@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "port": 4317,
+    "codexBinary": null,
+    "dataDir": "../.data"
+  },
+  "project": {
+    "id": "fixture",
+    "name": "Disposable acceptance fixture",
+    "mode": "fixture",
+    "repositories": [],
+    "context": "A disposable read-only totals audit for checking the manager, isolated worker, question, answer and verified-result loop. This test instance authorizes no business repository work.",
+    "linear": {
+      "teamId": null,
+      "projectId": null,
+      "teamKey": null
+    },
+    "prompts": {
+      "manager": "../prompts/manager.md",
+      "worker": "../prompts/worker.md"
+    },
+    "worker": {
+      "sandbox": "read-only",
+      "timeoutMs": 300000
+    }
+  }
+}

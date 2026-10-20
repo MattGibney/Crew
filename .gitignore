@@ -1,0 +1,26 @@
+.voice-chat.json
+.voice-chat.json.tmp
+.orchestration/
+.state/
+config/local.json
+config/instances/
+dist/
+*.log
+.data/
+config/prompts/
+instance/
+node_modules/
+release/
+
+# Machine-local settings, private configuration and runtime evidence
+.DS_Store
+.env
+.env.*
+config/*.json
+!config/*.example.json
+*.before-setup.json
+*.before-crew-migration.json
+manager-chat.json
+server.json
+desktop-status.json
+project-runtime.json

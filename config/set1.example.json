@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "port": 4317,
+    "codexBinary": null,
+    "dataDir": "../.data"
+  },
+  "project": {
+    "id": "set1",
+    "name": "Set1 (configure before use)",
+    "mode": "repository",
+    "repositories": [
+      {
+        "id": "product",
+        "name": "Set1 product repository (confirm mapping)",
+        "path": null,
+        "baseRef": null,
+        "components": [
+          "Confirm repository boundaries for reporting, ingestion and the product interface"
+        ]
+      }
+    ],
+    "context": "DRAFT \u2014 confirm with the owner before relying on this context. Set1 helps teams understand marketing performance, traffic quality, spend and revenue attribution. Relevant areas may include data ingestion, reporting, campaign detail and customer-facing product interfaces. Repository ownership, service boundaries, reporting definitions and the Linear workspace/team/project mappings have not been verified for this installation. Linear is the ticket source of truth; local orchestration files record execution evidence, questions and results.",
+    "linear": {
+      "teamId": null,
+      "projectId": null,
+      "teamKey": null
+    },
+    "prompts": {
+      "manager": "../prompts/manager.md",
+      "worker": "../prompts/worker.md"
+    },
+    "worker": {
+      "sandbox": "read-only",
+      "timeoutMs": 900000
+    }
+  }
+}

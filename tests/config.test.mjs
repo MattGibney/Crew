@@ -1,0 +1,101 @@
+// AI-006: config validation, portable initialization and package boundaries.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, writeFile, copyFile, chmod, rm, access } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { appRoot, loadAppConfig } from '../config.mjs';
+const exec = promisify(execFile);
+const environments = [];
+async function setup() {
+  const root = await mkdtemp(join(tmpdir(), 'ai006-config-')); environments.push(root);
+  await mkdir(join(root, 'config')); await mkdir(join(root, 'prompts')); await mkdir(join(root, 'bin'));
+  for (const template of ['fixture', 'set1']) await copyFile(join(appRoot, 'config', `${template}.example.json`), join(root, 'config', `${template}.example.json`));
+  for (const role of ['manager', 'worker']) await copyFile(join(appRoot, 'prompts', `${role}.md`), join(root, 'prompts', `${role}.md`));
+  const fakeCodex = join(root, 'bin', 'codex');
+  await writeFile(fakeCodex, '#!/bin/sh\nif [ "$1" = "--version" ]; then echo "codex-cli 0.test"; exit 0; fi\nexit 1\n'); await chmod(fakeCodex, 0o700);
+  const env = { ...process.env, AI_MANAGER_CONFIG: '', AI_MANAGER_CODEX_BINARY: fakeCodex, CODEX_BINARY: '', AI_MANAGER_PORT: '', VOICE_PORT: '' };
+  const config = JSON.parse(await readFile(join(root, 'config', 'fixture.example.json'), 'utf8'));
+  const configPath = join(root, 'config', 'local.json');
+  const save = async value => writeFile(configPath, JSON.stringify(value));
+  return { root, env, config, configPath, save, load: options => loadAppConfig({ root, env, ...options }) };
+}
+test.after(async () => { await Promise.all(environments.map(path => rm(path, { recursive: true, force: true }))); });
+test('default is one fixture project with no registry or business worker and isolated state', async () => {
+  const fixture = await setup();
+  const value = await fixture.load();
+  assert.equal(value.project.id, 'fixture'); assert.equal(value.activeProject, value.project); assert.equal(value.projects, undefined);
+  assert.equal(value.project.readiness.ready, true); assert.equal(value.projectStateDir, join(fixture.root, '.data', 'orchestration'));
+  assert.equal(value.managerStatePath, join(fixture.root, '.data', 'manager-chat.json'));
+  assert.equal(value.serverStatePath, join(fixture.root, '.data', 'server.json'));
+  assert.equal(value.configPath, null); assert.equal(value.legacyState, false);
+  assert.match(value.managerPrompt, /sole conversational contact/); assert.match(value.workerPrompt, /do not commit/i);
+});
+test('legacy state remains only for absent local configuration and fixture', async () => {
+  const fixture = await setup();
+  await mkdir(join(fixture.root, '.orchestration')); await writeFile(join(fixture.root, '.voice-chat.json'), '{}');
+  const legacy = await fixture.load(); assert.equal(legacy.legacyState, true); assert.equal(legacy.projectStateDir, join(fixture.root, '.orchestration'));
+  await fixture.save(fixture.config);
+  const configured = await fixture.load(); assert.equal(configured.legacyState, false); assert.equal(configured.projectStateDir, join(fixture.root, '.data', 'orchestration'));
+});
+test('unconfigured Set1 is a reviewable template, cannot become dispatch-ready by its name', async () => {
+  const fixture = await setup();
+  const value = await fixture.load({ configPath: join(fixture.root, 'config/set1.example.json') });
+  assert.equal(value.project.id, 'set1'); assert.equal(value.project.readiness.ready, false);
+  assert.equal(value.project.repositories[0].path, null); assert.equal(value.project.linear.teamId, null);
+  assert.equal(value.project.readiness.issues.length, 4); assert.match(value.project.context, /DRAFT/);
+});
+test('repository readiness validates actual Git path and explicit commit ref', async () => {
+  const fixture = await setup(), repository = join(fixture.root, 'business');
+  await mkdir(repository);
+  await exec('git', ['init', '-q', '-b', 'main', repository]);
+  await exec('git', ['-C', repository, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'Fixture baseline']);
+  const config = JSON.parse(await readFile(join(fixture.root, 'config/set1.example.json'), 'utf8'));
+  config.project.repositories[0].path = '../business'; config.project.repositories[0].baseRef = 'main'; config.project.linear = { teamId: 'example-team-id', teamKey: 'EX', projectId: null };
+  await fixture.save(config);
+  const value = await fixture.load(); assert.equal(value.project.readiness.ready, true); assert.equal(value.project.repositories[0].path, repository);
+  config.project.repositories[0].baseRef = 'missing-ref'; await fixture.save(config);
+  assert.equal((await fixture.load()).project.readiness.ready, false);
+});
+test('unknown settings and invalid overrides fail with actionable errors', async () => {
+  const fixture = await setup();
+  fixture.config.projects = []; await fixture.save(fixture.config);
+  await assert.rejects(fixture.load(), /Unknown root setting "projects"/); delete fixture.config.projects;
+  fixture.config.runtime.apiKey = 'not-allowed'; await fixture.save(fixture.config);
+  await assert.rejects(fixture.load(), /Unknown runtime setting "apiKey"/); delete fixture.config.runtime.apiKey;
+  await fixture.save(fixture.config);
+  await assert.rejects(fixture.load({ env: { ...fixture.env, AI_MANAGER_PORT: 'bad' } }), /runtime.port/);
+  await assert.rejects(fixture.load({ configPath: join(fixture.root, 'missing.json') }), /File not found/);
+  await assert.rejects(fixture.load({ env: { ...fixture.env, AI_MANAGER_CODEX_BINARY: join(fixture.root, 'no-codex') } }), /Cannot run configured Codex/);
+});
+test('worker permissions, prompt readability and state path are bounded', async () => {
+  const fixture = await setup();
+  fixture.config.project.worker.sandbox = 'workspace-write'; await fixture.save(fixture.config);
+  await assert.rejects(fixture.load(), /Fixture workers must remain read-only/);
+  fixture.config.project.worker.sandbox = 'read-only'; fixture.config.project.worker.timeoutMs = 1; await fixture.save(fixture.config);
+  await assert.rejects(fixture.load(), /timeoutMs/);
+  fixture.config.project.worker.timeoutMs = 300000; fixture.config.project.prompts.worker = 'absent.md'; await fixture.save(fixture.config);
+  await assert.rejects(fixture.load(), /Cannot read worker prompt/);
+  fixture.config.project.prompts.worker = '../prompts/worker.md'; fixture.config.runtime.dataDir = '/'; await fixture.save(fixture.config);
+  await assert.rejects(fixture.load(), /dedicated state directory/);
+});
+test('init copies editable single-project instance files and refuses overwrites', async () => {
+  const fixture = await setup(), destination = join(fixture.root, 'instance', 'manager.json');
+  const result = await exec(process.execPath, [join(appRoot, 'cli.mjs'), 'init', '--template', 'set1', '--config', destination]);
+  assert.match(result.stdout, /No work was launched/);
+  const value = JSON.parse(await readFile(destination, 'utf8'));
+  assert.equal(value.project.id, 'set1'); assert.equal(value.projects, undefined); assert.equal(value.runtime.dataDir, '.data');
+  assert.equal(value.project.prompts.manager, 'prompts/manager.md'); await access(join(fixture.root, 'instance', 'prompts', 'manager.md'));
+  await assert.rejects(exec(process.execPath, [join(appRoot, 'cli.mjs'), 'init', '--config', destination]), error => /Refusing to overwrite/.test(error.stderr));
+});
+test('source package contains only allowlisted code/templates; excludes live state and configuration', async () => {
+  const fixture = await setup(), destination = join(fixture.root, 'deliverable.tar.gz');
+  await exec(process.execPath, [join(appRoot, 'cli.mjs'), 'package', '--output', destination]);
+  const { stdout } = await exec('tar', ['-tzf', destination]);
+  const entries = stdout.trim().split('\n');
+  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs'));
+  assert.equal(entries.some(path => /(^|\/)(\.orchestration|\.data|\.git|local.json|\.voice-chat.json|server.json)(\/|$)/.test(path)), false);
+  assert.ok(entries.includes('docs/MACOS.md')); assert.ok(entries.includes('tests/config.test.mjs'));
+});

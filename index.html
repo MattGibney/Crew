@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Crew</title>
+<style>
+  :root { color-scheme: light; font: 17px/1.5 system-ui,sans-serif; color:#24332d; background:#f3f5ef; }
+  body { max-width:720px; margin:8vh auto; padding:24px; }
+  small { color:#52645a; } h1 { font-size:2rem; line-height:1.2; margin:12px 0; }
+  .panel { background:white; padding:24px; border:1px solid #d6ded3; border-radius:16px; margin:24px 0; }
+  .buttons { display:flex; gap:12px; flex-wrap:wrap; margin:20px 0; }
+  button { font:inherit; padding:10px 20px; border:1px solid #9aaba0; border-radius:8px; background:#fff; cursor:pointer; }
+  button.primary { background:#254e3a; color:white; border-color:#254e3a; }
+  button:disabled { opacity:.45; cursor:default; } button:focus-visible { outline:3px solid #a77a10; outline-offset:3px; }
+  #status { font-weight:650; } #error { color:#9f2d26; white-space:pre-wrap; overflow-wrap:anywhere; }
+  audio { width:100%; } #transcript { min-height:100px; max-height:300px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+  #transcript p { margin:10px 0; } .hint { font-size:.9rem; color:#52645a; }
+  pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:.85rem; max-height:240px; overflow:auto; }
+  select,input { display:block; width:100%; box-sizing:border-box; font:inherit; padding:8px; margin:8px 0 16px; }
+  .approval { border:1px solid #b28a40; border-radius:8px; padding:16px; margin:16px 0; }
+  #work-result { white-space:pre-wrap; overflow-wrap:anywhere; } #work-log { padding-left:20px; overflow-wrap:anywhere; }
+</style>
+<body>
+<img src="/crew-mark.png" alt="Crew" width="56" height="56"><br><small>CREW · LOCAL PROJECT INSTANCE</small>
+<h1>Talk to your project manager.</h1>
+<p id="instance-project" class="hint" role="status">Loading this instance’s project…</p>
+<p>Live conversation through your existing ChatGPT sign-in.</p>
+<section class="panel" aria-label="Worker attention">
+  <strong id="attention-title">No pending worker attention</strong>
+  <p class="hint">The local controller and worker continue when voice or this tab closes. You talk only to the manager. Reconnect voice or choose Review when you are ready; nothing starts your microphone automatically.</p>
+  <p id="controller-status" role="status">Loading local controller…</p>
+  <div id="worker-state"></div>
+</section>
+<section class="panel" aria-label="Voice controls">
+  <p id="account">Checking ChatGPT sign-in…</p>
+  <p id="status" role="status" aria-live="polite">Microphone off. No voice session started.</p>
+  <p id="error" role="alert" hidden></p>
+  <label for="voice">Voice</label>
+  <select id="voice" aria-describedby="voice-hint" disabled><option>Loading voices…</option></select>
+  <p id="voice-hint" class="hint" role="status">Loading available Codex voices. Microphone stays off.</p>
+  <button id="retry-voices" hidden>Retry loading voices</button>
+  <div class="buttons">
+    <button id="connect" class="primary" disabled>Connect voice</button>
+    <button id="mute" disabled>Mute microphone</button>
+    <button id="disconnect" disabled>Disconnect</button>
+  </div>
+  <audio id="audio" autoplay controls aria-label="Assistant audio"></audio>
+  <p class="hint">Finish any other voice call before connecting. Disconnect ends voice and releases the microphone. Codex and its isolated worker can keep working; Stop manager work cancels only the current manager turn.</p>
+  <p class="hint">The audio player controls local playback only. It does not ask the model to wait before speaking.</p>
+</section>
+<section class="panel" aria-label="Backing work chat">
+  <strong>Codex work chat</strong>
+  <p id="work-status" role="status" aria-live="polite">Preparing your backing chat…</p>
+  <p id="chat-reference" class="hint"></p>
+  <p id="connectors" class="hint"></p>
+  <p id="work-notice" role="alert" hidden></p>
+  <button id="stop-work" disabled>Stop manager work</button>
+  <div id="approvals"></div>
+  <ul id="work-log" aria-label="Actual backend tool activity"></ul>
+  <div id="work-result"></div>
+</section>
+<section class="panel" aria-label="Conversation transcript">
+  <strong>Conversation</strong>
+  <div id="transcript"><p class="hint">Your transcript will appear here during the session.</p></div>
+</section>
+<p class="hint">This instance works only on its configured project. Workers act on explicitly agreed tickets and briefs; each uses an isolated worktree. Voice interruption stops speech; Stop manager work cancels the current manager turn, not an isolated worker.</p>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

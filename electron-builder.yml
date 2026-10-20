@@ -1,0 +1,48 @@
+appId: local.voice.manager
+productName: Crew
+asar: false
+directories:
+  output: dist/desktop
+  buildResources: build
+files:
+  - '*.mjs'
+  - app.js
+  - index.html
+  - package.json
+  - desktop/**
+  - build/crew-mark.png
+  - config/*.example.json
+  - prompts/**
+  - docs/**
+  - README.md
+  - '!**/.DS_Store'
+  - '!**/*.log'
+  - '!**/node_modules/**'
+artifactName: '${productName}-${version}-${arch}.${ext}'
+npmRebuild: false
+publish: null
+mac:
+  icon: build/icon.icns
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch: arm64
+    - target: zip
+      arch: arm64
+  identity: null
+  # Unsigned local distribution only; enable with a Developer ID release later.
+  hardenedRuntime: false
+  notarize: false
+  minimumSystemVersion: '13.0'
+  extendInfo:
+    NSMicrophoneUsageDescription: 'Crew uses your microphone for voice conversations you explicitly start. You can approve access during setup without starting a call.'
+    NSLocalNetworkUsageDescription: 'Crew connects its window to its local controller on this Mac and uses WebRTC for voice when you start a call.'
+dmg:
+  sign: false
+  contents:
+    - x: 150
+      y: 180
+    - x: 450
+      y: 180
+      type: link
+      path: /Applications
