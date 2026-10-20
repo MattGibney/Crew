@@ -36,13 +36,19 @@ console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',tex
 console.log(JSON.stringify({type:'turn.completed'}));
 `); await chmod(file, 0o700); return file;
 }
-async function terminal(controller, state, id) {
-  for (let count=0; count<100; count++) {
-    await controller.tick(); const task=await readTask(state,id);
-    if (['failed','completed'].includes(task.status)) return task;
-    await new Promise(r=>setTimeout(r,50));
+// tick schedules launches independently so unrelated workers are never held behind one startup.
+// Wait for the observed durable outcome, preserving the original failure/safety assertions.
+async function waitFor(controller, observe, predicate, description='controller outcome') {
+  const deadline=Date.now()+5000;
+  while(Date.now()<deadline){
+    await controller.tick();const value=await observe();
+    if(predicate(value))return value;
+    await new Promise(resolve=>setTimeout(resolve,25));
   }
-  throw new Error('Timeout waiting for controller');
+  throw new Error(`Timeout waiting for ${description}`);
+}
+async function terminal(controller, state, id) {
+  return waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),`terminal task ${id}`);
 }
 test('repository worker executes in a durable isolated worktree and verification states its limits', async () => {
   const base=await mkdtemp(path.join(os.tmpdir(),'ai006-workers-')); const repo=await repository(base); const state=path.join(base,'state');
@@ -64,7 +70,7 @@ test('incomplete configuration fails before creating a worktree',async()=>{
   await createTask(state,{requestId:'incomplete-test',ticket:'EX-1',brief:'Inspect',projectId:'example',repositoryId:'app'});
   const project=profile(null);project.readiness={ready:false,issues:['Set repository path']};
   const controller=await createController({stateDir:state,sourceDir,executable:'/unused',project});
-  try {const task=await readTask(state,'incomplete-test');assert.equal(task.status,'failed');assert.match(task.failure,/incomplete/);assert.equal(task.worktree,undefined);} finally {await controller.stop();}
+  try {const task=await terminal(controller,state,'incomplete-test');assert.equal(task.status,'failed');assert.match(task.failure,/incomplete/);assert.equal(task.worktree,undefined);} finally {await controller.stop();}
 });
 test('task project and repository identity are immutable and dedupe includes scope',async()=>{
   const state=await mkdtemp(path.join(os.tmpdir(),'ai006-store-'));
@@ -73,7 +79,7 @@ test('task project and repository identity are immutable and dedupe includes sco
   await assert.rejects(createTask(state,{...request,projectId:'other'}),/Request ID/);
   await assert.rejects(updateTask(state,request.requestId,t=>{t.repositoryId='other';}),/immutable/);
   const controller=await createController({stateDir:state,sourceDir,executable:'/unused',project:{...profile(null),id:'other'}});
-  try {assert.match((await controller.view()).error,/another project/);assert.equal((await readTask(state,request.requestId)).status,'queued');} finally {await controller.stop();}
+  try {const view=await waitFor(controller,()=>controller.view(),v=>typeof v.error==='string'&&/another project/.test(v.error),'project mismatch error');assert.match(view.error,/another project/);assert.equal((await readTask(state,request.requestId)).status,'queued');} finally {await controller.stop();}
 });
 async function mcp(state, runtime, name, args) {
   const { spawn } = await import('node:child_process');
@@ -116,12 +122,14 @@ test('resume refuses changed sandbox without creating another run or supervisor'
   const controller=await createController({stateDir:state,sourceDir,executable:await mockedCodex(base),project});
   try {
     const prior=await terminal(controller,state,'sandbox-resume-test');assert.equal(prior.status,'completed',prior.failure);
+    const priorRunEntries=(await readdir(path.join(state,'runs',prior.id))).sort();
     await updateTask(state,prior.id,task=>{task.status='resume_queued';task.answer={text:'Continue the same scope'};});
     project.worker.sandbox='workspace-write';
-    await controller.tick();const task=await readTask(state,prior.id);
+    const task=await terminal(controller,state,prior.id);
     assert.equal(task.status,'failed');assert.match(task.failure,/sandbox configuration changed/);
     assert.equal(task.runId,prior.runId);assert.equal(task.runnerPid,prior.runnerPid);
-    assert.deepEqual(await readdir(path.join(state,'runs',task.id)),[prior.runId]);
+    assert.deepEqual((await readdir(path.join(state,'runs',task.id))).sort(),priorRunEntries);
+    assert.ok(priorRunEntries.includes(prior.runId));
     assert.equal(task.workerSandbox,'read-only');
   }finally{await controller.stop();}
 });

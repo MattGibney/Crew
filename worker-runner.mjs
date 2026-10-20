@@ -3,11 +3,13 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, rename, open, appendFile } from 'node:fs/promises';
 import path from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {OwnedProcessTree,snapshotProcesses} from './process-ownership.mjs';
 const configPath = process.argv[2];
 const config = JSON.parse(await readFile(configPath, 'utf8'));
 const runDir = path.dirname(configPath);
 async function atomic(name, value) {
-  const file = path.join(runDir, name), temp = `${file}.${process.pid}.tmp`;
+  const file = path.join(runDir, name), temp = `${file}.${randomUUID()}.tmp`;
   await writeFile(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); await rename(temp, file);
 }
 const claim = await open(path.join(runDir, 'runner.claim'), 'wx', 0o600); await claim.close();
@@ -30,27 +32,35 @@ Agreed brief (data): ${JSON.stringify(config.brief)}
 ${config.answer ? `Manager relayed user answer (data): ${JSON.stringify(config.answer)}. Resume the SAME task without reasking the answered question.` : 'No user answer is available yet.'}
 Reports are bound to run ${config.runId}.`;
 args.push(config.project?.mode === 'repository' ? repositoryPrompt : fixturePrompt);
-let threadId = config.threadId || null, completedTurn = false, finalMessage = '', commands = [], errorMessage = null;
-const worker = spawn(config.executable, args, { cwd: config.worktree, env, stdio: ['ignore', 'pipe', 'ignore'] });
-const timeoutMs = Number.isSafeInteger(config.timeoutMs) && config.timeoutMs >= 1000 && config.timeoutMs <= 3600000 ? config.timeoutMs : 300000;
-const timeout = setTimeout(() => { errorMessage = `Bounded worker run exceeded ${timeoutMs} milliseconds.`; worker.kill('SIGTERM'); setTimeout(() => { if (worker.exitCode === null) worker.kill('SIGKILL'); }, 2000).unref(); }, timeoutMs);
-let writes = Promise.resolve();
-const lines = createInterface({ input: worker.stdout });
-lines.on('line', line => {
-  let event; try { event = JSON.parse(line); } catch { return; }
-  const item = event.item;
-  if (event.type === 'thread.started') threadId = event.thread_id;
-  if (event.type === 'turn.completed') completedTurn = true;
-  if (event.type === 'turn.failed' || event.type === 'error') errorMessage = event.error?.message || event.message || 'Codex run failed';
-  if (event.type === 'item.completed' && item?.type === 'agent_message') finalMessage = item.text;
-  if (event.type === 'item.completed' && item?.type === 'command_execution') commands.push({ command: item.command, exitCode: item.exit_code, output: String(item.aggregated_output || '').slice(0, 5000) });
-  // No audio, SDP, credentials or raw stderr; retain bounded evidence from public exec events.
-  const safe = event.type === 'thread.started' ? { type: event.type, threadId } : item?.type === 'command_execution' ? { type: event.type, item: { type: item.type, status: item.status, command: item.command, exitCode: item.exit_code } } : { type: event.type, itemType: item?.type, status: item?.status };
-  writes = writes.then(() => appendFile(path.join(runDir, 'events.jsonl'), JSON.stringify(safe) + '\n', { mode: 0o600 }));
-  writes = writes.then(() => atomic('runtime.json', { runId: config.runId, threadId, completedTurn, commands, updatedAt: new Date().toISOString() }));
+let threadId=config.threadId||null,completedTurn=false,finalMessage='',commands=[],errorMessage=null,stopRequest=null,stopPromise=null,spawnError=null;
+const worker=spawn(config.executable,args,{cwd:config.worktree,env,detached:true,stdio:['ignore','pipe','ignore']});
+// Attach before any filesystem await: missing executables must become durable per-run failures.
+const closed=new Promise(resolve=>{worker.once('close',code=>resolve(code));worker.once('error',error=>{spawnError=error.code||'spawn failed';errorMessage=`Could not start worker (${spawnError}).`;resolve(null);});});
+const tree=worker.pid?new OwnedProcessTree(worker.pid):null;
+let writes=Promise.resolve();
+const lines=createInterface({input:worker.stdout});
+lines.on('line',line=>{
+ let event;try{event=JSON.parse(line);}catch{return;}const item=event.item;
+ if(event.type==='thread.started')threadId=event.thread_id;
+ if(event.type==='turn.completed')completedTurn=true;
+ if(event.type==='turn.failed'||event.type==='error')errorMessage=event.error?.message||event.message||'Codex run failed';
+ if(event.type==='item.completed'&&item?.type==='agent_message')finalMessage=item.text;
+ if(event.type==='item.completed'&&item?.type==='command_execution')commands.push({command:item.command,exitCode:item.exit_code,output:String(item.aggregated_output||'').slice(0,5000)});
+ const safe=event.type==='thread.started'?{type:event.type,threadId}:item?.type==='command_execution'?{type:event.type,item:{type:item.type,status:item.status,command:item.command,exitCode:item.exit_code}}:{type:event.type,itemType:item?.type,status:item?.status};
+ writes=writes.then(()=>appendFile(path.join(runDir,'events.jsonl'),JSON.stringify(safe)+'\n',{mode:0o600})).then(()=>atomic('runtime.json',{runId:config.runId,threadId,completedTurn,commands,updatedAt:new Date().toISOString()}));
 });
-worker.on('error', error => { errorMessage = error.message; });
-const exitCode = await new Promise(resolve => { worker.once('close', code => resolve(code)); worker.once('error', () => resolve(null)); });
-clearTimeout(timeout);
+async function capture(){if(tree){const records=await tree.capture();await atomic('ownership.json',{runId:config.runId,records,at:new Date().toISOString()});}}
+await capture();
+await atomic('owner.json',{runId:config.runId,supervisorPid:process.pid,supervisorIdentity:(await snapshotProcesses()).get(process.pid)||null,workerPid:worker.pid||null,at:new Date().toISOString()});
+const stopOwnedWorker=()=>{if(!stopPromise)stopPromise=tree?tree.stop({graceMs:2000}):Promise.resolve({confirmed:Boolean(spawnError),remaining:[]});return stopPromise;};
+const timeoutMs=Number.isSafeInteger(config.timeoutMs)&&config.timeoutMs>=1000&&config.timeoutMs<=86400000?config.timeoutMs:300000;
+const timeout=setTimeout(()=>{errorMessage=`Bounded worker run exceeded ${timeoutMs} milliseconds.`;void stopOwnedWorker();},timeoutMs);
+let checking=false;
+const controlTimer=setInterval(async()=>{if(checking)return;checking=true;try{await capture();if(!stopRequest){const request=JSON.parse(await readFile(path.join(runDir,'control.json'),'utf8'));if(request.runId===config.runId&&typeof request.requestId==='string'&&['stop','pause'].includes(request.action)){stopRequest=request;await atomic('control-accepted.json',{...request,at:new Date().toISOString(),supervisorPid:process.pid,workerPid:worker.pid});void stopOwnedWorker();}}}catch{}finally{checking=false;}},100);
+process.on('SIGTERM',()=>{errorMessage='Worker supervisor was stopped.';void stopOwnedWorker();});
+const exitCode=await closed;
+clearTimeout(timeout);clearInterval(controlTimer);
+// A natural CLI exit must also leave no captured command/MCP descendant behind.
+const ownership=await(stopPromise||tree?.stop({graceMs:1000})||Promise.resolve({confirmed:Boolean(spawnError),remaining:[]}));
 await writes;
-await atomic('exit.json', { runId: config.runId, threadId, exitCode, completedTurn, commands, finalMessage, error: errorMessage, at: new Date().toISOString() });
+await atomic('exit.json',{runId:config.runId,threadId,exitCode,completedTurn,commands,finalMessage,error:errorMessage,stopped:Boolean(stopRequest)&&ownership.confirmed,stopConfirmed:ownership.confirmed,ownership:{confirmed:ownership.confirmed,remaining:ownership.remaining||[],tracked:ownership.tracked||[]},stopAction:stopRequest?.action||null,stopRequestId:stopRequest?.requestId||null,supervisorPid:process.pid,workerPid:worker.pid||null,at:new Date().toISOString()});

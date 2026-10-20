@@ -1,4 +1,4 @@
-// AI-008: bounded local setup checks. No threads, turns, audio or auth-file reads.
+// Bounded local runtime/account checks. Linear reads live separately in project-options.mjs.
 import { readFile, writeFile, rename, unlink, mkdir, access, stat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -57,7 +57,7 @@ export async function probeCodex({ executable, root, env, startLogin = false, op
   lines.on('line', line => { try { const m=JSON.parse(line); const p=pending.get(m.id); if(p) { pending.delete(m.id);clearTimeout(p.timer); m.error ? p.reject(new Error(m.error.message)) : p.resolve(m.result); } else if (m.method==='account/login/completed') loginDone?.(m.params); else if(m.id!==undefined && m.method) child.stdin.write(`${JSON.stringify({id:m.id,error:{code:-32601,message:'Setup does not approve tools or work.'}})}\n`); } catch {} });
   const rpc = (method, params={}, timeout=20000) => new Promise((resolve,reject) => { const id=++nextId; const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`${method} timed out. Retry; no work was started.`));},timeout); pending.set(id,{resolve,reject,timer}); child.stdin.write(`${JSON.stringify({id,method,params})}\n`); });
   try {
-    await rpc('initialize', {clientInfo:{name:'crew_setup',version:'0.4.0'},capabilities:{experimentalApi:true}});
+    await rpc('initialize', {clientInfo:{name:'crew_setup',version:'0.5.0'},capabilities:{experimentalApi:true}});
     child.stdin.write('{"method":"initialized","params":{}}\n');
     if (startLogin) {
       let timer;
@@ -107,11 +107,11 @@ export async function setupInputsKey(configPath) {
   }
   return fingerprint(JSON.stringify(parts));
 }
-// User-reviewed proposal apply: new prompt files first, validated atomic config pointer last.
+// Automatic analyzed setup apply: new prompt files first, validated atomic config pointer last.
 export async function applyDiscoveryDraft({ root, configPath, env, revision, config, managerDraft, workerDraft, promptDirectory }) {
-  if(typeof managerDraft!=='string'||typeof workerDraft!=='string'||managerDraft.length>64000||workerDraft.length>64000||!managerDraft.trim()||!workerDraft.trim())throw new Error('Both reviewed Markdown prompts are required (maximum 64,000 characters each).');
+  if(typeof managerDraft!=='string'||typeof workerDraft!=='string'||managerDraft.length>64000||workerDraft.length>64000||!managerDraft.trim()||!workerDraft.trim())throw new Error('Project instructions are missing or too large. Retry project setup.');
   const expected={manager:join(promptDirectory,'manager.md'),worker:join(promptDirectory,'worker.md')};
-  if(config?.project?.prompts?.manager!==expected.manager || config?.project?.prompts?.worker!==expected.worker)throw new Error('Keep the generated prompt paths in this proposal. You can select other existing prompt files in manual setup later.');
+  if(config?.project?.prompts?.manager!==expected.manager || config?.project?.prompts?.worker!==expected.worker)throw new Error('The generated instruction-file locations changed. Retry project setup; advanced settings can select existing files later.');
   const target=resolve(dirname(configPath),promptDirectory);
   await mkdir(dirname(target),{recursive:true,mode:0o700});
   // New directory only: an existing prompt cannot be silently overwritten.

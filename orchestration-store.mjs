@@ -2,7 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-const ACTIVE = new Set(['queued', 'launching', 'running', 'awaiting_answer', 'resume_queued', 'verifying', 'blocked']);
+const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose']);
+const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(['progress', 'question', 'result', 'blocked']);
 const now = () => new Date().toISOString();
@@ -25,6 +26,7 @@ function validate(task, expectedId) {
       || ['projectId', 'repositoryId'].some(key => task[key] != null && (typeof task[key] !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(task[key])))
       || typeof task.status !== 'string' || !task.status || !Number.isSafeInteger(task.revision) || task.revision < 1
       || !Number.isFinite(Date.parse(task.createdAt)) || !Number.isFinite(Date.parse(task.updatedAt))
+      || (task.lifecycleRequests !== undefined && (!Array.isArray(task.lifecycleRequests) || task.lifecycleRequests.some(request => !request || typeof request.id !== 'string' || !ID.test(request.id) || !LIFECYCLE_ACTIONS.has(request.action) || !LIFECYCLE_STATES.has(request.status) || !Number.isFinite(Date.parse(request.at)) || (request.expectedRunId != null && (typeof request.expectedRunId !== 'string' || !request.expectedRunId.trim())))))
       || !Array.isArray(task.reports) || !Array.isArray(task.attention)
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
@@ -86,8 +88,7 @@ export async function createTask(dir, { requestId, ticket, brief, projectId = nu
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
-    if (tasks.some(task => ACTIVE.has(task.status))) throw new Error('One task is already active; finish it before submitting another');
-    return lock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], answer: null }));
+    return lock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
   });
 }
 export async function updateTask(dir, id, fn) {
@@ -101,7 +102,6 @@ export async function updateTask(dir, id, fn) {
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
     next.revision = identity.revision + 1; next.updatedAt = now();
     validate(next, id);
-    if (ACTIVE.has(next.status) && (await loadUnlocked(dir)).some(other => other.id !== id && ACTIVE.has(other.status))) throw new Error('Another task is already active');
     return save(dir, next);
   }));
 }
@@ -140,5 +140,27 @@ export async function acknowledgeAttention(dir, { taskId, attentionId }) {
     const item = task.attention.find(entry => entry.id === attentionId);
     if (!item) throw new Error('Unknown attention item');
     if (!item.ackedAt) item.ackedAt = now();
+  });
+}
+
+// Requests are durable intent, not evidence that a process has stopped or restarted.
+// The controller alone performs lifecycle transitions and marks each request handled.
+export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId }) {
+  identifier(taskId); identifier(actionId, 'action ID');
+  if (!LIFECYCLE_ACTIONS.has(action)) throw new Error('Invalid worker action');
+  if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
+  return updateTask(dir, taskId, task => {
+    const requests = task.lifecycleRequests ||= [];
+    const existing = requests.find(request => request.id === actionId);
+    if (existing) {
+      // An exact retry remains valid even after the controller advances to a new run.
+      if (existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
+      return;
+    }
+    if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId) throw new Error('Stale worker run for lifecycle action');
+    if (task.status === 'disposed') throw new Error('Worker has been disposed');
+    if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
+    if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
+    requests.push({ id: actionId, action, expectedRunId: task.runId || null, status: 'pending', at: now() });
   });
 }

@@ -113,10 +113,26 @@ export async function loadAppConfig({ root = appRoot, configPath = process.env.A
     try { prompts[role] = text(await readFile(promptPaths[role], 'utf8'), `${role} prompt`, { max: 64000 }); }
     catch (error) { if (error.message.startsWith('Configuration:')) throw error; fail(`Cannot read ${role} prompt at ${promptPaths[role]} (${error.code || 'read failed'}).`); }
   }
-  object(value.worker, ['sandbox', 'timeoutMs'], 'project.worker');
+  object(value.worker, ['sandbox', 'timeoutMs', 'maxConcurrent', 'environment'], 'project.worker');
   if (!['read-only', 'workspace-write'].includes(value.worker.sandbox)) fail('project.worker.sandbox must be read-only or workspace-write.');
   if (value.mode === 'fixture' && value.worker.sandbox !== 'read-only') fail('Fixture workers must remain read-only.');
   if (!Number.isInteger(value.worker.timeoutMs) || value.worker.timeoutMs < 10000 || value.worker.timeoutMs > 86400000) fail('project.worker.timeoutMs must be between 10000 and 86400000 milliseconds.');
+  const maxConcurrent = value.worker.maxConcurrent === undefined ? 2 : value.worker.maxConcurrent;
+  if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 8) fail('project.worker.maxConcurrent must be an integer between 1 and 8.');
+  const environment = {};
+  if (value.worker.environment !== undefined) {
+    object(value.worker.environment, ['bootstrap', 'start', 'ready', 'resume', 'cleanup'], 'project.worker.environment');
+    for (const [name, hook] of Object.entries(value.worker.environment)) {
+      const label = `project.worker.environment.${name}`;
+      object(hook, ['command', 'args', 'timeoutMs'], label);
+      text(hook.command, `${label}.command`, { max: 4096 });
+      if (!Array.isArray(hook.args) || hook.args.length > 64 || hook.args.some(argument => typeof argument !== 'string' || argument.length > 8192 || argument.includes('\0'))) fail(`${label}.args must be an array of at most 64 strings, each at most 8192 characters and without NUL.`);
+      if (!Number.isInteger(hook.timeoutMs) || hook.timeoutMs < 1000 || hook.timeoutMs > 600000) fail(`${label}.timeoutMs must be an integer between 1000 and 600000 milliseconds.`);
+      environment[name] = { command: hook.command, args: [...hook.args], timeoutMs: hook.timeoutMs };
+    }
+  }
+  // No configured hooks means no application runtime/readiness verification is promised.
+  const worker = { ...value.worker, maxConcurrent, environment };
   if (Number(process.versions.node.split('.')[0]) < 22) fail('Node.js 22 or newer is required.');
   const { executable, version: codexVersion } = checkRuntime ? await resolveCodexExecutable({ configured: raw.runtime.codexBinary, base, env }) : { executable:null, version:null };
   let gitVersion;
@@ -140,7 +156,7 @@ export async function loadAppConfig({ root = appRoot, configPath = process.env.A
       }
     }
   }
-  const project = { ...value, repositories, readiness: { ready: !issues.length, issues } };
+  const project = { ...value, worker, repositories, readiness: { ready: !issues.length, issues } };
   const legacyState = !present && value.mode === 'fixture' && await exists(resolve(root, '.orchestration')) && await exists(resolve(root, '.voice-chat.json'));
   return {
     configPath: present ? requestedPath : null, sourceConfigPath: sourcePath, port, executable, dataDir,

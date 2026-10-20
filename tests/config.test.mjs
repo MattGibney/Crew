@@ -99,3 +99,40 @@ test('source package contains only allowlisted code/templates; excludes live sta
   assert.equal(entries.some(path => /(^|\/)(\.orchestration|\.data|\.git|local.json|\.voice-chat.json|server.json)(\/|$)/.test(path)), false);
   assert.ok(entries.includes('docs/MACOS.md')); assert.ok(entries.includes('tests/config.test.mjs'));
 });
+
+test('worker concurrency defaults compatibly and accepts only bounded integers', async () => {
+  const fixture = await setup();
+  const initial = await fixture.load();
+  assert.equal(initial.project.worker.maxConcurrent, 2);
+  assert.deepEqual(initial.project.worker.environment, {});
+  for (const valid of [1, 8]) {
+    fixture.config.project.worker.maxConcurrent = valid; await fixture.save(fixture.config);
+    assert.equal((await fixture.load()).project.worker.maxConcurrent, valid);
+  }
+  for (const invalid of [0, 9, 1.5, '2', null]) {
+    fixture.config.project.worker.maxConcurrent = invalid; await fixture.save(fixture.config);
+    await assert.rejects(fixture.load(), /project.worker.maxConcurrent/);
+  }
+});
+
+test('configured environment hooks retain exact argv and do not invent missing hooks', async () => {
+  const fixture = await setup();
+  fixture.config.project.worker.environment = {
+    bootstrap: { command:'npm', args:['ci'], timeoutMs:600000 },
+    ready: { command:'node', args:['scripts/ready.mjs', '', 'literal;$(not-a-shell)'], timeoutMs:1000 }
+  };
+  await fixture.save(fixture.config);
+  const loaded = await fixture.load();
+  assert.deepEqual(loaded.project.worker.environment, fixture.config.project.worker.environment);
+  assert.equal('start' in loaded.project.worker.environment, false);
+  assert.equal(loaded.project.readiness.ready, true); // Project dispatch configuration, not application runtime readiness.
+});
+
+test('environment hook validation rejects unknown settings, unsafe shapes and unbounded values', async () => {
+  const fixture = await setup();
+  const valid = () => ({ command:'node', args:['check.mjs'], timeoutMs:1000 });
+  for (const environment of [null, [], { shell:valid() }, { ready:null }, { ready:{ ...valid(), env:{ TOKEN:'never-accepted' } } }, { ready:{ ...valid(), shell:true } }, { ready:{ ...valid(), command:' ' } }, { ready:{ ...valid(), command:'node\0bad' } }, { ready:{ ...valid(), command:'x'.repeat(4097) } }, { ready:{ ...valid(), args:'check.mjs' } }, { ready:{ ...valid(), args:[1] } }, { ready:{ ...valid(), args:['bad\0value'] } }, { ready:{ ...valid(), args:Array(65).fill('x') } }, { ready:{ ...valid(), args:['x'.repeat(8193)] } }, { ready:{ ...valid(), timeoutMs:999 } }, { ready:{ ...valid(), timeoutMs:600001 } }, { ready:{ ...valid(), timeoutMs:1000.1 } }, { ready:{ command:'node', args:[] } }]) {
+    fixture.config.project.worker.environment = environment; await fixture.save(fixture.config);
+    await assert.rejects(fixture.load(), /project.worker.environment/);
+  }
+});

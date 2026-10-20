@@ -252,11 +252,15 @@ function renderWork(work) {
 function renderOrchestration(view) {
   const pending = view.tasks.flatMap(task => task.attention.filter(a => !a.ackedAt));
   $('attention-title').textContent = pending.length ? `✋ ${pending.length} item${pending.length === 1 ? ' needs' : 's need'} your attention` : 'No pending worker attention';
-  $('controller-status').textContent = view.error ? `Controller needs attention: ${view.error}` : 'Local controller running independently of voice.';
-  $('worker-state').replaceChildren(...view.tasks.slice(-3).map(task => {
+  $('controller-status').textContent = view.error ? `Controller needs attention: ${view.error}` : `Local controller running independently of voice.${view.maxConcurrent?` Up to ${view.maxConcurrent} workers run at once.`:''}`;
+  const terminal=new Set(['completed','failed','stopped','paused','disposed','canceled','cancelled']);
+  const visible=[...view.tasks.filter(task=>!terminal.has(task.status)),...view.tasks.filter(task=>terminal.has(task.status)).slice(-3)];
+  $('worker-state').replaceChildren(...visible.map(task => {
     const section = document.createElement('div');
     const title = document.createElement('p'); title.textContent = `${task.ticket} · ${task.id} — ${task.status}`; section.append(title);
-    const progress = document.createElement('p'); progress.className = 'hint'; progress.textContent = task.status === 'completed' ? task.result.message : task.failure || task.progress || task.brief; section.append(progress);
+    const progress = document.createElement('p'); progress.className = 'hint'; progress.textContent = task.result?.message || task.failure || task.progress || task.brief; section.append(progress);
+    if(task.execution?.startedAt){const timing=document.createElement('p');timing.className='hint';const end=task.execution.endedAt?Date.parse(task.execution.endedAt):task.execution.live?Date.now():Date.parse(task.updatedAt);const seconds=Math.max(0,Math.floor((end-Date.parse(task.execution.startedAt))/1000));timing.textContent=`${task.execution.live?'Execution live':'Execution ended'} · this run ${seconds}s${task.environment?.status?` · environment ${task.environment.status}`:''}`;section.append(timing);}
+
     for (const item of task.attention.filter(a => !a.ackedAt)) {
       const p = document.createElement('p'); p.textContent = item.message; section.append(p);
       const button = document.createElement('button'); button.textContent = 'Review with manager';

@@ -20,11 +20,11 @@ async function fixture() {
   const analysis = () => ({ name: 'Shop', summary: 'The README describes a local inventory app.', components: ['src: inventory code'], managerContext: 'Clarify inventory goals with the owner.', workerContext: 'Inspect src and relevant docs for each task.', findings: [{ statement: 'Inventory application', status: 'inferred', sources: ['README.md'] }, { statement: 'Production environment is unknown.', status: 'unknown', sources: [] }], questions: ['What business outcome is intended?'] });
   return { root, repo, binary, env, analysis, options: { repositoryRoot: repo, env, runner: async () => analysis() } };
 }
-test('discovery returns loader-compatible review drafts, leaves mappings/ref unknown, never changes selected repository', async () => {
+test('discovery returns loader-compatible settings, leaves mappings/ref unknown, never changes selected repository', async () => {
   const f = await fixture(), draftDir = join(f.root, 'draft');
   const original = await readFile(join(f.repo, 'README.md'), 'utf8');
   const proposal = await discoverProject({ ...f.options, draftDir });
-  assert.equal(proposal.status, 'review-required'); assert.equal(proposal.activated, false);
+  assert.equal(proposal.status, 'ready-to-apply'); assert.equal(proposal.activated, false);
   assert.deepEqual(proposal.config.project.linear, { teamId: null, projectId: null, teamKey: null });
   assert.equal(proposal.config.project.repositories[0].baseRef, null);
   assert.equal(proposal.config.project.worker.sandbox, 'read-only');
@@ -36,6 +36,46 @@ test('discovery returns loader-compatible review drafts, leaves mappings/ref unk
   assert.equal(await readFile(join(f.repo, 'README.md'), 'utf8'), original);
   assert.deepEqual((await readdir(f.repo)).sort(), ['AGENTS.md', 'README.md', 'src']);
   assert.deepEqual((await readdir(draftDir)).sort(), ['config.proposal.json', 'manager.md', 'proposal.json', 'worker.md']);
+});
+test('canonical selected folder owns repository identity; model setup placeholders never become effective context', async () => {
+  const f = await fixture();
+  const alias = join(f.root, 'selected-link'); await symlink(f.repo, alias);
+  const analysis = f.analysis();
+  analysis.name = 'DRAFT — confirm this with the user';
+  analysis.summary = 'DRAFT — human review required.\nConfirm this with the user.\nThe README describes a local inventory app.\nConfirm Linear team ID before applying configuration.';
+  analysis.managerContext = 'Review the prompts with the user.\nUse inventory documentation as project context.';
+  analysis.workerContext = 'Confirm the base ref with the user.\nInspect src for inventory calculations.';
+  analysis.questions = ['Choose a repository base ref.', 'Confirm Linear team ID with the user.', 'Review the complete draft configuration.', 'What business outcome is intended?', 'Should inventory include reserved stock?'];
+  const p = await discoverProject({ ...f.options, repositoryRoot: alias, runner: async () => analysis });
+  assert.equal(p.config.project.name, 'shop');
+  assert.equal(p.config.project.repositories[0].name, 'shop');
+  assert.equal(p.config.project.repositories[0].path, await realpath(f.repo));
+  assert.equal(p.evidence.repositoryRoot, await realpath(f.repo));
+  assert.equal(p.config.project.context, 'The README describes a local inventory app.');
+  assert.doesNotMatch(p.managerDraft + p.workerDraft, /human review|required\.\n|confirm this|draft for|Confirm the base ref|Review the prompts/i);
+  assert.match(p.managerDraft, /Use inventory documentation/);
+  assert.match(p.workerDraft, /Inspect src/);
+  assert.deepEqual(p.confirmations, ['Should inventory include reserved stock?']);
+  assert.equal(p.config.project.repositories[0].baseRef, null);
+  assert.equal(p.findings[1].status, 'unknown');
+});
+test('actual legacy AI-008 output does not leak task-coded identity or activation disclaimers', async () => {
+  const f = await fixture(), analysis = f.analysis();
+  analysis.name = 'AI-008 — Set1 / Big Picture discovery draft';
+  analysis.summary = 'The project is an inventory application. This proposal is inferred and does not authorize activation/work.';
+  analysis.managerContext = 'Human review should resolve these before any work is activated.';
+  const p = await discoverProject({ ...f.options, runner: async () => analysis });
+  assert.equal(p.config.project.name, 'shop');
+  assert.equal(p.config.project.context, 'The project is an inventory application.');
+  assert.doesNotMatch(p.managerDraft, /This proposal|Human review should|activation\/work/);
+});
+test('sensible model product name is separate from canonical repository basename', async () => {
+  const f = await fixture(), analysis = f.analysis();
+  analysis.name = 'Stockroom (draft)';
+  const p = await discoverProject({ ...f.options, runner: async () => analysis });
+  assert.equal(p.config.project.name, 'Stockroom');
+  assert.equal(p.config.project.repositories[0].name, 'shop');
+  assert.doesNotMatch(p.config.project.context, /DRAFT|human review/);
 });
 test('bounded inventory excludes credentials, symlinks, binary, generated code and redacts embedded credential values', async () => {
   const f = await fixture();

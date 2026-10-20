@@ -2,7 +2,7 @@
 import readline from 'node:readline';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention } from './orchestration-store.mjs';
+import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction } from './orchestration-store.mjs';
 
 const [stateDirArg, role, taskId, runId] = process.argv.slice(2);
 if (!stateDirArg || !['manager', 'worker'].includes(role) || (role === 'worker' && (!taskId || !runId))) {
@@ -23,11 +23,12 @@ const taskIdentifier = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$' };
 const tools = role === 'manager' ? [
   {
     name: 'submit_task',
-    description: repositoryMode ? 'Start ONE explicitly user-authorized bounded task in a configured repository, separate worker and isolated Git worktree. Verify the existing Linear ticket first. No backlog selection, push, PR, production or external ticket mutations. Queued dispatch is not completion. Reuse requestId for retries.' : 'Start ONE explicitly user-authorized read-only disposable fixture audit in a separate worker and Git worktree. Queued dispatch is not completion. Reuse requestId for retries.',
+    description: repositoryMode ? 'Start an explicitly user-authorized bounded task in a configured repository, separate worker and isolated Git worktree. Verify the existing Linear ticket first. No backlog selection, push, PR, production or external ticket mutations. Independent tasks may run concurrently in separate workers. Queued dispatch is not completion. Reuse requestId for retries.' : 'Start an explicitly user-authorized read-only disposable fixture audit in a separate worker and Git worktree. Independent tasks may run concurrently in separate workers. Queued dispatch is not completion. Reuse requestId for retries.',
     inputSchema: object({ requestId: taskIdentifier, ticket: string('Development ticket, e.g. AI-004', 120), brief: string('Agreed bounded task brief and explicit scope limits'), repositoryId: string('Exact configured repository ID', 80) }, ['requestId', 'ticket', 'brief', ...(repositoryMode ? ['repositoryId'] : [])]),
   },
   { name: 'get_status', description: 'Read durable actual worker status, meaningful reports, questions and pending attention. Dispatch is not completion. Do not repeat low-level logs aloud.', inputSchema: object({ taskId: taskIdentifier }) },
   { name: 'answer_question', description: 'Relay the user answer to the currently pending worker question. This queues a controller resume; never invent user consent or expand the brief.', inputSchema: object({ taskId: taskIdentifier, questionId: string('Exact active question ID', 160), answer: string('User answer within agreed scope') }, ['taskId', 'questionId', 'answer']) },
+  { name: 'worker_action', description: 'Request a lifecycle change for one explicitly selected worker. Actions are durable queued intent: read status for actual execution. Stop retains task, history and worktree; pause retains resumable work; resume/start continues the same task; dispose tears down only a safely removable inactive worktree and retains records. Never invent user consent or expand scope. Use the current run ID from get_status to reject stale actions and reuse actionId for retries.', inputSchema: object({ taskId: taskIdentifier, actionId: taskIdentifier, action: { type: 'string', enum: ['stop', 'pause', 'resume', 'start', 'dispose'] }, expectedRunId: string('Current run ID read from get_status, when a run exists', 160) }, ['taskId', 'actionId', 'action']) },
   { name: 'acknowledge_attention', description: 'Mark one attention item acknowledged after discussing it with the user. Does not launch work, activate a microphone or grant speaking permission.', inputSchema: object({ taskId: taskIdentifier, attentionId: string('Exact attention ID', 160) }, ['taskId', 'attentionId']) },
 ] : [
   { name: 'report', description: 'Write a durable report for this bound task/run only. Give one useful progress update. For question: record the question, END this turn and wait for controller resume; do not keep polling or continue without the answer. For result: provide concrete evidence; this is a terminal candidate, not verified completion. Reuse reportId for retries.', inputSchema: object({ reportId: string('Unique stable report ID within this run', 160), kind: { type: 'string', enum: ['progress', 'question', 'result', 'blocked'] }, message: string('Useful bounded progress, question, result or blocker'), evidence: { type: 'array', maxItems: 20, items: string('Concrete evidence; no secrets', 2000) } }, ['reportId', 'kind', 'message']) },
@@ -59,6 +60,7 @@ async function callTool(name, args) {
     }
     case 'get_status': return args.taskId ? scoped(await readTask(stateDir, args.taskId)) : (await loadTasks(stateDir)).map(scoped);
     case 'answer_question': scoped(await readTask(stateDir, args.taskId)); return answerQuestion(stateDir, args);
+    case 'worker_action': scoped(await readTask(stateDir, args.taskId)); return requestWorkerAction(stateDir, args);
     case 'acknowledge_attention': scoped(await readTask(stateDir, args.taskId)); return acknowledgeAttention(stateDir, args);
   }
 }

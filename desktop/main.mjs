@@ -7,6 +7,8 @@ import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readSetupConfig, saveSetupConfig, checkLocalRuntime, probeCodex, probePaths, setupInputsKey, applyDiscoveryDraft, requestMicrophonePermission } from './setup-service.mjs';
 import { discoverProject } from '../project-discovery.mjs';
+import {discoverRepository,discoverLinearOptions,verifyReference} from './project-options.mjs';
+import {composeProjectSetup,assertLinearSelection} from './project-setup.mjs';
 import { randomUUID } from 'node:crypto';
 import { relative, sep, isAbsolute } from 'node:path';
 import { prepareCrewStorage } from './storage.mjs';
@@ -27,7 +29,8 @@ app.setPath('crashDumps',join(desktopData,'crash-dumps'));
 app.setAppLogsPath(join(desktopData,'logs'));
 app.setName('Crew');
 const locked = app.requestSingleInstanceLock({ configPath });
-let discoveryController, discoveryRoot, discoveryProposal;
+let discoveryController, discoveryRoot, discoveryProposal, discoverySummary, linearOptions, discoveryPhase;
+const repositoryOptions=new Map();
 let setupWindow, setupChecks = {}, setupRevision, setupInputs, setupOperation = false;
 let window, tray, config, origin, backend, pollTimer, starting = false, quitting = false, closing = false;
 let counts = { active: null, pending: null }, lastError = null, backendReady = false;
@@ -204,7 +207,7 @@ async function quitInstance() {
   }
 }
 // Setup uses a separate trusted local page. The manager renderer has no preload.
-function projectDraftStatus(issues=[]) {return {status:issues.length?'incomplete':'configured',detail:issues.join(' ')||'Local project configuration validated. External access is not yet verified.'};}
+function projectDraftStatus(issues=[]) {const detail=issues.map(issue=>/teamId|teamKey/.test(issue)?'Choose your Linear team, or connect it later before assigning ticketed work.':/baseRef/.test(issue)?'Choose a starting branch for each project folder.':/path/.test(issue)?'Choose your local project folder.':issue);return {status:issues.length?'incomplete':'configured',detail:[...new Set(detail)].join(' ')||'Project settings are saved. Ticket access is checked when you ask for work.'};}
 function microphoneStatus() {
   try { const status = systemPreferences.getMediaAccessStatus('microphone'); return ['granted','denied','restricted','not-determined'].includes(status) ? status : 'unknown'; }
   catch { return 'unknown'; }
@@ -217,7 +220,9 @@ async function setupSnapshot() {
   const currentInputs=await setupInputsKey(configPath);
   if ((setupRevision && setupRevision !== value.revision) || (setupInputs && setupInputs!==currentInputs)) {setupChecks = {};discoveryProposal=undefined;}
   setupRevision = value.revision;setupInputs=currentInputs;
-  return { ...value, proposal:discoveryProposal?.public, discoveryRoot, checks:setupChecks, microphone:microphoneStatus(), controllerRunning:backendReady, error:lastError };
+  if(!discoveryRoot)discoveryRoot=value.config.project.repositories.find(r=>r.path)?.path;
+  for(const repo of value.config.project.repositories.filter(r=>r.path))if(!repositoryOptions.has(repo.path)){let choice;try{choice=await discoverRepository({path:resolve(dirname(configPath),repo.path),env});}catch{choice={path:repo.path,name:repo.name,status:'unavailable',branches:[],detail:'This folder is unavailable. Choose its current location to reconnect it.'};}repositoryOptions.set(repo.path,choice);}
+  return { ...value, discoverySummary, linearOptions, repositoryOptions:[...repositoryOptions.values()], discoveryRoot, checks:setupChecks, microphone:microphoneStatus(), controllerRunning:backendReady, error:lastError };
 }
 async function openSetup() {
   if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.show(); setupWindow.focus(); return; }
@@ -274,7 +279,7 @@ ipcMain.handle('crew:setup', async (event, action, input) => {
   if (typeof action !== 'string') throw new Error('Invalid setup request.');
   // Serialize native checks/mutations. Snapshot is read-only and may run during a check.
   if (action === 'snapshot') return setupSnapshot();
-  if (action === 'cancel-discovery') {discoveryController?.abort();return {notice:'Cancellation requested. Active configuration remains unchanged.'};}
+  if (action === 'cancel-discovery') {if(discoveryPhase==='saving')return {notice:'Your validated settings are already saving. Please wait for the result.'};discoveryController?.abort();return {notice:'Canceling project setup. Your saved settings stay unchanged.'};}
   if (setupOperation) throw new Error('Another setup action is still running. Wait for it to finish.');
   setupOperation = true;
   try {
@@ -293,49 +298,67 @@ ipcMain.handle('crew:setup', async (event, action, input) => {
     }
     if(action==='choose-discovery') {
       const selected=await dialog.showOpenDialog(setupWindow,{title:'Choose a project to analyze (read-only)',defaultPath:discoveryRoot||app.getPath('home'),properties:['openDirectory']});
-      if(!selected.canceled){discoveryRoot=selected.filePaths[0];discoveryProposal=undefined;}
+      if(!selected.canceled){const choice=await discoverRepository({path:selected.filePaths[0],env});if(choice.status!=='verified')throw Error(choice.detail);discoveryRoot=choice.path;repositoryOptions.set(choice.path,choice);discoveryProposal=undefined;discoverySummary=undefined;}
       return setupSnapshot();
     }
     if(action==='discover') {
       if(!discoveryRoot)throw new Error('Choose a local project folder first.');
       const before=await readSetupConfig(configPath), inputs=await setupInputsKey(configPath);
-      discoveryController=new AbortController();
+      discoveryController=new AbortController();discoveryPhase='analyzing';
       try {
       const runtime=await checkRuntimeForSetup();
       if(!runtime.executable)throw new Error(runtime.checks.codex.detail);
       await checkAccountForSetup();
       if(setupChecks.auth?.status!=='verified')throw new Error('ChatGPT sign-in is required for optional project analysis.');
       if(discoveryController.signal.aborted)throw new Error('Project analysis canceled. Active configuration is unchanged.');
-        const proposal=await discoverProject({repositoryRoot:discoveryRoot,codexBinary:runtime.executable,env,signal:discoveryController.signal});
+        const [proposal,repository,linear]=await Promise.all([
+          discoverProject({repositoryRoot:discoveryRoot,codexBinary:runtime.executable,env,signal:discoveryController.signal}),
+          discoverRepository({path:discoveryRoot,env}),
+          discoverLinearOptions({executable:runtime.executable,root,env,signal:discoveryController.signal}).catch(error=>({status:'unavailable',detail:safe(error),teams:[],projects:[]}))
+        ]);
         await assertSetupInputs(inputs);
-        const token=randomUUID(), promptDirectory=join('prompts',`discovery-${token}`);
-        const draft=structuredClone(proposal.config);draft.runtime=structuredClone(before.config.runtime);
+        if(discoveryController.signal.aborted)throw Error('Project setup canceled. Your saved settings are unchanged.');
+        linearOptions=linear;repositoryOptions.set(repository.path,repository);
+        const token=randomUUID(),promptDirectory=join('prompts',`discovery-${token}`);
+        const currentRepository=before.config.project.repositories.find(r=>r.path===repository.path);
+        if(currentRepository?.baseRef){try{await verifyReference({path:repository.path,ref:currentRepository.baseRef,env});repository.verifiedExistingRef=currentRepository.baseRef;}catch{}}
+        const draft=composeProjectSetup({proposal,current:before.config,repository,linear});
         try {await access(join(resolve(dirname(configPath),before.config.runtime.dataDir),'orchestration/instance-project.json'));draft.project.id=before.config.project.id;}catch{}
+        try {await access(join(resolve(dirname(configPath),before.config.runtime.dataDir),'manager-chat.json'));draft.project.id=before.config.project.id;}catch{}
         draft.project.prompts={manager:join(promptDirectory,'manager.md'),worker:join(promptDirectory,'worker.md')};
-        discoveryProposal={revision:before.revision,inputs,promptDirectory,repositoryRoot:proposal.evidence.repositoryRoot,public:{...proposal,config:draft,token,files:[configPath,resolve(dirname(configPath),draft.project.prompts.manager),resolve(dirname(configPath),draft.project.prompts.worker)]}};
+        const inside=relative(repository.path,resolve(dirname(configPath),promptDirectory));
+        if(!inside || (inside!=='..'&&!inside.startsWith(`..${sep}`)&&!isAbsolute(inside)))throw Error('Crew settings must be outside the project folder. Choose a separate configuration location.');
+        const wasRunning=backendReady;
+        if(backend&&!backendReady)throw Error('The manager is still starting. Wait, then try again.');
+        if(wasRunning){await poll();const state=await api('state');if(counts.active!==0||state.activeTurnId||state.voiceActive||state.voiceConnecting)throw Error('Finish active work and disconnect voice before updating this project. Your saved settings are unchanged.');await stopOwnedBackend();}
+        try {
+          if(discoveryController.signal.aborted)throw Error('Project setup canceled. Your saved settings are unchanged.');
+          await assertSetupInputs(inputs);discoveryPhase='saving';
+          const applied=await applyDiscoveryDraft({root,configPath,env,revision:before.revision,config:draft,managerDraft:proposal.managerDraft,workerDraft:proposal.workerDraft,promptDirectory});
+          setupRevision=applied.revision;setupInputs=await setupInputsKey(configPath);setupChecks={project:projectDraftStatus(applied.issues)};lastError=null;
+          discoveryRoot=repository.path;
+          discoverySummary={name:draft.project.name,path:repository.path,branch:draft.project.repositories[0].baseRef,sources:proposal.evidence.sources,truncated:proposal.evidence.truncated,findings:proposal.findings,questions:proposal.confirmations};
+        } finally {if(wasRunning)await startup({showWindow:false});}
         return setupSnapshot();
-      } finally {discoveryController=undefined;}
+      } finally {discoveryController=undefined;discoveryPhase=undefined;}
     }
-    if(action==='discard-discovery') {discoveryProposal=undefined;return setupSnapshot();}
-    if(action==='apply-discovery') {
-      const saved=discoveryProposal;
-      if(!saved || input?.token!==saved.public.token || input?.reviewed!==true)throw new Error('Review the current proposal and explicitly approve its files before applying it.');
-      if((await readSetupConfig(configPath)).revision!==saved.revision)throw new Error('Configuration changed after analysis. Reload and analyze again; nothing was applied.');
-      await assertSetupInputs(saved.inputs);
-      const promptTarget=resolve(dirname(configPath),saved.promptDirectory), inside=relative(saved.repositoryRoot,promptTarget);
-      if(!inside || (inside!=='..' && !inside.startsWith(`..${sep}`) && !isAbsolute(inside)))throw new Error('Keep Crew configuration and generated prompts outside the analyzed repository. Choose an external instance configuration first.');
-      const wasRunning=backendReady;
-      if(backend && !backendReady)throw new Error('Controller startup/shutdown is pending. Retry once it has finished.');
-      if(wasRunning){await poll();const state=await api('state');if(counts.active!==0||state.activeTurnId||state.voiceActive||state.voiceConnecting)throw new Error('Finish active tasks and disconnect voice before applying the reviewed proposal. Nothing was applied.');await stopOwnedBackend();}
-      try {const applied=await applyDiscoveryDraft({root,configPath,env,revision:saved.revision,config:input.config,managerDraft:input.managerDraft,workerDraft:input.workerDraft,promptDirectory:saved.promptDirectory});discoveryProposal=undefined;setupRevision=applied.revision;setupInputs=await setupInputsKey(configPath);setupChecks={project:projectDraftStatus(applied.issues)};lastError=null;}
-      finally {if(wasRunning)await startup({showWindow:false});}
-      return setupSnapshot();
+    if(action==='linear-options') {
+      const runtime=await checkRuntimeForSetup();if(!runtime.executable)throw Error(runtime.checks.codex.detail);
+      const inputs=await setupInputsKey(configPath);
+      const next=await discoverLinearOptions({executable:runtime.executable,root,env,teamId:typeof input==='string'?input:undefined});
+      await assertSetupInputs(inputs);linearOptions=next;return setupSnapshot();
+    }
+    if(action==='repository-options') {
+      if(typeof input!=='string'||input.length>4096)throw Error('Choose a local folder first.');
+      const choice=await discoverRepository({path:input,env});if(choice.status!=='verified')throw Error(choice.detail);repositoryOptions.set(choice.path,choice);return choice;
     }
     if(action==='runtime') {await checkRuntimeForSetup();return setupSnapshot();}
     if(action==='account' || action==='login') {await checkAccountForSetup(action==='login');return setupSnapshot();}
     if(action==='save') {
       if(backend && !backendReady)throw new Error('Controller startup/shutdown is still pending. Quit this instance safely before editing configuration.');
       if(!input || typeof input.revision!=='string')throw new Error('Reload configuration before saving.');
+      for(const repo of input.config?.project?.repositories||[])if(repo.path&&repo.baseRef)await verifyReference({path:repo.path,ref:repo.baseRef,env});
+      assertLinearSelection(input.config?.project?.linear||{},linearOptions);
       const options={root,configPath,input:input.config,revision:input.revision,env};
       await saveSetupConfig({...options,dryRun:true});
       const wasRunning=backendReady;
