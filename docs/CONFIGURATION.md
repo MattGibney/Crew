@@ -32,3 +32,7 @@ Discovery order: explicit AI_MANAGER_CODEX_BINARY/CODEX_BINARY or runtime.codexB
 To use another business, create another instance directory/config, dataDir and port. Never repoint an existing instance's state at another project. Logs, backing chat history and task files must remain bound to the same configured project.
 
 Worker lifecycle and hook semantics are documented in [WORKERS.md](WORKERS.md). Environment hook commands run directly without a shell, take an explicit args array and timeoutMs of 1000–600000. Only configured scoped resource handling is supported; Crew does not automatically provision Set1 services or clean shared infrastructure.
+
+## Project execution plan
+
+`project.worker.environment.executionPlan` retains version 1 source hashes and optional setup, start, resume, ready, stop and teardown phases. Each phase stores the exact script, its source path/hash and a bounded timeout. Guided discovery reads existing Codex environment setup and Start actions; no project patch or specific lifecycle API is required. Scripts use the worker worktree as cwd. Optional `env.PATH` selects installed tools locally. Generic argv hooks remain supported separately. See [Project execution](PROJECT-ENVIRONMENTS.md).

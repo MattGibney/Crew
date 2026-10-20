@@ -15,7 +15,7 @@ export async function reconcileEnvironment({stateDir,taskId,stop=false}){
   const expected=path.join(stateDir,'runs',taskId,'environment',hook.id);if(hook.runDir!==expected)throw new Error('Environment ownership is invalid; nothing was removed.');
   if(stop)await save(path.join(expected,'control.json'),{id:hook.id,action:'stop',at:now()});
   const exit=await json(path.join(expected,'exit.json'));
-  if(exit?.id===hook.id&&exit.confirmed){Object.assign(hook,{status:exit.status,exitCode:exit.exitCode,timedOut:exit.timedOut,canceled:exit.canceled,endedAt:exit.at});if(exit.status!=='succeeded')environment.status='failed';}
+  if(exit?.id===hook.id&&exit.confirmed){Object.assign(hook,{status:exit.status,exitCode:exit.exitCode,timedOut:exit.timedOut,canceled:exit.canceled,endedAt:exit.at,diagnostics:exit.diagnostics||null});if(exit.status!=='succeeded')environment.status='failed';}
   else pending=true;
  }
  if(pending){environment.pending=true;await save(file,environment);return environment;}
@@ -39,7 +39,7 @@ export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},pha
    await save(file,environment);await onEvidence(environment);
    let exit;for(;;){exit=await json(path.join(runDir,'exit.json'));if(exit?.id===id)break;if(spawnError)throw new Error(`Could not start ${phase} supervisor (${spawnError}).`);if(closed)throw new Error(`${phase} supervisor exited without a stop confirmation. Preserve this environment and inspect its state.`);await sleep(75);}
    if(!exit.confirmed)throw new Error(`${phase} command descendants have not confirmed they stopped. Preserve this environment and inspect its state.`);
-   Object.assign(evidence,{status:exit.status,exitCode:exit.exitCode,timedOut:exit.timedOut,canceled:exit.canceled,endedAt:exit.at});
+   Object.assign(evidence,{status:exit.status,exitCode:exit.exitCode,timedOut:exit.timedOut,canceled:exit.canceled,endedAt:exit.at,diagnostics:exit.diagnostics||null});
    if(exit.status!=='succeeded')throw new Error(`${phase} environment hook ${exit.timedOut?'timed out':exit.canceled?'was canceled':`failed (exit ${exit.exitCode}${exit.error?`, ${exit.error}`:''})`}. Check the configured command before retrying.`);
   }catch(error){environment.status='failed';if(evidence.status!=='running')evidence.status='failed';evidence.error=error.message;throw error;}
   finally{signal?.removeEventListener('abort',abort);await save(file,environment);await onEvidence(environment);}

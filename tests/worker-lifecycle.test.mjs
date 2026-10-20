@@ -78,3 +78,13 @@ test('manager lifecycle MCP is project-scoped; bound worker exposes reports only
  const workerDenied=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/call',{name:'worker_action',arguments:args});
  assert.equal(workerDenied.isError,true);assert.match(workerDenied.content[0].text,/Unknown tool/);
 });
+
+
+test('answering a retained stopped or paused question resumes the same task and rejects competing lifecycle intent',async()=>{
+ const dir=await fixture();
+ for(const [index,status]of ['stopped','paused'].entries()){
+  const id=`question-worker-${index}`,runId=`question-run-${index}`;await running(dir,id,runId);await reportTask(dir,id,runId,{reportId:'retained-question',kind:'question',message:'Continue this same work?'});await updateTask(dir,id,t=>{t.status=status;t.question={id:'retained-question',runId,message:'Continue this same work?'};});
+  const action=await requestWorkerAction(dir,{taskId:id,actionId:`pending-stop-${index}`,action:'stop',expectedRunId:runId});await assert.rejects(answerQuestion(dir,{taskId:id,questionId:'retained-question',answer:'Yes, resume the same task.'}),/pending worker lifecycle/);
+  await updateTask(dir,id,t=>{t.lifecycleRequests[0].status='completed';});const answered=await answerQuestion(dir,{taskId:id,questionId:'retained-question',answer:'Yes, resume the same task.'});assert.equal(answered.status,'resume_queued');assert.equal(answered.runId,runId);assert.equal(answered.answer.questionId,'retained-question');
+ }
+});

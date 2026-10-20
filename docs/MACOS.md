@@ -14,7 +14,7 @@ The Electron package supplies Chromium and Node; Node need not be installed sepa
 
 ## Install and configure
 
-1. Open `Crew-0.5.0-arm64.dmg` and drag the app to Applications. ZIP is an alternative distribution of the same app.
+1. Open `Crew-0.6.0-arm64.dmg` and drag the app to Applications. ZIP is an alternative distribution of the same app.
 2. Launch **Crew**. This build is unsigned and unnotarized. If macOS blocks it, use its explicit **Open Anyway** approval in System Settings → Privacy & Security after checking the artifact's source and checksum. Do not disable Gatekeeper globally.
 3. First launch creates an incomplete Set1 template at `~/Library/Application Support/Crew/instances/default/project.json`, plus editable `prompts/manager.md` and `prompts/worker.md`. Existing files are not overwritten. No worker starts automatically.
 4. Follow the guided setup, or use **Set up Crew…** from the app/menu-bar menu. The configuration form, optional project-folder analysis and direct file actions edit those same files. Confirm the project context/components, repository paths, existing committed base refs and Linear identifiers. Set1 is a starting template, not the application's identity. See [configuration reference](CONFIGURATION.md).

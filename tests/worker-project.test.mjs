@@ -19,7 +19,7 @@ async function repository(base) {
   return repo;
 }
 function profile(repo) { return { id: 'example', name: 'Example', mode: 'repository', context: 'Example context', repositories: [{ id: 'app', path: repo, baseRef: 'main' }], linear: { teamKey: 'EX' }, worker: { sandbox: 'read-only', timeoutMs: 10000 }, readiness: { ready: true, issues: [] } }; }
-async function mockedCodex(base, fixture = false, edit = false) {
+async function mockedCodex(base, fixture = false, edit = false, {finalMessage=true,durableResult=true} = {}) {
   const file = path.join(base, 'codex-mock.mjs');
   await writeFile(file, `#!/usr/bin/env node
 import {execFileSync} from 'node:child_process';
@@ -31,8 +31,8 @@ const worktree=process.cwd(); if (${edit}) writeFileSync('example.txt','edited\\
 console.log(JSON.stringify({type:'thread.started',thread_id:'mock-thread'}));
 console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'git status --porcelain',exit_code:0,aggregated_output:output}}));
 if (${fixture}) console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'node --input-type=module import totals.mjs',exit_code:0,aggregated_output:execFileSync(process.execPath,['--input-type=module','-e','import {sum} from \"./src/totals.mjs\";console.log(JSON.stringify({emptyActual:sum([]),sumActual:sum([1,2,3])}));'],{encoding:'utf8'})}}));
-await reportTask(state,task,run,{reportId:'result',kind:'result',message:'Audit complete',evidence:${fixture ? JSON.stringify([JSON.stringify({emptyActual:1,sumActual:7,emptyExpected:0,sumExpected:6,finding:'initial_value_one'})]) : JSON.stringify(['Actual git status command succeeded; no semantic tests performed.'])}});
-console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Audit complete'}}));
+if(${durableResult})await reportTask(state,task,run,{reportId:'result',kind:'result',message:'Audit complete',evidence:${fixture ? JSON.stringify([JSON.stringify({emptyActual:1,sumActual:7,emptyExpected:0,sumExpected:6,finding:'initial_value_one'})]) : JSON.stringify(['Actual git status command succeeded; no semantic tests performed.'])}});
+if(${finalMessage})console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Audit complete'}}));
 console.log(JSON.stringify({type:'turn.completed'}));
 `); await chmod(file, 0o700); return file;
 }
@@ -57,7 +57,9 @@ test('repository worker executes in a durable isolated worktree and verification
   try {
     const task=await terminal(controller,state,'repository-test-1');
     assert.equal(task.status,'completed',task.failure); assert.equal(task.projectId,'example');
-    assert.equal(task.worktree,path.join(state,'worktrees',task.id));
+    assert.match(task.worktreeName,/^crew-[a-f0-9]{32}$/);
+    assert.equal(task.worktreeName.length,37);
+    assert.equal(task.worktree,path.join(state,'worktrees',task.worktreeName));
     assert.notEqual(await realpath(task.worktree),await realpath(repo));
     assert.equal(task.result.verification.semanticCorrectnessVerified,false); assert.equal(task.result.verification.clean,true);
     const run=JSON.parse(await readFile(path.join(task.runDir,'config.json'),'utf8'));
@@ -132,4 +134,14 @@ test('resume refuses changed sandbox without creating another run or supervisor'
     assert.ok(priorRunEntries.includes(prior.runId));
     assert.equal(task.workerSandbox,'read-only');
   }finally{await controller.stop();}
+});
+
+
+test('durable MCP result completes without assistant text, while assistant text alone never replaces a result',async()=>{
+ for(const resultOnly of [true,false]){
+  const base=await mkdtemp(path.join(os.tmpdir(),'crew-terminal-contract-')),repo=await repository(base),state=path.join(base,'state'),id=resultOnly?'worker-result-only':'worker-no-result';await createTask(state,{requestId:id,ticket:'EX-12',brief:'Verify terminal evidence without invented final text',projectId:'example',repositoryId:'app'});
+  const controller=await createController({stateDir:state,sourceDir,executable:await mockedCodex(base,false,false,{finalMessage:!resultOnly,durableResult:resultOnly}),project:profile(repo)});
+  try{const task=await terminal(controller,state,id),exit=JSON.parse(await readFile(path.join(task.runDir,'exit.json'),'utf8'));assert.equal(exit.exitCode,0);assert.equal(exit.completedTurn,true);assert.equal(exit.stopConfirmed,true);if(resultOnly){assert.equal(task.status,'completed',task.failure);assert.equal(task.result.message,'Audit complete');assert.equal(task.result.finalMessage,'');assert.equal(exit.finalMessage,'');assert.equal(task.result.verification.semanticCorrectnessVerified,false);assert.equal(task.result.verification.clean,true);}else{assert.equal(task.status,'failed');assert.match(task.failure,/without a durable question or result/);assert.equal(task.result,undefined);}}
+  finally{await controller.stop();}
+ }
 });

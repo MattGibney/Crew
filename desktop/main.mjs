@@ -9,6 +9,8 @@ import { readSetupConfig, saveSetupConfig, checkLocalRuntime, probeCodex, probeP
 import { discoverProject } from '../project-discovery.mjs';
 import {discoverRepository,discoverLinearOptions,verifyReference} from './project-options.mjs';
 import {composeProjectSetup,assertLinearSelection} from './project-setup.mjs';
+import {discoverWorkerEnvironment,assertWorkerEnvironmentSelection} from './environment-options.mjs';
+import {selectExecutionPlan} from './execution-selection.mjs';
 import { randomUUID } from 'node:crypto';
 import { relative, sep, isAbsolute } from 'node:path';
 import { prepareCrewStorage } from './storage.mjs';
@@ -222,7 +224,8 @@ async function setupSnapshot() {
   setupRevision = value.revision;setupInputs=currentInputs;
   if(!discoveryRoot)discoveryRoot=value.config.project.repositories.find(r=>r.path)?.path;
   for(const repo of value.config.project.repositories.filter(r=>r.path))if(!repositoryOptions.has(repo.path)){let choice;try{choice=await discoverRepository({path:resolve(dirname(configPath),repo.path),env});}catch{choice={path:repo.path,name:repo.name,status:'unavailable',branches:[],detail:'This folder is unavailable. Choose its current location to reconnect it.'};}repositoryOptions.set(repo.path,choice);}
-  return { ...value, discoverySummary, linearOptions, repositoryOptions:[...repositoryOptions.values()], discoveryRoot, checks:setupChecks, microphone:microphoneStatus(), controllerRunning:backendReady, error:lastError };
+  const workerEnvironmentOptions=await Promise.all(value.config.project.repositories.map(async repo=>({...await discoverWorkerEnvironment({path:repo.path?resolve(dirname(configPath),repo.path):null,baseRef:repo.baseRef,env}),repositoryId:repo.id,path:repo.path,baseRef:repo.baseRef})));
+  return { ...value, workerEnvironmentOptions, discoverySummary, linearOptions, repositoryOptions:[...repositoryOptions.values()], discoveryRoot, checks:setupChecks, microphone:microphoneStatus(), controllerRunning:backendReady, error:lastError };
 }
 async function openSetup() {
   if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.show(); setupWindow.focus(); return; }
@@ -323,6 +326,8 @@ ipcMain.handle('crew:setup', async (event, action, input) => {
         const currentRepository=before.config.project.repositories.find(r=>r.path===repository.path);
         if(currentRepository?.baseRef){try{await verifyReference({path:repository.path,ref:currentRepository.baseRef,env});repository.verifiedExistingRef=currentRepository.baseRef;}catch{}}
         const draft=composeProjectSetup({proposal,current:before.config,repository,linear});
+        {const execution=await discoverWorkerEnvironment({path:repository.path,baseRef:draft.project.repositories[0]?.baseRef,env}),saved=draft.project.worker?.environment?.executionPlan;if(saved&&execution.plan){const action=execution.actions.find(item=>item.command===saved.start?.command);draft.project.worker.environment={executionPlan:selectExecutionPlan({discovered:execution.plan,saved,action})};}else if(!Object.keys(draft.project.worker?.environment||{}).length&&execution.plan&&(execution.plan.setup||execution.plan.start))draft.project.worker.environment={executionPlan:execution.plan};}
+        if(draft.project.worker?.environment?.executionPlan){const options=await Promise.all(draft.project.repositories.map(async repo=>({...await discoverWorkerEnvironment({path:repo.path,baseRef:repo.baseRef,env}),repositoryId:repo.id,path:repo.path,baseRef:repo.baseRef})));assertWorkerEnvironmentSelection(draft,options);}
         try {await access(join(resolve(dirname(configPath),before.config.runtime.dataDir),'orchestration/instance-project.json'));draft.project.id=before.config.project.id;}catch{}
         try {await access(join(resolve(dirname(configPath),before.config.runtime.dataDir),'manager-chat.json'));draft.project.id=before.config.project.id;}catch{}
         draft.project.prompts={manager:join(promptDirectory,'manager.md'),worker:join(promptDirectory,'worker.md')};
@@ -358,6 +363,7 @@ ipcMain.handle('crew:setup', async (event, action, input) => {
       if(backend && !backendReady)throw new Error('Controller startup/shutdown is still pending. Quit this instance safely before editing configuration.');
       if(!input || typeof input.revision!=='string')throw new Error('Reload configuration before saving.');
       for(const repo of input.config?.project?.repositories||[])if(repo.path&&repo.baseRef)await verifyReference({path:repo.path,ref:repo.baseRef,env});
+      if(input.config?.project?.worker?.environment?.executionPlan){const options=await Promise.all(input.config.project.repositories.map(async repo=>({...await discoverWorkerEnvironment({path:repo.path,baseRef:repo.baseRef,env}),repositoryId:repo.id,path:repo.path,baseRef:repo.baseRef})));assertWorkerEnvironmentSelection(input.config,options);}
       assertLinearSelection(input.config?.project?.linear||{},linearOptions);
       const options={root,configPath,input:input.config,revision:input.revision,env};
       await saveSetupConfig({...options,dryRun:true});

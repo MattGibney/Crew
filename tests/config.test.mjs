@@ -136,3 +136,11 @@ test('environment hook validation rejects unknown settings, unsafe shapes and un
     await assert.rejects(fixture.load(), /project.worker.environment/);
   }
 });
+
+test('project execution plans retain exact scripts and require source provenance',async()=>{
+ const fixture=await setup(),source={path:'.codex/environments/environment.toml',sha256:'a'.repeat(64)},plan={schemaVersion:1,sources:[source],setup:{command:'./existing setup\n',source,timeoutMs:600000},start:null,resume:null,ready:null,stop:null,teardown:null};
+ fixture.config.project.worker.environment={executionPlan:plan};await fixture.save(fixture.config);await assert.rejects(fixture.load(),/repository mode/);
+ fixture.config.project.mode='repository';await fixture.save(fixture.config);assert.deepEqual((await fixture.load()).project.worker.environment,{executionPlan:plan});
+ for(const invalid of [{...plan,sources:[]},{...plan,setup:{...plan.setup,source:{...source,path:'../outside'}}},{...plan,setup:{...plan.setup,timeoutMs:1}},{...plan,env:{SECRET:'not-accepted'}}]){fixture.config.project.worker.environment={executionPlan:invalid};await fixture.save(fixture.config);await assert.rejects(fixture.load());}
+ fixture.config.project.worker.environment={preset:'set1'};await fixture.save(fixture.config);await assert.rejects(fixture.load(),/Unknown project.worker.environment/);
+});

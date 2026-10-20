@@ -18,6 +18,7 @@ export function composeProjectSetup({proposal,current,repository,linear}) {
  if(current.project.worker)config.project.worker=structuredClone(current.project.worker);
  const existingRepository=current.project.repositories.find(r=>r.path===repository.path);
  const sameFolder=Boolean(existingRepository);
+ if(!sameFolder&&Object.keys(config.project.worker?.environment||{}).length)config.project.worker.environment={};
  if(sameFolder&&current.project.id)config.project.id=current.project.id;
  if(sameFolder && !/draft|configure before|your project|AI-\d/i.test(current.project.name))config.project.name=current.project.name;
  const existingRef=existingRepository?.baseRef;

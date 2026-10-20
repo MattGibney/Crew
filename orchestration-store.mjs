@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import {snapshotProcesses} from './process-ownership.mjs';
 
 const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
@@ -44,16 +45,49 @@ async function loadUnlocked(dir) {
   }
   return tasks;
 }
-async function lock(dir, name, fn) {
-  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const lockPath = path.join(dir, name);
-  const deadline = Date.now() + 5000;
-  let handle;
-  while (!handle) {
-    try { handle = await fs.open(lockPath, 'wx', 0o600); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; if (Date.now() >= deadline) throw new Error(`State lock busy: ${name}; inspect controller before retrying`); await pause(25); }
+let processIdentity;
+async function ownIdentity(){
+  if(!processIdentity)processIdentity=snapshotProcesses().then(rows=>{const identity=rows.get(process.pid);if(!identity)throw new Error('Cannot verify state-lock process identity.');return{pid:process.pid,start:identity.start};}).catch(error=>{processIdentity=null;throw error;});
+  return processIdentity;
+}
+async function lockOwner(lockPath){try{return JSON.parse(await fs.readFile(path.join(lockPath,'owner.json'),'utf8'));}catch(error){if(['ENOENT','ENOTDIR'].includes(error.code))return null;throw error;}}
+async function ownerActive(owner){
+  if(!owner||!Number.isSafeInteger(owner.pid)||typeof owner.start!=='string'||typeof owner.token!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner.token))return true; // unknown is never permission to steal
+  if(owner.pid===process.pid)return owner.start===(await ownIdentity()).start;
+  try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')return false;return true;}
+  try{const actual=(await snapshotProcesses()).get(owner.pid);return Boolean(actual&&actual.start===owner.start&&!actual.state?.includes('Z'));}catch{return true;}
+}
+async function lock(dir,name,fn){
+  await fs.mkdir(dir,{recursive:true,mode:0o700});
+  const lockPath=path.join(dir,name),token=randomUUID(),candidate=`${lockPath}.candidate-${token}`,owner={...await ownIdentity(),token,at:now()};
+  // Publish a complete, nonempty owner directory atomically. A process killed
+  // before publication leaves only its private candidate, never an empty lock.
+  await fs.mkdir(candidate,{mode:0o700});await fs.writeFile(path.join(candidate,'owner.json'),JSON.stringify(owner),{mode:0o600});
+  const deadline=Date.now()+5000;let acquired=false;
+  try{
+    while(!acquired){
+      try{await fs.rename(candidate,lockPath);acquired=true;}
+      catch(error){
+        if(!['EEXIST','ENOTEMPTY','ENOTDIR'].includes(error.code))throw error;
+        const previous=await lockOwner(lockPath);
+        if(previous&&!await ownerActive(previous)){
+          // A deterministic nonempty tombstone prevents two stale observers from
+          // renaming a newly acquired lock after the first observer recovered it.
+          try{await fs.rename(lockPath,`${lockPath}.stale-${previous.token}`);}catch(recovery){if(!['EEXIST','ENOTEMPTY','ENOENT'].includes(recovery.code))throw recovery;}
+          continue;
+        }
+        if(Date.now()>=deadline)throw new Error(`State lock busy: ${name}; inspect its owner before retrying`);
+        await pause(25);
+      }
+    }
+    return await fn();
+  }finally{
+    if(acquired){const current=await lockOwner(lockPath);if(current?.token!==token)throw new Error(`State lock ownership changed: ${name}; no other lock was removed`);
+      // Move the entire lock away before deleting it: removing owner.json in
+      // place would briefly create an empty directory another writer can replace.
+      const released=`${lockPath}.released-${token}`;await fs.rename(lockPath,released);await fs.rm(released,{recursive:true});
+    }else await fs.rm(candidate,{recursive:true,force:true});
   }
-  try { return await fn(); } finally { await handle.close(); await fs.unlink(lockPath); }
 }
 async function atomic(file, content) {
   const temp = `${file}.${randomUUID()}.tmp`;
@@ -130,7 +164,8 @@ export async function answerQuestion(dir, { taskId, questionId, answer }) {
       if (task.answer.text !== answer) throw new Error('Question already answered differently');
       return;
     }
-    if (task.status !== 'awaiting_answer') throw new Error('Task is not awaiting this answer');
+    if (!['awaiting_answer', 'paused', 'stopped'].includes(task.status)) throw new Error('Task is not awaiting this answer');
+    if (task.lifecycleRequests?.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Wait for the pending worker lifecycle action before answering this question');
     task.answer = { questionId, text: answer, at: now() }; task.status = 'resume_queued';
   });
 }

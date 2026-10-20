@@ -84,7 +84,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       };
       proc.on('error', fail); proc.on('exit', () => fail(new Error('Codex process stopped. Reconnect to resume this chat.')));
       createInterface({ input: proc.stdout }).on('line', line => { try { handle(JSON.parse(line)); } catch (error) { emit('notice', { message: safeError(error) }); } });
-      await rpc('initialize', { clientInfo: { name: 'crew_manager', version: '0.5.0' }, capabilities: { experimentalApi: true, requestAttestation: false, mcpServerOpenaiFormElicitation: true } });
+      await rpc('initialize', { clientInfo: { name: 'crew_manager', version: '0.6.0' }, capabilities: { experimentalApi: true, requestAttestation: false, mcpServerOpenaiFormElicitation: true } });
       send({ method: 'initialized', params: {} });
       const { account } = await rpc('account/read', { refreshToken: false });
       if (account?.type !== 'chatgpt') throw new Error('ChatGPT sign-in required. API-key authentication is not allowed.');

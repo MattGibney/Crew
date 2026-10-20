@@ -258,9 +258,13 @@ function renderOrchestration(view) {
   $('worker-state').replaceChildren(...visible.map(task => {
     const section = document.createElement('div');
     const title = document.createElement('p'); title.textContent = `${task.ticket} · ${task.id} — ${task.status}`; section.append(title);
-    const progress = document.createElement('p'); progress.className = 'hint'; progress.textContent = task.result?.message || task.failure || task.progress || task.brief; section.append(progress);
-    if(task.execution?.startedAt){const timing=document.createElement('p');timing.className='hint';const end=task.execution.endedAt?Date.parse(task.execution.endedAt):task.execution.live?Date.now():Date.parse(task.updatedAt);const seconds=Math.max(0,Math.floor((end-Date.parse(task.execution.startedAt))/1000));timing.textContent=`${task.execution.live?'Execution live':'Execution ended'} · this run ${seconds}s${task.environment?.status?` · environment ${task.environment.status}`:''}`;section.append(timing);}
+    const progress = document.createElement('p'); progress.className = 'hint'; const brief=task.brief.length>220?`${task.brief.slice(0,220).trimEnd()}…`:task.brief; progress.textContent = task.result?.message || task.failure || task.progress || (task.status==='launching'&&task.environment?.kind==='project-execution'?'Running this project’s existing setup before work starts.':brief); section.append(progress);
+    if(task.execution?.startedAt&&task.harnessStarted===true){const timing=document.createElement('p');timing.className='hint';const end=task.execution.endedAt?Date.parse(task.execution.endedAt):task.execution.live?Date.now():Date.parse(task.updatedAt);const seconds=Math.max(0,Math.floor((end-Date.parse(task.execution.startedAt))/1000));timing.textContent=`${task.execution.live?'Execution live':'Execution ended'} · this run ${seconds}s${task.environment?.status?` · environment ${task.environment.status}`:''}`;section.append(timing);}
 
+    if(task.environment?.kind==='project-execution'){
+      const runtime=document.createElement('p');runtime.className='hint';runtime.textContent=`Project environment ${task.environment.id} · ${task.environment.status}`;section.append(runtime);
+      if(task.environment.urls?.web&&task.environment.status==='ready'){const address=document.createElement('p');address.className='hint';address.textContent=`Worker application: ${task.environment.urls.web}`;section.append(address);}
+    }
     for (const item of task.attention.filter(a => !a.ackedAt)) {
       const p = document.createElement('p'); p.textContent = item.message; section.append(p);
       const button = document.createElement('button'); button.textContent = 'Review with manager';

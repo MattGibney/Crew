@@ -34,6 +34,8 @@ Repository workers default to **read-only**. Set `project.worker.sandbox` to `wo
 
 Completed repository tasks mean the controller checked harness success, durable evidence, isolation, baseline and changed-file state. They do not establish code correctness or production behavior independently. Review test evidence and acceptance criteria with the manager.
 
+Crew reads existing project execution instructions and can run their setup and Start action unchanged in each worker’s worktree. It retains command provenance and runtime ownership across questions, resume and controller restarts. See [Project execution](docs/PROJECT-ENVIRONMENTS.md).
+
 ## Editable behavior
 
 - JSON defines the single project's context, components, repositories, Linear scope, permissions, port and state directory.
@@ -67,6 +69,6 @@ node cli.mjs package
 
 Use `--config path` consistently for independent instances. Foreground start is the default; `start --background` detaches the local controller without installing a daemon. Desktop startup never takes over an existing CLI-owned controller: stop that instance with its original CLI command first. Packages exclude local configuration, account credentials, conversations, worker state/worktrees and Git metadata.
 
-[Mac operations](docs/MACOS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Onboarding](docs/ONBOARDING.md) · [Storage migration](docs/STORAGE.md) · [Worker lifecycle](docs/WORKERS.md) · [AI-010](tickets/AI-010.md) · [AI-011](tickets/AI-011.md) · [Historical validation](docs/VALIDATION-HISTORY.md)
+[Mac operations](docs/MACOS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Onboarding](docs/ONBOARDING.md) · [Storage migration](docs/STORAGE.md) · [Worker lifecycle](docs/WORKERS.md) · [Project execution](docs/PROJECT-ENVIRONMENTS.md) · [AI-012](tickets/AI-012.md) · [AI-010](tickets/AI-010.md) · [AI-011](tickets/AI-011.md) · [Historical validation](docs/VALIDATION-HISTORY.md)
 
 The installed Electron lifecycle/fixture loop passed automated acceptance; live Electron microphone and agent conversation passed by user report. Fresh onboarding permission/denied recovery and sign-in need human confirmation when those states are present; consult the current ticket for measured results. The destination Mac's repository mapping, connector access and first business task still require validation. [Private Notion architecture/setup draft](https://app.notion.com/p/3ff2bdd9911181bfbac2c0495628fde8?pvs=204).

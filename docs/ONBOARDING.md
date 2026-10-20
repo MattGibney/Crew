@@ -12,6 +12,10 @@ Linear setup uses supported direct MCP reads in a short-lived ephemeral context,
 
 Branch and Linear choices save when selected. Advanced settings contain optional technical IDs, state paths and instruction-file locations; ordinary onboarding does not require raw JSON, Git ref syntax, Markdown editing or mandatory review checkboxes. A changed folder cannot silently inherit an unrelated project's team/project mapping. Existing task/chat identity and state directories remain protected, and active work/voice blocks applying settings.
 
+## Worker application environments (AI-012)
+
+Project setup reads existing committed Codex environment configuration and project instructions. Analysis can save the existing setup and Start action as a generic execution plan; **Worker application environment → Use existing project setup and Start action** also selects it. Missing readiness or teardown remains explicit. Saving runs no commands. Existing custom settings are retained, and changing project folders clears the old execution plan. See [Project execution](PROJECT-ENVIRONMENTS.md).
+
 ## Permissions and recovery
 
 Microphone permission is requested only by the user's explicit action, without a recording stream or voice call. Granted, denied, restricted, not-determined and unknown remain distinct. **Not now** defers voice. File checks probe the configured folders/branches/instruction files and a temporary write in Crew's state folder. These checks do not prove a worker's sandbox or a whole application environment is ready. There is no artificial LAN probe or blanket Local Network permission promise.

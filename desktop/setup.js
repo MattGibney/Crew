@@ -1,3 +1,4 @@
+import {selectExecutionPlan} from './execution-selection.mjs';
 /* AI-008: trusted local setup renderer; bounded preload API only. */
 const api=window.crewSetup, $=id=>document.getElementById(id);
 const labels=['Welcome','Local tools','ChatGPT & tools','Project','Permissions','Summary'];
@@ -50,13 +51,33 @@ function renderDiscovery(){
  const saved=snapshot?.config?.project.repositories?.find(r=>r.path)?.path;
  $('project-settings').hidden=!snapshot?.config||Boolean(snapshot.discoveryRoot&&snapshot.discoveryRoot!==saved);
 }
+
+function selectedExecutionPlan(){
+ const saved=snapshot?.config?.project.worker.environment?.executionPlan,option=snapshot?.workerEnvironmentOptions?.[0],selection=$('worker-environment').value;
+ const action=selection.startsWith('action:')?option.actions[Number(selection.slice(7))]:null;
+ return selectExecutionPlan({discovered:option.plan,saved,action});
+}
+function renderWorkerEnvironment(){
+ const select=$('worker-environment'),saved=snapshot?.config?.project.worker.environment||{},options=snapshot?.workerEnvironmentOptions||[];
+ select.replaceChildren();const add=(value,label,disabled=false)=>{const node=document.createElement('option');node.value=value;node.textContent=label;node.disabled=disabled;select.append(node);};
+ add('none','Separate worktree only');
+ const available=options.length===1&&options[0].status==='available',option=options[0];let selected='none';
+ if(available){add('project',option.plan.start?'Use existing project setup and Start action':'Use existing project setup',!option.plan.setup&&!option.plan.start);if(saved.executionPlan)selected='project';for(const [index,action]of(option.actions||[]).entries()){if(action.command===option.plan.start?.command)continue;const value=`action:${index}`;add(value,`Project action: ${action.name}`);if(saved.executionPlan?.start?.command===action.command)selected=value;}}
+ if(saved.executionPlan&&!available){add('custom','Saved project execution settings');selected='custom';}
+ const custom=Object.keys(saved).length&&!saved.executionPlan;if(custom){add('custom','Existing environment settings');selected='custom';}
+ select.value=selected;
+ $('worker-environment-detail').textContent=options.map(o=>o.detail).filter((v,i,a)=>a.indexOf(v)===i).join(' ')||'Choose a project folder and starting branch to read its execution instructions.';
+ $('worker-environment-settings').hidden=snapshot?.config?.project.mode==='fixture';
+}
+
 function fill(){renderStorage();$('initialize').hidden=!snapshot?.missingConfig;$('repair-config').hidden=Boolean(snapshot?.config);const raw=snapshot?.config;if(!raw){renderDiscovery();return;}$('instance').textContent='Your settings stay on this Mac and can be changed later.';
  for(const [id,value] of Object.entries({codex:raw.runtime.codexBinary||'',name:raw.project.name,id:raw.project.id,context:raw.project.context,mode:raw.project.mode,port:raw.runtime.port,'max-workers':raw.project.worker.maxConcurrent||2,'team-key':raw.project.linear.teamKey||'','team-id':raw.project.linear.teamId||'','linear-project':raw.project.linear.projectId||'','data-dir':raw.runtime.dataDir,'manager-prompt':raw.project.prompts.manager,'worker-prompt':raw.project.prompts.worker}))$(id).value=value;
- $('repositories').replaceChildren();raw.project.repositories.forEach(repo=>repositoryRow(repo));$('business-fields').hidden=raw.project.mode==='fixture';renderDiscovery();renderLinear();renderChecks();
+ $('repositories').replaceChildren();raw.project.repositories.forEach(repo=>repositoryRow(repo));$('business-fields').hidden=raw.project.mode==='fixture';renderDiscovery();renderLinear();renderWorkerEnvironment();renderChecks();
 }
-function collect(){if(!snapshot?.config)throw Error('Reload your saved settings before making changes.');const raw=structuredClone(snapshot.config);raw.runtime.codexBinary=$('codex').value.trim()||null;raw.runtime.port=Number($('port').value);raw.runtime.dataDir=$('data-dir').value.trim();Object.assign(raw.project,{id:$('id').value.trim(),name:$('name').value.trim(),context:$('context').value.trim(),mode:$('mode').value});raw.project.worker.maxConcurrent=Number($('max-workers').value);raw.project.prompts={manager:$('manager-prompt').value.trim(),worker:$('worker-prompt').value.trim()};raw.project.linear={teamKey:$('team-key').value.trim()||null,teamId:$('team-id').value.trim()||null,projectId:$('linear-project').value.trim()||null};raw.project.repositories=raw.project.mode==='fixture'?[]:[...$('repositories').children].map(row=>({...row.repository}));return raw;}
+function collect(){if(!snapshot?.config)throw Error('Reload your saved settings before making changes.');const raw=structuredClone(snapshot.config);raw.runtime.codexBinary=$('codex').value.trim()||null;raw.runtime.port=Number($('port').value);raw.runtime.dataDir=$('data-dir').value.trim();Object.assign(raw.project,{id:$('id').value.trim(),name:$('name').value.trim(),context:$('context').value.trim(),mode:$('mode').value});raw.project.worker.maxConcurrent=Number($('max-workers').value);if($('worker-environment').value!=='custom')raw.project.worker.environment=$('worker-environment').value==='project'||$('worker-environment').value.startsWith('action:')?{executionPlan:selectedExecutionPlan()}:{};raw.project.prompts={manager:$('manager-prompt').value.trim(),worker:$('worker-prompt').value.trim()};raw.project.linear={teamKey:$('team-key').value.trim()||null,teamId:$('team-id').value.trim()||null,projectId:$('linear-project').value.trim()||null};raw.project.repositories=raw.project.mode==='fixture'?[]:[...$('repositories').children].map(row=>({...row.repository}));return raw;}
 async function saveProject(label='Save project settings'){return action(label,async()=>{snapshot=await api.save({config:collect(),revision:snapshot.revision});fill();return{notice:'Project settings saved. No worker started.'};});}
 async function refresh(){snapshot=await api.snapshot();fill();renderChecks();if(snapshot.error)throw new Error(snapshot.error);}
+$('worker-environment').onchange=()=>saveProject('Save worker environment');
 for(const id of ['save-project','save-runtime'])$(id).onclick=()=>saveProject();
 $('runtime').onclick=()=>action('Check local tools',async()=>{snapshot=await api.runtime();renderChecks();});
 $('account').onclick=()=>action('Check sign-in and capabilities',async()=>{snapshot=await api.account();renderChecks();});
