@@ -74,7 +74,7 @@ if(m.method==='turn/interrupt'){clearInterval(timer);send({method:'turn/complete
  const followup=async(requestId,brief,from,extra={})=>{const task=from||await read();const args={taskId,requestId,expectedRunId:task.runId,expectedAssignmentId:store.currentAssignment(task).id,ticket:'GH-42',brief,userDecision:'The user explicitly authorizes this follow-up scope: '+brief,...extra};return{args,task:await store.requestWorkerFollowup(state,args)};};
  const calls=async()=>{try{return(await readFile(log,'utf8')).trim().split('\n').filter(Boolean).map(line=>JSON.parse(line));}catch(error){if(error.code==='ENOENT')return[];throw error;}};
  t.after(async()=>{try{const task=await read().catch(()=>null);if(task?.status==='failed')t.diagnostic(JSON.stringify({failure:task.failure,fixtureErrors:(await calls()).filter(c=>c.method==='fixture/error')}));if(task&&!['completed','stopped','paused','failed','blocked','disposed'].includes(task.status)){await action('pause');await wait(read,x=>['paused','stopped','failed'].includes(x.status),'cleanup stop');}}finally{await controller.stop();await rm(dir,{recursive:true,force:true});}});
- return{dir,repo,state,taskId,read,action,active,completed,finish,followup,calls,setAdmissionHeld:value=>{admissionHeld=value;},create:async()=>{await store.createTask(state,{requestId:taskId,ticket:'GH-42',brief:'Research only. Inspect the disposable fixture; do not edit it.',projectId:project.id,repositoryId:'repo'});await action('start');return active();},stopController:()=>controller.stop(),restart:async()=>{await controller.stop();controller=await createController(controllerOptions);},tick:()=>controller.tick()};
+ return{dir,repo,state,project,taskId,read,action,active,completed,finish,followup,calls,setAdmissionHeld:value=>{admissionHeld=value;},create:async()=>{await store.createTask(state,{requestId:taskId,ticket:'GH-42',brief:'Research only. Inspect the disposable fixture; do not edit it.',projectId:project.id,repositoryId:'repo'});await action('start');return active();},stopController:()=>controller.stop(),restart:async()=>{await controller.stop();controller=await createController(controllerOptions);},tick:()=>controller.tick()};
 }
 
 test('completed research supports repeated authorized assignments on one thread/worktree with immutable historical results',async t=>{
@@ -109,7 +109,7 @@ test('busy follow-up remains queued until natural completion; restart holds anot
  const held=await f.read();assert.equal(held.runId,completed.runId);assert.equal(held.assignments.at(-1).status,'queued');assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,2,'reopen does not dispatch backlog');
  await f.action('start');const restarted=await f.active();assert.equal(restarted.threadId,initial.threadId);assert.equal(restarted.worktree,initial.worktree);assert.notEqual(restarted.runId,completed.runId);
  await store.requestWorkerFollowup(f.state,pending.args);assert.equal((await f.read()).assignments.length,3,'retry after activation remains idempotent');await f.finish(restarted,{message:'Explicitly restarted assignment complete.'});const final=await f.completed();assert.equal(final.assignments.length,3);assert.equal(await readFile(path.join(final.worktree,'.fixture/setup-count'),'utf8'),'1');
- await f.action('dispose');const disposed=await wait(f.read,x=>x.status==='disposed','explicit disposal');assert.equal(disposed.assignments.length,3);await assert.rejects(f.followup('after-disposal','Unavailable resources must not be recreated.',disposed),/disposed/i);await assert.rejects(readFile(path.join(final.worktree,'README.md')),{code:'ENOENT'});
+ await f.action('dispose');const disposed=await wait(f.read,x=>x.status==='disposed','explicit disposal');assert.equal(disposed.assignments.length,3);await assert.rejects(f.followup('after-disposal','Unavailable resources must not be recreated.',disposed),/archived|disposed/i);await assert.rejects(readFile(path.join(final.worktree,'README.md')),{code:'ENOENT'});
 });
 
 test('a follow-up queued behind blocked work requires explicit recovery and preserves the previous assignment evidence',async t=>{
@@ -150,4 +150,33 @@ test('edits followed by a question resume within the same assignment, while exte
 test('external removal of known dirty work also requires adoption even though the retained worktree becomes clean',async t=>{
  const f=await fixture(t),initial=await f.create();await f.finish(initial,{message:'Research complete.'});const research=await f.completed();await f.followup('removal-test-implementation','Implement the agreed fixture file only.',research);const implementation=await f.active();await f.finish(implementation,{write:'Known worker implementation.\n',message:'Worker result retains an implementation file.'});const completed=await f.completed();await rm(path.join(completed.worktree,'implementation.txt'));const cleanReview=await captureWorktreeEvidence(completed.worktree);assert.equal(cleanReview.dirty,false);
  const queued=await f.followup('clean-removal-followup','Inspect the retained state after explicit review of removed work.',completed);const held=await wait(f.read,x=>Boolean(x.followupWait),'external removal held');assert.equal(held.runId,completed.runId);assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,2);await store.requestWorkerFollowupAdoption(f.state,{taskId:f.taskId,assignmentId:queued.task.assignments.at(-1).id,requestId:'clean-removal-adoption',expectedRunId:completed.runId,fingerprint:cleanReview.fingerprint,userDecision:'The user reviewed and explicitly accepts removal of the former worker file; continue with the exact current clean worktree.'});const next=await f.active();assert.equal(next.threadId,completed.threadId);assert.equal(next.worktree,completed.worktree);await f.finish(next,{message:'Reviewed clean-state follow-up complete.'});const final=await f.completed();assert.equal(final.assignments.length,3);assert.equal(final.assignments[1].result.message,'Worker result retains an implementation file.');await assert.rejects(readFile(path.join(final.worktree,'implementation.txt')),{code:'ENOENT'});
+});
+
+
+test('combined archive stops queued scope and history restore cannot launch it or retry setup',async t=>{
+ const f=await fixture(t),initial=await f.create();await f.finish(initial,{message:'Result retained through archive.'});const completed=await f.completed();
+ await f.stopController();await f.followup('archive-queued-followup','Retained new scope must not launch after history restore.',completed);await f.restart();
+ await f.action('archive');const archived=await wait(f.read,x=>x.status==='disposed','confirmed archive');
+ assert.equal(archived.assignments.at(-1).status,'stopped');assert.equal(archived.assignments[0].result.message,'Result retained through archive.');
+ await store.manageArchivedTask(f.state,{taskId:f.taskId,action:'restore',operationId:'combined-archive-restore',expectedRevision:archived.revision},f.project);
+ const restored=await f.read();assert.equal(restored.archiveRestoration.requiresRecovery,true);assert.equal(restored.status,'blocked');assert.deepEqual(restored.assignments,archived.assignments);
+ await assert.rejects(f.followup('restored-new-followup','No reconstruction is authorized.',restored),/history only|archived/);
+ for(const action of ['start','resume','retry_setup']){await f.action(action);const refused=await wait(f.read,x=>x.lifecycleRequests.at(-1).status==='failed','history-only '+action+' refused');assert.match(refused.lifecycleRequests.at(-1).error,/history only/);}
+ // Older retained records may still carry queued intent. Even a stale terminal
+ // label must not bypass the history-only guard in automatic follow-up admission.
+ await store.updateTask(f.state,f.taskId,n=>{n.status='completed';n.assignments.at(-1).status='queued';delete n.assignments.at(-1).endedAt;});
+ await f.tick();await f.restart();await f.tick();const held=await f.read();assert.equal(held.currentAssignmentId,archived.currentAssignmentId);assert.equal(held.assignments.at(-1).status,'queued');assert.equal(held.runId,initial.runId);
+ assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,1);await assert.rejects(readFile(path.join(held.worktree,'README.md')),{code:'ENOENT'});
+});
+
+test('combined retained follow-up adopts corrected lifecycle commands only at explicit start after reopen',async t=>{
+ const f=await fixture(t),initial=await f.create();await f.finish(initial,{message:'Original command plan complete.'});const completed=await f.completed();
+ await f.stopController();const plan=f.project.worker.environment.executionPlan;
+ plan.ready={command:JSON.stringify(process.execPath)+' -e '+JSON.stringify("require('node:fs').writeFileSync('.fixture/corrected-ready','applied')"),source:plan.setup.source,timeoutMs:10000};
+ await f.followup('configured-lifecycle-followup','Inspect after explicitly starting with corrected Ready command.',completed);await f.restart();await f.tick();
+ await assert.rejects(readFile(path.join(completed.worktree,'.fixture/corrected-ready')),{code:'ENOENT'});assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,1,'configuration and reopen execute no command or turn');
+ await f.action('start');const next=await f.active();assert.equal(next.worktree,completed.worktree);assert.equal(next.threadId,completed.threadId);assert.equal(next.environment.id,completed.environment.id);
+ assert.equal(await readFile(path.join(next.worktree,'.fixture/corrected-ready'),'utf8'),'applied');assert.equal(await readFile(path.join(next.worktree,'.fixture/setup-count'),'utf8'),'1');
+ assert.equal(next.environment.originalPlan.ready,null);assert.ok(next.environment.planHistory.length);assert.ok(next.environment.hooks.some(h=>h.phase==='ready'&&h.status==='succeeded'&&h.configurationSource==='crew-settings'));
+ await f.finish(next,{message:'Corrected lifecycle follow-up complete.'});const final=await f.completed();assert.equal(final.assignments.length,2);assert.equal(final.assignments[0].result.message,'Original command plan complete.');
 });

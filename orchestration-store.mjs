@@ -6,7 +6,7 @@ import { inspectUpdateEvidence } from './update-evidence.mjs';
 import { isArchivedTask } from './worker-archive.mjs';
 import { promptSnapshot } from './prompt-settings.mjs';
 
-const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose', 'archive', 'reconcile_plan', 'retire_missing']);
+const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'retry_setup', 'dispose', 'archive', 'reconcile_plan', 'retire_missing']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(['progress', 'question', 'result', 'blocked']);
@@ -348,7 +348,7 @@ export async function requestWorkerRecovery(dir, {taskId, actionId, action, expe
 
 export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
-  if (!['stop','pause','resume','start','dispose','archive'].includes(action)) throw new Error('Invalid worker action');
+  if (!['stop','pause','resume','start', 'retry_setup','dispose','archive'].includes(action)) throw new Error('Invalid worker action');
   if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {

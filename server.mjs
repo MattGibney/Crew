@@ -9,6 +9,7 @@ import { loadAppConfig } from './config.mjs';
 import { fileURLToPath } from 'node:url';
 import { createPromptSettings } from './prompt-settings.mjs';
 import { createManagerProfile, managerProfileSnapshot } from './manager-profile.mjs';
+import { createEnvironmentSettings } from './environment-settings.mjs';
 import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
@@ -92,9 +93,10 @@ const refreshScratchpad = async () => {
 let settingsSave = Promise.resolve();
 const serializeSettings = work => { const result = settingsSave.then(work); settingsSave = result.catch(() => {}); return result; };
 const prompts = await createPromptSettings({ stateDir: orchestrationDir, sourceDir: root, projectId: project.id, managerPrompt, workerPrompt });
+const environmentSettings = await createEnvironmentSettings({ configuration });
 const managerProfile = createManagerProfile({ stateDir: orchestrationDir, projectId: project.id });
 const controller = await createController({ admissionHeld:async()=>await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)||drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR ? {dir:process.env.CREW_GLOBAL_CAPACITY_DIR} : null, onChange: state => broadcast({ type: 'orchestration-state', state }) });
-await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
+await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt, environmentConfigPath: configuration.configPath }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
 const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, getManagerScratchpad: () => scratchpad.snapshot(), onEvent: broadcast });
 const manager = await createManagerLifecycle({ stateDir: orchestrationDir, projectId: project.id, bridge, prompts: { snapshot: async () => managerProfileSnapshot((await prompts.snapshot('manager')).text, await managerProfile.read()) }, onChange: state => broadcast({ type: 'manager-lifecycle', state }) });
@@ -102,7 +104,7 @@ const scratchpadTimer = setInterval(() => void refreshScratchpad().catch(error =
 const settingsView = async () => {
   const saved = await prompts.read(), lifecycle = manager.view();
   const profile = await managerProfile.read();
-  return { projectId: project.id, projectName: project.name, managerProfile: profile, managerLifecycle: lifecycle, manager: { savedBehaviorVersion: managerProfileSnapshot(saved.manager.text, profile).version, saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: managerProfileSnapshot(saved.manager.text, profile).version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
+  return { projectId: project.id, projectName: project.name, workerEnvironment: await environmentSettings.read(), managerProfile: profile, managerLifecycle: lifecycle, manager: { savedBehaviorVersion: managerProfileSnapshot(saved.manager.text, profile).version, saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: managerProfileSnapshot(saved.manager.text, profile).version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
 };
 const version = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version;
 const updates = createUpdateBridge({version,onStatus:status=>broadcast({type:'update-state',status:{...status,plan:updatePlan?.status()||null}})});
@@ -176,11 +178,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (!['POST', 'PUT'].includes(req.method) || !req.url?.startsWith('/api/')) return send(404, { error: 'Not found.' });
     if (req.headers.origin !== origin || !req.headers['content-type']?.startsWith('application/json')) return send(403, { error: 'Same-origin JSON requests only.' });
+    req.setEncoding('utf8'); // Preserve code points split across HTTP chunks.
     let body = '';
-    for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/manager-profile' ? 750000 : req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
+    for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/worker-environment' ? 16000000 : req.url === '/api/settings/manager-profile' ? 750000 : req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
     const input = JSON.parse(body || '{}');
-    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts','/api/settings/manager-profile','/api/archived-worker-action'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
+    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts','/api/settings/manager-profile','/api/archived-worker-action','/api/settings/worker-environment'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
     if (req.method === 'PUT') {
+      if (req.url === '/api/settings/worker-environment') { const saved = await environmentSettings.save(input); project.worker.environment = structuredClone(saved.environment); return send(200, await settingsView()); }
       if (req.url === '/api/settings/manager-profile') { await serializeSettings(() => managerProfile.save(input, async profile => managerProfileSnapshot((await prompts.snapshot('manager')).text, profile))); return send(200, await settingsView()); }
       if (req.url !== '/api/settings/prompts') return send(404, { error: 'Not found.' });
       await serializeSettings(async () => {

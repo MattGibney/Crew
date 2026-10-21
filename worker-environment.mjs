@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {readFile,writeFile,rename,mkdir} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 const now=()=>new Date().toISOString(),sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function json(file){try{return JSON.parse(await readFile(file,'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function save(file,value){const tmp=`${file}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(tmp,file);}
@@ -21,17 +21,25 @@ export async function reconcileEnvironment({stateDir,taskId,stop=false}){
  if(pending){environment.pending=true;await save(file,environment);return environment;}
  environment.pending=false;await save(file,environment);return environment;
 }
-export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},phases,existing=null,toolchain=null,env=process.env,signal,pauseBoundary,cooperative=false,onEvidence=async()=>{}}){
+export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},phases,existing=null,toolchain=null,env=process.env,signal,pauseBoundary,cooperative=false,setupRetry=null,onEvidence=async()=>{}}){
+ hooks=structuredClone(hooks);
  const file=environmentFile(stateDir,taskId),prior=await reconcileEnvironment({stateDir,taskId});if(prior?.pending)throw new Error('An earlier environment command has not confirmed it stopped. Wait for its bounded supervisor, then retry. No environment was removed or restarted.');
  const environment=prior||existing||{id:`crew-${taskId}-${randomUUID().slice(0,8)}`,taskId,worktree,createdAt:now(),status:'not-configured',hooks:[]};
  if(toolchain)environment.toolchain=toolchain;
  if(environment.taskId!==taskId||environment.worktree!==worktree)throw new Error('Environment ownership does not match this worker.');
+ const completedBootstrap=environment.hooks.some(h=>h.phase==='bootstrap'&&h.status==='succeeded');
+ const incompleteBootstrap=!completedBootstrap&&(environment.bootstrapAttempted||environment.hooks.some(h=>h.phase==='bootstrap'));
+ const retryBootstrap=Boolean(setupRetry?.requestId)&&!environment.setupRetryHistory?.some(entry=>entry.requestId===setupRetry.requestId);
+ if(incompleteBootstrap&&phases.some(phase=>['bootstrap','start','resume','ready'].includes(phase))&&!retryBootstrap)throw new Error('Earlier bootstrap did not complete. Its retained data will not be reseeded; explicitly Retry failed setup after reviewing the configured command.');
+ if(incompleteBootstrap&&retryBootstrap&&!hooks.bootstrap)throw new Error('Retry failed setup requires a configured bootstrap command; retained partial data was preserved.');
+ if(incompleteBootstrap&&retryBootstrap&&!phases.includes('bootstrap'))phases=['bootstrap',...phases];
  for(const phase of phases){
   await pauseBoundary?.();
+  if(phase==='bootstrap'&&completedBootstrap)continue;
   const hook=hooks[phase];if(!hook)continue;if(signal?.aborted)throw new Error('Worker environment preparation canceled.');
   if(typeof hook.command!=='string'||!hook.command||hook.command.includes('\0')||!Array.isArray(hook.args)||hook.args.some(a=>typeof a!=='string'||a.includes('\0'))||!Number.isInteger(hook.timeoutMs)||hook.timeoutMs<1000||hook.timeoutMs>600000)throw new Error(`Invalid ${phase} environment hook.`);
   const id=randomUUID(),runDir=path.join(stateDir,'runs',taskId,'environment',id);await mkdir(runDir,{recursive:true,mode:0o700});
-  const evidence={id,phase,runDir,status:'running',startedAt:now(),command:hook.command,args:hook.args,timeoutMs:hook.timeoutMs};environment.status=phase==='cleanup'?'cleaning':'preparing';environment.hooks.push(evidence);await save(file,environment);await onEvidence(environment);
+  const evidence={id,phase,runDir,status:'running',startedAt:now(),configurationHash:createHash('sha256').update(JSON.stringify(hook)).digest('hex'),configurationSource:hook.configurationSource||'crew-config',command:hook.command,args:structuredClone(hook.args),timeoutMs:hook.timeoutMs,...(hook.planHash?{planHash:hook.planHash}:{}),...(hook.source?{source:structuredClone(hook.source)}:{})};environment.status=phase==='cleanup'?'cleaning':'preparing';if(phase==='bootstrap'){environment.bootstrapAttempted=true;if(retryBootstrap)environment.setupRetryHistory=[...(environment.setupRetryHistory||[]),{...setupRetry,at:now(),configurationHash:evidence.configurationHash}];}environment.hooks.push(evidence);await save(file,environment);await onEvidence(environment);
   const config={...hook,id,taskId,worktree,environmentId:environment.id,cooperative:cooperative===true};await save(path.join(runDir,'config.json'),config);
   let spawnError=null,closed=false;
   const child=spawn(process.execPath,[fileURLToPath(new URL('./environment-runner.mjs',import.meta.url)),path.join(runDir,'config.json')],{detached:true,stdio:'ignore',env});

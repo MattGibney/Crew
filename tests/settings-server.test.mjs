@@ -4,11 +4,12 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
+import { request as httpRequest } from 'node:http';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, updateTask, readTask } from '../orchestration-store.mjs';
+import { createTask, updateTask, readTask, loadTasks, requestWorkerAction } from '../orchestration-store.mjs';
 import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../worker-approvals.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -55,6 +56,18 @@ createInterface({ input: process.stdin }).on('line', line => {
     for (const abort of streams) abort.abort(); streams.clear();
     if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited; }
     child = null;
+    // A server shutdown leaves workers independent. This fixture owns only
+    // synthetic workers; wait for natural supervisor exit before deleting files.
+    for (const task of await loadTasks(stateDir).catch(error => {if(error.code==='ENOENT') return []; throw error;})) {
+      if (!task.runnerPid) continue;
+      const until = Date.now() + 15000;
+      for (;;) {
+        try { process.kill(task.runnerPid, 0); }
+        catch (error) { if (error.code === 'ESRCH') break; throw error; }
+        if (Date.now() >= until) throw new Error(`Synthetic worker ${task.id} has not exited; fixture files preserved.`);
+        await delay(30);
+      }
+    }
   }
   async function start() {
     diagnostics = '';
@@ -71,8 +84,20 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   async function events() { const abort = new AbortController(); streams.add(abort); const response = await fetch(origin + '/events', { headers: { Origin: origin }, signal: abort.signal }); assert.equal(response.status, 200); const reader = response.body.getReader(); await reader.read(); return abort; }
   const calls = async () => (await readFile(callsFile, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
-  t.after(async () => { await stop(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, dataDir, stateDir, request, start, stop, calls, events, nativeEvents };
+  t.after(async () => {
+    await stop();
+    let disposable;
+    try { disposable = JSON.parse(await readFile(join(stateDir, 'fixture.json'), 'utf8')); }
+    catch (error) { if(error.code!=='ENOENT') throw error; }
+    // The controller creates this separate disposable Git root, outside dataDir.
+    if (disposable) {
+      assert.match(disposable.base, /[/\\]crew-fixture-[^/\\]+$/);
+      assert.equal(disposable.repo, join(disposable.base,'repo'));
+      await rm(disposable.base, {recursive:true,force:true});
+    }
+    await rm(directory, { recursive: true, force: true });
+  });
+  return { directory, dataDir, stateDir, configPath, origin, request, start, stop, calls, events, nativeEvents };
 }
 const instructions = calls => calls.filter(c => ['thread/start', 'thread/resume', 'thread/fork'].includes(c.method));
 
@@ -295,4 +320,142 @@ test('history-only restore HTTP preserves records across restart and never reviv
  assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].status,'pending');
  await f.stop();await f.start();assert.equal((await f.request('/api/archived-worker-action',{body})).status,200);restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.equal(restored.runId,archived.runId);assert.equal(restored.history.filter(event=>event.id==='archive-restore:http-restore-operation').length,1);assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
  assert.equal((await f.calls()).some(call=>['turn/start','thread/start'].includes(call.method)),false);
+});
+
+
+test('worker environment HTTP saves every supported direct hook without execution, preserves retained work, and survives restart', async t => {
+  const f = await fixture(t);
+  const historical = await createTask(f.stateDir, { requestId: 'http-environment-retained', ticket: 'GH-45', brief: 'Retained environment evidence; never execute.', projectId: 'http-settings-fixture' });
+  await updateTask(f.stateDir, historical.id, task => { task.status = 'completed'; task.result = { message: 'Original attempt retained.' }; task.environment = { status: 'failed', planHash: 'original-plan', setupCompleted: false }; });
+  const marker = join(f.directory, 'must-not-execute');
+  const hook = { command: process.execPath, args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`, 'literal space', '$(never execute)', '', ...Array.from({length:12}, () => 'x'.repeat(8192))], timeoutMs: 1234 };
+  const environment = Object.fromEntries(['bootstrap', 'start', 'ready', 'resume', 'cleanup'].map(phase => [phase, hook]));
+  await f.start();
+  const before = (await f.request('/api/settings', { method: 'GET' })).value;
+  const retainedBefore = await readTask(f.stateDir, historical.id);
+  assert.equal(before.workerEnvironment.available, true);
+  assert.deepEqual(before.workerEnvironment.environment, {});
+  const body = { expectedRevision: before.workerEnvironment.revision, environment };
+  const denied = await f.request('/api/settings/worker-environment', { method: 'PUT', body, requestOrigin: 'https://untrusted.invalid' });
+  assert.equal(denied.status, 403);
+  const saved = await f.request('/api/settings/worker-environment', { method: 'PUT', body });
+  assert.equal(saved.status, 200, JSON.stringify(saved.value));
+  assert.deepEqual(saved.value.workerEnvironment.environment, environment);
+  assert.equal(saved.value.workerEnvironment.configPath, f.configPath);
+  assert.match(saved.value.workerEnvironment.provenance.description, /Crew overrides/);
+  assert.deepEqual(await readTask(f.stateDir, historical.id), retainedBefore);
+  const diskAfter = await readFile(f.configPath, 'utf8');
+  const stale = await f.request('/api/settings/worker-environment', { method: 'PUT', body: { ...body, environment: {} } });
+  assert.equal(stale.status, 400); assert.match(stale.value.error, /changed elsewhere/);
+  const invalid = await f.request('/api/settings/worker-environment', { method: 'PUT', body: { expectedRevision: saved.value.workerEnvironment.revision, environment: { start: { ...hook, args: '--shell-shaped-string' } } } });
+  assert.equal(invalid.status, 400);
+  assert.equal(await readFile(f.configPath, 'utf8'), diskAfter);
+  assert.deepEqual((await f.request('/api/settings', { method: 'GET' })).value.workerEnvironment.environment, environment, 'leaving the editor without another PUT preserves the saved hooks');
+  await assert.rejects(readFile(marker), {code:'ENOENT'});
+  assert.deepEqual(await f.calls(), [], 'settings never starts a manager, worker or realtime session');
+  await f.stop(); await f.start();
+  const restarted = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.deepEqual(restarted.workerEnvironment.environment, environment);
+  assert.equal(restarted.workerEnvironment.revision, saved.value.workerEnvironment.revision);
+  assert.deepEqual((await readTask(f.stateDir, historical.id)).environment, retainedBefore.environment);
+  assert.deepEqual((await readTask(f.stateDir, historical.id)).result, retainedBefore.result);
+  await assert.rejects(readFile(marker), {code:'ENOENT'});
+  assert.deepEqual(await f.calls(), []);
+});
+
+
+test('chunked worker environment HTTP preserves UTF-8 commands and arguments split inside code points', async t => {
+  const f = await fixture(t); await f.start();
+  const before = (await f.request('/api/settings', {method:'GET'})).value;
+  const environment = {start:{command:'/tmp/工具-🌍',args:['naïve 🧪 café', '', 'line\n二'],timeoutMs:1000}};
+  const bytes = Buffer.from(JSON.stringify({expectedRevision:before.workerEnvironment.revision,environment}), 'utf8');
+  const firstSplit = bytes.indexOf(Buffer.from('工')) + 1;
+  const secondSplit = bytes.indexOf(Buffer.from('🧪')) + 2;
+  assert.ok(firstSplit > 0 && secondSplit > firstSplit);
+  const result = await new Promise((resolve, reject) => {
+    const req = httpRequest(f.origin + '/api/settings/worker-environment', {method:'PUT',headers:{Origin:f.origin,'Content-Type':'application/json','Transfer-Encoding':'chunked'}}, response => {
+      const chunks=[]; response.on('data',chunk=>chunks.push(chunk)); response.on('error',reject);
+      response.on('end',()=> {try {resolve({status:response.statusCode,value:JSON.parse(Buffer.concat(chunks).toString('utf8'))});} catch(error) {reject(error);}});
+    });
+    t.after(() => req.destroy());
+    req.on('error',reject); req.setTimeout(10000,()=>req.destroy(new Error('Chunked environment request timed out.')));
+    // Separate actual HTTP chunks deliberately end inside 3- and 4-byte UTF-8
+    // sequences. Yield between writes so the server consumes partial input.
+    void (async () => {
+      req.write(bytes.subarray(0,firstSplit)); await delay(30);
+      req.write(bytes.subarray(firstSplit,secondSplit)); await delay(30);
+      req.end(bytes.subarray(secondSplit));
+    })().catch(error=>req.destroy(error));
+  });
+  assert.equal(result.status,200,JSON.stringify(result.value));
+  assert.deepEqual(result.value.workerEnvironment.environment,environment);
+  assert.deepEqual((await f.request('/api/settings',{method:'GET'})).value.workerEnvironment.environment,environment);
+  assert.deepEqual(JSON.parse(await readFile(f.configPath,'utf8')).project.worker.environment,environment);
+  assert.deepEqual(await f.calls(),[], 'Unicode configuration editing never starts commands, workers or voice');
+});
+
+
+test('HTTP configuration fix survives restart and explicitly retries failed bootstrap in the same retained worker', async t => {
+  const f = await fixture(t); await f.start();
+  const phaseFile = '.crew-http-partial.json';
+  const initialScript = `require('node:fs').writeFileSync(${JSON.stringify(phaseFile)}, JSON.stringify({seeds:1,partial:true}));process.exit(17)`;
+  const initialEnvironment = {bootstrap:{command:process.execPath,args:['-e',initialScript],timeoutMs:5000}};
+  const before = (await f.request('/api/settings',{method:'GET'})).value;
+  const initialSaved = await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:before.workerEnvironment.revision,environment:initialEnvironment}});
+  assert.equal(initialSaved.status,200,JSON.stringify(initialSaved.value));
+  const taskId='http-lifecycle-retry';
+  await createTask(f.stateDir,{requestId:taskId,ticket:'GH-45',brief:'Disposable synthetic lifecycle acceptance only.',projectId:'http-settings-fixture'});
+  async function waitTask(predicate, description) {
+    const until=Date.now()+25000;let task;
+    while(Date.now()<until) {
+      task=await readTask(f.stateDir,taskId);
+      if(await predicate(task)) return task;
+      await delay(40);
+    }
+    throw new Error(description+': '+JSON.stringify({status:task?.status,failure:task?.failure,harnessStarted:task?.harnessStarted,lifecycleRequests:task?.lifecycleRequests}));
+  }
+  const failed=await waitTask(task=>task.status==='failed'&&task.environment?.hooks?.some(h=>h.phase==='bootstrap'&&h.status==='failed'),'Initial bootstrap did not fail');
+  assert.equal(failed.harnessStarted,false);
+  const failedAttempt=failed.environment.hooks.find(h=>h.phase==='bootstrap');
+  assert.equal(failedAttempt.exitCode,17);
+  assert.deepEqual(JSON.parse(await readFile(join(failed.worktree,phaseFile),'utf8')),{seeds:1,partial:true});
+  const correctedScript = `const fs=require('node:fs');const state=JSON.parse(fs.readFileSync(${JSON.stringify(phaseFile)},'utf8'));if(state.seeds!==1||!state.partial)process.exit(31);state.repaired=true;fs.writeFileSync(${JSON.stringify(phaseFile)},JSON.stringify(state))`;
+  const correctedEnvironment={bootstrap:{command:process.execPath,args:['-e',correctedScript],timeoutMs:5000}};
+  const fixed=await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:initialSaved.value.workerEnvironment.revision,environment:correctedEnvironment}});
+  assert.equal(fixed.status,200,JSON.stringify(fixed.value));
+  assert.deepEqual((await readTask(f.stateDir,taskId)).environment,failed.environment,'Save does not execute or rewrite retained attempt evidence');
+  assert.deepEqual(await f.calls(),[],'Failed lifecycle and settings do not dispatch a native turn');
+  await f.stop();await f.start();
+  assert.deepEqual((await f.request('/api/settings',{method:'GET'})).value.workerEnvironment.environment,correctedEnvironment);
+  const retained=await readTask(f.stateDir,taskId);
+  assert.equal(retained.runId,failed.runId);
+  assert.equal(retained.worktree,failed.worktree);
+  const action={taskId,actionId:'http-explicit-setup-retry',action:'retry_setup',expectedRunId:failed.runId};
+  await requestWorkerAction(f.stateDir,action);
+  const retried=await waitTask(async task=> {
+    if(!task.harnessStarted||!task.runDir||!['failed','completed','stopped'].includes(task.status))return false;
+    let exit;try{exit=JSON.parse(await readFile(join(task.runDir,'exit.json'),'utf8'));}catch(error){if(error.code==='ENOENT')return false;throw error;}
+    return exit.runId===task.runId&&exit.stopConfirmed===true&&task.environment?.hooks?.some(h=>h.phase==='bootstrap'&&h.status==='succeeded');
+  },'Corrected bootstrap and synthetic worker did not reach confirmed terminal exit');
+  assert.equal(retried.worktree,failed.worktree);
+  assert.equal(retried.environment.id,failed.environment.id);
+  assert.notEqual(retried.runId,failed.runId);
+  const attempts=retried.environment.hooks.filter(h=>h.phase==='bootstrap');
+  assert.equal(attempts.length,2);
+  assert.deepEqual(attempts[0],failedAttempt);
+  assert.equal(attempts[1].status,'succeeded');
+  assert.equal(attempts[1].exitCode,0);
+  assert.deepEqual(attempts[1].args,correctedEnvironment.bootstrap.args);
+  assert.equal(retried.environment.setupRetryHistory[0].requestId,action.actionId);
+  assert.deepEqual(JSON.parse(await readFile(join(retried.worktree,phaseFile),'utf8')),{seeds:1,partial:true,repaired:true});
+  await requestWorkerAction(f.stateDir,action); // Exact duplicate is idempotent after the run advanced.
+  assert.equal((await readTask(f.stateDir,taskId)).environment.hooks.filter(h=>h.phase==='bootstrap').length,2);
+  const calls=await f.calls();
+  assert.equal(calls.some(call=>call.method==='turn/start'),true,'The synthetic provider executes only after explicit retry and successful bootstrap');
+  assert.equal(calls.some(call=>call.method==='thread/realtime/start'),false);
+  // This provider emits no durable task result: lifecycle success is the
+  // supported claim, independently of the later synthetic task outcome.
+  const exit=JSON.parse(await readFile(join(retried.runDir,'exit.json'),'utf8'));
+  assert.equal(exit.stopConfirmed,true);
+  await f.stop(); // Also waits for the detached runner PID to disappear.
 });

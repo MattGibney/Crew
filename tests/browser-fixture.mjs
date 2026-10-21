@@ -3,6 +3,7 @@
 // This never loads Codex, project configuration, credentials or business repositories.
 import http from 'node:http';
 import { isArchivedTask } from '../worker-archive.mjs';
+import {validateWorkerEnvironment} from '../config.mjs';
 import { conversationMessage } from '../conversation.mjs';
 import { createConversationTimeline } from '../conversation-timeline.mjs';
 import { readFile } from 'node:fs/promises';
@@ -49,7 +50,8 @@ let nativeAttentionSound = false;
 
 let proof = { calls: [], media: null, setup: [], sseConnections: 0 };
 const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
-const settingsView = () => ({ ...settings, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
+let workerEnvironment = {revision:'environment-0',configPath:'/private/tmp/crew-fixture/config.json',environment:{},available:true};
+const settingsView = () => ({ ...settings, workerEnvironment, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const server = http.createServer(async (req, res) => {
@@ -75,6 +77,7 @@ const server = http.createServer(async (req, res) => {
         if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
         if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
 
+        if (body.workerEnvironment) workerEnvironment = {...workerEnvironment,environment:body.workerEnvironment,revision:`environment-${++promptRevision}`};
         if (body.workerDetail) {
           const { taskId, ...change } = body.workerDetail;
           if (!workerDetails.has(taskId)) return send({ error: 'Unknown fixture worker' }, 400);
@@ -125,6 +128,11 @@ const server = http.createServer(async (req, res) => {
         return send({ taskId: target.id, action: 'delete', status: 'deleted' });
       }
       if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
+      if (name === 'settings/worker-environment') {
+        if (body.expectedRevision !== workerEnvironment.revision) return send({error:'Environment settings changed elsewhere; reload before saving.'},400);
+        workerEnvironment = {...workerEnvironment,environment:validateWorkerEnvironment(body.environment,{mode:'repository'}),revision:`environment-${++promptRevision}`};
+        return send(settingsView());
+      }
       if (name === 'settings/manager-profile') {
         if (body.expectedVersion !== profileView().version) return send({ error: 'Manager profile changed elsewhere.' }, 409);
         managerProfiles.set(fixtureProjectName, { voice: body.voice, version: `profile-${++promptRevision}` });
