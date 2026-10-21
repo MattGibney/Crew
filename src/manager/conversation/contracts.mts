@@ -32,7 +32,7 @@ export interface NativeItem {
   command?: string;
   status?: string;
   exitCode?: number | null;
-  aggregatedOutput?: string;
+  aggregatedOutput?: string | null;
   server?: string;
   tool?: string;
   result?: unknown;

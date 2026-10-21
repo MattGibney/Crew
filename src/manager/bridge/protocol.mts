@@ -77,7 +77,7 @@ const itemSchema = obj(
     command: str,
     status: str,
     exitCode: { type: ["number", "null"] },
-    aggregatedOutput: str,
+    aggregatedOutput: { type: ["string", "null"] },
     server: str,
     tool: str,
   },

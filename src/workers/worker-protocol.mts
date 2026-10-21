@@ -77,7 +77,7 @@ export interface NativeItem {
   text?: string;
   command?: string;
   exitCode?: number | null;
-  aggregatedOutput?: string;
+  aggregatedOutput?: string | null;
   status?: string;
 }
 export interface WorkerNativeParams extends Partial<ApprovalParams> {
@@ -137,7 +137,7 @@ const messageShape = ajv.compile<WorkerNativeMessage>({
             text: { type: "string" },
             command: { type: "string" },
             exitCode: { type: ["number", "null"] },
-            aggregatedOutput: { type: "string" },
+            aggregatedOutput: { type: ["string", "null"] },
             status: { type: "string" },
           },
         },

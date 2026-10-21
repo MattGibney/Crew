@@ -39,3 +39,24 @@ for await(const line of lines){const m=JSON.parse(line);if(m.id===undefined)cont
  await until(()=>readFile(path.join(root,'completed')).catch(()=>false),'completion notification before reply');await sleep(150);await assert.rejects(readFile(path.join(root,'closed')),{code:'ENOENT'});await writeFile(path.join(root,'release'),'yes');
  await until(()=>readFile(path.join(runDir,'exit.json')).catch(()=>false),'successful matching terminal');assert.equal(await closed,0,diagnostic);const exit=JSON.parse(await readFile(path.join(runDir,'exit.json'),'utf8'));assert.equal(exit.nativeTurnStatus,'completed');assert.equal(exit.completedTurn,true);assert.equal(exit.error,null);assert.equal(exit.exitCode,0);assert.equal(exit.stopConfirmed,true);
 });
+
+test('successful silent native command survives decoder, event journal and terminal command evidence', async t => {
+ const root=await mkdtemp(path.join(tmpdir(),'crew-silent-command-')),stateDir=path.join(root,'state'),runDir=path.join(root,'run'),taskId='silent-command-worker',runId='silent-command-run';
+ await mkdir(runDir);await createTask(stateDir,{requestId:taskId,ticket:'GH-37',brief:'Retain silent native command evidence'});await updateTask(stateDir,taskId,task=>{task.runId=runId;task.status='running';});
+ const executable=path.join(root,'codex.mjs'),command='node -e ""';
+ await writeFile(executable,`#!${process.execPath}
+import{createInterface}from'node:readline';import{execFileSync}from'node:child_process';
+const threadId='silent-thread',turnId='silent-turn',send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
+const lines=createInterface({input:process.stdin});lines.on('close',()=>process.exit(0));
+for await(const line of lines){const m=JSON.parse(line);if(m.id===undefined)continue;let result={};if(m.method==='account/read')result={account:{type:'chatgpt'}};if(m.method==='thread/start')result={thread:{id:threadId}};if(m.method==='config/read')result={config:{}};if(m.method==='turn/start')result={turn:{id:turnId,status:'inProgress'}};send({id:m.id,result});if(m.method==='turn/start'){const output=execFileSync(process.execPath,['-e',''],{encoding:'utf8'});if(output!=='')throw Error('Expected a silent command');send({method:'item/completed',params:{threadId,turnId,item:{id:'silent-command-item',type:'commandExecution',command:${JSON.stringify(command)},status:'completed',exitCode:0,aggregatedOutput:null}}});send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed',items:[]}}});}}
+`,{mode:0o700});
+ const configPath=path.join(runDir,'config.json');await writeFile(configPath,JSON.stringify({stateDir,taskId,runId,executable,ticket:'GH-37',workerPrompt:'Disposable silent command fixture.',worktree:root,mcpScript:path.resolve('runtime/orchestration-mcp.mjs'),project:{mode:'repository'},brief:'Observe a successful silent native command'}));
+ const child=spawn(process.execPath,[path.resolve('runtime/workers/runner.mjs'),configPath],{stdio:['ignore','ignore','pipe']});let diagnostic='';child.stderr.on('data',chunk=>diagnostic+=chunk);const closed=new Promise(resolve=>child.once('close',resolve));
+ t.after(async()=>{if(child.exitCode===null)child.kill('SIGTERM');await closed;await rm(root,{recursive:true,force:true});});
+ await until(()=>readFile(path.join(runDir,'exit.json')).catch(()=>false),'silent command terminal record');assert.equal(await closed,0,diagnostic);
+ const exit=JSON.parse(await readFile(path.join(runDir,'exit.json'),'utf8'));
+ assert.equal(exit.completedTurn,true);assert.equal(exit.error,null);assert.equal(exit.exitCode,0);
+ assert.deepEqual(exit.commands,[{command,exitCode:0,output:''}]);
+ const events=(await readFile(path.join(runDir,'events.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+ assert.deepEqual(events.filter(event=>event.item.type==='command_execution').map(event=>({runId:event.runId,turnId:event.turnId,item:event.item})),[{runId,turnId:'silent-turn',item:{id:'silent-command-item',type:'command_execution',command,status:'completed',exitCode:0}}]);
+});

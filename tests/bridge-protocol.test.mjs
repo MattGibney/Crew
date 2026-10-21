@@ -20,3 +20,14 @@ test('native method-bearing requests retain their namespace and nullable startup
  assert.equal(decodeNotification({ method: 'unknown/future', params: {} }), null);
  assert.throws(() => decodeNotification({ method: 'item/agentMessage/delta', params: { threadId: 'thread', itemId: 'item', delta: 1 } }), /Invalid native notification/);
 });
+
+test('silent native command null output is preserved in manager notifications and restored history', () => {
+ const item={id:'silent-command',type:'commandExecution',command:'node -e ""',status:'completed',exitCode:0,aggregatedOutput:null};
+ const notification={method:'item/completed',params:{threadId:'thread',turnId:'turn',item}};
+ assert.equal(decodeNotification(notification).params.item,item);
+ const history={data:[{id:'turn',status:'completed',items:[item]}]};
+ assert.equal(decodeRpc('thread/turns/list',history),history);
+ const timeline={data:[{type:'item',position:0,turnId:'turn',item}]};
+ assert.equal(decodeRpc('thread/timeline/list',timeline),timeline);
+ assert.throws(()=>decodeNotification({...notification,params:{...notification.params,item:{...item,aggregatedOutput:42}}}),/Invalid native notification/);
+});
