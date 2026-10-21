@@ -9,6 +9,10 @@ const VOICE_KEY = 'crew.voice.v3';
 export function useCrewManager() {
   const [error, setError] = useState('');
   const [updates, setUpdates] = useState(null);
+  const [settings, setSettings] = useState(null), [settingsError, setSettingsError] = useState('');
+  const [managerLifecycle, setManagerLifecycle] = useState({ state: 'loading' });
+  const lifecycleLock = useRef(false);
+  const managerEnabled = managerLifecycle.state === 'running';
   const voice = useVoiceSession(setError);
   const [prepared, setPrepared] = useState(false), [eventReady, setEventReady] = useState(false);
   const [account, setAccount] = useState('Checking ChatGPT sign-in…');
@@ -51,7 +55,12 @@ export function useCrewManager() {
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'update-state') setUpdates(message.status);
-        if (message.type === 'work-state') setWork(message.state);
+        if (message.type === 'work-state') { setWork(message.state); if (message.state.managerLifecycle) setManagerLifecycle(message.state.managerLifecycle); }
+        if (message.type === 'manager-lifecycle') {
+          setManagerLifecycle(message.state);
+          if ('activeVersion' in message.state) setSettings(previous => previous ? ({ ...previous, manager: { ...previous.manager, activeVersion: message.state.activeVersion, retainedVersion: message.state.retainedVersion, pendingRestart: previous.manager.saved.version !== (message.state.activeVersion || message.state.retainedVersion) } }) : previous);
+          if (message.state.state !== 'running') voice.dispose();
+        }
         if (message.type === 'orchestration-state') setOrchestration(message.state);
         if (message.type === 'notice') setWorkNotice(message.message);
         if (message.type === 'transcript-delta' || message.type === 'transcript-done') dispatchTranscript({ role: message.role, text: message.text, done: message.type === 'transcript-done' });
@@ -59,19 +68,26 @@ export function useCrewManager() {
       } catch (failure) { showError(`Could not read a live update: ${errorText(failure)}`); }
     };
     void (async () => {
+      let bootstrapRunning = false;
       try {
         const config = await api('config');
         if (!canceled) { setProjectInfo(config.project); setProject(`${config.project.name} · ${config.project.mode === 'fixture' ? 'disposable fixture' : 'configured project'}${config.project.readiness.ready ? '' : ' · setup needed: ' + config.project.readiness.issues.join('; ')}`); }
       } catch (failure) { if (!canceled) setProject(`Project configuration unavailable: ${errorText(failure)}`); }
       if (canceled) return;
       try {
-        const result = await api('prepare');
-        if (!canceled) { setPrepared(true); setAccount(`Signed in with ChatGPT · ${result.plan || 'subscription'}. No API key used.`); if (result.state) setWork(result.state); }
+        const nextSettings = await api('settings', {}, { method: 'GET' });
+        bootstrapRunning = nextSettings.managerLifecycle.state === 'running';
+        if (!canceled) { setSettings(nextSettings); setManagerLifecycle(nextSettings.managerLifecycle); }
+        const result = nextSettings.managerLifecycle.state === 'running' ? await api('prepare') : { state: await api('state') };
+        if (!canceled) { setPrepared(nextSettings.managerLifecycle.state === 'running'); setAccount(nextSettings.managerLifecycle.state === 'running' ? `Signed in with ChatGPT · ${result.plan || 'subscription'}. No API key used.` : 'Manager stopped. Start explicitly to reconnect the saved conversation.'); if (result.state) setWork(result.state); }
+        const refreshed = await api('settings', {}, { method: 'GET' });
+        if (!canceled) { setSettings(refreshed); setManagerLifecycle(refreshed.managerLifecycle); }
       } catch (failure) {
-        if (!canceled) { setAccount(failure.account?.auth === 'chatgpt' ? `Signed in with ChatGPT · ${failure.account.plan || 'subscription'}. Saved chat could not be prepared.` : 'Could not prepare the Codex connection.'); showError(failure); }
+        if (!canceled) { setSettingsError(errorText(failure)); setAccount(failure.account?.auth === 'chatgpt' ? `Signed in with ChatGPT · ${failure.account.plan || 'subscription'}. Saved chat could not be prepared.` : 'Could not prepare the Codex connection.'); showError(failure); }
       }
       if (canceled) return;
-      await loadVoices();
+      if (bootstrapRunning) await loadVoices();
+      else { setVoiceLoading(false); setVoiceNotice('Start your manager to load available voices.'); }
       if (canceled) return;
       try { const result = await api('orchestration'); if (!canceled) setOrchestration(result); }
       catch (failure) { if (!canceled) setOrchestration(previous => ({ ...previous, loading: false, error: errorText(failure) })); }
@@ -81,30 +97,31 @@ export function useCrewManager() {
     return () => { canceled = true; events.close(); window.removeEventListener('pagehide', pagehide); endVoiceBeacon(); };
   }, [loadVoices, showError, voice.transportLost, voice.handleEvent, voice.dispose]);
   const connect = useCallback(() => {
-    if (!prepared || !eventReady || !catalog || voice.busy || voice.allocated) return;
+    if (!managerEnabled || !prepared || !eventReady || !catalog || voice.busy || voice.allocated) return;
     setError(''); dispatchTranscript({ type: 'reset' }); void voice.connect(selectedVoice);
-  }, [prepared, eventReady, catalog, voice.busy, voice.allocated, voice.connect, selectedVoice]);
+  }, [managerEnabled, prepared, eventReady, catalog, voice.busy, voice.allocated, voice.connect, selectedVoice]);
   const reviewAttention = useCallback(async (taskId, attentionId) => {
     try { await api('discuss-attention', { taskId, attentionId }); } catch (failure) { showError(failure); throw failure; }
   }, [showError]);
   const answerApproval = useCallback(async (id, response) => {
     try { await api('approval', { id, response }); } catch (failure) { setWorkNotice(errorText(failure)); }
   }, []);
-  const stopManager = useCallback(async () => {
+  const interruptManager = useCallback(async () => {
     try { await api('stop-work'); } catch (failure) { setWorkNotice(errorText(failure)); }
   }, []);
   const retryConnection = useCallback(async () => {
     setError(''); setAccount('Reconnecting your saved chat…');
-    try { const result = await api('prepare'); setPrepared(true); setAccount(`Signed in with ChatGPT · ${result.plan || 'subscription'}.`); if (result.state) setWork(result.state); await loadVoices(); }
+    try { const result = await api('prepare'); setPrepared(true); setAccount(`Signed in with ChatGPT · ${result.plan || 'subscription'}.`); if (result.state) setWork(result.state); const refreshed = await api('settings', {}, { method: 'GET' }); setSettings(refreshed); setManagerLifecycle(refreshed.managerLifecycle); setSettingsError(''); await loadVoices(); }
     catch (failure) { setPrepared(false); showError(failure); }
   }, [loadVoices, showError]);
   const sendRequest = useCallback(async request => {
+    if (!managerEnabled) throw new Error('Start your manager before sending a message or action.');
     if (requestLock.current) throw new Error('A message is already being sent.');
     requestLock.current = true; setSending(true); setWorkNotice('');
     try { return await api('work', request); }
     catch (failure) { setWorkNotice(errorText(failure)); throw failure; }
     finally { requestLock.current = false; setSending(false); }
-  }, []);
+  }, [managerEnabled]);
   const correlatedRequest = useCallback(async (key, create) => {
     const request = retryRequests.current.get(key) || create();
     retryRequests.current.set(key, request);
@@ -114,5 +131,31 @@ export function useCrewManager() {
   }, [sendRequest]);
   const sendMessage = useCallback(text => correlatedRequest(`message:${text}`, () => ({ text, requestId: `message-${crypto.randomUUID()}` })), [correlatedRequest]);
   const workerAction = useCallback((task, action) => correlatedRequest(`worker:${task.id}:${task.runId}:${action}`, () => workerActionRequest(task, action)), [correlatedRequest]);
-  return { error, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, stopManager, sending, sendMessage, workerAction, retryConnection };
+  const loadSettings = useCallback(async () => {
+    try { const result = await api('settings', {}, { method: 'GET' }); setSettings(result); setManagerLifecycle(result.managerLifecycle); setSettingsError(''); return result; }
+    catch (failure) { setSettingsError(errorText(failure)); throw failure; }
+  }, []);
+  const savePrompt = useCallback(async (role, text, expectedVersion) => {
+    await api('settings/prompts', { role, text, expectedVersion }, { method: 'PUT' });
+    return await loadSettings();
+  }, [loadSettings]);
+  const changeManagerLifecycle = useCallback(async action => {
+    if (lifecycleLock.current) return;
+    lifecycleLock.current = true;
+    setManagerLifecycle(previous => ({ ...previous, state: action === 'start' ? 'starting' : action === 'stop' ? 'stopping' : 'restarting', error: '' }));
+    try {
+      if (action !== 'start') { voice.dispose(); await voice.disconnect('Manager stopped. Microphone off.'); }
+      const result = await api('manager/lifecycle', { action });
+      if (result.managerLifecycle) setManagerLifecycle(result.managerLifecycle);
+      if (result.state) setWork(result.state);
+      await loadSettings();
+      if (action !== 'stop') { setError(''); const preparedResult = await api('prepare'); setPrepared(true); setAccount(`Signed in with ChatGPT · ${preparedResult.plan || 'subscription'}. No API key used.`); if (preparedResult.state) setWork(preparedResult.state); await loadSettings(); await loadVoices(); }
+      else setAccount('Manager stopped. Start explicitly to reconnect the saved conversation.');
+    } catch (failure) {
+      try { await loadSettings(); } catch { setManagerLifecycle(previous => ({ ...previous, state: 'error', error: errorText(failure) })); }
+      setSettingsError(errorText(failure));
+      throw failure;
+    } finally { lifecycleLock.current = false; }
+  }, [loadSettings, loadVoices, voice.dispose, voice.disconnect]);
+  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
 }

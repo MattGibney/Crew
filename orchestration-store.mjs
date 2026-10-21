@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
+import { promptSnapshot } from './prompt-settings.mjs';
 
 const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
@@ -28,6 +29,7 @@ function validate(task, expectedId) {
       || typeof task.status !== 'string' || !task.status || !Number.isSafeInteger(task.revision) || task.revision < 1
       || !Number.isFinite(Date.parse(task.createdAt)) || !Number.isFinite(Date.parse(task.updatedAt))
       || (task.lifecycleRequests !== undefined && (!Array.isArray(task.lifecycleRequests) || task.lifecycleRequests.some(request => !request || typeof request.id !== 'string' || !ID.test(request.id) || !LIFECYCLE_ACTIONS.has(request.action) || !LIFECYCLE_STATES.has(request.status) || !Number.isFinite(Date.parse(request.at)) || (request.expectedRunId != null && (typeof request.expectedRunId !== 'string' || !request.expectedRunId.trim())))))
+      || (task.workerPromptSnapshot !== undefined && (!task.workerPromptSnapshot || typeof task.workerPromptSnapshot.text !== 'string' || task.workerPromptSnapshot.version !== promptSnapshot(task.workerPromptSnapshot.text).version))
       || !Array.isArray(task.reports) || !Array.isArray(task.attention)
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
@@ -129,10 +131,11 @@ export async function updateTask(dir, id, fn) {
   identifier(id);
   return lock(dir, '.schedule.lock', () => lock(dir, `.${id}.lock`, async () => {
     const task = await readUnlocked(dir, id);
-    const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision };
+    const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision, workerPromptSnapshot: task.workerPromptSnapshot ? JSON.stringify(task.workerPromptSnapshot) : null };
     const returned = await fn(task);
     const next = returned === undefined ? task : returned;
     if (!next || next.id !== identity.id || next.ticket !== identity.ticket || next.brief !== identity.brief || next.projectId !== identity.projectId || next.repositoryId !== identity.repositoryId || next.createdAt !== identity.createdAt) throw new Error('Task identity is immutable');
+    if (identity.workerPromptSnapshot && JSON.stringify(next.workerPromptSnapshot) !== identity.workerPromptSnapshot) throw new Error('Worker prompt snapshot is immutable');
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
     next.revision = identity.revision + 1; next.updatedAt = now();
     validate(next, id);

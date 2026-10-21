@@ -24,6 +24,8 @@ First-run setup guides local tools, ChatGPT sign-in, automatic project-folder se
 
 Type to your manager or choose **Connect voice**. Open microphone is the default: Connect starts the call and microphone once connected and permission allows. Input stays active when switching apps until you mute or end the call. Explicit mute is preserved on reconnect. Alternatively choose Push to talk and hold its button (or Space outside text fields); release or focus loss stops PTT input; End call releases the complete voice session. End other calls first. Closing the window also ends voice while leaving the controller running. **Quit this instance…** is separate: its confirmation shows active work, stops that controller, and leaves already dispatched worker supervisors alone. Reopen the instance to collect their reports. The app neither launches at login nor keeps a sleeping Mac awake.
 
+Open **Settings** in the header to edit the full Crew manager and worker instructions for this project. Saved manager changes apply only after explicit **Restart manager**; worker changes apply to newly launched workers. **Stop manager** releases voice and holds manager interaction while independent workers continue. **Start manager** resumes the saved conversation without starting a task or microphone. See [Settings and manager controls](docs/SETTINGS.md).
+
 ## First work session
 
 Agree a bounded task with the manager, naming an existing ticket in the configured Linear scope and the relevant project folder. The manager verifies the ticket through connected tools before dispatch. Missing ticket or connector evidence must be explained, never invented. Linear remains ticket truth; local JSON and readable notes record execution.
