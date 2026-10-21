@@ -6,6 +6,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {runEnvironmentHooks,environmentFile,reconcileEnvironment} from './worker-environment.mjs';
+import {resolveProjectToolchain, applyProjectToolchain} from './project-toolchain.mjs';
 import {snapshotProcesses} from './process-ownership.mjs';
 const exec=promisify(execFile),sleep=ms=>new Promise(r=>setTimeout(r,ms)),now=()=>new Date().toISOString();
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -41,8 +42,8 @@ async function verifyPermissionsSource(repositoryPath,plan){
 }
 function assertOwned(args,environment){if(environment?.kind!=='project-execution'||environment.taskId!==args.taskId||!/^crew-[a-f0-9]{32}$/.test(environment.id))throw new Error('Project runtime identity does not match this task.');if(environment.runtime&&(typeof environment.runtime.id!=='string'||environment.runtime.runDir!==path.join(args.stateDir,'runs',args.taskId,'project-runtime',environment.runtime.id)))throw new Error('Runtime directory does not belong to this task.');}
 async function persist(args,environment){await save(environmentFile(args.stateDir,args.taskId),environment);await args.onEvidence?.(environment);return environment;}
-function scriptArgs(plan,action){return plan.env?.PATH?['-lc','export PATH="$1"; exec /bin/zsh -c "$2"','crew-project-action',plan.env.PATH,action.command]:['-lc',action.command];}
-async function bounded(args,environment,phase,action,signal=args.signal){if(!action)return;await runEnvironmentHooks({stateDir:args.stateDir,taskId:args.taskId,worktree:environment.worktree,hooks:{[phase]:{command:'/bin/zsh',args:scriptArgs(environment.plan,action),timeoutMs:action.timeoutMs}},phases:[phase],existing:environment,signal,onEvidence:async value=>{Object.assign(environment,value);await args.onEvidence?.(value);}});}
+function scriptArgs(plan,action){return ['-f','-c',action.command];}
+async function bounded(args,environment,phase,action,signal=args.signal){if(!action)return;await runEnvironmentHooks({stateDir:args.stateDir,taskId:args.taskId,worktree:environment.worktree,hooks:{[phase]:{command:'/bin/zsh',args:scriptArgs(environment.plan,action),timeoutMs:action.timeoutMs}},phases:[phase],existing:environment,env:applyProjectToolchain(environment.toolchain),signal,onEvidence:async value=>{Object.assign(environment,value);await args.onEvidence?.(value);}});}
 async function runtimeState(environment,processes=null){
  const runtime=environment.runtime;if(!runtime)return{kind:'absent'};const exit=await json(path.join(runtime.runDir,'exit.json'));if(exit?.id===runtime.id&&exit.environmentId===environment.id)return{kind:exit.stopConfirmed===true?'stopped':'unknown',exit};
  const started=await json(path.join(runtime.runDir,'started.json'));if(started?.id!==runtime.id||started.environmentId!==environment.id)return{kind:'unknown'};const actual=(processes||await snapshotProcesses()).get(started.pid),expected=started.identity;
@@ -53,7 +54,7 @@ async function startRuntime(args,environment){
  const restarting=Boolean(environment.runtime),action=restarting?(environment.plan.resume||environment.plan.start):environment.plan.start;
  const id=randomUUID(),dir=path.join(args.stateDir,'runs',args.taskId,'project-runtime',id);await mkdir(dir,{recursive:true,mode:0o700});environment.runtime={id,runDir:dir,status:'starting',createdAt:now()};environment.servicesStarted=true;await persist(args,environment);
  await save(path.join(dir,'config.json'),{id,environmentId:environment.id,worktree:environment.worktree,command:'/bin/zsh',args:scriptArgs(environment.plan,action)});
- let error=null;const child=spawn(process.execPath,[fileURLToPath(new URL('./project-runtime-runner.mjs',import.meta.url)),path.join(dir,'config.json')],{detached:true,stdio:'ignore'});child.once('error',e=>{error=e.code||'spawn failed';});child.unref();
+ let error=null;const child=spawn(process.execPath,[fileURLToPath(new URL('./project-runtime-runner.mjs',import.meta.url)),path.join(dir,'config.json')],{detached:true,stdio:'ignore',env:applyProjectToolchain(environment.toolchain)});child.once('error',e=>{error=e.code||'spawn failed';});child.unref();
  for(let i=0;i<100;i++){const current=await runtimeState(environment);if(current.kind==='live'){await sleep(300);if((await runtimeState(environment)).kind!=='live')throw new Error('Project Start action must remain in the foreground; it exited during startup.');environment.runtime.status='running';await persist(args,environment);return;}if(current.kind==='stopped'||error)throw new Error('Project Start action exited before runtime ownership was established.');await sleep(100);}throw new Error('Project runtime ownership was not established. Preserve this environment.');
 }
 export async function inspectProjectEnvironment(args){const environment=await json(environmentFile(args.stateDir,args.taskId));if(environment?.kind!=='project-execution')return environment;assertOwned(args,environment);if(!environment.runtime)return environment;const current=await runtimeState(environment,args.processes),status=current.kind==='live'?'running':current.kind==='stopped'?'stopped':Date.now()-Date.parse(environment.runtime.createdAt)<15000?'starting':'unknown';if(environment.runtime.status!==status){environment.runtime.status=status;if(['ready','running'].includes(environment.status)&&status!=='running'){environment.status='failed';environment.detail='Owned foreground project action stopped or lost ownership confirmation. Worktree and data were retained.';}await persist(args,environment);}return environment;}
@@ -65,6 +66,11 @@ export async function prepareProjectEnvironment(args){
  await verifySources(worktree,args.baseCommit,args.plan,[...(!environment.prepared?['setup']:[]),environment.runtime&&args.plan.resume?'resume':'start','ready']);
  // Upgrade legacy order-sensitive hashes only after the retained sources are verified.
  environment.planHash=executionPlanHash(args.plan);await persist(args,environment);
+ if(!environment.prepared&&environment.setupAttempted&&!environment.hooks.some(h=>h.phase==='setup'&&h.status==='succeeded'))throw new Error('Earlier setup did not complete. Its retained data will not be reseeded; review it before starting a fresh worker.');
+ // Resolve before provisioning; resume checks the exact retained version, never upgrades it.
+ try{environment.toolchain=await resolveProjectToolchain({worktree,baseCommit:args.baseCommit,plan:args.plan,retained:environment.toolchain,cacheRoot:args.toolchainCacheRoot,env:args.env});}
+ catch(error){environment.status='failed';environment.detail=`Toolchain preparation failed: ${error.message}`;await persist(args,environment);throw error;}
+ await persist(args,environment);
  if(!environment.prepared){const completed=environment.hooks.some(h=>h.phase==='setup'&&h.status==='succeeded');if(environment.setupAttempted&&!completed)throw new Error('Earlier setup did not complete. Its retained data will not be reseeded; review it before starting a fresh worker.');if(!completed&&environment.plan.setup){environment.setupAttempted=true;await persist(args,environment);await bounded(args,environment,'setup',environment.plan.setup);}environment.prepared=true;await persist(args,environment);}
  if(environment.plan.start)await startRuntime(args,environment);if(args.signal?.aborted){await stopProjectEnvironment(args);throw new Error('Project startup canceled.');}
  if(environment.plan.ready){await bounded(args,environment,'ready',environment.plan.ready);if(environment.plan.start&&(await runtimeState(environment)).kind!=='live')throw new Error('Project Start action stopped before its declared readiness check completed.');environment.readinessKind='app-verified';environment.status='ready';}else{environment.readinessKind='setup-complete';environment.status=environment.plan.start?'running':'ready';}

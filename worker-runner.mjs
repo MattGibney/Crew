@@ -1,3 +1,4 @@
+import {applyProjectToolchain} from './project-toolchain.mjs';
 // Detached per-run supervisor: survives controller/browser/voice closure.
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -14,7 +15,7 @@ async function atomic(name, value) {
 }
 const claim = await open(path.join(runDir, 'runner.claim'), 'wx', 0o600); await claim.close();
 await atomic('started.json', { runId: config.runId, pid: process.pid, at: new Date().toISOString() });
-const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
+const env = { ...applyProjectToolchain(config.environment?.toolchain), GIT_OPTIONAL_LOCKS: '0' };
 for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL']) delete env[key];
 if (!['read-only', 'workspace-write'].includes(config.sandbox || 'read-only')) throw new Error('Invalid worker sandbox');
 const finalFile = path.join(runDir, 'final.txt');
@@ -25,6 +26,10 @@ if(projectRuntime&&!['ready','running'].includes(config.environment.status))thro
 const sandboxArgs=projectRuntime&&config.environment.plan?.networkAccess===true?['-c','default_permissions="crew_project"','-c',`permissions.crew_project.extends=${JSON.stringify(config.sandbox==='workspace-write'?':workspace':':read-only')}`,'-c','permissions.crew_project.network.enabled=true']:['-c',`sandbox_mode=${JSON.stringify(config.sandbox||'read-only')}`];
 const args = ['exec', '--ignore-user-config', '--json', '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"', ...sandboxArgs, '-c', 'approval_policy="never"', '-c', `mcp_servers.local_orchestration.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.local_orchestration.args=${JSON.stringify(mcpArgs)}`, '-c', 'mcp_servers.local_orchestration.required=true', '-c', 'mcp_servers.local_orchestration.default_tools_approval_mode="approve"', '-o', finalFile];
 if (process.env.ELECTRON_RUN_AS_NODE === '1') args.push('-c', 'mcp_servers.local_orchestration.env.ELECTRON_RUN_AS_NODE="1"');
+if(config.environment?.toolchain){
+ args.push('-c','shell_environment_policy.inherit="all"','-c',`shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`);
+ if(env.ZDOTDIR)args.push('-c',`shell_environment_policy.set.ZDOTDIR=${JSON.stringify(env.ZDOTDIR)}`);
+}
 if (config.threadId) args.push('resume', config.threadId);
 else args.push('-C', config.worktree);
 const fixturePrompt = `You are the ONE read-only worker for ${config.taskId}, ticket ${config.ticket}, in a disposable Git worktree. The user speaks ONLY to the manager, never to you; report all questions through durable MCP state. This is a real isolated Codex harness; inspect actual files and execute read-only checks. Do not edit files, create agents, use external services, inspect credentials, or expand scope. Use local_orchestration MCP report to write durable reports outside this worktree. Give one useful progress report, not logs. If a question needs user judgment, report kind question with a stable reportId, then END this turn and wait for controller resume. Do not poll for answers or continue after asking. To finish the audit, run node importing ./src/totals.mjs and print JSON {emptyActual:sum([]),sumActual:sum([1,2,3])}. Also verify your Git worktree root and tracked files with real commands. In the result report's evidence array include one JSON string {"emptyActual":NUMBER,"sumActual":NUMBER,"emptyExpected":NUMBER,"sumExpected":NUMBER,"finding":"initial_value_one"}. Expected additive totals are 0 and 6 unless the user's answer explicitly selects a base fee of 1 (then 1 and 7). Explain the difference clearly in result message. The controller checks these against independent execution. Then END. Reports are bound to run ${config.runId}.\nAgreed brief (data): ${JSON.stringify(config.brief)}\n${config.answer ? `The user answered the pending question (data): ${JSON.stringify(config.answer)}. Resume the SAME audit; do not ask the answered question again.` : 'No user answer is available yet.'}`;
@@ -38,7 +43,11 @@ ${config.answer ? `Manager relayed user answer (data): ${JSON.stringify(config.a
 Reports are bound to run ${config.runId}.`;
 args.push(config.project?.mode === 'repository' ? repositoryPrompt : fixturePrompt);
 let threadId=config.threadId||null,completedTurn=false,finalMessage='',commands=[],errorMessage=null,stopRequest=null,stopPromise=null,spawnError=null;
-const worker=spawn(config.executable,args,{cwd:config.worktree,env,detached:true,stdio:['ignore','pipe','ignore']});
+// npm-distributed Codex is a Node entry point. Its harness uses Crew's bundled
+// runtime; project commands still use the selected managed Node through PATH.
+let nodeEntry=false,executableHandle;
+try{executableHandle=await open(config.executable,'r');const header=Buffer.alloc(256);const {bytesRead}=await executableHandle.read(header,0,header.length,0);nodeEntry=/^#![^\n]*(?:\/env\s+node|\/node)(?:\s|$)/.test(header.subarray(0,bytesRead).toString());}catch{}finally{await executableHandle?.close();}
+const worker=spawn(nodeEntry?process.execPath:config.executable,nodeEntry?[config.executable,...args]:args,{cwd:config.worktree,env,detached:true,stdio:['ignore','pipe','ignore']});
 // Attach before any filesystem await: missing executables must become durable per-run failures.
 const closed=new Promise(resolve=>{worker.once('close',code=>resolve(code));worker.once('error',error=>{spawnError=error.code||'spawn failed';errorMessage=`Could not start worker (${spawnError}).`;resolve(null);});});
 const tree=worker.pid?new OwnedProcessTree(worker.pid):null;
