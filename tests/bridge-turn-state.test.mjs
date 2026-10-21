@@ -57,8 +57,9 @@ createInterface({input:process.stdin}).on('line',line=>{
  await writeFile(executable,program,{mode:0o700});await chmod(executable,0o700);
  const repository=join(directory,'project-repository'),orchestrationDir=join(directory,'orchestration'),runtimeProjectPath=join(directory,'runtime.json');if(projectScoped)await mkdir(repository);
  const project=projectScoped?{id:'scoped-project',name:'Scoped',repositories:[{id:'app',path:repository}]}:undefined;
- const events=[],create=()=>createBridge({cwd:directory,statePath,executable,...(projectScoped?{project,orchestrationDir,runtimeProjectPath}:{}),onEvent:event=>events.push(event)}),bridge=create();
- t.after(async()=>{await bridge.shutdown();await rm(directory,{recursive:true,force:true});});
+ const events=[],bridges=new Set(),create=()=>{const value=createBridge({cwd:directory,statePath,executable,...(projectScoped?{project,orchestrationDir,runtimeProjectPath}:{}),onEvent:event=>events.push(event)});bridges.add(value);return value;},bridge=create();
+ // Shutdown every recreated fixture bridge before removing the state it may persist.
+ t.after(async()=>{for(const value of bridges)await value.shutdown();await rm(directory,{recursive:true,force:true});});
  return {bridge,request:async(id,method,params)=>appendFile(control,JSON.stringify({id,method,params:{threadId:'manager-thread',...params}})+'\n'),create,events,directory,executable,repository,orchestrationDir,runtimeProjectPath,clearNotifications:()=>writeFile(control,''),setTimelineError:error=>writeFile(join(directory,'timeline-error.json'),JSON.stringify(error)),notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
 }
 const canUpdate=bridge=>updateActivity({work:bridge.state(),view:{tasks:[]}}).safe;

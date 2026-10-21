@@ -164,6 +164,7 @@ async function packageSource(options) {
   allowed.push('conversation.mjs','worker-detail.mjs','tests/worker-detail.test.mjs','tickets/GH-014.md','docs/MANAGER-WORKSPACE.md','renderer/src/manager/ManagerCallBar.jsx','renderer/src/manager/WorkerDetail.jsx','scripts/worker-overview-browser-acceptance.mjs','tests/browser-fixture.mjs','tests/fixtures/BROWSER-ACCEPTANCE.md','tests/fixtures/browser-setup.js','renderer/src/manager/conversation.js','renderer/src/manager/conversation.test.mjs','renderer/src/manager/voice-input.js','renderer/src/manager/voice-input.test.mjs','renderer/src/manager/voice-silence.js','renderer/src/manager/voice-silence.test.mjs','renderer/src/manager/worker-model.js','renderer/src/manager/worker-model.test.mjs');
   allowed.push('tickets/REL-0.11.0.md', 'tickets/REL-0.12.0.md', 'tests/grouped-012.test.mjs');
   allowed.push('tickets/GH-20.md');
+  allowed.push('environment-settings.mjs', 'tests/environment-settings.test.mjs', 'tests/environment-bootstrap.test.mjs', 'renderer/src/manager/WorkerEnvironment.jsx', 'tickets/GH-045.md', 'scripts/environment-browser-acceptance.mjs', 'scripts/environment-native-acceptance.mjs');
   const sources = [...new Set(allowed)];
   for (const path of sources) if (!(await stat(join(appRoot, path))).isFile()) throw new Error(`Missing package source file: ${path}.`);
   await mkdir(dirname(output), { recursive: true });

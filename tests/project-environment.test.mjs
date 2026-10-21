@@ -19,7 +19,7 @@ async function fixture(t,{ready=true,teardown=true,failSetup=false,gracefulStop=
  t.after(async()=>{await stopProjectEnvironment(args).catch(()=>{});await rm(dir,{recursive:true,force:true});});return{args,dir,read:async()=>JSON.parse(await readFile(path.join(worktree,'.test-data/state.json'),'utf8'))};
 }
 test('declared scripts prepare once, retain identity/data through stop and resume, then scoped teardown',async t=>{
- const f=await fixture(t),first=await prepareProjectEnvironment(f.args);assert.equal(first.status,'ready');assert.equal(first.readinessKind,'app-verified');assert.equal((await f.read()).seeds,1);
+ const f=await fixture(t),first=await prepareProjectEnvironment(f.args);assert.equal(first.status,'ready');assert.equal(first.hooks[0].configurationSource,'crew-config');assert.equal(first.runtime.configurationSource,'crew-config');assert.equal(first.readinessKind,'app-verified');assert.equal((await f.read()).seeds,1);
  const adopted=await prepareProjectEnvironment({...f.args,resume:true});assert.equal(adopted.runtime.id,first.runtime.id);assert.equal((await f.read()).starts,1);
  await stopProjectEnvironment(f.args);assert.equal((await f.read()).resources,false);
  const resumed=await prepareProjectEnvironment({...f.args,resume:true});assert.equal(resumed.id,first.id);assert.notEqual(resumed.runtime.id,first.runtime.id);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
@@ -79,7 +79,7 @@ test('plan identity ignores deep object-key ordering but preserves array order a
 test('legacy ordered plan hash migrates on a reordered equivalent stop/resume without reseeding',async t=>{
  const f=await fixture(t),first=await prepareProjectEnvironment(f.args);await stopProjectEnvironment(f.args);const file=path.join(f.args.stateDir,'runs',f.args.taskId,'environment.json'),saved=JSON.parse(await readFile(file,'utf8'));saved.planHash=createHash('sha256').update(JSON.stringify(saved.plan)).digest('hex');await writeFile(file,JSON.stringify(saved));
  const reorder=value=>Array.isArray(value)?value.map(reorder):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([k,v])=>[k,reorder(v)])):value,reordered=reorder(f.args.plan),resumed=await prepareProjectEnvironment({...f.args,plan:reordered,resume:true});assert.equal(resumed.id,first.id);assert.equal(resumed.worktree,first.worktree);assert.equal(resumed.planHash,executionPlanHash(reordered));assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
- await assert.rejects(prepareProjectEnvironment({...f.args,plan:{...reordered,start:{...reordered.start,timeoutMs:reordered.start.timeoutMs+1}},resume:true}),/execution plan changed/);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
+ const updated={...reordered,start:{...reordered.start,timeoutMs:reordered.start.timeoutMs+1}};const changed=await prepareProjectEnvironment({...f.args,plan:updated,resume:true});assert.equal(changed.planHash,executionPlanHash(updated));assert.equal(changed.planHistory.length,1);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
 });
 
 
@@ -134,7 +134,7 @@ test('reviewed teardown adoption preserves original plan, data and dirty work; t
  assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).disposed,undefined);assert.equal(await readFile(path.join(f.task.worktree,'keep.txt'),'utf8'),'Retained user work');
  const replay=await applyProjectRecovery({...f.recovery,request:{id:'recover-plan-one',reviewHash:reviewed.reviewHash,decision:'Use the reviewed teardown for this worker only.'}});assert.equal(replay.recoveryHistory.length,1);
  await rm(path.join(f.task.worktree,'keep.txt'));
- await disposeProjectEnvironment(f.args);assert.equal((await f.read()).disposed,true);
+ await disposeProjectEnvironment({...f.args,plan:f.current});assert.equal((await f.read()).disposed,true);
 });
 
 test('compatible lifecycle recovery resumes retained environment without repeating setup',async t=>{
@@ -158,7 +158,7 @@ test('recovery rejects incompatible metadata, changed sources, stale reviews and
 });
 
 test('failed setup permits adding teardown but never replays incomplete provisioning',async t=>{
- const f=await retainedRecovery(t,{failSetup:true});await f.apply();await assert.rejects(prepareProjectEnvironment({...f.args,plan:f.current,resume:true}),/will not be reseeded/);assert.equal((await f.read()).seeds,1);await disposeProjectEnvironment(f.args);assert.equal((await f.read()).disposed,true);
+ const f=await retainedRecovery(t,{failSetup:true});await f.apply();await assert.rejects(prepareProjectEnvironment({...f.args,plan:f.current,resume:true}),/will not be reseeded/);assert.equal((await f.read()).seeds,1);await disposeProjectEnvironment({...f.args,plan:f.current});assert.equal((await f.read()).disposed,true);
 });
 
 test('missing recovery requires absence and no registration, rejects foreign paths and dangling links',async t=>{
@@ -210,4 +210,66 @@ test('recovery rejects a worktree repointed to another registered worktree at th
 test('reviewed lifecycle adoption retains edited non-executable instruction files',async t=>{
  const f=await retainedRecovery(t,{instructionSource:true});await writeFile(path.join(f.task.worktree,'AGENTS.md'),'Retained worker guidance edits.\n');
  assert.equal((await f.review()).allowed,true);await f.apply();assert.equal(await readFile(path.join(f.task.worktree,'AGENTS.md'),'utf8'),'Retained worker guidance edits.\n');
+});
+
+// GH-45: settings are passive; action entry snapshots the edited configuration.
+test('failed retained readiness retries latest command with prior failure and setup evidence preserved',async t=>{
+ const f=await fixture(t);const original=structuredClone(f.args.plan);f.args.plan.ready={...f.args.plan.ready,command:'exit 19'};
+ await assert.rejects(prepareProjectEnvironment(f.args),/ready environment hook failed/);
+ const file=path.join(f.args.stateDir,'runs',f.args.taskId,'environment.json');const failed=JSON.parse(await readFile(file,'utf8'));
+ const failedHook=failed.hooks.find(h=>h.phase==='ready');assert.equal(failedHook.exitCode,19);assert.equal((await f.read()).seeds,1);
+ f.args.plan=original; // Saving the config alone cannot touch the retained worker.
+ assert.equal(JSON.parse(await readFile(file,'utf8')).plan.ready.command,'exit 19');
+ const retried=await prepareProjectEnvironment({...f.args,resume:true});
+ assert.equal(retried.id,failed.id);assert.equal(retried.runtime.id,failed.runtime.id);assert.equal((await f.read()).seeds,1);
+ assert.equal(retried.hooks.find(h=>h.id===failedHook.id).exitCode,19);assert.equal(retried.hooks.filter(h=>h.phase==='ready').length,2);
+ assert.equal(retried.hooks.at(-1).planHash,executionPlanHash(original));assert.equal(retried.hooks.at(-1).configurationSource,'crew-settings');
+ assert.equal(retried.planHistory[0].plan.ready.command,'exit 19');
+ await stopProjectEnvironment(f.args);
+ const stopped=await prepareProjectEnvironment({...f.args,resume:true});assert.equal(stopped.id,failed.id);assert.equal((await f.read()).seeds,1);
+});
+test('retained stop and teardown resolve latest hooks without manual plan adoption',async t=>{
+ const f=await fixture(t);const first=await prepareProjectEnvironment(f.args);
+ await assert.rejects(stopProjectEnvironment({...f.args,plan:{...f.args.plan,stop:{...f.args.plan.stop,command:'exit 13'}}}),/stop environment hook failed/);
+ const stopped=await stopProjectEnvironment(f.args);assert.equal(stopped.id,first.id);assert.equal(stopped.hooks.filter(h=>h.phase==='stop').length,2);
+ await assert.rejects(disposeProjectEnvironment({...f.args,plan:{...f.args.plan,teardown:{...f.args.plan.teardown,command:'exit 14'}}}),/teardown environment hook failed/);
+ const disposed=await disposeProjectEnvironment(f.args);assert.equal(disposed.status,'disposed');assert.equal(disposed.hooks.filter(h=>h.phase==='teardown').length,2);assert.equal((await f.read()).seeds,1);
+});
+
+test('only an explicit uniquely identified failed setup retry reruns the edited Setup',async t=>{
+ const f=await fixture(t,{failSetup:true,ready:false});f.args.plan.start=null;
+ await assert.rejects(prepareProjectEnvironment(f.args),/setup environment hook failed/);
+ const corrected={...f.args.plan,setup:{...f.args.plan.setup,command:'true'}};
+ await assert.rejects(prepareProjectEnvironment({...f.args,plan:corrected}),/will not be reseeded/);
+ const result=await prepareProjectEnvironment({...f.args,plan:corrected,setupRetry:{requestId:'explicit-retry-one',runId:'failed-run'}});
+ assert.equal(result.prepared,true);assert.equal(result.hooks.filter(h=>h.phase==='setup').length,2);assert.equal(result.hooks[0].exitCode,7);assert.equal(result.hooks[1].status,'succeeded');assert.equal(result.setupRetryHistory[0].requestId,'explicit-retry-one');assert.equal((await f.read()).seeds,1);
+ const again=await prepareProjectEnvironment({...f.args,plan:corrected,setupRetry:{requestId:'explicit-retry-one',runId:'failed-run'}});assert.equal(again.hooks.filter(h=>h.phase==='setup').length,2);
+});
+test('lifecycle invocation snapshots settings before asynchronous command evidence',async t=>{
+ const f=await fixture(t,{ready:false});f.args.plan.start=null;const command=f.args.plan.setup.command;
+ const value=await prepareProjectEnvironment({...f.args,onEvidence:async environment=>{if(environment.setupAttempted)f.args.plan.setup.command='exit 99';}});
+ assert.equal(value.hooks[0].status,'succeeded');assert.equal(value.plan.setup.command,command);assert.equal((await f.read()).seeds,1);
+});
+for(const kind of ['plan','argv'])test(`controller persists explicit ${kind} setup retry and applies latest settings in the same worker worktree`,async t=>{
+ const {createController}=await import('../controller.mjs');const {createTask,readTask,requestWorkerAction}=await import('../orchestration-store.mjs');
+ const f=await fixture(t,{failSetup:true,ready:false});f.args.plan.start=null;
+ const phase=kind==='plan'?'setup':'bootstrap';const configured=kind==='plan'?{executionPlan:f.args.plan}:{bootstrap:{command:process.execPath,args:['action.mjs','setup'],timeoutMs:5000}};
+ const stateDir=path.join(await realpath(f.dir),'retry-controller');const project={id:'retry-project',mode:'repository',readiness:{ready:true},repositories:[{id:'repo',path:f.args.repositoryPath,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs:10000,maxConcurrent:1,environment:configured}};
+ let controller=await createController({stateDir,sourceDir:path.resolve('.'),executable:path.join(f.dir,'absent-codex'),project});t.after(()=>controller.stop().catch(error=>{if(error.code!=='ENOENT')throw error;}));
+ const wait=async predicate=>{const until=Date.now()+15000;let latest;while(Date.now()<until){await controller.tick();const task=latest=await readTask(stateDir,'retry-worker');if(predicate(task))return task;await new Promise(r=>setTimeout(r,50));}throw new Error('Setup retry controller did not reach its expected boundary: '+JSON.stringify({status:latest?.status,failure:latest?.failure,admission:latest?.admission,lifecycleRequests:latest?.lifecycleRequests}));};
+ await createTask(stateDir,{requestId:'retry-worker',ticket:'45',brief:'Disposable setup retry proof.',projectId:project.id,repositoryId:'repo'});
+ const failed=await wait(task=>task.status==='failed'&&task.environment?.hooks?.some(h=>h.phase===phase&&h.status==='failed'));
+ if(kind==='plan')project.worker.environment.executionPlan={...f.args.plan,setup:{...f.args.plan.setup,command:'true'}};else project.worker.environment.bootstrap={command:process.execPath,args:['-e',''],timeoutMs:5000};
+ await controller.stop();controller=await createController({stateDir,sourceDir:path.resolve('.'),executable:path.join(f.dir,'absent-codex'),project});
+ await requestWorkerAction(stateDir,{taskId:failed.id,actionId:'explicit-setup-retry',action:'retry_setup',expectedRunId:failed.runId});
+ const retried=await wait(task=>task.status==='failed'&&task.environment?.hooks?.some(h=>h.phase===phase&&h.status==='succeeded'));
+ assert.equal(retried.worktree,failed.worktree);assert.equal(retried.environment.id,failed.environment.id);assert.equal(retried.environment.hooks.filter(h=>h.phase===phase).length,2);assert.equal(retried.environment.hooks[0].status,'failed');assert.equal(retried.environment.hooks[1].status,'succeeded');assert.equal(retried.environment.setupRetryHistory[0].requestId,'explicit-setup-retry');assert.equal(retried.setupRetryIntent,null);
+ assert.equal(JSON.parse(await readFile(path.join(retried.worktree,'.test-data/state.json'),'utf8')).seeds,1);
+});
+
+test('hook fixes retain prepared PATH and verified baseline dependency despite newer configured hashes',async t=>{
+ const f=await fixture(t,{ready:false});f.args.plan.start=null;f.args.plan.env={PATH:'/retained/bin'};
+ const initial=await prepareProjectEnvironment(f.args);const updated=structuredClone(f.args.plan);updated.env.PATH='/new/bin';updated.stop.command='true';updated.stop.source.sha256='f'.repeat(64);updated.sources[0].sha256='f'.repeat(64);
+ const stopped=await stopProjectEnvironment({...f.args,plan:updated});assert.equal(stopped.plan.env.PATH,'/retained/bin');assert.equal(stopped.plan.stop.command,'true');assert.equal(stopped.hooks.at(-1).source.sha256,initial.plan.stop.source.sha256);assert.equal(stopped.hooks.at(-1).status,'succeeded');assert.equal(stopped.planHash,executionPlanHash(stopped.plan));assert.equal(stopped.configuredPlanHash,executionPlanHash(updated));assert.equal(stopped.planHistory.at(-1).configuredPlanHash,executionPlanHash(updated));assert.equal(stopped.planHistory.at(-1).sourceBindings[0].configured.sha256,'f'.repeat(64));assert.equal(stopped.planHistory.at(-1).sourceBindings[0].effective.sha256,initial.plan.stop.source.sha256);
+ const resumed=await prepareProjectEnvironment({...f.args,plan:updated});assert.equal(resumed.planHash,executionPlanHash(resumed.plan));assert.equal(resumed.configuredPlanHash,executionPlanHash(updated));assert.equal(resumed.plan.env.PATH,'/retained/bin');
 });

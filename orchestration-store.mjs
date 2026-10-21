@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
 import { promptSnapshot } from './prompt-settings.mjs';
 
-const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose', 'reconcile_plan', 'retire_missing']);
+const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'retry_setup', 'dispose', 'reconcile_plan', 'retire_missing']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(['progress', 'question', 'result', 'blocked']);
@@ -267,7 +267,7 @@ export async function requestWorkerRecovery(dir, {taskId, actionId, action, expe
 
 export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
-  if (!['stop','pause','resume','start','dispose'].includes(action)) throw new Error('Invalid worker action');
+  if (!['stop','pause','resume','start','retry_setup','dispose'].includes(action)) throw new Error('Invalid worker action');
   if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {

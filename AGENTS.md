@@ -202,3 +202,9 @@
 
 - The user's bottom-follow preference supersedes turn anchoring: open at the bottom, follow appended/streamed output only while at the bottom, and preserve the reader's position through state refreshes and new messages while scrolled back. Do not mark user rows as scroll anchors or reapply opening position on updates. Jump to latest explicitly resumes following. Verify repeated refresh, near-bottom reading, new user/assistant rows, streaming, completion and composer resizing in the real compiled renderer.
 - The user explicitly authorized releasing the chat-scroll fix in PR #33 as patch 0.13.1. Merge through that PR, preserve published 0.13.0, and use the existing signed/notarized workflow and public artifact verification. This authorization covers this patch only.
+
+## Worker environment settings (GitHub #45)
+
+- Settings exposes the actual five argv hooks or six source-backed shell phases, preserving exact commands, argument boundaries, fixed worker-worktree cwd and supported options. Saves edit only Crew configuration atomically with stale-document validation; never mutate project tooling or execute commands, workers or capture.
+- Saved lifecycle command corrections apply to existing workers on their next explicit retry/action, not only new plans. Snapshot each active attempt, retain earlier plan/command/source/outcome evidence and preserve ownership, permissions and partial data. No separate adoption step is required just to retry a corrected command. Successful setup stays setup-once; failed partial setup reruns only through explicit Retry failed setup.
+- Source references describe captured dependencies; manually edited settings commands are Crew overrides, not claims about project-file contents. Keep actual project/Codex instructions authoritative and preserve normal configuration resolution. This PR targets main separately; do not resume paused TypeScript migration, merge, version bump or release without further authorization.

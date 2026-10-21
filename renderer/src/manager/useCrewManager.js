@@ -167,6 +167,10 @@ export function useCrewManager() {
     await api('settings/prompts', { role, text, expectedVersion }, { method: 'PUT' });
     return await loadSettings();
   }, [loadSettings]);
+  const saveWorkerEnvironment = useCallback(async (environment, expectedRevision) => {
+    const result = await api('settings/worker-environment', { environment, expectedRevision }, { method: 'PUT' });
+    setSettings(result); return result;
+  }, []);
   const changeManagerLifecycle = useCallback(async action => {
     if (lifecycleLock.current) return;
     lifecycleLock.current = true;
@@ -185,5 +189,5 @@ export function useCrewManager() {
       throw failure;
     } finally { lifecycleLock.current = false; }
   }, [loadSettings, loadVoices, voice.dispose, voice.disconnect]);
-  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, saveManagerProfile, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
+  return { settings, settingsError, loadSettings, savePrompt, saveWorkerEnvironment, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, saveManagerProfile, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
 }

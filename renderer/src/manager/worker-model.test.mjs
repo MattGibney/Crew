@@ -56,3 +56,15 @@ test('missing worktree retirement is honest history and review requests never au
  const request=workerRecoveryReviewRequest(worker({status:'failed',worktree:'/fixture/worker'}));assert.match(request,/"taskId":"task-example"/);assert.match(request,/"expectedRunId":"run-one"/);assert.match(request,/review only/);assert.match(request,/explicitly approve/);
  assert.throws(()=>workerRecoveryReviewRequest(worker({status:'running',worktree:'/fixture/worker'})));
 });
+
+test('failed setup offers an explicit manager-mediated retry without replacing ordinary resume',()=>{
+ const task=worker({status:'failed',environment:{kind:'project-execution',setupAttempted:true,prepared:false,hooks:[{phase:'setup',status:'failed'}]}});
+ assert.deepEqual(workerActions(task),['retry_setup','resume','dispose']);
+ const request=workerActionRequest(task,'retry_setup','setup-retry-action');assert.match(request.text,/"action":"retry_setup"/);assert.match(request.text,/explicitly authorizes rerunning the failed incomplete Setup/);
+ assert.ok(!workerActions({...task,environment:{...task.environment,prepared:true}}).includes('retry_setup'));
+});
+
+test('failed argv bootstrap exposes explicit setup retry while completed bootstrap does not',()=>{
+ const task=worker({status:'failed',environment:{hooks:[{phase:'bootstrap',status:'failed'}]}});assert.ok(workerActions(task).includes('retry_setup'));
+ task.environment.hooks.push({phase:'bootstrap',status:'succeeded'});assert.ok(!workerActions(task).includes('retry_setup'));
+});

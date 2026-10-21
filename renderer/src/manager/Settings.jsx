@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { WorkerEnvironment } from './WorkerEnvironment';
 import { Check, ChevronDown, CircleHelp, LoaderCircle, Play, RotateCcw, Save, Square, Radio, UserRound, Users, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -193,6 +194,7 @@ export function Settings({ manager }) {
     { id: 'project', label: 'General', icon: SlidersHorizontal, description: 'Manage the details for this project.' },
     { id: 'sessions', label: 'Sessions', icon: Radio, description: 'Manage the live manager session for this project.' },
     { id: 'manager', label: 'Manager profile', icon: UserRound, description: 'Configure your manager’s voice and instructions.' },
+    { id: 'environment', label: 'Worker environment', icon: SlidersHorizontal, description: 'Manage lifecycle commands used in worker worktrees.' },
     { id: 'worker', label: 'Worker profile', icon: Users, description: 'Set the instructions for newly launched workers.' },
   ];
   const current = pages.find(item => item.id === page);
@@ -212,6 +214,7 @@ export function Settings({ manager }) {
         {page !== 'global' && manager.settingsError && <Alert variant="destructive" role="alert"><AlertDescription>{manager.settingsError}<Button className="ml-2" variant="outline" onClick={() => void manager.loadSettings().catch(() => {})}>Reload settings</Button></AlertDescription></Alert>}
         <div hidden={page !== 'sessions'} aria-label="Session settings"><section aria-labelledby="manager-lifecycle-heading" className="border-t pt-6"><h3 id="manager-lifecycle-heading" className="mb-4 font-semibold">Manager session</h3><ManagerLifecycle manager={manager} /></section></div>
         <div hidden={page !== 'manager'} aria-label="Manager profile settings" className="space-y-12"><ManagerProfile key={manager.settings?.projectId || 'loading'} manager={manager} onNotify={notify} />{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:manager`} role="manager" data={manager.settings.manager} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading manager instructions…</p>}</div>
+        <div hidden={page !== 'environment'} aria-label="Worker environment settings"><WorkerEnvironment key={manager.settings?.projectId || 'loading'} manager={manager} onNotify={notify} /></div>
         <div hidden={page !== 'worker'} aria-label="Worker profile settings">{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:worker`} role="worker" data={manager.settings.worker} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading worker instructions…</p>}</div>
     </div>
     </div>
