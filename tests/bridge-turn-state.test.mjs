@@ -35,7 +35,7 @@ createInterface({input:process.stdin}).on('line',line=>{
   return setTimeout(()=>reply(id,{thread:{id:nativeThreadId}}),${threadDelay});
  }
  if(method==='thread/name/set')return reply(id,{});
- if(method==='thread/timeline/list'){let error=${JSON.stringify(timelineError)};try{error=JSON.parse(readFileSync(${JSON.stringify(join(directory,'timeline-error.json'))},'utf8'));}catch{};if(error)return send({id,error});const pages=${JSON.stringify(timelinePages)};return pages ? setTimeout(()=>reply(id,pages[Number(params.cursor||0)]),${timelineDelay}) : send({id,error:{code:-32601,message:'Method not found'}});}
+ if(method==='thread/timeline/list'){let error=${JSON.stringify(timelineError)};try{error=JSON.parse(readFileSync(${JSON.stringify(join(directory,'timeline-error.json'))},'utf8'));}catch{};if(error)return send({id,error});let pages=${JSON.stringify(timelinePages)};try{pages=JSON.parse(readFileSync(${JSON.stringify(join(directory,'timeline-pages.json'))},'utf8'));}catch{};return pages ? setTimeout(()=>reply(id,pages[Number(params.cursor||0)]),${timelineDelay}) : send({id,error:{code:-32601,message:'Method not found'}});}
  if(method==='thread/turns/list'){const error=${JSON.stringify(turnsError)};return error?send({id,error}):reply(id,{data:history});}
  if(method==='mcpServerStatus/list')return reply(id,{data:[]});
  if(method==='thread/realtime/listVoices')return reply(id,{voices:{v3:['cove'],defaultV1:'cove'}});
@@ -59,7 +59,7 @@ createInterface({input:process.stdin}).on('line',line=>{
  const project=projectScoped?{id:'scoped-project',name:'Scoped',repositories:[{id:'app',path:repository}]}:undefined;
  const events=[],create=()=>createBridge({cwd:directory,statePath,executable,...(projectScoped?{project,orchestrationDir,runtimeProjectPath}:{}),onEvent:event=>events.push(event)}),bridge=create();
  t.after(async()=>{await bridge.shutdown();await rm(directory,{recursive:true,force:true});});
- return {bridge,request:async(id,method,params)=>appendFile(control,JSON.stringify({id,method,params:{threadId:'manager-thread',...params}})+'\n'),create,events,directory,executable,repository,orchestrationDir,runtimeProjectPath,clearNotifications:()=>writeFile(control,''),setTimelineError:error=>writeFile(join(directory,'timeline-error.json'),JSON.stringify(error)),notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
+ return {bridge,request:async(id,method,params)=>appendFile(control,JSON.stringify({id,method,params:{threadId:'manager-thread',...params}})+'\n'),create,events,directory,executable,repository,orchestrationDir,runtimeProjectPath,clearNotifications:()=>writeFile(control,''),setTimelineError:error=>writeFile(join(directory,'timeline-error.json'),JSON.stringify(error)),setTimelinePages:pages=>writeFile(join(directory,'timeline-pages.json'),JSON.stringify(pages)),notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
 }
 const canUpdate=bridge=>updateActivity({work:bridge.state(),view:{tasks:[]}}).safe;
 
@@ -480,4 +480,74 @@ for (const canonical of [true, false]) test(`realtime handoff presentation is cl
  if (!canonical) assert.equal(restored.state().messages.find(m=>m.id==='live-handoff').text,'New live request');
  const calls=await f.calls();
  assert.equal(calls.filter(call=>['turn/start','thread/realtime/appendText','thread/realtime/start'].includes(call.method)).length,0);
+});
+
+for (const canonical of [true, false]) test(`delegated native origin survives ${canonical ? 'canonical hydration' : 'journal fallback'}, live completion and controller recreation without dispatch`, async t => {
+ const request={id:'native-request',type:'userMessage',content:[{type:'text',text:'<realtime_delegation><input>Check the fixture</input></realtime_delegation>'}]};
+ const reply={id:'native-reply',type:'agentMessage',phase:'final_answer',text:'Detailed fixture response'};
+ const speech={id:'spoken-request',type:'transcriptSegment',realtimeSessionId:'call',role:'user',text:'Check the fixture'};
+ const f=await fixture(t,{saved:true,history:[{id:'backing',status:'completed',items:[request,reply]}],...(canonical?{timelinePages:[{data:[
+  {type:'realtime',position:0,item:speech},
+  {type:'item',position:1,turnId:'backing',item:request},
+  {type:'item',position:2,turnId:'backing',item:reply},
+ ],nextCursor:null}]}:{})});
+ await f.bridge.ensureThread();
+ if(!canonical) await f.notify('thread/realtime/item/completed',{item:speech});
+ await f.notify('thread/realtime/item/started',{item:{id:'spoken-answer',type:'transcriptSegment',role:'assistant',text:''}});
+ await f.notify('thread/realtime/item/transcript/delta',{itemId:'spoken-answer',delta:'Short spoken result'});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='spoken-answer'&&m.status==='streaming'));
+ await f.notify('thread/realtime/item/completed',{item:{id:'spoken-answer',type:'transcriptSegment',role:'assistant',text:'Short spoken result.'}});
+ await f.notify('thread/realtime/item/started',{item:{id:'spoken-answer',type:'transcriptSegment',role:'assistant',text:''}});
+ await f.notify('thread/realtime/item/transcript/delta',{itemId:'spoken-answer',delta:'Late duplicate delta'});
+ // Use a distinct repeated utterance as a protocol fence; both must remain.
+ await f.notify('thread/realtime/item/completed',{item:{...speech,id:'spoken-repeat'}});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='spoken-repeat'));
+ const assertProjection=messages=>{
+  assert.equal(messages.filter(m=>m.origin==='realtime-delegation').length,2);
+  assert.equal(messages.find(m=>m.id==='native-reply').text,reply.text);
+  assert.equal(messages.find(m=>m.id==='spoken-answer').text,'Short spoken result.');
+  assert.equal(messages.find(m=>m.id==='spoken-answer').status,'complete');
+  assert.equal(messages.filter(m=>m.source==='voice'&&m.text===speech.text).length,2);
+  assert.equal(new Set(messages.map(m=>m.id)).size,messages.length);
+ };
+ assertProjection(f.bridge.state().messages);
+ await f.bridge.shutdown();await f.clearNotifications();
+ // The provider commits speech to canonical history before the next connection.
+ if(canonical) await f.setTimelinePages([{data:[
+  {type:'realtime',position:0,item:speech},
+  {type:'item',position:1,turnId:'backing',item:request},
+  {type:'item',position:2,turnId:'backing',item:reply},
+  {type:'realtime',position:3,item:{id:'spoken-answer',type:'transcriptSegment',role:'assistant',text:'Short spoken result.'}},
+  {type:'realtime',position:4,item:{...speech,id:'spoken-repeat'}},
+ ],nextCursor:null}]);
+ const restored=f.create();t.after(()=>restored.shutdown());await restored.ensureThread();assertProjection(restored.state().messages);await restored.shutdown();
+ const calls=await f.calls();
+ assert.equal(calls.filter(c=>c.method==='turn/start').length,0);
+ assert.equal(calls.filter(c=>c.method==='thread/realtime/appendText').length,0);
+});
+
+test('bounded canonical hydration retains exact saved delegation origin without restoring stale text, status or position', async t => {
+ const reply={id:'retained-reply',type:'agentMessage',text:'Canonical response'};
+ const f=await fixture(t,{saved:true,timelinePages:[{data:[
+  {type:'item',position:20,turnId:'retained-turn',item:reply},
+  {type:'item',position:21,turnId:'different-turn',item:{...reply,id:'wrong-turn'}},
+  {type:'item',position:22,turnId:'actor-turn',item:{...reply,id:'wrong-role'}},
+ ],nextCursor:null}]});
+ await writeFile(join(f.directory,'manager.json.conversation.json'),JSON.stringify({threadId:'manager-thread',messages:[
+  {id:'retained-reply',turnId:'retained-turn',role:'assistant',origin:'realtime-delegation',text:'Stale journal response',position:1,status:'streaming'},
+  {id:'wrong-turn',turnId:'old-turn',role:'assistant',origin:'realtime-delegation',text:'Stale',position:2,status:'complete'},
+  {id:'wrong-role',turnId:'actor-turn',role:'user',origin:'realtime-delegation',text:'Stale',position:3,status:'complete'},
+ ]}));
+ await f.bridge.ensureThread();
+ const messages=f.bridge.state().messages;
+ assert.equal(messages.find(m=>m.id==='retained-reply').origin,'realtime-delegation');
+ assert.equal(messages.find(m=>m.id==='retained-reply').text,'Canonical response');
+ assert.equal(messages.find(m=>m.id==='retained-reply').status,'complete');
+ assert.equal(messages.find(m=>m.id==='retained-reply').position,20);
+ assert.equal(messages.find(m=>m.id==='wrong-turn').origin,undefined);
+ assert.equal(messages.find(m=>m.id==='wrong-role').origin,undefined);
+ await f.bridge.shutdown();await f.clearNotifications();
+ const recreated=f.create();t.after(()=>recreated.shutdown());await recreated.ensureThread();
+ assert.deepEqual(recreated.state().messages,messages);await recreated.shutdown();
+ assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,0);
 });
