@@ -145,7 +145,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       if(abort.signal.aborted)throw new Error('Worker environment preparation canceled.');
 
       await pauseBoundary();
-      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
+      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, modelSelection: task.modelSelection || null, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
       if (resume && !config.threadId) throw new Error('Cannot resume: no recorded worker Codex session.');
       await atomic(path.join(runDir, 'config.json'), config);
       await updateTask(stateDir, task.id, next => { next.worktree = worktree; next.fixtureRepo = repositoryMode ? null : meta.repo; next.fixtureCommit = repositoryMode ? null : meta.commit; next.repositoryPath = meta.repo; next.baseCommit = task.worktree ? task.baseCommit : meta.commit; next.workerSandbox = config.sandbox; next.runDir = runDir; next.runId = runId; next.status = 'running'; next.harnessStarted='pending'; next.spawnIntentAt=now(); next.startedAt=null; next.endedAt=null; next.execution=null; next.handledReports = next.handledReports || []; });
@@ -314,6 +314,17 @@ export async function createController({ stateDir, sourceDir, executable, projec
     const runtime=await json(path.join(task.runDir,'runtime.json')),started=await json(path.join(task.runDir,'started.json')),owner=await json(path.join(task.runDir,'owner.json')),exit=await json(path.join(task.runDir,'exit.json'));
     if(started?.runId===task.runId&&task.runnerPid!==started.pid)task=await updateTask(stateDir,task.id,n=>{n.runnerPid=started.pid;});
     if(runtime?.runId===task.runId&&runtime.threadId&&task.threadId!==runtime.threadId)task=await updateTask(stateDir,task.id,n=>{n.threadId=runtime.threadId;});
+    const modelEvidence=await json(path.join(task.runDir,'model-selection.json'));
+    if(modelEvidence?.runId===task.runId&&modelEvidence.requestId===task.modelSelection?.id&&JSON.stringify(task.modelSelection.runtime)!==JSON.stringify(modelEvidence)){
+      task=await updateTask(stateDir,task.id,n=>{
+        if(n.runId!==modelEvidence.runId||n.modelSelection?.id!==modelEvidence.requestId)return;
+        n.modelSelection={...n.modelSelection,status:modelEvidence.status,message:modelEvidence.message,runtime:modelEvidence};
+        if(['selected','failed','rerouted'].includes(modelEvidence.status)){
+          const id=`model:${modelEvidence.requestId}:${modelEvidence.runId}:${modelEvidence.status}`;
+          if(!n.history.some(item=>item.id===id))n.history.push({id,actor:'controller',kind:'model_selection',message:modelEvidence.message,at:modelEvidence.at,runId:n.runId});
+        }
+      });
+    }
     const protocolError=await json(path.join(task.runDir,'protocol-error.json'));
     if(protocolError?.runId===task.runId&&!task.attention.some(item=>item.id===`${task.runId}:native-protocol-error`)){
       task=await updateTask(stateDir,task.id,n=>{attention(n,`${n.runId}:native-protocol-error`,'blocked','Worker approval or lifecycle transport needs review. Pending requests and owned process evidence were retained; no automatic response was sent.');});

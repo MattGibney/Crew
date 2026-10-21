@@ -133,3 +133,9 @@
 ## Realtime handoff presentation (GitHub #20)
 
 - Native realtime delegation user items contain current input plus historical transcript context. Project only the current input for display; never render or split historical context into new conversation rows. Preserve native item/turn/promotion identity and passive handoff observation. Repair legacy presentation journals without rewriting native chat, and retain projection provenance so literal envelope examples in user wording are not unwrapped again on restore.
+## Worker model continuity (GitHub #22)
+
+- A model change is explicit user-authorized next-turn intent for one exact task/current run. Store the decision separately from the immutable brief and prompt snapshot; it supersedes only the resolved model requirement. Never change another worker or future-task defaults.
+- The current turn retains its model. For an immediate transition, the manager requests cooperative pause, waits for verified owned exit, then explicitly resumes the same native thread/worktree. A model request alone never pauses or launches work. Preserve native approvals and normal user/project configuration.
+- Pending intent is not provider availability or effective selection. Validate an exact model/list ID on continuation, require matching native thread/resume model and turn/start acknowledgement, and retain correlated result history. Missing, mismatched or unavailable selection fails without a fallback turn or replacement thread.
+- Correlate native model reroutes to the exact current thread and turn. Buffer early turn-start notifications by turn identity and never apply stale same-thread events.

@@ -1,3 +1,4 @@
+import {requireWorkerModel} from './worker-model-selection.mjs';
 import {applyProjectToolchain} from './project-toolchain.mjs';
 // Detached per-run supervisor: survives controller/browser/voice closure.
 import { spawn } from 'node:child_process';
@@ -33,7 +34,13 @@ if (process.env.ELECTRON_RUN_AS_NODE === '1') args.push('-c', 'mcp_servers.local
 const fixturePrompt = `${buildWorkerInstructions(config)}
 Disposable fixture acceptance procedure (task data): Inspect only this fixture worktree. Run node importing ./src/totals.mjs and print JSON {emptyActual:sum([]),sumActual:sum([1,2,3])}. Verify the Git root and tracked files with real commands. In the result report's evidence array include one JSON string {"emptyActual":NUMBER,"sumActual":NUMBER,"emptyExpected":NUMBER,"sumExpected":NUMBER,"finding":"initial_value_one"}. Expected additive totals are 0 and 6 unless the relayed answer explicitly selects a base fee of 1 (then 1 and 7). Explain the observed difference in the result. The controller independently checks these fixture values.`;
 const repositoryPrompt = buildWorkerInstructions(config);
+const selectedModel=config.modelSelection?.model||null;
+let modelWrites=Promise.resolve();
+const modelEvidence=(status,message,extra={})=>{if(!selectedModel)return Promise.resolve();const evidence={runId:config.runId,requestId:config.modelSelection.id,requestedModel:selectedModel,threadId,turnId,status,message,...extra,at:new Date().toISOString()};modelWrites=modelWrites.then(()=>atomic('model-selection.json',evidence));return modelWrites;};
 const prompt=config.project?.mode === 'repository' ? repositoryPrompt : fixturePrompt;
+let modelTurnAcknowledged=false,modelEventBytes=0;
+const pendingModelEvents=[];
+const modelTurnEvents=new Set(['turn/started','turn/completed','model/rerouted','item/completed']);
 let threadId=config.threadId||null,nativeTurnStatus=null,completedTurn=false,finalMessage='',commands=[],errorMessage=null,stopRequest=null,stopPromise=null,spawnError=null;
 // npm-distributed Codex is a Node entry point. Its harness uses Crew's bundled
 // runtime; project commands still use the selected managed Node through PATH.
@@ -54,11 +61,22 @@ const sendResponse=message=>new Promise((resolve,reject)=>{
 });
 worker.stdin.on('error',error=>{errorMessage=errorMessage||`Worker protocol channel closed (${error.code||'error'}).`;});
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++nextId,timer=setTimeout(()=>{pending.delete(id);reject(new Error(`${method} timed out.`));},90000);pending.set(id,{resolve,reject,timer});send({id,method,params});});}
-function interruptTurn(){if(interruptRequested||!turnId||ending)return;interruptRequested=true;void rpc('turn/interrupt',{threadId,turnId}).catch(error=>{errorMessage=error.message;});}
+function interruptTurn(){if(interruptRequested||!turnId||ending||(selectedModel&&(!modelTurnAcknowledged||turnStartPending)))return;interruptRequested=true;void rpc('turn/interrupt',{threadId,turnId}).catch(error=>{errorMessage=error.message;});}
 function saveRuntime(){writes=writes.then(()=>atomic('runtime.json',{runId:config.runId,threadId,turnId,completedTurn,commands,updatedAt:new Date().toISOString()}));return writes;}
+async function applyModelReroute(params){
+ if(!selectedModel||!modelTurnAcknowledged||ending||params.threadId!==threadId||!turnId||params.turnId!==turnId)return;
+ await modelEvidence('rerouted',`The native provider rerouted this turn from ${params.fromModel} to ${params.toModel}. Review the reported model with the manager; Crew did not substitute a model.`,{selectedModel:params.toModel,source:'native-model-rerouted',reason:params.reason});
+}
+async function completeTurn(params){
+ if(selectedModel&&(!modelTurnAcknowledged||ending))return;
+ if(turnId&&params.turn.id!==turnId)return;
+ nativeTurnStatus=params.turn.status;completedTurn=nativeTurnStatus==='completed';
+ if(params.turn.error){errorMessage=params.turn.error.message||'Codex turn failed';await modelEvidence('failed',`Native worker failed after model selection: ${errorMessage}`,{selectedModel:null});}
+ await finish();
+}
 async function finish(){if(ending)return;if(turnStartPending){finishPending=true;return;}ending=true;await saveRuntime();await writeFile(finalFile,finalMessage,{mode:0o600});await invalidateWorkerRequests({...requestContext(),reason:'Worker turn ended; this native request is no longer actionable.'});worker.stdin.end();}
 const approvalMethods=new Set(['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','item/tool/requestUserInput','mcpServer/elicitation/request']);
-async function handle(message){
+async function handle(message,replayModelEvent=false){
  if(message.id!==undefined&&pending.has(message.id)&&!message.method){const entry=pending.get(message.id);pending.delete(message.id);clearTimeout(entry.timer);message.error?entry.reject(new Error(message.error.message)):entry.resolve(message.result);return;}
  const {method,params={}}=message;
  if(message.id!==undefined&&method){
@@ -73,8 +91,26 @@ async function handle(message){
   send({id:message.id,error:{code:-32601,message:errorMessage}});return;
  }
  if(params.threadId&&params.threadId!==threadId)return;
+ // In a resumed model turn, native notifications are observations until the
+ // start response positively binds their turn. Keep one bounded ordered queue;
+ // stale items must never become current-run command or terminal evidence.
+ if(selectedModel&&(modelTurnEvents.has(method)||(method==='error'&&typeof params.turnId==='string'))){
+  if(ending||nativeTurnStatus||params.threadId!==threadId)return;
+  const eventTurnId=method==='turn/started'||method==='turn/completed'?params.turn?.id:params.turnId;
+  if(typeof eventTurnId!=='string'||!eventTurnId)return;
+  if(!modelTurnAcknowledged||(turnStartPending&&!replayModelEvent)){
+   if(turnStartPending){
+    const size=Buffer.byteLength(JSON.stringify(message));
+    if(pendingModelEvents.length>=100||modelEventBytes+size>262144)throw new Error('Early native model-turn events exceeded their bounded journal; selection is unverified.');
+    pendingModelEvents.push(message);modelEventBytes+=size;
+   }
+   return;
+  }
+  if(eventTurnId!==turnId)return;
+ }
  if(method==='thread/started'&&!threadId&&params.thread?.id){threadId=params.thread.id;await saveRuntime();}
  if(method==='turn/started'){turnId=params.turn.id;await saveRuntime();if(stopRequest?.cooperative)interruptTurn();}
+ if(method==='model/rerouted'&&selectedModel)await applyModelReroute(params);
  if(method==='item/completed'){
   const item=params.item;
   if(item?.type==='agentMessage')finalMessage=item.text||'';
@@ -84,13 +120,8 @@ async function handle(message){
  if(method==='serverRequest/resolved'&&!ending&&!nativeTurnStatus){
   for(const [id,request]of nativeRequests)if(request.requestId===params.requestId){await markWorkerRequestResolved({...requestContext(),approvalId:id});nativeRequests.delete(id);}
  }
- if(method==='turn/completed'){
-  if(turnId&&params.turn.id!==turnId)return;
-  nativeTurnStatus=params.turn.status;completedTurn=nativeTurnStatus==='completed';
-  if(params.turn.error)errorMessage=params.turn.error.message||'Codex turn failed';
-  await finish();
- }
- if(method==='error')errorMessage=params.error?.message||'Codex worker error';
+ if(method==='turn/completed')await completeTurn(params);
+ if(method==='error'){errorMessage=params.error?.message||'Codex worker error';await modelEvidence('failed',`Native worker reported an error: ${errorMessage}`,{selectedModel:null});}
 }
 const lines=createInterface({input:worker.stdout});
 lines.on('line',line=>{
@@ -105,17 +136,33 @@ const bootstrap=(async()=>{
  try{
   await rpc('initialize',{clientInfo:{name:'crew_worker',version:'0.10.0'},capabilities:{experimentalApi:true,mcpServerOpenaiFormElicitation:true}});send({method:'initialized',params:{}});if(ending||stopRequest){await finish();return;}
   const {account}=await rpc('account/read',{refreshToken:false});if(account?.type!=='chatgpt')throw new Error('ChatGPT subscription sign-in is required for workers.');if(ending||stopRequest){await finish();return;}
-  const options={cwd:config.worktree};
+  if(selectedModel){await modelEvidence('validating','Validating the requested model before the next native turn.');await requireWorkerModel(rpc,selectedModel);if(!config.threadId)throw new Error('Model continuation requires the retained native conversation; no replacement thread was started.');}
+  if(ending||stopRequest){await finish();return;}
+  const options={cwd:config.worktree,...(selectedModel?{model:selectedModel}:{})};
   // Disposable fixture acceptance retains its explicitly authorized read-only boundary.
   if(config.project?.mode!=='repository')options.sandbox='read-only';
   threadStartPending=true;const started=await rpc(config.threadId?'thread/resume':'thread/start',config.threadId?{...options,threadId:config.threadId,excludeTurns:true}:options);
-  threadStartPending=false;threadId=started.thread.id;await saveRuntime();if(ending||stopRequest){await finish();return;}
+  threadStartPending=false;
+  if(selectedModel&&started.thread.id!==config.threadId)throw new Error('Native model continuation returned another thread; no new turn was started.');
+  threadId=started.thread.id;await saveRuntime();
+  if(selectedModel&&started.model!==selectedModel)throw new Error('Native model selection did not confirm the requested exact model; no fallback turn was started.');if(ending||stopRequest){await finish();return;}
   const settings=await rpc('config/read',{cwd:config.worktree,includeLayers:false});
   await atomic('effective-policy.json',{runId:config.runId,threadId,configResolutionCwd:config.worktree,source:started.sandbox?'native-thread-response':'config-read',sandboxType:started.sandbox?.type??null,configSandboxMode:settings.config?.sandbox_mode??null,approvalPolicy:started.approvalPolicy??settings.config?.approval_policy??null,approvalsReviewer:started.approvalsReviewer??null,permissionsProfile:settings.config?.default_permissions??null});
   if(ending||stopRequest){await finish();return;}
-  turnStartPending=true;const result=await rpc('turn/start',{threadId,input:[{type:'text',text:prompt}]});
-  turnStartPending=false;if(!turnId)turnId=result.turn.id;await saveRuntime();if(finishPending)await finish();else if(stopRequest?.cooperative)interruptTurn();
- }catch(error){turnStartPending=false;if(!stopRequest&&!nativeTurnStatus)errorMessage=error.message;await finish();}
+  turnStartPending=true;const result=await rpc('turn/start',{threadId,...(selectedModel?{model:selectedModel}:{}),input:[{type:'text',text:prompt}]});
+  if(selectedModel&&(typeof result.turn?.id!=='string'||!result.turn.id))throw new Error('Native model continuation did not acknowledge a turn identity; selection was not confirmed.');
+  if(selectedModel&&turnId&&turnId!==result.turn.id)throw new Error('Native model continuation returned a different turn identity; selection was not confirmed.');
+  if(!turnId)turnId=result.turn.id;
+  if(selectedModel){
+   if(errorMessage)throw new Error(errorMessage);
+   modelTurnAcknowledged=true;
+   if(!ending)await modelEvidence('selected',`Native worker selected ${selectedModel} for the resumed turn.`,{selectedModel,source:'native-thread-resume-response-and-turn-start',turnStartAcknowledged:true});
+   while(pendingModelEvents.length&&!ending&&!nativeTurnStatus){const event=pendingModelEvents.shift();modelEventBytes-=Buffer.byteLength(JSON.stringify(event));await handle(event,true);}
+   pendingModelEvents.length=0;modelEventBytes=0;
+  }
+  turnStartPending=false;await saveRuntime();if(finishPending)await finish();else if(stopRequest?.cooperative)interruptTurn();
+ }catch(error){turnStartPending=false;modelTurnAcknowledged=false;pendingModelEvents.length=0;modelEventBytes=0;if(!stopRequest&&!nativeTurnStatus){errorMessage=error.message;await modelEvidence('failed',`Model change failed: ${error.message} Retained task, worktree and native conversation were preserved.`,{selectedModel:null});}await finish();}
+
 })();
 async function capture(){if(tree){const records=await tree.capture();await atomic('ownership.json',{runId:config.runId,records,at:new Date().toISOString()});}}
 await capture();
