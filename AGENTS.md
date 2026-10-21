@@ -80,3 +80,5 @@
 
 - The user explicitly authorized integrating and merging PRs 4, 5, 6 and 7, resolving their combined conflicts, preparing version exactly 0.10.0 and one signed/notarized publication. This is a named exception under the PR-first/user-directed release policy, not standing permission for future releases. Preserve all branch histories and user settings; use a reviewable integration PR if required.
 - Verify combined all-project admission, toolchain environments, immutable prompt snapshots and explicit manager lifecycle together. A selected project's idle state cannot approve a shared installation replacement. Hold every project before draining; mark every exact child plan installing before stopping any controller; preserve the global hold on partial/unknown rollback.
+
+- Combined process/ownership suites run with test-file concurrency two so their many real subprocess/ps observations do not invalidate fixture lifetimes through self-imposed load. Retain strict no-force/ownership assertions and meaningful original-timeout tests.

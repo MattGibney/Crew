@@ -42,3 +42,11 @@ The single-instance engine lives in update-plan.mjs. Its callbacks provide fresh
 A future multi-project coordinator must enumerate every managed instance, hold all admissions, collect all worker/runtime evidence and keep the native installation lease/other-instance checks global. One project's idle state cannot approve a shared application replacement. A separate manager-lifecycle start/restart endpoint must enter the same update-admission barrier; lifecycle transitions or errors remain unverified until a positively stopped/ready process state is confirmed. Manager stop is not worker pause. No multi-project registry or manager-settings feature is implemented by AI-018.
 
 Retained worker questions/blocked records with freshly confirmed stopped execution can survive an update unanswered. Missing or live execution evidence still blocks. Recovery does not resume those previously waiting workers.
+
+## Crew 0.10.0: all-project update coordination
+
+The native parent now applies Pause work and update to every registered project, including hidden windows. It durably holds shared admission and registration before asking each project to pause. A group journal binds canonical project identities, exact child plans and the target release. All projects must confirm fresh readiness and durable installation markers before any controller stops. Partial or unavailable evidence keeps the global hold; one selected project's idle state cannot approve a shared app replacement.
+
+The existing idle-update reservation journal remains separate. Grouped updates use their own retained plan and confirmed local barriers, so queued recovery work is not mistaken for an unsafe idle-update restart. After the exact version launches, every child confirms eligible recovery before shared admission is released. An interrupted manager request is not replayed, and stopped manager intent stays stopped.
+
+Cancel holds all projects. Resume paused work creates only correlated eligible resumes. Return to work creates no new resumes: paused workers stay paused, while already queued work, including previously admitted resumes, may continue. Switching projects remains available to inspect history and pending approvals; adding projects, changing shared capacity or starting/restarting managers cannot cross the update hold.

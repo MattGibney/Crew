@@ -229,3 +229,8 @@ test('only completed plan releases native ordinary restart; canceled retains hol
  await f.helper.request('cancel-pause-update');await assert.rejects(f.helper.restart(),/Resume paused work or Return to work/);assert.equal(f.original.calls.length,0);
  f.plan.phase='complete';await f.helper.restart();assert.equal(f.original.calls.includes('install'),true);assert.equal(f.calls.includes('mark-installing'),false);
 });
+
+test('one native snapshot verifies all owned project backends without excluding unrelated instances',async()=>{
+ const executable='/Applications/Crew.app/Contents/MacOS/Crew';let reads=0;const stdout=`1 100 ${executable}\n3 1 ${executable} server-one\n4 3 ${executable} child-one\n8 1 ${executable} server-two\n9 8 ${executable} child-two\n10 100 ${executable} other-instance\n11 100 ${executable} detached-worker`;
+ assert.deepEqual(await otherNativeInstances({executable,pid:1,backendPids:[3,8,11],run:async()=>{reads++;return{stdout};}}),[10,11]);assert.equal(reads,1);
+});

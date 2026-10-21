@@ -25,17 +25,16 @@ export async function signedUpdateSupport({packaged,executable=process.execPath,
   return {supported:true,error:null};
  }catch{return {supported:false,error:'This Crew build is unsigned or its Developer ID signature could not be verified. Install a signed release to enable automatic updates.'};}
 }
-export async function otherNativeInstances({executable=process.execPath,pid=process.pid,backendPid,run=exec}={}){
+export async function otherNativeInstances({executable=process.execPath,pid=process.pid,backendPid,backendPids=backendPid?[backendPid]:[],run=exec}={}){
  const {stdout}=await run('/bin/ps',['-axo','pid=,ppid=,command='],{timeout:5000,maxBuffer:8*1024*1024});
  const rows=stdout.split('\n').flatMap(line=>{const m=line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);return m?[{pid:Number(m[1]),ppid:Number(m[2]),command:m[3]}]:[];});
  if(!rows.some(row=>row.pid===pid))throw new Error('Native process ownership snapshot is unavailable.');
  const allowed=new Set([pid]);
  // Only this instance's currently owned backend tree may be stopped during an
  // idle restart. Detached supervisors from closed instances remain blockers.
- if(Number.isSafeInteger(backendPid)&&rows.some(row=>row.pid===backendPid&&row.ppid===pid)){
-  allowed.add(backendPid);let changed=true;
-  while(changed){changed=false;for(const row of rows)if(allowed.has(row.ppid)&&row.ppid!==pid&&!allowed.has(row.pid)){allowed.add(row.pid);changed=true;}}
- }
+ for(const backend of backendPids)if(Number.isSafeInteger(backend)&&rows.some(row=>row.pid===backend&&row.ppid===pid))allowed.add(backend);
+ let changed=true;
+ while(changed){changed=false;for(const row of rows)if(allowed.has(row.ppid)&&row.ppid!==pid&&!allowed.has(row.pid)){allowed.add(row.pid);changed=true;}}
  return rows.filter(row=>!allowed.has(row.pid)&&(row.command===executable||row.command.startsWith(executable+' '))).map(row=>row.pid);
 }
 // Atomic nonempty directory publication avoids the empty-lock crash window.

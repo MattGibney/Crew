@@ -9,12 +9,13 @@ import {createRequire} from 'node:module';
 import {prepareCrewStorage} from './storage.mjs';
 import {instanceKey,childEnvironment} from './lifecycle.mjs';
 import {createProjectHost} from './project-host.mjs';
-import {workspaceUpdateActivity,createWorkspaceUpdateReservation} from './workspace-update.mjs';
+import {workspaceUpdateActivity,reserveWorkspaceUpdate,createWorkspaceUpdateReservation} from './workspace-update.mjs';
 import {assertWorkspaceIsolation} from './workspace-isolation.mjs';
 import {openWorkspaceRegistry} from './workspace-registry.mjs';
 import {configureGlobalCapacity} from '../global-capacity.mjs';
 import {loadAppConfig} from '../config.mjs';
-import {createUpdateCoordinator,createNativeUpdateGate,createInstallLease,createRestartHandoff,signedUpdateSupport,otherNativeInstances} from './updater.mjs';
+import {createWorkspacePauseUpdate} from './workspace-pause-update.mjs';
+import {createUpdateCoordinator,createPauseUpdateCoordinator,createNativeUpdateGate,createInstallLease,createRestartHandoff,signedUpdateSupport,otherNativeInstances} from './updater.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 const args=process.argv.slice(app.isPackaged?1:2),flag=args.indexOf('--config');
 if(flag>=0&&(!args[flag+1]||args[flag+1].startsWith('--')))throw Error('--config requires a config path.');
@@ -31,16 +32,17 @@ const nativeData=crewRoot;
 await mkdir(nativeData,{recursive:true,mode:0o700});
 app.setPath('userData',nativeData);app.setPath('sessionData',nativeData);app.setName('Crew');
 const locked=app.requestSingleInstanceLock({configPath:explicit||restarted?storage.configPath:null});
-let registry,tray,updater,quitting=false,transition=false,changedTimer;
+let registry,tray,updater,workspacePause,pauseCoordinator,quitting=false,transition=false,changedTimer,refreshPending;
 const hosts=new Map(),capacityDirectory=join(crewRoot,'capacity');
 const safe=error=>String(error?.message||error).replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/sk-[\w-]+/g,'[redacted]').slice(0,1400);
 const selected=()=>hosts.get(registry?.snapshot().selectedId);
-const gate=createNativeUpdateGate({busy:()=>Boolean(transition||quitting||[...hosts.values()].some(h=>h.busy()))});
+const nativeGate=createNativeUpdateGate({busy:()=>Boolean(transition||quitting||[...hosts.values()].some(h=>h.busy()))});
+const gate={...nativeGate,assertSetupAllowed(){nativeGate.assertSetupAllowed();if(workspacePause?.isHolding())throw Error('Crew is coordinating an update across all projects. Resume paused work or Return to work before changing project setup.');}};
 const lease=createInstallLease({directory:updatesDirectory});
 let cancelHandoff,updateReservation,updateRecoveryError;
 const reservationPath=join(updatesDirectory,'workspace-reservation.json');
 async function reservationPending(){try{await access(reservationPath);return true;}catch(error){return error.code!=='ENOENT';}}
-async function assertRegistrationAllowed(){if(updateRecoveryError||await reservationPending())throw Error('Resolve the interrupted update before adding another project. Existing project setup remains available.');}
+async function assertRegistrationAllowed(){if(workspacePause?.isHolding()||updateRecoveryError||await reservationPending())throw Error('Resolve the interrupted update before adding another project. Existing project setup remains available.');}
 async function recordReservationFailure(error){if(await reservationPending()){updateRecoveryError=safe(error);changed();}}
 async function configuredProjects(){const projects=[];for(const p of registry.snapshot().projects){try{await access(p.configPath);projects.push(p);}catch(error){if(error.code!=='ENOENT')throw error;}}return projects;}
 async function validateWorkspaces(candidate){const projects=await configuredProjects();if(candidate&&!projects.some(p=>p.id===candidate.id))projects.push({id:candidate.id,configPath:candidate.configPath});return projects.length?assertWorkspaceIsolation({projects,candidate}):[];}
@@ -85,12 +87,16 @@ function updateTray(){
     {label:'Download update',enabled:updater?.getStatus().phase==='available',click:()=>attempt(()=>updater.request('download'))},
     {label:'Resolve interrupted update…',visible:Boolean(updateRecoveryError),click:()=>attempt(resolveUpdateRecovery)},
     {label:'Restart to update…',enabled:updater?.getStatus().phase==='downloaded',click:()=>attempt(()=>updater.request('restart'))},
+    {label:'Pause all projects and update…',enabled:updater?.getStatus().phase==='downloaded'&&!workspacePause?.isHolding(),click:()=>attempt(()=>updater.request('pause-update'))},
+    {label:'Cancel pause and update',enabled:['draining','ready','blocked'].includes(workspacePause?.status()?.phase),click:()=>attempt(()=>updater.request('cancel-pause-update'))},
+    {label:'Resume paused work',enabled:['canceled','blocked'].includes(workspacePause?.status()?.phase),click:()=>attempt(()=>updater.request('resume-paused-work'))},
+    {label:'Return to work',enabled:['canceled','blocked'].includes(workspacePause?.status()?.phase),click:()=>attempt(()=>updater.request('return-to-work'))},
     {type:'separator'},{label:'Quit Crew…',click:()=>attempt(quitCrew)}
   ]));
 }
 function register(project){
   const runtime=createProjectHost({root,storage:{...storage,...project,issue:project.configPath===storage.configPath?storage.issue:null},host:{
-    capacityDirectory,gate,configured:async(id,previousName,name)=>{const project=registry.snapshot().projects.find(p=>p.id===id);if(project&&(project.name===previousName||project.name==='Your project')&&project.name!==name){await registry.rename(id,name);changed();}},validateAll:()=>configureCapacity(),validateCandidate:(id,configPath,config)=>validateWorkspaces({id,configPath,config}),relaunch:async launchArgs=>{quitting=true;for(const h of hosts.values())await h.quit();app.relaunch({args:launchArgs});app.exit(0);},get updater(){return updater;},changed,isSelected:id=>registry.snapshot().selectedId===id
+    capacityDirectory,gate,assertControllerStartAllowed:()=>{nativeGate.assertSetupAllowed();if(quitting)throw Error('Crew is shutting down or installing an update. Wait before restarting a project controller.');},configured:async(id,previousName,name)=>{const project=registry.snapshot().projects.find(p=>p.id===id);if(project&&(project.name===previousName||project.name==='Your project')&&project.name!==name){await registry.rename(id,name);changed();}},validateAll:()=>configureCapacity(),validateCandidate:(id,configPath,config)=>validateWorkspaces({id,configPath,config}),relaunch:async launchArgs=>{quitting=true;for(const h of hosts.values())await h.quit();app.relaunch({args:launchArgs});app.exit(0);},get updater(){return updater;},changed,isSelected:id=>registry.snapshot().selectedId===id
   }});
   hosts.set(project.id,runtime);return runtime;
 }
@@ -110,7 +116,7 @@ async function configureCapacity(limit=registry.snapshot().workerLimit){
   return configureGlobalCapacity({dir:capacityDirectory,limit,stateDirs});
 }
 async function selectProject(id){
-  gate.assertSetupAllowed();
+  nativeGate.assertSetupAllowed();
   if(transition)throw Error('Another project change is still running.');
   const next=hosts.get(id);if(!next)throw Error('Unknown project.');
   if(id===registry.snapshot().selectedId)return next.openWindow();
@@ -153,18 +159,21 @@ async function resolveUpdateRecovery(){
 }
 async function initializeUpdates(){
   const support=await signedUpdateSupport({packaged:app.isPackaged});let nativeUpdater;
+  const publish=()=>{if(!updater)return;for(const host of hosts.values())host.broadcastUpdate(updater.getStatus());changed();};
+  workspacePause=createWorkspacePauseUpdate({path:join(updatesDirectory,'workspace-pause-plan.json'),currentVersion:app.getVersion(),projects:projectHosts,setAdmissionPaused:admissionPaused=>configureGlobalCapacity({dir:capacityDirectory,admissionPaused}),onChange:publish});
+  await workspacePause.ready;
   try{nativeUpdater=createRequire(import.meta.url)('electron-updater').autoUpdater;}catch{nativeUpdater={on(){},autoDownload:false};support.supported=false;support.error='The updater is unavailable in this build.';}
-  updateReservation=createWorkspaceUpdateReservation({path:reservationPath,currentVersion:app.getVersion(),projects:projectHosts,setAdmissionPaused:admissionPaused=>configureGlobalCapacity({dir:capacityDirectory,admissionPaused})});
-  updater=createUpdateCoordinator({updater:nativeUpdater,currentVersion:app.getVersion(),support,lease,
+  updateReservation=createWorkspaceUpdateReservation({path:reservationPath,currentVersion:app.getVersion(),projects:projectHosts,setAdmissionPaused:admissionPaused=>configureGlobalCapacity({dir:capacityDirectory,admissionPaused:admissionPaused||workspacePause.isHolding()})});
+  const native=createUpdateCoordinator({updater:nativeUpdater,currentVersion:app.getVersion(),support,lease,
     activity:async()=>{
       if(transition||quitting||[...hosts.values()].some(h=>h.busy()))return {safe:false,reasons:['Crew setup, switching or shutdown is in progress.']};
       if(updateRecoveryError)return {safe:false,reasons:[updateRecoveryError]};
       return workspaceUpdateActivity(projectHosts());
-    },prepare:()=>gate.reserve(async()=>{try{return await updateReservation.prepare(updater.getStatus().availableVersion);}catch(error){await recordReservationFailure(error);throw error;}}),cancel:async()=>{
+    },prepare:()=>gate.reserve(async()=>{try{return workspacePause.isHolding()?await reserveWorkspaceUpdate(projectHosts(),{setAdmissionPaused:admissionPaused=>configureGlobalCapacity({dir:capacityDirectory,admissionPaused:admissionPaused||workspacePause.isHolding()})}):await updateReservation.prepare(updater.getStatus().availableVersion);}catch(error){await recordReservationFailure(error);throw error;}}),cancel:async()=>{
       try{
       gate.cancel();await cancelHandoff?.();cancelHandoff=undefined;quitting=false;
       for(const host of hosts.values())await host.cancelUpdate();
-      await updateReservation.cancel();updateRecoveryError=undefined;
+      await updateReservation.cancel();if(workspacePause.isHolding())await configureGlobalCapacity({dir:capacityDirectory,admissionPaused:true});updateRecoveryError=undefined;
       }catch(error){await recordReservationFailure(error);throw error;}
     },
     stopBackend:async()=>{cancelHandoff=await restartHandoff.write({configPath:selected().configPath,version:updater.getStatus().availableVersion});quitting=true;for(const host of hosts.values())await host.stopForUpdate();},
@@ -174,12 +183,17 @@ async function initializeUpdates(){
       const finish=error=>{clearTimeout(timer);nativeUpdater.removeListener('error',fail);app.removeListener('before-quit',exiting);error?reject(error):done();};
       nativeUpdater.once('error',fail);app.once('before-quit',exiting);try{nativeUpdater.quitAndInstall(false,true);}catch{fail();}
     }),otherInstances:async()=>{
-      // Existing ownership verifier checks each controller tree. Intersecting only
-      // excludes roots whose parent relationship was confirmed in the same snapshots.
-      const snapshots=await Promise.all([...hosts.values()].map(h=>otherNativeInstances({backendPid:h.backendPid()})));
-      return snapshots.length?snapshots[0].filter(pid=>snapshots.every(list=>list.includes(pid))):otherNativeInstances();
-    },onState:status=>{for(const host of hosts.values())host.broadcastUpdate(status);changed();}
+      return otherNativeInstances({backendPids:[...hosts.values()].map(host=>host.backendPid()).filter(Number.isSafeInteger)});
+    },onState:status=>{for(const host of hosts.values())host.broadcastUpdate({...status,workspacePlan:workspacePause.status()});changed();}
   });
+  pauseCoordinator=createPauseUpdateCoordinator({native,begin:async input=>({plan:await workspacePause.begin(input)}),status:async()=>({plan:workspacePause.status()}),cancel:async()=>({plan:await workspacePause.cancel()}),markInstalling:input=>workspacePause.markInstalling(input),markBlocked:async input=>({plan:await workspacePause.markBlocked(input.reason,input)})});
+  updater={getStatus:()=>({...native.getStatus(),workspacePlan:workspacePause.status()}),async request(action='status'){
+    if(['pause-update','cancel-pause-update'].includes(action)){if(action==='pause-update'){if(transition||quitting||[...hosts.values()].some(host=>host.busy()))throw Error('Finish project setup or switching before pausing work for an update.');if(updateRecoveryError||await reservationPending())throw Error('Resolve the interrupted idle update before pausing work for another update.');if(transition||quitting||[...hosts.values()].some(host=>host.busy()))throw Error('A project change is in progress. Wait before pausing all projects.');}await pauseCoordinator.request(action);}
+    else if(['resume-paused-work','return-to-work'].includes(action)){if(await reservationPending()){for(const host of hosts.values())await host.cancelUpdate();await updateReservation.cancel();updateRecoveryError=undefined;}if(action==='resume-paused-work')await workspacePause.resumeAfterCancel();else await workspacePause.releaseForReview();}
+    else if(action==='restart')await pauseCoordinator.restart();
+    else await native.request(action);
+    publish();return updater.getStatus();
+  },refresh(){if(refreshPending)return refreshPending;refreshPending=(async()=>{try{await native.refresh();if(!updateRecoveryError){await workspacePause.tick();await pauseCoordinator.advancePlan();}return updater.getStatus();}finally{refreshPending=null;}})();return refreshPending;}};
   if(support.supported){const timer=setTimeout(()=>attempt(()=>updater.request('check')),30000);timer.unref();const repeat=setInterval(()=>attempt(()=>updater.request('check')),6*60*60*1000);repeat.unref();}
 }
 ipcMain.handle('crew:setup',(event,action,input)=>{
@@ -188,8 +202,8 @@ ipcMain.handle('crew:setup',(event,action,input)=>{
 ipcMain.handle('crew:workspaces',async(event,action,input)=>{
   if(!selected()?.acceptsWorkspace(event))throw Error('Workspace request rejected.');
   if(action==='snapshot')return snapshot();
-  gate.assertSetupAllowed();
   if(action==='select'){await selectProject(input);return snapshot();}
+  gate.assertSetupAllowed();
   if(action==='add')return addProject();
   if(action==='rename'){await registry.rename(input?.id,input?.name);changed();return snapshot();}
   if(action==='capacity'){await configureCapacity(input);await registry.setWorkerLimit(input);changed();return snapshot();}
@@ -214,6 +228,8 @@ if(!locked)app.quit();else{
     if(!storage.issue){try{await access(storage.configPath);}catch(error){if(error.code!=='ENOENT')throw error;if(!explicit)await initializeConfig(storage.configPath);}}
     registry=await openWorkspaceRegistry({crewRoot,initial:{configPath:storage.configPath,key:storage.key,desktopData:storage.desktopData},explicitConfig:Boolean(explicit||restarted)});
     for(const project of registry.snapshot().projects)register(project);
+    // A retained idle journal owns a hold even if its capacity ledger was lost.
+    if(await reservationPending())await configureGlobalCapacity({dir:capacityDirectory,admissionPaused:true});
     let restoreIssue;try{await configureCapacity();}catch(error){restoreIssue=safe(error);}
     await initializeUpdates();
     Menu.setApplicationMenu(Menu.buildFromTemplate([{label:'Crew',submenu:[{label:'About Crew',role:'about'},{label:'Project setup…',click:()=>attempt(()=>selected().openSetup())},{label:'Add project…',click:()=>attempt(addProject)},{type:'separator'},{label:'Open window',click:()=>attempt(()=>selected().openWindow())},{label:'Quit Crew…',accelerator:'Command+Q',click:()=>attempt(quitCrew)}]},{label:'Edit',submenu:[{role:'undo'},{role:'redo'},{type:'separator'},{role:'cut'},{role:'copy'},{role:'paste'},{role:'selectAll'}]},{label:'Window',submenu:[{role:'minimize'},{role:'close'}]}]));
@@ -221,7 +237,12 @@ if(!locked)app.quit();else{
     // Register capacity evidence for every project before recovering any controller.
     if(restoreIssue){selected().setError(restoreIssue);await selected().openSetup();}
     else{for(const host of hosts.values())if(host!==selected())await host.bootstrap();await selected().bootstrap();}
-    const recovery=await updateReservation.recover();updateRecoveryError=recovery.blocked?recovery.error:undefined;changed();
+    let recovery;
+    const retained=workspacePause.status();
+    if(retained&&['installing','resuming'].includes(retained.phase)&&retained.targetVersion===app.getVersion()){try{await updateReservation.cancel();recovery={recovered:true};}catch(error){recovery={blocked:true,error:safe(error)};}}else recovery=await updateReservation.recover();
+    updateRecoveryError=recovery.blocked?recovery.error:undefined;
+    if(!updateRecoveryError)await workspacePause.recover();
+    changed();
     const updatePoll=setInterval(()=>void updater.refresh().catch(()=>{}),1500);updatePoll.unref();
   }).catch(async error=>{quitting=true;await dialog.showMessageBox({type:'error',message:'Crew could not restore its projects',detail:safe(error)});app.exit(1);});
 }

@@ -12,7 +12,7 @@ import {composeProjectSetup,assertLinearSelection} from './project-setup.mjs';
 import {discoverWorkerEnvironment,assertWorkerEnvironmentSelection} from './environment-options.mjs';
 import {selectExecutionPlan} from './execution-selection.mjs';
 import { randomUUID } from 'node:crypto';
-import {UPDATE_ACTIONS} from './updater.mjs';
+import {UPDATE_ACTIONS,PAUSE_UPDATE_ACTIONS} from './updater.mjs';
 import { relative, sep, isAbsolute } from 'node:path';
 import { loadAppConfig } from '../config.mjs';
 import { summarizeTasks, isAppURL, isExternalHTTPS, permitsAudio, childEnvironment } from './lifecycle.mjs';
@@ -90,6 +90,7 @@ async function poll() {
 }
 async function startup({ showWindow = true } = {}) {
   if (starting || backend) return;
+  host.assertControllerStartAllowed?.();
   starting = true; lastError = null; updateTray();
   try {
     try { await access(configPath); }
@@ -116,7 +117,7 @@ async function startup({ showWindow = true } = {}) {
     finally { await log.close(); }
     const owned = backend;
     owned.on('message',message=>{
-      if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action))return;
+      if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action)&&!PAUSE_UPDATE_ACTIONS.has(message.action)&&!['resume-paused-work','return-to-work'].includes(message.action))return;
       void (async()=>{try{const status=await host.updater.request(message.action);sendUpdate(owned,{type:'crew:update:response',id:message.id,status});}catch(error){sendUpdate(owned,{type:'crew:update:response',id:message.id,status:host.updater?.getStatus(),error:safe(error)});}})();
     });
     sendUpdate(owned,{type:'crew:update:status',status:host.updater?.getStatus()});
@@ -176,11 +177,11 @@ async function updateAction(action){
     await host.updater.request(action);
   }catch(error){await dialog.showMessageBox({type:'warning',message:'Crew update needs attention',detail:safe(error)});}
 }
-async function updateToken(route){
+async function updateToken(route,input={}){
   if(!backendReady||!backend)throw new Error('Local controller is unavailable.');
   const marker=JSON.parse(await readFile(config.serverStatePath,'utf8'));
   if(marker.pid!==backend.pid||marker.configPath!==config.configPath||marker.projectId!==config.project.id)throw new Error('Controller ownership could not be verified.');
-  return api(route,{token:marker.token});
+  return api(route,{...input,token:marker.token});
 }
 // Setup and workspace surfaces expose separate bounded native bridges.
 function projectDraftStatus(issues=[]) {const detail=issues.map(issue=>/teamId|teamKey/.test(issue)?'Choose your Linear team, or connect it later before assigning ticketed work.':/baseRef/.test(issue)?'Choose a starting branch for each project folder.':/path/.test(issue)?'Choose your local project folder.':issue);return {status:issues.length?'incomplete':'configured',detail:[...new Set(detail)].join(' ')||'Project settings are saved. Ticket access is checked when you ask for work.'};}
