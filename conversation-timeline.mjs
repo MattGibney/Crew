@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { conversationMessage } from './conversation.mjs';
+import { conversationMessage, presentUserMessage } from './conversation.mjs';
 
 // Presentation-only projection. Identity always comes from the protocol, never text.
 export function createConversationTimeline() {
@@ -70,7 +70,7 @@ export function createConversationTimeline() {
   function restore(entries) {
     for (const entry of entries || []) if (entry && typeof entry.id === 'string' && ['user', 'assistant'].includes(entry.role) && typeof entry.text === 'string') {
       if (typeof entry.promotionId === 'string' && entry.promotionId && Number.isFinite(entry.position)) promotions.set(entry.id, { id: entry.promotionId, position: entry.position });
-      put(entry, { status: entry.status === 'streaming' ? 'partial' : entry.status, position: entry.position });
+      put(presentUserMessage(entry), { status: entry.status === 'streaming' ? 'partial' : entry.status, position: entry.position });
     }
   }
   return { record, realtime, delta, flat, partial, snapshot, restore, resumeTurn };
