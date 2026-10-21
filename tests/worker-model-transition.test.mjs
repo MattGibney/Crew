@@ -1,0 +1,49 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import path from 'node:path';
+import os from 'node:os';
+import {createController} from '../controller.mjs';
+import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../orchestration-store.mjs';
+const exec=promisify(execFile);
+async function wait(fn,predicate,label){const end=Date.now()+30000;let value;while(Date.now()<end){value=await fn();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out ${label}: ${JSON.stringify(value)}`);}
+test('real detached runner safely resumes the same context with exact validated model and refuses substitution',async t=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'crew-model-native-')),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'Synthetic model transition fixture\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
+ await writeFile(binary,`#!${process.execPath}
+import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../orchestration-store.mjs',import.meta.url).href)};
+const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
+// Exclusive ownership makes accidental overlap a real child-process failure.
+const lock=${JSON.stringify(path.join(dir,'active'))};closeSync(openSync(lock,'wx'));const log=${JSON.stringify(log)},threadId='retained-model-thread',turnId='turn-'+run,send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
+const lines=createInterface({input:process.stdin});lines.on('close',()=>{appendFileSync(log,JSON.stringify({method:'fixture/exit',run})+'\\n');unlinkSync(lock);process.exit(0);});
+for await(const line of lines){const m=JSON.parse(line);if(m.id===undefined)continue;appendFileSync(log,JSON.stringify({...m,run})+'\\n');let result={};
+if(m.method==='account/read')result={account:{type:'chatgpt'}};
+if(m.method==='model/list')result=m.params.cursor?{data:[{model:'fixture-sol'},{model:'fixture-mismatch'},{model:'fixture-rerouted'}],nextCursor:null}:{data:[{model:'fixture-astra'}],nextCursor:'second'};
+if(m.method==='thread/start'||m.method==='thread/resume')result={thread:{id:threadId},model:m.params.model==='fixture-mismatch'?'fixture-fallback':m.params.model||'fixture-astra'};
+if(m.method==='config/read')result={config:{sandbox_mode:'read-only',approval_policy:'on-request'}};
+if(m.method==='turn/start')result={turn:{id:turnId,status:'inProgress'}};
+send({id:m.id,result});
+if(m.method==='turn/start'){send({method:'turn/started',params:{threadId,turn:{id:turnId,status:'inProgress'}}});await reportTask(state,task,run,{reportId:'model-progress',kind:m.params.model?'blocked':'progress',message:m.params.model?'Synthetic continuation held for another explicit instruction.':'Synthetic original worker running.'});if(m.params.model==='fixture-rerouted')send({method:'model/rerouted',params:{threadId,turnId,fromModel:m.params.model,toModel:'fixture-provider-route',reason:'highRiskCyberActivity'}});if(m.params.model)send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed',items:[]}}});}
+if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'interrupted',items:[]}}});}
+`,{mode:0o700});
+ const project={id:'model-fixture',name:'Model fixture',mode:'repository',readiness:{ready:true},repositories:[{id:'repo',path:repo,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs:60000,maxConcurrent:1}},taskId='model-native-worker';
+ let controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ const action=async(action,extra={})=>{const task=await readTask(state,taskId);await requestWorkerAction(state,{taskId,actionId:action+'-'+Date.now(),action,expectedRunId:task.runId||null,...extra});};
+ t.after(async()=>{try{const task=await readTask(state,taskId);if(!['paused','stopped','failed','completed'].includes(task.status)){await action('pause',{cooperative:true});await wait(()=>readTask(state,taskId),x=>['paused','stopped','failed'].includes(x.status),'cleanup pause');}}finally{await controller.stop();await rm(dir,{recursive:true,force:true});}});
+ await createTask(state,{requestId:taskId,ticket:'GH-22',brief:'Use Astra to inspect this fixture. Read-only; no other scope.',projectId:project.id,repositoryId:'repo'});await action('start');
+ const initial=await wait(()=>readTask(state,taskId),x=>x.progress==='Synthetic original worker running.'&&x.threadId,'original execution');const immutable={brief:initial.brief,worktree:initial.worktree,threadId:initial.threadId,workerPromptSnapshot:initial.workerPromptSnapshot};
+ const request={taskId,requestId:'native-model-request',expectedRunId:initial.runId,model:'fixture-sol',userDecision:'The user approves Sol in place of the original Astra requirement; inspect only.'};
+ await requestWorkerModel(state,request);await controller.tick();assert.equal((await readTask(state,taskId)).runId,initial.runId);assert.equal((await readTask(state,taskId)).status,'running');
+ const calls=async()=>JSON.parse('['+(await readFile(log,'utf8')).trim().split('\n').join(',')+']');assert.equal((await calls()).filter(c=>c.method==='model/list').length,0,'model intent does not affect running provider');
+ await action('pause',{cooperative:true});const paused=await wait(()=>readTask(state,taskId),x=>x.status==='paused','cooperative pause');const exit=JSON.parse(await readFile(path.join(paused.runDir,'exit.json')));assert.equal(exit.stopConfirmed,true);assert.equal(exit.nativeTurnStatus,'interrupted');
+ await controller.stop();controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ await action('resume');const selected=await wait(()=>readTask(state,taskId),x=>x.status==='blocked'&&x.modelSelection.status==='selected'&&x.execution?.live===false,'resumed selection');
+ for(const [key,value]of Object.entries(immutable))assert.deepEqual(selected[key],value,key+' preserved');assert.notEqual(selected.runId,initial.runId);assert.equal(selected.modelSelection.runtime.selectedModel,'fixture-sol');assert.equal(selected.modelSelection.runtime.threadId,initial.threadId);
+ let rows=await calls();const resume=rows.find(c=>c.method==='thread/resume');assert.equal(resume.params.threadId,initial.threadId);assert.equal(resume.params.model,'fixture-sol');const turn=rows.find(c=>c.method==='turn/start'&&c.run===selected.runId);assert.equal(turn.params.model,'fixture-sol');assert.match(turn.params.input[0].text,/approves Sol/);assert.match(turn.params.input[0].text,/Use Astra/);assert.equal(rows.filter(c=>c.method==='turn/interrupt').length,1);assert.equal(rows.filter(c=>c.method==='thread/start').length,1);
+ for(const model of ['fixture-unavailable','fixture-mismatch']){
+  const current=await readTask(state,taskId);await requestWorkerModel(state,{...request,requestId:'native-'+model,expectedRunId:current.runId,model});await action('resume');const failed=await wait(()=>readTask(state,taskId),x=>x.status==='failed'&&x.modelSelection.status==='failed','unavailable or substituted model');assert.equal(failed.worktree,immutable.worktree);assert.equal(failed.threadId,immutable.threadId);rows=await calls();assert.equal(rows.filter(c=>c.method==='turn/start'&&c.run===failed.runId).length,0,'unavailable/mismatching provider never starts fallback turn');assert.ok(failed.history.some(h=>h.kind==='model_selection'&&h.runId===failed.runId));
+ }
+ const prior=await readTask(state,taskId);await requestWorkerModel(state,{...request,requestId:'native-provider-reroute',expectedRunId:prior.runId,model:'fixture-rerouted'});await action('resume');const rerouted=await wait(()=>readTask(state,taskId),x=>x.status==='blocked'&&x.modelSelection.status==='rerouted'&&x.execution?.live===false,'provider reroute');assert.equal(rerouted.modelSelection.runtime.selectedModel,'fixture-provider-route');assert.match(rerouted.modelSelection.message,/native provider rerouted/);
+ assert.equal((await calls()).find(c=>c.method==='turn/start').params.model,undefined,'default worker selection is untouched');
+});

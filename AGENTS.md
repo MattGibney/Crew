@@ -124,3 +124,9 @@
 
 - Native server requests may share numeric IDs with client RPCs: classify method-bearing requests before matching replies. Manager start/resume/fork can require connector input before their RPC resolves; bind observed native identity, preserve null turns, validate final correlation and invalidate failed-start forms without automatic answers.
 - A genuine native update of a CREW_APP_DATA portable profile can replace the bundle yet relaunch in the default root, leaving the custom-root handoff unconsumed. Verify actual post-update profile/config/voice identity; hashes of retained files alone do not prove automatic recovery. Do not use global environment changes or user-root registration to manufacture an isolated passing result. Capture a trustworthy before snapshot before any test that can touch shared user roots; unknown prior state is never permission for deletion/rollback.
+
+## Worker model continuity (GitHub #22)
+
+- A model change is explicit user-authorized next-turn intent for one exact task/current run. Store the decision separately from the immutable brief and prompt snapshot; it supersedes only the resolved model requirement. Never change another worker or future-task defaults.
+- The current turn retains its model. For an immediate transition, the manager requests cooperative pause, waits for verified owned exit, then explicitly resumes the same native thread/worktree. A model request alone never pauses or launches work. Preserve native approvals and normal user/project configuration.
+- Pending intent is not provider availability or effective selection. Validate an exact model/list ID on continuation, require matching native thread/resume model and turn/start acknowledgement, and retain correlated result history. Missing, mismatched or unavailable selection fails without a fallback turn or replacement thread.

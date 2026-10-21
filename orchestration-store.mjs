@@ -265,6 +265,30 @@ export async function requestWorkerAction(dir, { taskId, actionId, action, expec
   });
 }
 
+// A model request is next-turn intent, never an in-flight model swap or resume.
+export async function requestWorkerModel(dir, { taskId, requestId, expectedRunId, model, userDecision }) {
+  identifier(taskId); identifier(requestId, 'model request ID');
+  text(expectedRunId, 'expected run ID', 160); text(model, 'model', 160); text(userDecision, 'user decision', 4000);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(model)) throw new Error('Use an exact provider model ID');
+  return updateTask(dir, taskId, task => {
+    const requests = task.modelRequests ||= [];
+    const existing = requests.find(request => request.id === requestId);
+    if (existing) {
+      if (existing.expectedRunId !== expectedRunId || existing.model !== model || existing.userDecision !== userDecision) throw new Error('Model request ID reused with changed content');
+      return;
+    }
+    if (task.runId !== expectedRunId) throw new Error('Stale worker run for model change');
+    if (!['running', 'paused', 'stopped', 'blocked', 'awaiting_answer', 'failed'].includes(task.status)) throw new Error('Worker must be running or retained for explicit resume before changing its model');
+    if (task.lifecycleRequests?.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker has a pending lifecycle action; wait for its boundary');
+    if (requests.length >= 100) throw new Error('Worker model request limit reached');
+    if (['pending', 'validating'].includes(task.modelSelection?.status)) throw new Error('Worker already has a pending model change; apply or review it before another change');
+    const request = { id: requestId, expectedRunId, model, userDecision, at: now() };
+    requests.push(request);
+    task.modelSelection = { ...request, status: 'pending', message: 'Pending provider validation on the next explicit resume; the current turn is unchanged.' };
+    (task.history ||= []).push({ id: `model:${requestId}`, actor: 'manager', kind: 'model_request', message: `Requested model ${model} for the next explicit resume. User decision: ${userDecision}`, at: request.at, runId: expectedRunId });
+  });
+}
+
 // Shared prose is a real separate Markdown document, never the generated task projection.
 export async function updateWorkNotes(dir, id, { updateId, markdown, runId = null }) {
   text(updateId, 'note update ID', 160); text(markdown, 'work notes', 60000);
