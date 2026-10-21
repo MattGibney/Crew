@@ -15,6 +15,7 @@ import { createUpdateBridge } from './update-bridge.mjs';
 import { updateActivity } from './update-activity.mjs';
 import { inspectUpdateEvidence } from './update-evidence.mjs';
 import { createUpdateAdmission } from './update-admission.mjs';
+import { globalAdmissionPaused } from './global-capacity.mjs';
 import { createUpdatePlan,readUpdatePlan,isUpdatePlanHolding } from './update-plan.mjs';
 const root = fileURLToPath(new URL('.', import.meta.url));
 let renderer;
@@ -54,7 +55,7 @@ const broadcast = event => {
 };
 let drainHeld=false,updatePlan,updatePlanTimer;
 const prompts = await createPromptSettings({ stateDir: orchestrationDir, sourceDir: root, projectId: project.id, managerPrompt, workerPrompt });
-const controller = await createController({ admissionHeld:async()=>drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), onChange: state => broadcast({ type: 'orchestration-state', state }) });
+const controller = await createController({ admissionHeld:async()=>await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)||drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR ? {dir:process.env.CREW_GLOBAL_CAPACITY_DIR} : null, onChange: state => broadcast({ type: 'orchestration-state', state }) });
 await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
 const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent: broadcast });
@@ -74,7 +75,7 @@ const activity = async () => {
   return result;
 };
 const synchronizePlan=plan=>{drainHeld=isUpdatePlanHolding(plan);if(drainHeld)updateAdmission.hold();else updateAdmission.releaseHold();broadcast({type:'update-plan-state',plan});};
-updatePlan=createUpdatePlan({stateDir:orchestrationDir,version,getView:async()=>inspectUpdateEvidence({stateDir:orchestrationDir,view:await controller.view()}),getManager:()=>bridge.state(),stopVoice:()=>bridge.stopVoice({cooperative:true}),interruptManager:input=>bridge.interrupt(input),requestAction:input=>requestWorkerAction(orchestrationDir,input),activity,onChange:synchronizePlan});
+updatePlan=createUpdatePlan({stateDir:orchestrationDir,version,getView:async()=>inspectUpdateEvidence({stateDir:orchestrationDir,view:await controller.view()}),getManager:()=>{const state=bridge.state(),lifecycle=manager.view();return ['running','stopped'].includes(lifecycle.state)?state:{...state,status:`manager-lifecycle-${lifecycle.state}`,workStarting:true};},stopVoice:()=>bridge.stopVoice({cooperative:true}),interruptManager:input=>bridge.interrupt(input),requestAction:input=>requestWorkerAction(orchestrationDir,input),activity,onChange:synchronizePlan});
 await updatePlan.ready;synchronizePlan(updatePlan.status());await updatePlan.recover();
 updatePlanTimer=setInterval(()=>void updatePlan.tick().catch(error=>broadcast({type:'notice',message:safeError(error)})),500);
 const server = http.createServer(async (req, res) => {
@@ -110,16 +111,18 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
     const input = JSON.parse(body || '{}');
+    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
     if (req.method === 'PUT') {
       if (req.url !== '/api/settings/prompts') return send(404, { error: 'Not found.' });
       await prompts.save(input); return send(200, await settingsView());
     }
     if (req.url === '/api/manager/lifecycle') return send(200, await updateAdmission.run(() => manager.request(input.action)));
-    if(req.url==='/api/updates'){if(input.action==='return-to-work'){await updatePlan.releaseForReview();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}if(input.action==='resume-paused-work'){await updatePlan.resumeAfterCancel();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}return send(200,{...await updates.request(input.action||'status'),plan:updatePlan.status()});}
+    if(req.url==='/api/updates'){if(typeof process.send==='function'&&['resume-paused-work','return-to-work'].includes(input.action))return send(200,await updates.request(input.action));if(input.action==='return-to-work'){await updatePlan.releaseForReview();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}if(input.action==='resume-paused-work'){await updatePlan.resumeAfterCancel();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}return send(200,{...await updates.request(input.action||'status'),plan:updatePlan.status()});}
     if(req.url==='/api/update-plan-status')return send(200,{plan:updatePlan.status()});
-    if(['/api/update-plan-begin','/api/update-plan-cancel','/api/update-plan-installing','/api/update-plan-blocked'].includes(req.url)){
+    if(['/api/update-plan-begin','/api/update-plan-cancel','/api/update-plan-installing','/api/update-plan-blocked','/api/update-plan-resume','/api/update-plan-review'].includes(req.url)){
       if(input.token!==shutdownToken||typeof process.send!=='function')return send(403,{error:'Only this desktop owner may coordinate an update.'});
       if(req.url==='/api/update-plan-begin'){drainHeld=true;updateAdmission.hold();try{await updatePlan.begin({targetVersion:input.targetVersion});}finally{synchronizePlan(updatePlan.status());}return send(200,{plan:updatePlan.status()});}
+      if(['/api/update-plan-resume','/api/update-plan-review'].includes(req.url)){const plan=updatePlan.status();if(!plan||input.planId!==plan.id||input.targetVersion!==plan.targetVersion)return send(409,{error:'The update plan changed. Refresh before resuming or reviewing work.'});if(req.url==='/api/update-plan-resume')await updatePlan.resumeAfterCancel();else await updatePlan.releaseForReview();return send(200,{plan:updatePlan.status()});}
       if(req.url==='/api/update-plan-cancel'){if(input.planId&&input.planId!==updatePlan.status()?.id)return send(409,{error:'The update plan changed. Refresh before canceling.'});await updatePlan.cancel();return send(200,{plan:updatePlan.status()});}
       if(req.url==='/api/update-plan-installing')return send(200,await updatePlan.markInstalling({planId:input.planId,targetVersion:input.targetVersion}));
       await updatePlan.markBlocked('The update could not finish. Paused work is retained; review it or choose Resume paused work.',{planId:input.planId,targetVersion:input.targetVersion});return send(200,{plan:updatePlan.status()});

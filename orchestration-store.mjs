@@ -59,7 +59,7 @@ async function ownerActive(owner){
   try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')return false;return true;}
   try{const actual=(await snapshotProcesses()).get(owner.pid);return Boolean(actual&&actual.start===owner.start&&!actual.state?.includes('Z'));}catch{return true;}
 }
-async function lock(dir,name,fn){
+export async function withStateLock(dir,name,fn){
   await fs.mkdir(dir,{recursive:true,mode:0o700});
   const lockPath=path.join(dir,name),token=randomUUID(),candidate=`${lockPath}.candidate-${token}`,owner={...await ownIdentity(),token,at:now()};
   // Publish a complete, nonempty owner directory atomically. A process killed
@@ -117,19 +117,19 @@ export async function loadTasks(dir) { return loadUnlocked(dir); }
 export async function createTask(dir, { requestId, ticket, brief, projectId = null, repositoryId = null }) {
   for (const [name, value] of Object.entries({ projectId, repositoryId })) if (value !== null && (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) throw new Error(`Invalid ${name}`);
   identifier(requestId); text(ticket, 'ticket', 120); text(brief, 'brief');
-  return lock(dir, '.schedule.lock', async () => {
+  return withStateLock(dir, '.schedule.lock', async () => {
     const tasks = await loadUnlocked(dir);
     const existing = tasks.find(task => task.id === requestId);
     if (existing) {
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
-    return lock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
+    return withStateLock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
   });
 }
 export async function updateTask(dir, id, fn) {
   identifier(id);
-  return lock(dir, '.schedule.lock', () => lock(dir, `.${id}.lock`, async () => {
+  return withStateLock(dir, '.schedule.lock', () => withStateLock(dir, `.${id}.lock`, async () => {
     const task = await readUnlocked(dir, id);
     const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision, workerPromptSnapshot: task.workerPromptSnapshot ? JSON.stringify(task.workerPromptSnapshot) : null };
     const returned = await fn(task);

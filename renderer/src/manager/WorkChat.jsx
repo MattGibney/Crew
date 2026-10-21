@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ApprovalForm } from './ApprovalForm.jsx';
 import { Transcript } from './Transcript.jsx';
 import { orderedMessages } from './conversation.js';
+import { projectDraftStorage, readDraft, writeDraft } from './draft-storage.js';
 import crewMark from '../../../build/crew-mark.png';
 
 function Message({ message }) {
@@ -27,7 +28,15 @@ export function WorkChat({ manager, children }) {
   const { work, workNotice: notice, prepared, eventReady, sending } = manager;
   const approvals = work.approvals || [], connectors = work.connectors || [], items = work.items || [];
   const messages = orderedMessages(work.messages);
-  const [draft, setDraft] = useState(''), [sendError, setSendError] = useState('');
+  const [draft, setDraftState] = useState(() => readDraft(projectDraftStorage()));
+  const draftRef = useRef(draft);
+  const setDraft = value => {
+    const next = typeof value === 'function' ? value(draftRef.current) : value;
+    draftRef.current = next;
+    writeDraft(projectDraftStorage(), next);
+    setDraftState(next);
+  };
+  const [sendError, setSendError] = useState('');
   const scrollRef = useRef(null), nearBottom = useRef(true), inputRef = useRef(null), submitLock = useRef(false);
   const [scrolledUp, setScrolledUp] = useState(false);
   const busy = Boolean(work.activeTurnId) || sending;

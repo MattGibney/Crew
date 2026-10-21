@@ -29,7 +29,7 @@ Use **Settings** for full replacement manager and worker instructions. Saved man
 
 Discovery order: explicit AI_MANAGER_CODEX_BINARY/CODEX_BINARY or runtime.codexBinary, codex on PATH, supported macOS desktop bundle candidates. AI_MANAGER_CONFIG selects a config and AI_MANAGER_PORT (legacy VOICE_PORT) overrides its port. No credential material belongs in config/prompts; configure ChatGPT login and MCP connections using Codex on that Mac.
 
-To use another business, create another instance directory/config, dataDir and port. Never repoint an existing instance's state at another project. Logs, backing chat history and task files must remain bound to the same configured project.
+To use another business, choose Add project in the native workspace switcher; Crew creates another instance directory/config, dataDir and port. An explicit existing --config is also registered/selected in the same native app. Never repoint an existing instance's state at another project. Logs, backing chat history and task files must remain bound to the same configured project.
 
 Worker lifecycle and hook semantics are documented in [WORKERS.md](WORKERS.md). Environment hook commands run directly without a shell, take an explicit args array and timeoutMs of 1000–600000. Only configured scoped resource handling is supported; Crew does not automatically infer service provisioning or clean shared infrastructure.
 

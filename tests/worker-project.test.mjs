@@ -52,6 +52,10 @@ async function waitFor(controller, observe, predicate, description='controller o
   throw new Error(`Timeout waiting for ${description}; last observed status: ${lastObserved?.status || 'unavailable'}${lastObserved?.failure ? ` (${lastObserved.failure})` : ''}`);
 }
 async function terminal(controller, state, id) {
+  const current=await readTask(state,id);
+  if(current.status==='queued'){
+    await requestWorkerAction(state,{taskId:id,actionId:`explicit-start-${id}`,action:'start',expectedRunId:current.runId||null});
+  }
   return waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),`terminal task ${id}`);
 }
 test('repository worker executes in a durable isolated worktree and verification states its limits', async () => {
@@ -195,6 +199,7 @@ test('cooperative update pause verifies an already-finished durable result inste
  const base=await mkdtemp(path.join(os.tmpdir(),'crew-finished-pause-')),repo=await repository(base),state=path.join(base,'state'),id='worker-finished-before-pause',project=profile(repo),executable=await mockedCodex(base);
  await createTask(state,{requestId:id,ticket:'EX-12',brief:'Inspect only',projectId:project.id,repositoryId:'app'});let controller=await createController({stateDir:state,sourceDir,executable,project});
  t.after(async()=>{await controller.stop();});
+ await requestWorkerAction(state,{taskId:id,actionId:'explicit-start-finished-pause',action:'start'});
  const first=await waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),'finished result before cooperative pause',30000);assert.equal(first.status,'completed');await controller.stop();
  // Recreate the deterministic window after durable result/terminal publication,
  // before the next controller verification tick. The actual command/exit data is retained.

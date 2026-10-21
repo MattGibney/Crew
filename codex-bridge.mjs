@@ -7,6 +7,8 @@ import { conversationMessage } from './conversation.mjs';
 import { buildManagerInstructions } from './prompt-settings.mjs';
 export const safeError = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1500);
 export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent = () => {} }) {
+  // Keep app-owned MCP scripts rooted in cwd; project configuration resolves in sessionCwd.
+  const sessionCwd = project?.repositories?.find(repository => repository.path)?.path || cwd;
   let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0;
   let voiceActive = false, connecting = false, negotiation, activeTurnId = null, status = 'idle', voiceGeneration = 0, workStarting = false;
   let connectors = [], connectorError = null, voiceCatalog, greetingSession, lastVoice = null;
@@ -78,7 +80,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       const args = ['app-server', '--stdio', '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'];
       if (orchestrationDir) args.push('-c', `mcp_servers.local_orchestration.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.local_orchestration.args=${JSON.stringify([`${cwd}/orchestration-mcp.mjs`, orchestrationDir, 'manager', ...(runtimeProjectPath ? [runtimeProjectPath] : [])])}`, '-c', 'mcp_servers.local_orchestration.required=true', '-c', 'mcp_servers.local_orchestration.default_tools_approval_mode="approve"');
       if (orchestrationDir && process.env.ELECTRON_RUN_AS_NODE === '1') args.push('-c', 'mcp_servers.local_orchestration.env.ELECTRON_RUN_AS_NODE="1"');
-      child = spawn(executable, args, { cwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
+      child = spawn(executable, args, { cwd:sessionCwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
       const proc = child;
       const fail = error => {
         if (proc !== child) return;
@@ -110,7 +112,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
         catch (error) { if (error.code !== 'ENOENT') throw new Error('Cannot read the saved chat reference. It has not been replaced.'); }
       }
       const managerInstructions = buildManagerInstructions({ managerPrompt: managerPrompt ?? await readFile(new URL('./prompts/manager.md', import.meta.url), 'utf8'), project });
-      const options = { cwd, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only', developerInstructions: managerInstructions };
+      const options = { cwd: sessionCwd, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only', developerInstructions: managerInstructions };
       let result;
       if (threadId) {
         try { result = await rpc('thread/resume', { threadId, excludeTurns: true, ...options }); }

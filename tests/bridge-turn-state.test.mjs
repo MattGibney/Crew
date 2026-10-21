@@ -1,14 +1,14 @@
 // A real child JSON-RPC peer exercises bridge ordering; no Codex/network/mic.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,appendFile,readFile,rm,chmod} from 'node:fs/promises';
+import {mkdtemp,writeFile,appendFile,readFile,rm,chmod,mkdir,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createBridge} from '../codex-bridge.mjs';
 import {updateActivity} from '../update-activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
-async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false}={}){
+async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-turn-state-')),statePath=join(directory,'manager.json'),control=join(directory,'notifications.jsonl'),calls=join(directory,'calls.jsonl'),executable=join(directory,'fake-codex.mjs');
  await writeFile(control,'');await writeFile(calls,'');if(saved)await writeFile(statePath,JSON.stringify({threadId:'manager-thread'}));
  const program=`#!${process.execPath}
@@ -22,7 +22,7 @@ const notify=(method,params)=>send({method,params:{threadId:'manager-thread',...
 setInterval(()=>{const lines=readFileSync(control,'utf8').split('\\n').filter(Boolean);for(const line of lines.slice(seen))send(JSON.parse(line));seen=lines.length;},10);
 createInterface({input:process.stdin}).on('line',line=>{
  const message=JSON.parse(line);if(message.id===undefined)return;
- appendFileSync(calls,JSON.stringify(message)+'\\n');const {id,method,params}=message;
+ appendFileSync(calls,JSON.stringify({...message,processCwd:process.cwd(),processArgs:process.argv.slice(2)})+'\\n');const {id,method,params}=message;
  if(method==='initialize')return reply(id,{});
  if(method==='account/read')return reply(id,{account:{type:'chatgpt',planType:'synthetic'}});
  if(method==='thread/start'||method==='thread/resume')return setTimeout(()=>reply(id,{thread:{id:'manager-thread'}}),${threadDelay});
@@ -46,9 +46,11 @@ createInterface({input:process.stdin}).on('line',line=>{
 });
 `;
  await writeFile(executable,program,{mode:0o700});await chmod(executable,0o700);
- const events=[],bridge=createBridge({cwd:directory,statePath,executable,onEvent:event=>events.push(event)});
+ const repository=join(directory,'project-repository'),orchestrationDir=join(directory,'orchestration'),runtimeProjectPath=join(directory,'runtime.json');if(projectScoped)await mkdir(repository);
+ const project=projectScoped?{id:'scoped-project',name:'Scoped',repositories:[{id:'app',path:repository}]}:undefined;
+ const events=[],bridge=createBridge({cwd:directory,statePath,executable,...(projectScoped?{project,orchestrationDir,runtimeProjectPath}:{}),onEvent:event=>events.push(event)});
  t.after(async()=>{await bridge.shutdown();await rm(directory,{recursive:true,force:true});});
- return {bridge,events,notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
+ return {bridge,events,directory,repository,orchestrationDir,runtimeProjectPath,notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
 }
 const canUpdate=bridge=>updateActivity({work:bridge.state(),view:{tasks:[]}}).safe;
 
@@ -103,4 +105,16 @@ test('cooperative update voice stop failure preserves the manager process and st
 test('update manager runtime shutdown waits for natural EOF exit and never escalates if it remains live',async t=>{
  const natural=await fixture(t,{exitOnEOF:true});await natural.bridge.startWork('complete','natural-shutdown');await until(()=>natural.bridge.state().status==='completed');await natural.bridge.shutdown({cooperative:true});assert.equal((await natural.calls()).filter(c=>c.signal).length,0);
  const refuses=await fixture(t);await refuses.bridge.startWork('complete','pending-shutdown');await until(()=>refuses.bridge.state().status==='completed');await assert.rejects(refuses.bridge.shutdown({cooperative:true}),/still pending.*No force signal/);assert.equal((await refuses.calls()).filter(c=>c.signal).length,0);assert.equal(refuses.bridge.state().status,'completed');
+});
+
+test('project repository scopes child and thread configuration while orchestration executable stays app-owned',async t=>{
+ for(const saved of [false,true]){
+  const f=await fixture(t,{saved,projectScoped:true});await f.bridge.startWork('complete',saved?'scoped-resume':'scoped-start');await until(()=>f.bridge.state().status==='completed');
+  const awaitedRepository=await realpath(f.repository);
+  const calls=await f.calls(),thread=calls.find(call=>call.method===(saved?'thread/resume':'thread/start'));
+  assert.equal(thread.params.cwd,f.repository);assert.ok(calls.every(call=>call.processCwd===awaitedRepository));
+  const argument=calls[0].processArgs.find(arg=>arg.startsWith('mcp_servers.local_orchestration.args='));
+  assert.deepEqual(JSON.parse(argument.slice(argument.indexOf('=')+1)),[join(f.directory,'orchestration-mcp.mjs'),f.orchestrationDir,'manager',f.runtimeProjectPath]);
+  assert.notEqual(f.repository,f.directory);
+ }
 });

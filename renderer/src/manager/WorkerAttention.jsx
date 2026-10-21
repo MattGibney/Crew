@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, Check, ChevronDown, Clock3, FolderGit2, GitBranch, Hand, LoaderCircle, Pause, Play, Square, Trash2, TriangleAlert } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { formatElapsed, groupWorkers, pendingAttention, pendingLifecycle, workerActions, workerStatus, workerTiming } from './worker-model.js';
+import { formatElapsed, groupWorkers, pendingAttention, pendingLifecycle, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.js';
 
 const ACTIONS = { pause: { label: 'Pause', Icon: Pause }, stop: { label: 'Stop', Icon: Square }, resume: { label: 'Resume', Icon: Play }, dispose: { label: 'Remove worktree', Icon: Trash2 } };
 function AttentionItem({ taskId, item, onReview, disabled }) {
@@ -19,7 +19,7 @@ function WorkerCard({ task, onReview, onAction, disabled, now }) {
   const [busy, setBusy] = useState(false), [confirmRemove, setConfirmRemove] = useState(false), [error, setError] = useState(''), [requested, setRequested] = useState('');
   const attention = pendingAttention(task), pending = pendingLifecycle(task), timing = workerTiming(task, now);
   const title = task.brief?.trim().split('\n')[0] || 'Worker task';
-  const progress = task.failure || task.result?.message || task.progress || (task.status === 'launching' ? 'Preparing the project environment.' : task.status === 'queued' ? 'Waiting for an available worker slot.' : 'Waiting for the next progress report.');
+  const progress = workerProgress(task);
   const actions = workerActions(task), retained = task.worktree && task.status !== 'disposed';
   const recentAction = task.lifecycleRequests?.at(-1);
   useEffect(() => { setRequested(''); setConfirmRemove(false); }, [task.runId, task.status, recentAction?.status]);
