@@ -139,3 +139,8 @@
 - The current turn retains its model. For an immediate transition, the manager requests cooperative pause, waits for verified owned exit, then explicitly resumes the same native thread/worktree. A model request alone never pauses or launches work. Preserve native approvals and normal user/project configuration.
 - Pending intent is not provider availability or effective selection. Validate an exact model/list ID on continuation, require matching native thread/resume model and turn/start acknowledgement, and retain correlated result history. Missing, mismatched or unavailable selection fails without a fallback turn or replacement thread.
 - Correlate native model reroutes to the exact current thread and turn. Buffer early turn-start notifications by turn identity and never apply stale same-thread events.
+
+## Authorized grouped 0.12.0 release
+
+- The human explicitly authorized merging the three open PRs #23, #25 and #27 and publishing one new version while UI iteration continues separately. Integrate their complete histories, validate their interactions and publish one signed/notarized 0.12.0 release. This permission covers only those changes and necessary integration corrections; the independent UI playground, installed application, user profiles and business workers remain outside scope.
+- The known portable CREW_APP_DATA updater relaunch limitation is unchanged. Do not repeat a native installer test that could fall through to the user's default profile, or silently include a separate updater correction. Verify signed artifacts and isolated explicit-profile launch/manual replacement honestly; do not claim automatic profile preservation without independent safe evidence.
