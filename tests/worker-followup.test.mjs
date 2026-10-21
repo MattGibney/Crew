@@ -13,6 +13,7 @@ import {createController} from '../controller.mjs';
 import * as store from '../orchestration-store.mjs';
 import {listWorkerRequests} from '../worker-approvals.mjs';
 import {captureWorktreeEvidence} from '../worker-worktree-evidence.mjs';
+import {inspectUpdateEvidence} from '../update-evidence.mjs';
 
 const exec=promisify(execFile),sourceDir=fileURLToPath(new URL('..',import.meta.url));
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -24,7 +25,7 @@ async function wait(read,predicate,label){
 }
 
 async function fixture(t){
- const dir=await mkdtemp(path.join(os.tmpdir(),'crew-followup-')),repo=path.join(dir,'repo'),state=path.join(dir,'state'),gates=path.join(dir,'gates'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');
+ const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'crew-followup-'))),repo=path.join(dir,'repo'),state=path.join(dir,'state'),gates=path.join(dir,'gates'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');
  await mkdir(repo);await mkdir(gates);
  const script=`import fs from 'node:fs';fs.mkdirSync('.fixture',{recursive:true});if(process.argv[2]==='setup'){const p='.fixture/setup-count';const n=fs.existsSync(p)?Number(fs.readFileSync(p,'utf8')):0;fs.writeFileSync(p,String(n+1));}else if(process.argv[2]==='teardown')fs.writeFileSync('.fixture/disposed','yes');`;
  await writeFile(path.join(repo,'actions.mjs'),script);await writeFile(path.join(repo,'.gitignore'),'.fixture/\n');await writeFile(path.join(repo,'README.md'),'Disposable worker assignment fixture.\n');
@@ -158,6 +159,7 @@ test('combined archive stops queued scope and history restore cannot launch it o
  await f.stopController();await f.followup('archive-queued-followup','Retained new scope must not launch after history restore.',completed);await f.restart();
  await f.action('archive');const archived=await wait(f.read,x=>x.status==='disposed','confirmed archive');
  assert.equal(archived.assignments.at(-1).status,'stopped');assert.equal(archived.assignments[0].result.message,'Result retained through archive.');
+ await wait(async()=>{const view=await inspectUpdateEvidence({stateDir:f.state,view:{tasks:[await f.read()]}});return view.tasks[0].updateEvidence;},e=>['stopped','absent'].includes(e.worker)&&['stopped','absent'].includes(e.runtime)&&e.hooks.every(h=>['stopped','absent'].includes(h.state)),'fresh archive execution exit');
  await store.manageArchivedTask(f.state,{taskId:f.taskId,action:'restore',operationId:'combined-archive-restore',expectedRevision:archived.revision},f.project);
  const restored=await f.read();assert.equal(restored.archiveRestoration.requiresRecovery,true);assert.equal(restored.status,'blocked');assert.deepEqual(restored.assignments,archived.assignments);
  await assert.rejects(f.followup('restored-new-followup','No reconstruction is authorized.',restored),/history only|archived/);

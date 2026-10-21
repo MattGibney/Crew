@@ -23,6 +23,7 @@ export function groupWorkers(tasks) {
 }
 export function workerStatus(task) { if (task.archiveRestoration?.requiresRecovery) return 'History restored'; return task.retirement?.reason === 'worktree-already-missing' ? 'Retired' : LABELS[task.status] || 'Status unavailable'; }
 export function workerProgress(task) {
+  if (task.archiveRestoration?.requiresRecovery) return task.failure || 'History restored. The worker environment is unavailable and requires recovery.';
   if(task.retirement?.reason === 'worktree-already-missing') return 'Worktree already missing. History retained; resource cleanup unverified.';
   if (queuedAssignments(task).length && typeof task.followupWait === 'string' && task.followupWait.trim()) return task.followupWait;
   if (['queued', 'resume_queued'].includes(task.status)) {

@@ -162,6 +162,7 @@ test('failed argv bootstrap exposes explicit setup retry while completed bootstr
 test('history-only restoration blocks setup retry even when failed setup and queued assignments remain in evidence', () => {
   const task = worker({ status: 'failed', archiveRestoration: { requiresRecovery: true }, assignments: [{ id: 'queued', status: 'queued' }], environment: { kind: 'project-execution', setupAttempted: true, prepared: false, hooks: [{ phase: 'setup', status: 'failed' }] } });
   assert.deepEqual(workerActions(task), ['dispose']);
+  assert.match(workerProgress({ ...task, failure: 'History restored; environment recovery is unavailable.', followupWait: 'Waiting to start the next assignment.' }), /History restored/);
   assert.throws(() => workerActionRequest(task, 'retry_setup', 'restored-retry'));
   assert.deepEqual(workerActions({ ...task, execution: { live: true } }), ['pause', 'stop']);
 });

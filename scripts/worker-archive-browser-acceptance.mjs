@@ -169,6 +169,7 @@ try {
   await visibleDetail.getByRole('button', { name: 'Back to manager', exact: true }).click();
   // A page reload reconnects only to retained fixture state; archive projection must persist.
   await page.reload(); await sidebar.waitFor();
+  await sidebar.locator('[data-worker-id="fixture-task-9"]').waitFor();
   assert.equal(await sidebar.locator('[data-worker-id="fixture-task-7"]').count(), 0);
   assert.equal(await sidebar.locator('[data-worker-id="fixture-task-10"]').count(), 0);
   assert.equal(await sidebar.locator('[data-worker-id="fixture-task-9"]').count(), 1, 'Restored record remains ordinary workspace history after reload');
