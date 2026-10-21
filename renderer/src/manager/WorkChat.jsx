@@ -46,7 +46,7 @@ export function WorkChat({ manager }) {
     catch (failure) { setSendError(failure.message || 'Message was not sent. Your text is kept here; try again.'); }
     finally { submitLock.current = false; }
   };
-  return <MessageScrollerProvider autoScroll defaultScrollPosition="last-anchor" scrollPreviousItemPeek={40}><div className="relative flex min-h-0 flex-1 flex-col">
+  return <MessageScrollerProvider autoScroll defaultScrollPosition="end" scrollEdgeThreshold={8}><div className="relative flex min-h-0 flex-1 flex-col">
     <MessageScroller className="flex-1">
     <MessageScrollerViewport aria-label="Manager conversation" className="px-5 sm:px-7 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40">
       <MessageScrollerContent id="work-result" aria-label="Conversation messages" aria-live="off" className="mx-auto max-w-3xl gap-7 py-8">
@@ -57,7 +57,7 @@ export function WorkChat({ manager }) {
         {manager.error && <Alert variant="destructive" id="error" role="alert"><AlertDescription className="space-y-3 break-words"><p>{manager.error}</p>{!prepared && <Button type="button" variant="outline" onClick={() => void manager.retryConnection()}>Retry connection</Button>}</AlertDescription></Alert>}
         {!messages.length && !approvals.length && !manager.workerApprovals?.length && <div className="flex min-h-64 flex-col items-center justify-center px-2 py-10 text-center"><div className="mb-5 flex size-12 items-center justify-center rounded-2xl border bg-background"><MessageSquare className="size-5 text-primary" aria-hidden="true" /></div><h2 className="text-2xl font-semibold tracking-tight">What are we working on?</h2><p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">Talk through an idea, review progress, or agree on a task. Your manager brings in workers when you ask.</p><div className="mt-6 flex flex-wrap justify-center gap-2">{['What is the current project status?', 'Help me plan a task'].map(text => <Button key={text} variant="outline" className="h-auto whitespace-normal py-2 text-xs" onClick={() => { setDraft(text); selectInput('text'); requestAnimationFrame(() => inputRef.current?.focus()); }}>{text}</Button>)}</div></div>}
         </MessageScrollerItem>
-        {messages.map(message => <MessageScrollerItem key={message.id} messageId={message.id} scrollAnchor={message.role === 'user'}><Message message={message} copyable /></MessageScrollerItem>)}
+        {messages.map(message => <MessageScrollerItem key={message.id} messageId={message.id}><Message message={message} copyable /></MessageScrollerItem>)}
         {busy && <MessageScrollerItem messageId="conversation-status">
         <p id="work-status" role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />{approvals.length ? 'Waiting for your answer below' : sending ? 'Sending your message…' : 'Your manager is working…'}</p>
         </MessageScrollerItem>}
