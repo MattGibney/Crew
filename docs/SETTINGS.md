@@ -12,6 +12,10 @@ Manager saves remain pending until **Restart manager**. Saving never hot-applies
 
 Worker changes affect the next worker direction or native launch, including a retained worker continuation. Earlier run text/version snapshots remain in history. Saving does not interrupt an active turn or create work.
 
+Upgrading from 0.14 migrates exact, untouched shipped manager and worker defaults in saved project profiles to the current facilitation instructions. Each role upgrades independently; customized instruction text stays byte-for-byte intact. The saved settings retain the old default text/version as upgrade history. An explicit later save of an old default is treated as an intentional custom edit.
+
+The retained manager continues using its existing active snapshot after this migration. Settings shows the ordinary pending Start/Restart notice; choose **Restart manager** (or Stop then Start) to apply the migrated instructions in the same conversation. The next worker direction uses its current saved instructions, including the explicit workflow-state and environment-context tools. Original worker run snapshots and conversation history remain unchanged. An upgrade never starts work or answers native approvals.
+
 ## Start, stop and recovery
 
 - **Stop manager** immediately holds new conversation/voice requests, releases voice, waits for pending starts, requests native interruption and waits for terminal turn/approval evidence before confirming process exit. It does not stop the controller, workers, worktrees or environments.
@@ -23,7 +27,7 @@ Workers report durable progress, questions and results while the manager is stop
 
 ## Persistence and integration
 
-Settings are stored privately under this project's state directory at `prompt-settings/<projectId>.json`. Atomic replacement, file mode 0600, project identity, content hashes and optimistic version checks protect saved values. The configured Markdown files remain unchanged and provide the initial content when no settings save exists. Exact byte-for-byte untouched pre-settings shipped defaults are recognized by known hashes and upgraded to the complete visible defaults. Customized files, explicit saved settings and retained worker snapshots are never upgraded by this migration.
+Settings are stored privately under this project's state directory at `prompt-settings/<projectId>.json`. Atomic replacement, file mode 0600, project identity, content hashes and optimistic version checks protect saved values. The configured Markdown files remain unchanged and provide the initial content when no settings save exists. Known hashes recognize exact pristine shipped defaults in configured files and legacy saved settings. Custom text, explicit custom provenance and retained active/run snapshots remain unchanged; the default upgrade behavior is described above.
 
 `manager-lifecycle.json` records project identity, held/running intent and the retained manager text/version. A transition persists held intent before changing the provider session. Only successful native activation advances the retained active version. A damaged or mismatched record fails closed and remains available for recovery. Do not delete state to clear a lifecycle error.
 
