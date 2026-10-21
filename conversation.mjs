@@ -26,6 +26,7 @@ export function conversationMessage(item, turnId) {
   if (!text) return null;
   let presentation = text.startsWith('The user explicitly chose to review this queued controller attention item.')
     ? 'Review the selected worker update with me.'
+    : text.startsWith('CREW_WORKER_RECOVERY_REVIEW\n') ? 'Review recovery options for this worker with me.'
     : text.startsWith('CREW_WORKER_ACTION\n') ? 'Apply the selected worker action.' : text;
   if (text.startsWith('CREW_WORKER_ACTION\n')) {
     try {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerTiming } from './worker-model.js';
+import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.js';
 const at = '2026-10-21T12:00:00.000Z', now = Date.parse(at);
 const worker = overrides => ({ id: 'task-example', ticket: 'AI-014', status: 'running', runId: 'run-one', brief: 'Read-only audit', attention: [], lifecycleRequests: [], ...overrides });
 test('every task and worktree remains reachable; attention, pending actions and live processes stay active', () => {
@@ -47,4 +47,12 @@ test('queued cards show the controller admission reason without inferring capaci
   assert.equal(workerProgress(worker({ status: 'resume_queued', capacityWait: ' ' })), 'Waiting to resume.');
   assert.equal(workerProgress(worker({ status: 'running', capacityWait: 'Old waiting reason', progress: 'Actual progress' })), 'Actual progress');
   assert.equal(workerProgress(worker({ status: 'failed', failure: 'Actual failure', capacityWait: 'Old waiting reason' })), 'Actual failure');
+});
+
+test('missing worktree retirement is honest history and review requests never authorize a recovery mutation', async()=>{
+ const {workerRecoveryReviewRequest}=await import('./worker-model.js');
+ const retired=worker({status:'disposed',retirement:{reason:'worktree-already-missing',cleanupVerified:false}});
+ assert.equal(workerStatus(retired),'Retired');assert.match(workerProgress(retired),/cleanup unverified/);assert.deepEqual(workerActions(retired),[]);
+ const request=workerRecoveryReviewRequest(worker({status:'failed',worktree:'/fixture/worker'}));assert.match(request,/"taskId":"task-example"/);assert.match(request,/"expectedRunId":"run-one"/);assert.match(request,/review only/);assert.match(request,/explicitly approve/);
+ assert.throws(()=>workerRecoveryReviewRequest(worker({status:'running',worktree:'/fixture/worker'})));
 });
