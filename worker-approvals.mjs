@@ -27,6 +27,7 @@ function identity(value) { return [id(value.taskId), native(value.runId), native
 function key(value) { return `approval-${createHash('sha256').update(JSON.stringify(identity(value))).digest('hex')}`; }
 async function current(stateDir, value, { allowLifecycle = false } = {}) {
   const task = await readTask(stateDir, value.taskId);
+  if (task.archiveRestoration?.requiresRecovery) throw rejection('Restored history has no runnable worker turn; historical approvals cannot receive decisions', 'STALE_WORKER_REQUEST');
   if (task.runId !== value.runId || !ACTIVE.has(task.status)) throw rejection('Worker request belongs to an inactive or stale run', 'STALE_WORKER_REQUEST');
   if (task.threadId && task.threadId !== value.threadId) throw rejection('Worker request belongs to a different thread', 'STALE_WORKER_REQUEST');
   if (!allowLifecycle && (task.lifecycleRequests || []).some(request => ['pending', 'processing'].includes(request.status) && ['stop', 'pause', 'dispose'].includes(request.action))) throw rejection('Worker lifecycle change is pending; this request cannot be approved', 'WORKER_LIFECYCLE_PENDING');
@@ -118,6 +119,7 @@ export async function decideWorkerRequest({ stateDir, ...input }) {
   return withStateLock(stateDir, '.schedule.lock', () => withStateLock(stateDir, '.worker-approvals.lock', async () => {
     const record = await read(stateDir, input.approvalId);
     if (key(input) !== record.approvalId) throw new Error('Worker request correlation mismatch');
+    if ((await readTask(stateDir, record.taskId)).archiveRestoration?.requiresRecovery) throw rejection('Restored history has no runnable worker turn; historical approvals cannot receive decisions', 'STALE_WORKER_REQUEST');
     const response = workerApprovalResponse(record, input.response);
     if (record.status === 'delivery-unknown') throw new Error('Native response delivery outcome is unknown; the decision cannot be retried');
     if (['decided', 'delivered', 'resolved'].includes(record.status)) { if (JSON.stringify(record.response) !== JSON.stringify(response)) throw new Error('Worker request already has a different decision or was resolved by Codex'); return record; }

@@ -252,3 +252,47 @@ test('combined instruction limit rejects either editor before persisting an unus
   assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'x'.repeat(63999), expectedVersion: saved.manager.saved.version } })).status, 400);
   assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.saved.text, 'Short instructions');
 });
+
+test('permanent archive deletion is scoped, stale guarded, idempotent and removes local records only', async t => {
+ const {mkdir,access}=await import('node:fs/promises');const f=await fixture(t);await f.start();
+ const taskId='http-archive-delete';
+ await createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Local archived fixture',projectId:'http-settings-fixture'});
+ await updateTask(f.stateDir,taskId,n=>{n.status='running';n.runId='archive-delete-run';});
+ const native=await recordWorkerRequest({stateDir:f.stateDir,taskId,runId:'archive-delete-run',threadId:'archive-thread',turnId:'archive-turn',requestId:99,method:'item/commandExecution/requestApproval',params:{threadId:'archive-thread',turnId:'archive-turn',command:'fixture',availableDecisions:['accept','decline']}});
+ const task=await updateTask(f.stateDir,taskId,n=>{n.status='disposed';n.archivedAt='2026-10-21T12:00:00Z';});
+ const run=join(f.stateDir,'runs',taskId,'archive-run');await mkdir(run,{recursive:true});await writeFile(join(run,'evidence.json'),'local evidence');await writeFile(join(f.stateDir,'tasks',`${taskId}.notes.md`),'local notes');
+ const outside=join(f.directory,'native-history');await mkdir(outside);await writeFile(join(outside,'keep.txt'),'provider history');
+ const body={taskId,action:'delete',operationId:'delete-archive-operation',expectedRevision:task.revision};
+ assert.equal((await f.request('/api/archived-worker-action',{body,requestOrigin:'https://untrusted.invalid'})).status,403);
+ assert.equal((await f.request('/api/archived-worker-action',{body:{...body,expectedRevision:1}})).status,400);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ const result=await f.request('/api/archived-worker-action',{body});assert.equal(result.status,200,JSON.stringify(result.value));
+ await f.stop();await f.start();
+ assert.equal((await f.request('/api/archived-worker-action',{body})).status,200);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ await assert.rejects(access(join(f.stateDir,'worker-approvals',`${native.approvalId}.json`)),{code:'ENOENT'});
+ // A retained orphan from an older version must never resurrect native attention.
+ await writeFile(join(f.stateDir,'worker-approvals',`${native.approvalId}.json`),JSON.stringify(native));
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ await assert.rejects(access(join(f.stateDir,'tasks',`${taskId}.json`)),{code:'ENOENT'});await assert.rejects(access(join(f.stateDir,'runs',taskId)),{code:'ENOENT'});assert.equal(await readFile(join(outside,'keep.txt'),'utf8'),'provider history');
+ await assert.rejects(createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Reused deleted identity',projectId:'http-settings-fixture'}),/choose a new task ID/);
+ await createTask(f.stateDir,{requestId:'foreign-archive-delete',ticket:'GH-43',brief:'Foreign archived fixture',projectId:'foreign-project'});const foreign=await updateTask(f.stateDir,'foreign-archive-delete',n=>{n.status='disposed';});
+ const denied=await f.request('/api/archived-worker-action',{body:{...body,taskId:foreign.id,expectedRevision:foreign.revision,operationId:'foreign-delete-operation'}});assert.equal(denied.status,400);assert.match(denied.value.error,/another project/);
+ assert.equal((await f.calls()).some(call=>call.method==='turn/start'),false);
+});
+
+test('history-only restore HTTP preserves records across restart and never revives old questions or approvals', async t => {
+ const f=await fixture(t),taskId='http-history-restore',projectId='http-settings-fixture';
+ await createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Restore recorded history only',projectId});
+ await updateTask(f.stateDir,taskId,n=>{n.status='running';n.runId='historical-restore-run';n.threadId='historical-restore-thread';});
+ const native=await recordWorkerRequest({stateDir:f.stateDir,taskId,runId:'historical-restore-run',threadId:'historical-restore-thread',turnId:'old-restore-turn',requestId:101,method:'item/commandExecution/requestApproval',params:{threadId:'historical-restore-thread',turnId:'old-restore-turn',command:'historical fixture',availableDecisions:['accept','decline','cancel']}});
+ const archived=await updateTask(f.stateDir,taskId,n=>{n.status='disposed';n.archivedAt='2026-10-21T12:00:00Z';n.result={message:'Retained result'};n.question={id:'historical-question',runId:n.runId,message:'Old question'};n.attention=[{id:'historical-attention',kind:'question',message:'Old question'}];});
+ await f.start();const body={taskId,action:'restore',operationId:'http-restore-operation',expectedRevision:archived.revision};
+ const response=await f.request('/api/archived-worker-action',{body});assert.equal(response.status,200,JSON.stringify(response.value));
+ let restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.match(restored.failure,/reconstruction is not currently supported/);assert.equal(restored.question,null);assert.ok(restored.attention[0].ackedAt);assert.deepEqual(restored.result,archived.result);assert.equal(restored.archivedAt,archived.archivedAt);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].approvalId,native.approvalId,'native historical approval is retained without answering');
+ for(const decision of ['accept','decline','cancel']){const denied=await f.request('/api/worker-approval',{body:{taskId,runId:native.runId,threadId:native.threadId,turnId:native.turnId,approvalId:native.approvalId,requestId:native.requestId,response:{decision}}});assert.equal(denied.status,400);assert.match(denied.value.error,/historical approvals/);}
+ assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].status,'pending');
+ await f.stop();await f.start();assert.equal((await f.request('/api/archived-worker-action',{body})).status,200);restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.equal(restored.runId,archived.runId);assert.equal(restored.history.filter(event=>event.id==='archive-restore:http-restore-operation').length,1);assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ assert.equal((await f.calls()).some(call=>['turn/start','thread/start'].includes(call.method)),false);
+});

@@ -5,7 +5,8 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile,spawn}from'node:child_process';import{promisify}from'node:util';
 import{createController}from'../controller.mjs';
-import{createTask,readTask,requestWorkerAction,answerQuestion,updateTask,reportTask}from'../orchestration-store.mjs';
+import{createTask,readTask,requestWorkerAction,answerQuestion,updateTask,reportTask,manageArchivedTask}from'../orchestration-store.mjs';
+import{activeTasks,archivedTasks,isArchivedTask}from'../worker-archive.mjs';
 const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,description='condition'){const deadline=Date.now()+15000;while(Date.now()<deadline){const value=await fn();if(value)return value;await sleep(50);}throw new Error(`Timed out: ${description}`);}
@@ -141,4 +142,42 @@ test('recovery interrupts old pending start and processing resume requests until
  await f.action(queued.id,'start');await f.action(prior.id,'resume');
  await wait(async()=>{const a=await readTask(f.stateDir,queued.id),b=await readTask(f.stateDir,prior.id);return a.execution?.live&&b.runId!==prior.runId&&b.execution?.runId===b.runId&&b.execution.live;},'fresh correlated start and resume launch');
  const resumed=await readTask(f.stateDir,prior.id);assert.equal(resumed.threadId,prior.threadId);assert.equal(resumed.worktree,prior.worktree);assert.equal(resumed.lifecycleRequests.find(r=>r.id==='stored-resume-request').status,'failed');
+});
+
+test('archive keeps pending and failed teardown visible then retains confirmed history across restart and exact retries', async t => {
+ const f=await fixture(t,{environment:{cleanup:{command:process.execPath,args:['-e','setTimeout(()=>{},700)'],timeoutMs:5000}}});
+ await f.add('worker-archive');
+ const first=await wait(async()=>{const n=await readTask(f.stateDir,'worker-archive');return n.threadId?n:null;},'owned archive worker');
+ await f.action(first.id,'stop');
+ await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.status==='stopped'&&n.lifecycleRequests.at(-1).status==='completed';},'confirmed inactive worker');
+ await writeFile(path.join(first.worktree,'preserve.txt'),'unreviewed changes');
+ await f.action(first.id,'archive');
+ const failed=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.lifecycleRequests.at(-1).status==='failed'?n:null;},'dirty archive refusal');
+ assert.equal(isArchivedTask(failed),false);assert.equal(failed.archivedAt,undefined);assert.match(failed.lifecycleRequests.at(-1).error,/contains changes/);
+ await rm(path.join(first.worktree,'preserve.txt'));
+ const request={taskId:first.id,actionId:'confirmed-archive-request',action:'archive',expectedRunId:first.runId};
+ await requestWorkerAction(f.stateDir,request);await f.controller.tick();
+ const pending=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.environment?.status==='cleaning'?n:null;},'ordinary cleanup running');
+ assert.equal(isArchivedTask(pending),false);assert.equal(pending.archivedAt,undefined);
+ const archived=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return isArchivedTask(n)?n:null;},'confirmed archive');
+ assert.equal(archived.status,'disposed');assert.equal(archived.archivedAt,archived.disposedAt);assert.ok(Date.parse(archived.archivedAt));
+ assert.equal(archived.brief,first.brief);assert.deepEqual(archived.reports,failed.reports);assert.equal(archived.threadId,first.threadId);assert.ok(archived.history.some(event=>event.id==='assignment'));
+ const retained=await f.controller.view();assert.equal(activeTasks(retained.tasks).length,0);assert.equal(archivedTasks(retained.tasks)[0].id,first.id);
+ await requestWorkerAction(f.stateDir,request);await f.restart();await f.controller.tick();
+ const recovered=await readTask(f.stateDir,first.id);assert.equal(isArchivedTask(recovered),true);assert.equal(recovered.archivedAt,archived.archivedAt);assert.equal(recovered.lifecycleRequests.filter(r=>r.id===request.actionId).length,1);
+ assert.equal(recovered.history.filter(event=>event.id==='assignment').length,1);
+ await assert.rejects(requestWorkerAction(f.stateDir,{...request,actionId:'no-archived-resume',action:'resume'}),/archived/);
+ await manageArchivedTask(f.stateDir,{taskId:first.id,action:'restore',operationId:'real-history-restore',expectedRevision:recovered.revision},f.project);
+ await f.restart();await f.controller.tick();
+ const restored=await readTask(f.stateDir,first.id);assert.equal(restored.status,'blocked');assert.equal(restored.archiveRestoration.requiresRecovery,true);assert.equal(restored.runId,first.runId);
+ for(const action of ['start','resume']){
+   await f.action(first.id,action);const refused=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.lifecycleRequests.at(-1).status==='failed'?n:null;},'history restore refuses '+action);
+   assert.equal(refused.status,'blocked');assert.equal(refused.runId,first.runId);assert.match(refused.lifecycleRequests.at(-1).error,/reconstruction is not currently supported/);
+ }
+ // A newly present path must not be hidden or cleaned by record-only rearchive.
+ await mkdir(first.worktree);await writeFile(path.join(first.worktree,'preserve.txt'),'new resource');await f.action(first.id,'archive');
+ const pathBlocked=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.lifecycleRequests.at(-1).status==='failed'?n:null;},'existing restored path blocks rearchive');assert.equal(pathBlocked.status,'blocked');assert.equal(await readFile(path.join(first.worktree,'preserve.txt'),'utf8'),'new resource');await rm(first.worktree,{recursive:true});
+ await exec('git',['-C',f.repo,'worktree','add','--detach',first.worktree,first.baseCommit]);await rm(first.worktree,{recursive:true});await f.action(first.id,'archive');const registrationBlocked=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.lifecycleRequests.at(-1).status==='failed'?n:null;},'registered missing worktree blocks rearchive');assert.match(registrationBlocked.lifecycleRequests.at(-1).error,/registered/);await exec('git',['-C',f.repo,'worktree','remove','--force',first.worktree]);
+ await f.action(first.id,'archive');const rearchived=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return isArchivedTask(n)?n:null;},'record-only rearchive');assert.ok(rearchived.archiveRestoration.rearchivedAt);assert.equal(rearchived.disposedAt,archived.disposedAt);assert.ok(rearchived.history.some(event=>/No environment cleanup was run/.test(event.message)));
+ assert.equal((await readFile(path.join(f.stateDir,'launches.jsonl'),'utf8')).trim().split('\n').length,1,'restore/start refusal/rearchive never launches a second worker');
 });

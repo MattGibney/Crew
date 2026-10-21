@@ -168,6 +168,7 @@ async function packageSource(options) {
   allowed.push('manager-profile.mjs', 'tests/manager-profile.test.mjs', 'tickets/GH-035.md', 'renderer/src/manager/ManagerAvatar.jsx', 'renderer/src/manager/profile.js', 'renderer/src/manager/profile.test.mjs', 'scripts/manager-profile-native-acceptance.mjs');
   allowed.push('tickets/GH-038.md', 'scripts/chat-reconciliation-browser-acceptance.mjs', 'tests/bridge-turn-state.test.mjs');
   allowed.push('worker-worktree-evidence.mjs','tests/worker-worktree-evidence.test.mjs','tests/worker-followup.test.mjs','tests/worker-followup-store.test.mjs','scripts/worker-followup-browser-acceptance.mjs','scripts/worker-followup-native-acceptance.mjs','tickets/GH-42.md');
+  allowed.push('worker-archive.mjs', 'tests/worker-archive.test.mjs', 'tickets/GH-043.md', 'scripts/worker-archive-browser-acceptance.mjs', 'scripts/worker-archive-native-acceptance.mjs');
   const sources = [...new Set(allowed)];
   for (const path of sources) if (!(await stat(join(appRoot, path))).isFile()) throw new Error(`Missing package source file: ${path}.`);
   await mkdir(dirname(output), { recursive: true });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, CircleHelp, LoaderCircle, Play, RotateCcw, Save, Square, Radio, UserRound, Users, SlidersHorizontal, X } from 'lucide-react';
+import { Archive, Check, ChevronDown, CircleHelp, LoaderCircle, Play, RotateCcw, Save, Square, Radio, UserRound, Users, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
@@ -9,6 +9,39 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { ManagerAvatar } from './ManagerAvatar.jsx';
 import { managerDisplayName, readProfilePicture, PROFILE_NAME_MAX_LENGTH, PROFILE_PERSONALITY_MAX_LENGTH } from './profile.js';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+
+import { archiveTime } from '../../../worker-archive.mjs';
+import { archivedWorkers } from './worker-model.js';
+import { api } from './api.js';
+
+function ArchivedWorkers({ manager }) {
+  const [confirmation, setConfirmation] = useState(null);
+  const [busy, setBusy] = useState(null), [error, setError] = useState('');
+  const retry = useRef(null);
+  const projectId = manager.settings?.projectId || manager.projectInfo?.id;
+  const tasks = archivedWorkers(manager.orchestration.tasks || [], projectId, manager.projectInfo?.mode);
+  const act = async (task, action, selection) => {
+    const request = selection || (retry.current?.taskId === task.id && retry.current?.action === action && retry.current?.expectedRevision === task.revision ? retry.current : { taskId: task.id, action, expectedRevision: task.revision, operationId: `archive-${crypto.randomUUID()}` });
+    retry.current = request; setBusy(task.id); setError('');
+    try { await api('archived-worker-action', request); retry.current = null; setConfirmation(null); }
+    catch (failure) { setError(failure.message); }
+    finally { setBusy(null); }
+  };
+  return <section aria-label="Archived worker list" className="border-t">
+    {(error || manager.orchestration.error) && <p role="alert" className="py-4 text-sm text-destructive">{error || manager.orchestration.error}</p>}
+    {tasks.length ? <div className="overflow-x-auto"><table className="w-full text-left text-sm">
+      <thead><tr className="border-b text-xs text-muted-foreground"><th scope="col" className="py-3 pr-4 font-medium">Worker</th><th scope="col" className="py-3 pr-4 font-medium">Status</th><th scope="col" className="py-3 pr-4 font-medium">Archived</th><th scope="col" className="py-3 text-right font-medium">Actions</th></tr></thead>
+      <tbody>{tasks.map(task => { const at = archiveTime(task); return <tr key={task.id} data-archived-worker-id={task.id} className="border-b align-top">
+        <td className="py-4 pr-4"><p className="text-xs text-muted-foreground">{task.ticket || task.id}</p><p className="mt-1 font-medium">{task.brief?.trim().split('\n')[0] || 'Worker task'}</p></td>
+        <td className="py-4 pr-4 text-muted-foreground">Archived</td>
+        <td className="py-4 pr-4 text-xs text-muted-foreground">{at ? <time dateTime={at}>{new Date(at).toLocaleString()}</time> : 'Time unavailable'}</td>
+        <td className="py-4 text-right"><div className="flex justify-end gap-2"><Button variant="outline" size="sm" disabled={Boolean(busy)} onClick={() => void act(task, 'restore')}>Restore</Button><Button variant="ghost" size="sm" disabled={Boolean(busy)} onClick={() => { setError(''); setConfirmation({ taskId: task.id, action: 'delete', expectedRevision: task.revision, operationId: `archive-${crypto.randomUUID()}` }); }}>Delete permanently</Button></div>
+          {confirmation?.taskId === task.id && <div className="mt-3 max-w-sm rounded-lg border p-3 text-left text-xs"><p>Permanently delete this worker’s saved Crew history, results, notes and execution evidence? This cannot be undone.</p><div className="mt-3 flex gap-2"><Button variant="destructive" size="sm" disabled={Boolean(busy)} onClick={() => void act(task, 'delete', confirmation)}>{busy === task.id ? 'Deleting…' : 'Delete permanently'}</Button><Button variant="ghost" size="sm" disabled={Boolean(busy)} onClick={() => setConfirmation(null)}>Cancel</Button></div></div>}
+        </td>
+      </tr>; })}</tbody>
+    </table></div> : <p className="py-8 text-sm text-muted-foreground">{projectId ? 'No archived workers for this project.' : 'Loading project archive…'}</p>}
+  </section>;
+}
 
 function SettingsToast({ message, onDismiss }) {
   const [paused, setPaused] = useState(false);
@@ -251,6 +284,7 @@ export function Settings({ manager }) {
   const pages = [
     { id: 'global', label: 'General', icon: SlidersHorizontal, description: 'Preferences shared across every project on this Mac.' },
     { id: 'project', label: 'General', icon: SlidersHorizontal, description: 'Manage the details for this project.' },
+    { id: 'archive', label: 'Archived workers', icon: Archive, description: 'Past workers whose teardown is complete. Restore a worker or permanently delete its saved Crew history.' },
     { id: 'sessions', label: 'Sessions', icon: Radio, description: 'Manage the live manager session for this project.' },
     { id: 'manager', label: 'Manager profile', icon: UserRound, description: 'Customize your AI manager’s name, picture, personality, voice and instructions.' },
     { id: 'worker', label: 'Worker profile', icon: Users, description: 'Set the instructions for newly launched workers.' },
@@ -270,6 +304,7 @@ export function Settings({ manager }) {
         <div hidden={page !== 'global'} aria-label="Global settings"><GlobalSettings workspace={workspace} onNotify={notify} /></div>
         <div hidden={page !== 'project'} aria-label="Project general settings"><ProjectGeneral key={selectedProject?.id || 'loading'} workspace={workspace} onNotify={notify} /></div>
         {page !== 'global' && manager.settingsError && <Alert variant="destructive" role="alert"><AlertDescription>{manager.settingsError}<Button className="ml-2" variant="outline" onClick={() => void manager.loadSettings().catch(() => {})}>Reload settings</Button></AlertDescription></Alert>}
+        {page === 'archive' && <ArchivedWorkers key={manager.settings?.projectId || manager.projectInfo?.id || 'loading'} manager={manager} />}
         <div hidden={page !== 'sessions'} aria-label="Session settings"><section aria-labelledby="manager-lifecycle-heading" className="border-t pt-6"><h3 id="manager-lifecycle-heading" className="mb-4 font-semibold">Manager session</h3><ManagerLifecycle manager={manager} /></section></div>
         <div hidden={page !== 'manager'} aria-label="Manager profile settings" className="space-y-12"><div key={manager.settings?.projectId || 'loading'}><ManagerIdentity manager={manager} onNotify={notify} /><ManagerPersonality manager={manager} onNotify={notify} /><ManagerProfile key={manager.settings?.projectId || 'loading'} manager={manager} onNotify={notify} /></div>{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:manager`} role="manager" data={manager.settings.manager} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading manager instructions…</p>}</div>
         <div hidden={page !== 'worker'} aria-label="Worker profile settings">{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:worker`} role="worker" data={manager.settings.worker} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading worker instructions…</p>}</div>
