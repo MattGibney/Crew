@@ -88,3 +88,9 @@
 - State-lock recovery and normal release use the same token barrier. A waiting candidate is a registered observer: publish it before reading an owner and retain it throughout recovery. Reclaim only barrier names captured before a separate scan confirms no matching candidates; never expire unknown candidates/barriers by age. This prevents a delayed dead-owner observation from stealing a live successor while avoiding normal poll-related file growth.
 
 - A successful process snapshot omitting a lock owner does not prove it dead when kill(pid, 0) succeeded. Preserve the lock on unavailable liveness. Reclaim candidate evidence only for an exact verified-dead owner. An unknown or overdue observer blocks new admission within the existing acquisition budget; its deadline never authorizes deleting live/unknown evidence. Avoid full process-table scans for every fresh contender, which can make normal contention exceed its own budget.
+
+## Unified manager conversation (GitHub #15)
+
+- Typed and spoken manager messages share one timeline and message renderer. Prefer native canonical timeline/item identities, including referenced promoted execution items; never deduplicate by matching transcript text or group an entire voice call separately. Transcript/handoff observation remains passive.
+- Keep stable partial rows during deltas and final reconciliation, preserve mixed text/speech ordering, drafts and reconnect history, and label unfinished observed speech honestly. Connect never clears the conversation. Canonical persistence and a legacy flat transcript fallback are different evidence; never fabricate missing words, speech delivery or acoustic acceptance.
+- Generated Codex protocol types do not prove installed method support. Handle only verified unsupported-method and exact native empty-history responses as compatibility cases; preserve operational errors and durable native-fork provenance across failed hydration and retries.

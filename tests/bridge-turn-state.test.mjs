@@ -8,7 +8,7 @@ import {createBridge} from '../codex-bridge.mjs';
 import {updateActivity} from '../update-activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
-async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false}={}){
+async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,timelinePages=null,timelineDelay=0,timelineError=null,writerConflict=false,conflictThreadIds=null,recoveryActive=false,turnsError=null}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-turn-state-')),statePath=join(directory,'manager.json'),control=join(directory,'notifications.jsonl'),calls=join(directory,'calls.jsonl'),executable=join(directory,'fake-codex.mjs');
  await writeFile(control,'');await writeFile(calls,'');if(saved)await writeFile(statePath,JSON.stringify({threadId:'manager-thread'}));
  const program=`#!${process.execPath}
@@ -25,9 +25,13 @@ createInterface({input:process.stdin}).on('line',line=>{
  appendFileSync(calls,JSON.stringify({...message,processCwd:process.cwd(),processArgs:process.argv.slice(2)})+'\\n');const {id,method,params}=message;
  if(method==='initialize')return reply(id,{});
  if(method==='account/read')return reply(id,{account:{type:'chatgpt',planType:'synthetic'}});
- if(method==='thread/start'||method==='thread/resume')return setTimeout(()=>reply(id,{thread:{id:'manager-thread'}}),${threadDelay});
+ if(method==='thread/resume'&&(${JSON.stringify(conflictThreadIds)}||(${writerConflict}?['manager-thread']:[])).includes(params.threadId))return send({id,error:{code:-32600,message:'Thread already has an active writer'}});
+ if(method==='thread/read')return reply(id,{thread:{id:'manager-thread',status:{type:${JSON.stringify(recoveryActive?'active':'idle')}}}});
+ if(method==='thread/fork')return reply(id,{thread:{id:params.threadId==='forked-thread'?'reforked-thread':'forked-thread'}});
+ if(method==='thread/start'||method==='thread/resume')return setTimeout(()=>reply(id,{thread:{id:params.threadId||'manager-thread'}}),${threadDelay});
  if(method==='thread/name/set')return reply(id,{});
- if(method==='thread/turns/list')return reply(id,{data:history});
+ if(method==='thread/timeline/list'){let error=${JSON.stringify(timelineError)};try{error=JSON.parse(readFileSync(${JSON.stringify(join(directory,'timeline-error.json'))},'utf8'));}catch{};if(error)return send({id,error});const pages=${JSON.stringify(timelinePages)};return pages ? setTimeout(()=>reply(id,pages[Number(params.cursor||0)]),${timelineDelay}) : send({id,error:{code:-32601,message:'Method not found'}});}
+ if(method==='thread/turns/list'){const error=${JSON.stringify(turnsError)};return error?send({id,error}):reply(id,{data:history});}
  if(method==='mcpServerStatus/list')return reply(id,{data:[]});
  if(method==='thread/realtime/listVoices')return reply(id,{voices:{v3:['cove'],defaultV1:'cove'}});
  if(method==='thread/realtime/start'){notify('thread/realtime/started',{});notify('thread/realtime/sdp',{sdp:'v=0 fixture'});return reply(id,{});}
@@ -48,9 +52,9 @@ createInterface({input:process.stdin}).on('line',line=>{
  await writeFile(executable,program,{mode:0o700});await chmod(executable,0o700);
  const repository=join(directory,'project-repository'),orchestrationDir=join(directory,'orchestration'),runtimeProjectPath=join(directory,'runtime.json');if(projectScoped)await mkdir(repository);
  const project=projectScoped?{id:'scoped-project',name:'Scoped',repositories:[{id:'app',path:repository}]}:undefined;
- const events=[],bridge=createBridge({cwd:directory,statePath,executable,...(projectScoped?{project,orchestrationDir,runtimeProjectPath}:{}),onEvent:event=>events.push(event)});
+ const events=[],create=()=>createBridge({cwd:directory,statePath,executable,...(projectScoped?{project,orchestrationDir,runtimeProjectPath}:{}),onEvent:event=>events.push(event)}),bridge=create();
  t.after(async()=>{await bridge.shutdown();await rm(directory,{recursive:true,force:true});});
- return {bridge,events,directory,repository,orchestrationDir,runtimeProjectPath,notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
+ return {bridge,create,events,directory,executable,repository,orchestrationDir,runtimeProjectPath,clearNotifications:()=>writeFile(control,''),setTimelineError:error=>writeFile(join(directory,'timeline-error.json'),JSON.stringify(error)),notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
 }
 const canUpdate=bridge=>updateActivity({work:bridge.state(),view:{tasks:[]}}).safe;
 
@@ -116,5 +120,254 @@ test('project repository scopes child and thread configuration while orchestrati
   const argument=calls[0].processArgs.find(arg=>arg.startsWith('mcp_servers.local_orchestration.args='));
   assert.deepEqual(JSON.parse(argument.slice(argument.indexOf('=')+1)),[join(f.directory,'orchestration-mcp.mjs'),f.orchestrationDir,'manager',f.runtimeProjectPath]);
   assert.notEqual(f.repository,f.directory);
+ }
+});
+
+
+test('canonical mixed history pages retain exact order, identity promotion and streaming updates without flat mirror duplicates', async t => {
+ const native={type:'agentMessage',id:'native',text:'Native result'};
+ const f=await fixture(t,{timelinePages:[{data:[
+  {type:'item',position:0,turnId:'text',item:{type:'userMessage',id:'typed',content:[{type:'text',text:'Typed question'}]}},
+  {type:'realtime',position:1,item:{type:'transcriptSegment',id:'spoken',role:'user',text:'Spoken question'}},
+  {type:'item',position:2,turnId:'native-turn',item:native}
+ ],nextCursor:'1'}, {data:[
+  {type:'realtime',position:3,item:{type:'transcriptSegment',id:'answer',role:'assistant',text:'Spoken answer'}},
+  {type:'realtime',position:4,item:{type:'bemItemPromoted',id:'promotion',itemId:'native',turnId:'native-turn',presentation:{type:'wholeItem'}}}
+ ],nextCursor:null}]});
+ await f.bridge.ensureThread();
+ assert.deepEqual(f.bridge.state().messages.map(m=>m.id),['typed','spoken','answer','native']);
+ await f.notify('thread/realtime/item/started',{item:{type:'transcriptSegment',id:'live',role:'user',text:''}});
+ await f.notify('thread/realtime/item/transcript/delta',{itemId:'live',delta:'Partial speech'});
+ await f.notify('thread/realtime/transcript/delta',{role:'user',delta:'Partial speech'});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='live'&&m.text==='Partial speech'));
+ assert.equal(f.bridge.state().messages.filter(m=>m.text==='Partial speech').length,1);
+ await f.notify('thread/realtime/item/completed',{item:{type:'transcriptSegment',id:'live',role:'user',text:'Final speech'}});
+ await f.notify('thread/realtime/item/started',{item:{type:'transcriptSegment',id:'live',role:'user',text:''}});
+ await f.notify('item/started',{turnId:'next',item:{type:'agentMessage',id:'typed-reply',text:''}});
+ await f.notify('item/agentMessage/delta',{itemId:'typed-reply',delta:'Live native reply'});
+ await until(()=>f.bridge.state().messages.some(m=>m.text==='Live native reply'));
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='live').text,'Final speech');
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='typed-reply').status,'streaming');
+ assert.equal((await f.calls()).filter(c=>c.method==='thread/timeline/list').length,2);
+ assert.equal((await f.calls()).filter(c=>c.method==='thread/turns/list').length,1);
+ assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,0);
+});
+
+test('older-protocol synthetic speech persists mixed order across actual bridge recreation and retains interrupted text',async t=>{
+ const f=await fixture(t);await f.bridge.ensureThread();
+ await f.notify('item/completed',{turnId:'typed-turn',item:{type:'userMessage',id:'typed',content:[{type:'text',text:'Typed first'}]}});
+ await f.notify('thread/realtime/transcript/delta',{role:'user',delta:'Said '});
+ await f.notify('thread/realtime/transcript/done',{role:'user',text:'Said aloud'});
+ await f.notify('thread/realtime/transcript/delta',{role:'assistant',delta:'Unfinished reply'});
+ await f.notify('thread/realtime/closed',{reason:'interrupted'});
+ await until(()=>f.bridge.state().messages.some(m=>m.text==='Unfinished reply'&&m.status==='partial'));
+ const original=f.bridge.state().messages;
+ await f.bridge.shutdown();await f.clearNotifications();
+ const restored=f.create();t.after(()=>restored.shutdown());await restored.ensureThread();
+ assert.deepEqual(restored.state().messages,original);
+ await restored.shutdown();
+ const calls=await f.calls();assert.equal(calls.filter(c=>c.method==='turn/start').length,0);
+});
+
+test('canonical reconnect restores active native streaming, voice close leaves it live, and absent partial speech survives recreation',async t=>{
+ const f=await fixture(t,{timelinePages:[{data:[
+  {type:'turnStarted',position:0,turnId:'active'},
+  {type:'item',position:1,turnId:'active',item:{id:'reply',type:'agentMessage',text:'Started'}}
+ ],nextCursor:null}]});
+ await writeFile(join(f.directory,'manager.json.conversation.json'),JSON.stringify({threadId:'manager-thread',messages:[{id:'reply',turnId:'active',role:'assistant',text:'Started',position:1,status:'streaming'}]}));
+ await f.bridge.ensureThread();
+ await f.notify('item/agentMessage/delta',{itemId:'reply',delta:' continuing'});
+ await f.notify('thread/realtime/item/started',{item:{type:'transcriptSegment',id:'unfinished',role:'user',text:'Interrupted words'}});
+ await f.notify('thread/realtime/closed',{reason:'disconnect'});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='unfinished'&&m.status==='partial'));
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='reply').text,'Started continuing');
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='reply').status,'streaming');
+ await f.bridge.shutdown();await f.clearNotifications();
+ const restored=f.create();t.after(()=>restored.shutdown());await restored.ensureThread();
+ assert.equal(restored.state().messages.find(m=>m.id==='unfinished').text,'Interrupted words');
+ assert.equal(restored.state().messages.find(m=>m.id==='unfinished').status,'partial');
+ assert.equal(restored.state().messages.filter(m=>m.id==='reply').length,1);
+ assert.equal(restored.state().messages.find(m=>m.id==='reply').text,'Started continuing');
+ await restored.shutdown();
+});
+
+test('older timeline protocol chooses item transcript source once and ignores flat mirrors',async t=>{
+ const f=await fixture(t);await f.bridge.ensureThread();
+ await f.notify('thread/realtime/item/started',{item:{type:'transcriptSegment',id:'identified',role:'user',text:''}});
+ await f.notify('thread/realtime/item/transcript/delta',{itemId:'identified',delta:'Hello'});
+ await f.notify('thread/realtime/transcript/delta',{role:'user',delta:'Hello'});
+ await f.notify('thread/realtime/transcript/done',{role:'user',text:'Hello'});
+ await f.notify('thread/realtime/item/completed',{item:{type:'transcriptSegment',id:'identified',role:'user',text:'Hello'}});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='identified'&&m.status==='complete'));
+ assert.equal(f.bridge.state().messages.length,1);
+});
+
+test('late native user is repaired within its turn without regrouping intervening speech',async t=>{
+ const f=await fixture(t);await f.bridge.ensureThread();
+ await f.notify('item/completed',{turnId:'native',item:{id:'assistant-first',type:'agentMessage',text:'Reply'}});
+ await f.notify('thread/realtime/transcript/done',{role:'user',text:'Intervening speech'});
+ await f.notify('item/completed',{turnId:'native',item:{id:'user-late',type:'userMessage',content:[{type:'text',text:'Original request'}]}});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='user-late'));
+ assert.deepEqual(f.bridge.state().messages.map(m=>m.text),['Original request','Reply','Intervening speech']);
+});
+
+
+test('live speech during delayed canonical history stays after restored history and terminal status follows position',async t=>{
+ const f=await fixture(t,{timelineDelay:100,timelinePages:[{data:[
+  {type:'turnCompleted',position:20,turnId:'ended',status:'completed'},
+  {type:'item',position:10,turnId:'ended',item:{id:'past',type:'agentMessage',text:'Past reply'}},
+  {type:'turnStarted',position:0,turnId:'ended'}
+ ],nextCursor:null}]});
+ const loading=f.bridge.ensureThread();
+ await until(async()=> (await f.calls()).some(call=>call.method==='thread/timeline/list'));
+ await f.notify('thread/realtime/item/started',{item:{type:'transcriptSegment',id:'current',role:'user',text:'Current speech'}});
+ await loading;await until(()=>f.bridge.state().messages.some(m=>m.id==='current'));
+ assert.deepEqual(f.bridge.state().messages.map(m=>m.id),['past','current']);
+ assert.equal(f.bridge.state().activeTurnId,null);assert.equal(f.bridge.state().status,'completed');
+ await f.notify('thread/realtime/item/completed',{item:{type:'transcriptSegment',id:'current',role:'user',text:''}});
+ await until(()=>f.bridge.state().messages.find(m=>m.id==='current').status==='partial');
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='current').text,'Current speech');
+});
+
+
+test('canonical partial overlay retains earlier speech before later committed messages and leaves completed commentary complete',async t=>{
+ const f=await fixture(t,{timelinePages:[{data:[
+  {type:'turnStarted',position:0,turnId:'active'},
+  {type:'item',position:2,turnId:'active',item:{id:'commentary',type:'agentMessage',text:'Committed commentary'}},
+  {type:'item',position:3,turnId:'active',item:{id:'live-reply',type:'agentMessage',text:'In progress'}}
+ ],nextCursor:null}]});
+ await writeFile(join(f.directory,'manager.json.conversation.json'),JSON.stringify({threadId:'manager-thread',messages:[
+  {id:'speech',role:'user',source:'voice',text:'Interrupted speech',status:'partial',position:1},
+  {id:'commentary',role:'assistant',turnId:'active',text:'Committed commentary',status:'complete',position:2},
+  {id:'live-reply',role:'assistant',turnId:'active',text:'In progress',status:'streaming',position:3}
+ ]}));
+ await f.bridge.ensureThread();
+ assert.deepEqual(f.bridge.state().messages.map(m=>m.id),['speech','commentary','live-reply']);
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='commentary').status,'complete');
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='live-reply').status,'streaming');
+ await f.notify('item/started',{turnId:'active',item:{id:'commentary',type:'agentMessage',text:''}});
+ await f.notify('item/agentMessage/delta',{itemId:'live-reply',delta:' now'});
+ await until(()=>f.bridge.state().messages.some(m=>m.text==='In progress now'));
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='commentary').text,'Committed commentary');
+});
+
+test('bounded canonical history never supplies stale admission status and retains recent observed conversation',async t=>{
+ const timelinePages=Array.from({length:21},(_,index)=>({data:[
+  {type:'turnStarted',position:index*2,turnId:`old-${index}`},
+  {type:'item',position:index*2+1,turnId:`old-${index}`,item:{id:`old-${index}`,type:'agentMessage',text:`Old ${index}`}}
+ ],nextCursor:index<20?String(index+1):null}));
+ const f=await fixture(t,{timelinePages,history:[{id:'current-active',status:'inProgress',items:[]}]});
+ await writeFile(join(f.directory,'manager.json.conversation.json'),JSON.stringify({threadId:'manager-thread',messages:[
+  {id:'observed-recent',role:'user',source:'voice',text:'Observed recent conversation',status:'complete',position:100}
+ ]}));
+ await f.bridge.ensureThread();
+ assert.equal(f.bridge.state().activeTurnId,'current-active');assert.equal(canUpdate(f.bridge),false);
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='observed-recent').text,'Observed recent conversation');
+ assert.equal((await f.calls()).filter(c=>c.method==='thread/timeline/list').length,20);
+ assert.ok(f.events.some(e=>e.type==='notice'&&/bounded window/.test(e.message)));
+});
+
+
+test('native timeline not-supported-yet response falls back precisely, while operational errors remain visible',async t=>{
+ const f=await fixture(t,{timelineError:{code:-32600,message:'thread/timeline/list is not supported yet'},history:[{id:'historical-turn',status:'completed',items:[{id:'historical-message',type:'agentMessage',text:'Retained native history'}]}]});
+ await f.bridge.ensureThread();
+ assert.equal(f.bridge.state().messages[0].text,'Retained native history');
+ await f.notify('thread/realtime/transcript/done',{role:'user',text:'Fallback utterance'});
+ await until(()=>f.bridge.state().messages.some(m=>m.text==='Fallback utterance'));
+ assert.equal((await f.calls()).filter(c=>c.method==='thread/turns/list').length,1);
+ const broken=await fixture(t,{timelineError:{code:-32600,message:'thread/timeline/list history storage is unavailable'}});
+ await assert.rejects(broken.bridge.ensureThread(),/history storage is unavailable/);
+ assert.equal((await broken.calls()).filter(c=>c.method==='thread/turns/list').length,0);
+});
+
+
+test('verified native writer-conflict fork preserves and rebinds only the exact source journal',async t=>{
+ for(const sourceId of ['manager-thread','unrelated-thread']) {
+  const f=await fixture(t,{saved:true,writerConflict:true});
+  const journal=join(f.directory,'manager.json.conversation.json');
+  await writeFile(journal,JSON.stringify({threadId:sourceId,messages:[{id:'saved-speech',role:'user',source:'voice',text:'Preserved speech',status:'complete',position:0}]}));
+  await f.bridge.ensureThread();
+  assert.equal(f.bridge.state().threadId,'forked-thread');
+  assert.equal(f.bridge.state().messages.some(m=>m.id==='saved-speech'),sourceId==='manager-thread');
+  await f.bridge.shutdown();
+  const persisted=JSON.parse(await readFile(journal,'utf8'));
+  assert.equal(persisted.threadId,'forked-thread');
+  assert.equal(persisted.messages.some(m=>m.id==='saved-speech'),sourceId==='manager-thread');
+  const calls=await f.calls();assert.equal(calls.filter(c=>c.method==='thread/fork').length,1);
+  assert.equal(calls.filter(c=>c.method==='turn/start').length,0);
+ }
+ const active=await fixture(t,{saved:true,writerConflict:true,recoveryActive:true});
+ const journal=join(active.directory,'manager.json.conversation.json');
+ const original=JSON.stringify({threadId:'manager-thread',messages:[{id:'retained',role:'user',source:'voice',text:'Keep original',status:'complete',position:0}]});
+ await writeFile(journal,original);
+ await assert.rejects(active.bridge.ensureThread(),/active in another/);
+ assert.equal((await active.calls()).filter(c=>c.method==='thread/fork').length,0);
+ assert.equal(await readFile(journal,'utf8'),original);
+ await active.bridge.shutdown();
+ assert.equal(await readFile(journal,'utf8'),original);
+ assert.equal(JSON.parse(await readFile(join(active.directory,'manager.json'),'utf8')).threadId,'manager-thread');
+});
+
+
+test('exact unmaterialized native chat hydrates on first use and reopen while preserving observed voice',async t=>{
+ const turnsError={code:-32600,message:'thread manager-thread is not materialized yet; thread/turns/list is unavailable before first user message'};
+ const fresh=await fixture(t,{turnsError});await fresh.bridge.ensureThread();
+ assert.equal(fresh.bridge.state().managerConnected,true);assert.deepEqual(fresh.bridge.state().messages,[]);
+ assert.equal((await fresh.calls()).filter(c=>c.method==='turn/start').length,0);
+ await fresh.bridge.shutdown();await fresh.clearNotifications();
+ const reopened=fresh.create();t.after(()=>reopened.shutdown());await reopened.ensureThread();
+ assert.equal(reopened.state().managerConnected,true);await reopened.shutdown();
+ const existing=await fixture(t,{saved:true,turnsError});
+ await writeFile(join(existing.directory,'manager.json.conversation.json'),JSON.stringify({threadId:'manager-thread',messages:[{id:'observed-voice',role:'user',source:'voice',text:'Observed voice remains',status:'complete',position:0}]}));
+ await existing.bridge.ensureThread();
+ assert.equal(existing.bridge.state().messages[0].text,'Observed voice remains');
+ const operational=await fixture(t,{turnsError:{code:-32600,message:'thread manager-thread history storage is unavailable'}});
+ await assert.rejects(operational.bridge.ensureThread(),/history storage is unavailable/);
+ const wrongThread=await fixture(t,{turnsError:{code:-32600,message:'thread different-thread is not materialized yet; thread/turns/list is unavailable before first user message'}});
+ await assert.rejects(wrongThread.bridge.ensureThread(),/different-thread/);
+});
+
+
+test('saved native fork provenance retains source speech after failed hydration across retry and recreation',async t=>{
+ for(const mode of ['retry','recreation']) {
+  const timelineError={code:-32600,message:'thread/timeline/list history storage is unavailable'};
+  const f=await fixture(t,{saved:true,writerConflict:true,timelineError});
+  const journal=join(f.directory,'manager.json.conversation.json');
+  const original=JSON.stringify({threadId:'manager-thread',messages:[{id:'retained-speech',role:'user',source:'voice',text:'Preserve across failed recovery',status:'complete',position:0}]});
+  await writeFile(journal,original);
+  await assert.rejects(f.bridge.ensureThread(),/history storage is unavailable/);
+  assert.equal(await readFile(journal,'utf8'),original);
+  const reference=JSON.parse(await readFile(join(f.directory,'manager.json'),'utf8'));
+  assert.equal(reference.threadId,'forked-thread');assert.equal(reference.previousThreadId,'manager-thread');
+  if(mode==='recreation') { await f.bridge.shutdown();assert.equal(await readFile(journal,'utf8'),original); }
+  await f.setTimelineError(null);
+  const recovered=mode==='retry'?f.bridge:f.create();t.after(()=>recovered.shutdown());
+  await recovered.ensureThread();
+  assert.equal(recovered.state().threadId,'forked-thread');
+  assert.equal(recovered.state().messages.find(m=>m.id==='retained-speech').text,'Preserve across failed recovery');
+  await recovered.shutdown();
+  const persisted=JSON.parse(await readFile(journal,'utf8'));
+  assert.equal(persisted.threadId,'forked-thread');assert.equal(persisted.messages[0].id,'retained-speech');
+  const calls=await f.calls();assert.equal(calls.filter(c=>c.method==='thread/fork').length,1);assert.equal(calls.filter(c=>c.method==='turn/start').length,0);
+ }
+});
+
+
+test('repeated verified native forks retain actual journal provenance after failed or successful hydration',async t=>{
+ for(const failed of [true,false]) {
+ const f=await fixture(t,{saved:true,conflictThreadIds:['manager-thread','forked-thread'],timelineError:failed?{code:-32600,message:'thread/timeline/list history storage is unavailable'}:null});
+ const journal=join(f.directory,'manager.json.conversation.json');
+ await writeFile(journal,JSON.stringify({threadId:'manager-thread',messages:[{id:'original-speech',role:'user',source:'voice',text:'Original source speech',status:'complete',position:0}]}));
+ if(failed)await assert.rejects(f.bridge.ensureThread(),/history storage is unavailable/);else await f.bridge.ensureThread();
+ await f.bridge.shutdown();
+ await f.setTimelineError(null);
+ const recovered=f.create();t.after(()=>recovered.shutdown());await recovered.ensureThread();
+ assert.equal(recovered.state().threadId,'reforked-thread');
+ assert.equal(recovered.state().messages[0].text,'Original source speech');
+ await recovered.shutdown();
+ const reference=JSON.parse(await readFile(join(f.directory,'manager.json'),'utf8'));
+ assert.equal(reference.previousThreadId,'forked-thread');assert.equal(reference.journalSourceThreadId,failed?'manager-thread':'forked-thread');
+ assert.equal(JSON.parse(await readFile(journal,'utf8')).threadId,'reforked-thread');
+ assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,0);
  }
 });

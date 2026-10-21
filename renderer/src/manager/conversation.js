@@ -1,4 +1,7 @@
 export function orderedMessages(messages = []) {
+  // Canonical snapshots are already in native rollout order. Grouping by turn
+  // would pull spoken interruptions away from their actual place in the chat.
+  if (messages.some(message => message.source === 'voice' || Number.isFinite(message.position))) return messages;
   const groups = new Map();
   for (const message of messages) {
     const key = message.turnId || message.id;

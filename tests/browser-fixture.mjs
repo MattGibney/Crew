@@ -3,6 +3,7 @@
 // This never loads Codex, project configuration, credentials or business repositories.
 import http from 'node:http';
 import { conversationMessage } from '../conversation.mjs';
+import { createConversationTimeline } from '../conversation-timeline.mjs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,11 +21,13 @@ let orchestration = { maxConcurrent: 6, tasks: [
   task(8, 'failed', { failure: 'Fixture environment readiness check failed.' }), task(9, 'stopped'), task(10, 'disposed'),
 ] };
 let work = { threadId: 'fixture-manager', managerConnected: true, status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
+const conversation = createConversationTimeline();
+const conversationChanged = () => { work = { ...work, messages: conversation.snapshot() }; emit({ type: 'work-state', state: work }); };
 let managerLifecycle = { state: 'running' };
 const fixturePrompt = 'You are the Crew fixture manager. Help the user plan work and report verified progress.';
 let settings = { projectId: 'crew-acceptance-fixture', projectName: 'Crew acceptance fixture', manager: { saved: { text: fixturePrompt, version: 'manager-1' }, activeVersion: 'manager-1', pendingRestart: false, defaultText: fixturePrompt }, worker: { saved: { text: 'Complete the agreed fixture task and report evidence.', version: 'worker-1' }, defaultText: 'Complete the agreed fixture task and report evidence.' } };
 let promptRevision = 1, promptSaveDelay = 0;
-let proof = { calls: [], media: null, setup: [] };
+let proof = { calls: [], media: null, setup: [], sseConnections: 0 };
 const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
 const settingsView = () => ({ ...settings, managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
@@ -35,8 +38,11 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
     if (url.pathname === '/events' || url.pathname === '/__media-events') {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' }); res.write(': connected\n\n');
-      const set = url.pathname === '/events' ? peers : mediaPeers; set.add(res); req.on('close', () => set.delete(res)); return;
+      const set = url.pathname === '/events' ? peers : mediaPeers; set.add(res);
+      if (url.pathname === '/events') { proof.sseConnections++; res.write(`data: ${JSON.stringify({ type: 'work-state', state: work })}\n\n`); }
+      req.on('close', () => set.delete(res)); return;
     }
+    if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (url.pathname === '/api/settings' && req.method === 'GET') return send(settingsView());
     if (req.method === 'POST' || req.method === 'PUT') {
       let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 100000) throw Error('Too large'); }
@@ -45,9 +51,20 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/__setup-proof') { proof.setup.push(body); return send({ ok: true }); }
       if (url.pathname === '/__control') {
         if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
-        if (body.work) { work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
+        if (body.work) { if (body.work.messages) conversation.restore(body.work.messages); work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
         if (body.orchestration) { orchestration = body.orchestration; emit({ type: 'orchestration-state', state: orchestration }); }
-        if (body.event) emit(body.event);
+        if (body.protocol) {
+          const { method, params = {} } = body.protocol;
+          if (method === 'thread/realtime/item/started' || method === 'thread/realtime/item/completed') conversation.realtime(params.item, { status: method.endsWith('/started') ? 'streaming' : 'complete' });
+          if (method === 'thread/realtime/item/transcript/delta' || method === 'item/agentMessage/delta') conversation.delta(params.itemId, params.delta);
+          if (method === 'item/started' || method === 'item/completed') conversation.record(params.item, params.turnId, { status: method === 'item/started' ? 'streaming' : 'complete' });
+          if (method === 'thread/realtime/closed') conversation.partial();
+          conversationChanged();
+        }
+        if (body.event) {
+          if (body.event.type === 'transcript-delta' || body.event.type === 'transcript-done') { conversation.flat(body.event.role, body.event.text, { done: body.event.type === 'transcript-done' }); conversationChanged(); }
+          emit(body.event);
+        }
         if (body.media) sendMedia(body.media);
         if (body.dropEvents) for (const response of peers) response.end();
         return send({ ok: true });
@@ -69,13 +86,19 @@ const server = http.createServer(async (req, res) => {
         emit({ type: 'manager-lifecycle', state: lifecycleView() }); emit({ type: 'work-state', state: work });
         return send({ managerLifecycle: lifecycleView(), state: work });
       }
+      if (name === 'updates') return send({ phase: 'unavailable', currentVersion: '0.10.0' });
       if (name === 'config') return send({ project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
       if (name === 'prepare') return send({ plan: 'synthetic fixture', state: work });
       if (name === 'state') return send(work);
       if (name === 'orchestration') return send(orchestration);
       if (name === 'voices') return send({ defaultVoice: 'cove', voices: [{ id: 'cove', name: 'Cove' }, { id: 'maple', name: 'Maple' }] });
       if (name === 'connect') return send({ sessionToken: 'synthetic-session', sdp: 'synthetic-answer' });
-      if (name === 'work') { work = { ...work, status: 'idle', messages: [...work.messages, conversationMessage({ id: `fixture-user-${proof.calls.length}`, type: 'userMessage', content: [{ type: 'text', text: body.text }] }, `fixture-turn-${proof.calls.length}`), { id: `fixture-${proof.calls.length}`, turnId: `fixture-turn-${proof.calls.length}`, role: 'assistant', text: body.text.startsWith('CREW_WORKER_ACTION') ? 'I received the selected worker action. The controller will report its confirmed outcome here.' : `Fixture manager received: ${body.text}` }] }; emit({ type: 'work-state', state: work }); return send({ accepted: true }); }
+      if (name === 'work') {
+        const id = proof.calls.length, turnId = `fixture-turn-${id}`;
+        conversation.record({ id: `fixture-user-${id}`, type: 'userMessage', content: [{ type: 'text', text: body.text }] }, turnId);
+        conversation.record({ id: `fixture-${id}`, type: 'agentMessage', text: body.text.startsWith('CREW_WORKER_ACTION') ? 'I received the selected worker action. The controller will report its confirmed outcome here.' : `Fixture manager received: ${body.text}` }, turnId);
+        work = { ...work, status: 'idle' }; conversationChanged(); return send({ accepted: true });
+      }
       if (name === 'approval') { work = { ...work, approvals: work.approvals.filter(item => item.id !== body.id) }; emit({ type: 'work-state', state: work }); }
       if (name === 'stop-work') { work = { ...work, activeTurnId: null, status: 'idle' }; emit({ type: 'work-state', state: work }); }
       if (['voice-ready', 'voice-status', 'disconnect', 'approval', 'stop-work', 'discuss-attention'].includes(name)) return send({ ok: true });

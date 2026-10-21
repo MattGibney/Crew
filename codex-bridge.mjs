@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, rename } from 'node:fs/promises';
-import { conversationMessage } from './conversation.mjs';
+import { createConversationTimeline } from './conversation-timeline.mjs';
 import { buildManagerInstructions } from './prompt-settings.mjs';
 export const safeError = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1500);
 export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent = () => {} }) {
@@ -12,13 +12,34 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0;
   let voiceActive = false, connecting = false, negotiation, activeTurnId = null, status = 'idle', voiceGeneration = 0, workStarting = false;
   let connectors = [], connectorError = null, voiceCatalog, greetingSession, lastVoice = null;
-  const pending = new Map(), approvals = new Map(), items = new Map(), messages = new Map(), workRequests = new Map();
+  const pending = new Map(), approvals = new Map(), items = new Map(), workRequests = new Map();
+  const timeline = createConversationTimeline();
+  let loadingHistory = false, journalThreadId = null, recoveredJournalSource = null;
+  const historyNotifications = [];
+  let canonicalTimeline = false, realtimeMode = null, journalWrites = Promise.resolve(), queuedJournal = null, writingJournal = false;
+  function persistTimeline() {
+    if (!threadId || loadingHistory || journalThreadId !== threadId) return;
+    queuedJournal = JSON.stringify({ threadId, messages: timeline.snapshot() }) + '\n';
+    if (writingJournal) return;
+    writingJournal = true;
+    journalWrites = (async () => {
+      try {
+        while (queuedJournal !== null) {
+          const data = queuedJournal; queuedJournal = null;
+          const temporary = `${statePath}.conversation-${randomUUID()}.tmp`;
+          await writeFile(temporary, data, { mode: 0o600 });
+          await rename(temporary, `${statePath}.conversation.json`);
+        }
+      } catch (error) { emit('notice', { message: `Conversation history could not be saved: ${safeError(error)}` }); }
+      finally { writingJournal = false; }
+    })();
+  }
   const expectedExits = new WeakSet();
   const completedTurns = new Set();
   function markCompleted(id){completedTurns.add(id);if(completedTurns.size>100)completedTurns.delete(completedTurns.values().next().value);}
-  const state = () => ({ threadId, managerConnected: Boolean(threadReady && child && child.exitCode === null && child.signalCode === null), activeTurnId, status, voiceActive, voiceConnecting:connecting, workStarting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: [...messages.values()].slice(-20) });
+  const state = () => ({ threadId, managerConnected: Boolean(threadReady && child && child.exitCode === null && child.signalCode === null), activeTurnId, status, voiceActive, voiceConnecting:connecting, workStarting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: timeline.snapshot() });
   const emit = (type, data = {}) => onEvent({ type, ...data });
-  const changed = () => emit('work-state', { state: state() });
+  const changed = () => { persistTimeline(); emit('work-state', { state: state() }); };
   const send = message => child?.stdin.write(`${JSON.stringify(message)}\n`);
   function rpc(method, params = {}) {
     return new Promise((resolve, reject) => {
@@ -28,19 +49,17 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       pending.set(id, { resolve, reject, timer }); send({ id, method, params });
     });
   }
-  function record(item, turnId) {
-    const message = conversationMessage(item, turnId);
-    if (message) messages.set(item.id, message);
+  function record(item, turnId, options) {
+    timeline.record(item, turnId, options);
     if (item.type === 'commandExecution') items.set(item.id, { id: item.id, turnId, type: item.type, name: item.command, status: item.status, exitCode: item.exitCode, output: safeError(item.aggregatedOutput || '').slice(0, 2500) });
     if (item.type === 'mcpToolCall') items.set(item.id, { id: item.id, turnId, type: item.type, name: `${item.server}/${item.tool}`, status: item.status, resultPresent: item.result != null, error: item.error ? safeError(item.error.message || 'MCP call failed') : null });
     if (item.type === 'fileChange') items.set(item.id, { id: item.id, turnId, type: item.type, name: 'File changes', status: item.status, changes: item.changes });
     if (items.size > 80) items.delete(items.keys().next().value);
-    if (messages.size > 40) messages.delete(messages.keys().next().value);
   }
   function handle(message) {
     if (message.id !== undefined && pending.has(message.id)) {
       const entry = pending.get(message.id); pending.delete(message.id); clearTimeout(entry.timer);
-      message.error ? entry.reject(new Error(message.error.message)) : entry.resolve(message.result); return;
+      message.error ? entry.reject(Object.assign(new Error(message.error.message), { code: message.error.code })) : entry.resolve(message.result); return;
     }
     const { method, params = {} } = message;
     if (message.id !== undefined && method) {
@@ -52,14 +71,18 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       emit('notice', { message: `Codex requested ${method}, which this client cannot handle.` }); return;
     }
     if (params.threadId !== threadId) return;
+    if (loadingHistory) { historyNotifications.push(message); return; }
     // Passive observers only: NEVER start turns or append speech from these events.
     // Native realtime handoffs own routing, steering and result return.
     if (method === 'thread/realtime/sdp') negotiation?.resolve(params.sdp);
-    else if (method === 'thread/realtime/started') { voiceActive = true; if (lastVoice) lastVoice.startedAt = new Date().toISOString(); emit('backend-started'); }
+    else if (method === 'thread/realtime/started') { voiceActive = true; realtimeMode = canonicalTimeline ? 'item' : null; if (lastVoice) lastVoice.startedAt = new Date().toISOString(); emit('backend-started'); }
     else if (method === 'thread/realtime/error') { if (lastVoice) lastVoice.error = safeError(params.message); const error = new Error(params.message); negotiation?.reject(error); emit('error', { message: safeError(error) }); }
-    else if (method === 'thread/realtime/closed') { if (lastVoice) { lastVoice.closedAt = new Date().toISOString(); lastVoice.closeReason = safeError(params.reason || 'Voice ended.'); } voiceActive = false; negotiation?.reject(new Error(params.reason || 'Voice closed.')); emit('closed', { reason: params.reason || 'Voice ended.' }); changed(); }
-    else if (method === 'thread/realtime/transcript/delta') { if (lastVoice) { const key = params.role === 'user' ? 'inputTranscriptEvents' : 'outputTranscriptEvents'; lastVoice[key]++; } emit('transcript-delta', { role: params.role, text: params.delta }); }
-    else if (method === 'thread/realtime/transcript/done') emit('transcript-done', { role: params.role, text: params.text });
+    else if (method === 'thread/realtime/closed') { timeline.partial(); if (lastVoice) { lastVoice.closedAt = new Date().toISOString(); lastVoice.closeReason = safeError(params.reason || 'Voice ended.'); } voiceActive = false; negotiation?.reject(new Error(params.reason || 'Voice closed.')); emit('closed', { reason: params.reason || 'Voice ended.' }); changed(); }
+    else if (method === 'thread/realtime/transcript/delta') { if (lastVoice) { const key = params.role === 'user' ? 'inputTranscriptEvents' : 'outputTranscriptEvents'; lastVoice[key]++; } if (!canonicalTimeline && realtimeMode !== 'item') { realtimeMode = 'flat'; timeline.flat(params.role, params.delta); changed(); } emit('transcript-delta', { role: params.role, text: params.delta }); }
+    else if (method === 'thread/realtime/transcript/done') { if (!canonicalTimeline && realtimeMode !== 'item') { realtimeMode = 'flat'; timeline.flat(params.role, params.text, { done: true }); changed(); } emit('transcript-done', { role: params.role, text: params.text }); }
+    else if (method === 'thread/realtime/item/started' || method === 'thread/realtime/item/completed') { if (params.item.type === 'transcriptSegment') { if (realtimeMode === 'flat') return; realtimeMode = 'item'; } timeline.realtime(params.item, { status: method.endsWith('/started') ? 'streaming' : 'complete' }); changed(); }
+    else if (method === 'thread/realtime/item/transcript/delta') { if (realtimeMode !== 'flat') { realtimeMode = 'item'; timeline.delta(params.itemId, params.delta); changed(); } }
+    else if (method === 'item/agentMessage/delta') { timeline.delta(params.itemId, params.delta); changed(); }
     else if (method === 'turn/started') { if(completedTurns.has(params.turn.id))return;activeTurnId = params.turn.id; status = 'working'; changed(); }
     else if (method === 'turn/completed') {
       for (const item of params.turn.items || []) record(item, params.turn.id);
@@ -67,7 +90,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       if (!activeTurnId || activeTurnId === params.turn.id) { activeTurnId = null; status = params.turn.status; }
       if (params.turn.error) emit('notice', { message: safeError(params.turn.error.message) });
       changed();
-    } else if (method === 'item/started' || method === 'item/completed') { record(params.item, params.turnId); changed(); }
+    } else if (method === 'item/started' || method === 'item/completed') { record(params.item, params.turnId, { status: method === 'item/started' ? 'streaming' : 'complete' }); changed(); }
     else if (method === 'serverRequest/resolved') { approvals.delete(String(params.requestId)); changed(); }
     else if (method === 'error') emit('notice', { message: safeError(params.error?.message || 'Backend work error.') });
   }
@@ -85,7 +108,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       const fail = error => {
         if (proc !== child) return;
         for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(error); }
-        pending.clear(); approvals.clear(); negotiation?.reject(error);
+        pending.clear(); approvals.clear(); negotiation?.reject(error); timeline.partial({ voiceOnly: false });
         ready = undefined; voiceCatalog = undefined; greetingSession = undefined; threadReady = false; voiceActive = false; activeTurnId = null;
         if (!expectedExits.has(proc)) { status = 'connection lost'; emit('error', { message: safeError(error) }); changed(); }
       };
@@ -106,14 +129,20 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     threadPromise = (async () => {
       if (!threadId) {
         try {
-          ({ threadId } = JSON.parse(await readFile(statePath, 'utf8')));
+          const reference = JSON.parse(await readFile(statePath, 'utf8'));
+          threadId = reference.threadId;
           if (typeof threadId !== 'string' || !/^[\w-]+$/.test(threadId)) throw new Error('Invalid saved chat ID.');
+          if (reference.reason === 'saved_chat_writer_conflict' && typeof reference.previousThreadId === 'string' && /^[\w-]+$/.test(reference.previousThreadId) && reference.previousThreadId !== threadId && typeof reference.recoveredAt === 'string' && Number.isFinite(Date.parse(reference.recoveredAt))) {
+            const sourceId = reference.journalSourceThreadId ?? reference.previousThreadId;
+            if (typeof sourceId === 'string' && /^[\w-]+$/.test(sourceId) && sourceId !== threadId) recoveredJournalSource = sourceId;
+          }
         }
         catch (error) { if (error.code !== 'ENOENT') throw new Error('Cannot read the saved chat reference. It has not been replaced.'); }
       }
       const managerInstructions = buildManagerInstructions({ managerPrompt: managerPrompt ?? await readFile(new URL('./prompts/manager.md', import.meta.url), 'utf8'), project });
       const options = { cwd: sessionCwd, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only', developerInstructions: managerInstructions };
-      let result;
+      let result, recoveredFromThreadId = recoveredJournalSource;
+      loadingHistory = true;
       if (threadId) {
         try { result = await rpc('thread/resume', { threadId, excludeTurns: true, ...options }); }
         catch (error) {
@@ -125,10 +154,18 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
           // Native history-preserving fork avoids terminating the owning desktop runtime.
           // It starts no turn; controller task files remain the same source of execution state.
           result = await rpc('thread/fork', { threadId, ...options, excludeTurns: true, ephemeral: false, deferGoalContinuation: true });
-          const reference = { threadId: result.thread.id, previousThreadId, recoveredAt: new Date().toISOString(), reason: 'saved_chat_writer_conflict' };
+          await journalWrites;
+          let journalSourceThreadId = recoveredJournalSource || previousThreadId;
+          try {
+            const journal = JSON.parse(await readFile(`${statePath}.conversation.json`, 'utf8'));
+            if (typeof journal.threadId === 'string' && (journal.threadId === previousThreadId || journal.threadId === recoveredJournalSource)) journalSourceThreadId = journal.threadId;
+          } catch { /* Overlay loading below reports unreadable history without replacing it. */ }
+          const reference = { threadId: result.thread.id, previousThreadId, journalSourceThreadId, recoveredAt: new Date().toISOString(), reason: 'saved_chat_writer_conflict' };
           await writeFile(`${statePath}.tmp`, JSON.stringify(reference) + '\n', { mode: 0o600 });
           await rename(`${statePath}.tmp`, statePath);
           threadId = result.thread.id;
+          recoveredJournalSource = journalSourceThreadId;
+          recoveredFromThreadId = recoveredJournalSource;
           await rpc('thread/name/set', { threadId, name: 'Crew work chat' });
           emit('notice', { message: 'The saved manager chat was held by another Codex client. Continued from its preserved history; the original chat and worker state are retained.' });
         }
@@ -139,19 +176,75 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
         await rpc('thread/name/set', { threadId, name: 'Crew work chat' });
       }
       threadId = result.thread.id;
-      const history = await rpc('thread/turns/list', { threadId, limit: 10, itemsView: 'full', sortDirection: 'desc' });
+      let savedMessages = [], historyTruncated = false;
+      try {
+        const saved = JSON.parse(await readFile(`${statePath}.conversation.json`, 'utf8'));
+        if ((saved.threadId === threadId || (recoveredFromThreadId && saved.threadId === recoveredFromThreadId)) && Array.isArray(saved.messages)) savedMessages = saved.messages;
+      } catch (error) { if (error.code !== 'ENOENT') emit('notice', { message: 'Saved conversation overlay could not be restored; its file has been retained.' }); }
+      try {
+        let cursor, pages = 0;
+        const entries = [];
+        do {
+          const page = await rpc('thread/timeline/list', { threadId, limit: 200, ...(cursor ? { cursor } : {}) });
+          if (!Array.isArray(page.data)) throw new Error('Invalid canonical conversation history response.');
+          canonicalTimeline = true;
+          entries.push(...page.data);
+          if (page.nextCursor && page.nextCursor === cursor) throw new Error('Canonical conversation history cursor did not advance.');
+          cursor = page.nextCursor;
+          if (++pages >= 20 && cursor) { historyTruncated = true; emit('notice', { message: 'Only a bounded window of this long conversation could be loaded.' }); break; }
+        } while (cursor);
+        for (const entry of entries.sort((a,b) => a.position - b.position)) {
+          if (entry.type === 'item') record(entry.item, entry.turnId, { position: entry.position });
+          else if (entry.type === 'realtime') timeline.realtime(entry.item, { position: entry.position });
+          else if (entry.type === 'turnStarted') { activeTurnId = entry.turnId; status = 'working'; }
+          else if (entry.type === 'turnCompleted') { markCompleted(entry.turnId); if (activeTurnId === entry.turnId) { activeTurnId = null; status = entry.status; } }
+        }
+        if (activeTurnId) timeline.resumeTurn(activeTurnId, savedMessages);
+        const canonicalIds = new Set(timeline.snapshot().map(message => message.id));
+        const missingPartials = savedMessages.filter(message => (historyTruncated || ['streaming', 'partial'].includes(message.status)) && !canonicalIds.has(message.id));
+        const current = new Map(timeline.snapshot().map(message => [message.id, message]));
+        const lastPosition = Math.max(-1, ...[...current.values()].map(message => message.position));
+        timeline.restore(missingPartials.map((message,index) => {
+          const savedIndex = savedMessages.indexOf(message);
+          const before = savedMessages.slice(0,savedIndex).reverse().find(entry => current.has(entry.id));
+          const after = savedMessages.slice(savedIndex+1).find(entry => current.has(entry.id));
+          const left = before ? current.get(before.id).position : null;
+          const right = after ? current.get(after.id).position : null;
+          const fraction = (index + 1) / (missingPartials.length + 1);
+          const position = right !== null ? (left !== null ? left + (right-left)*fraction : right-1+fraction) : left !== null ? left+fraction : lastPosition+index+1;
+          return { ...message, status: message.status === 'streaming' ? 'partial' : message.status, position };
+        }));
+      } catch (error) {
+        if (error.code !== -32601 && error.message.trim() !== 'thread/timeline/list is not supported yet') throw error;
+        canonicalTimeline = false;
+        timeline.restore(savedMessages);
+      }
+      // The bounded timeline is presentation history, never an activity oracle.
+      // Recent native turns remain authoritative for current work and tool evidence.
+      let history;
+      try { history = await rpc('thread/turns/list', { threadId, limit: 10, itemsView: 'full', sortDirection: 'desc' }); }
+      catch (error) {
+        const emptyNativeThread = error.code === -32600 && error.message === `thread ${threadId} is not materialized yet; thread/turns/list is unavailable before first user message`;
+        if (!emptyNativeThread) throw error;
+        history = { data: [] };
+      }
+      if (history.data.length) { activeTurnId = null; status = history.data[0].status; }
       for (const turn of [...history.data].reverse()) {
         for (const item of turn.items || []) record(item, turn.id);
-        if (turn.status === 'inProgress') { activeTurnId = turn.id; status = 'working'; }
+        if (turn.status === 'inProgress') { activeTurnId = turn.id; status = 'working'; timeline.resumeTurn(turn.id, savedMessages); }
+        else markCompleted(turn.id);
       }
       threadReady = true;
+      journalThreadId = threadId;
+      loadingHistory = false;
+      for (const notification of historyNotifications.splice(0)) handle(notification);
       changed();
       void rpc('mcpServerStatus/list', { threadId, limit: 100, detail: 'toolsAndAuthOnly' }).then(result => {
         connectors = result.data.map(s => ({ name: s.name, status: s.runtimeStatus, auth: s.authStatus, tools: Object.keys(s.tools || {}).length })); connectorError = null; changed();
       }).catch(error => { connectorError = safeError(error); changed(); });
       return threadId;
     })();
-    try { return await threadPromise; } finally { threadPromise = undefined; }
+    try { return await threadPromise; } finally { threadPromise = undefined; loadingHistory = false; historyNotifications.length = 0; }
   }
   async function listVoices() {
     await prepare();
@@ -219,7 +312,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       catch (error) { if (cooperative) throw new Error(`Voice shutdown could not be confirmed: ${safeError(error)}`); if (preserveWork) throw error; await shutdown(); }
       finally { clearTimeout(timer); }
     }
-    voiceActive = false; negotiation?.reject(new Error('Disconnected.')); changed();
+    timeline.partial(); voiceActive = false; negotiation?.reject(new Error('Disconnected.')); changed();
   }
   async function shutdown({cooperative=false}={}) {
     if (shuttingDown) return shuttingDown;
@@ -239,6 +332,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
           await new Promise((resolve, reject) => { const force = setTimeout(() => proc.kill('SIGKILL'), 1500); const deadline = setTimeout(() => { clearTimeout(force); reject(new Error('Manager process exit could not be confirmed.')); }, 4500); proc.once('exit', () => { clearTimeout(force); clearTimeout(deadline); resolve(); }); });
         }
       }
+      timeline.partial({ voiceOnly: false }); persistTimeline(); await journalWrites;
       child = undefined; ready = undefined; threadReady = false; voiceActive = false;
     })();
     try { await shuttingDown; } finally { shuttingDown = undefined; }

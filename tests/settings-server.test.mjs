@@ -34,6 +34,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'initialize') return reply({});
   if (method === 'account/read') return reply({ account: { type: 'chatgpt', planType: 'synthetic' } });
   if (method === 'thread/start' || method === 'thread/resume') return reply({ thread: { id: 'http-retained-chat' } });
+  if (method === 'thread/timeline/list') return send({ id, error: { code: -32601, message: 'Method not found' } });
   if (method === 'thread/turns/list') return reply({ data: [{ id: 'historic-turn', status: 'completed', items: [{ id: 'historic-message', type: 'agentMessage', text: 'Preserved HTTP history.' }] }] });
   if (method === 'mcpServerStatus/list') return reply({ data: [] });
   if (method === 'turn/start') { const turn = { id: 'http-turn', status: 'completed', items: [] }; send({ method: 'turn/completed', params: { threadId: 'http-retained-chat', turn } }); return reply({ turn }); }

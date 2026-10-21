@@ -40,6 +40,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (method === 'initialize') return reply(id, {});
   if (method === 'account/read') return reply(id, { account: { type: 'chatgpt', planType: 'synthetic' } });
   if (method === 'thread/start' || method === 'thread/resume') return setTimeout(() => reply(id, { thread: { id: 'preserved-manager' } }), ${threadDelay});
+  if (method === 'thread/timeline/list') return send({ id, error: { code: -32601, message: 'Method not found' } });
   if (method === 'thread/turns/list') return reply(id, { data: [{ id: 'historic-turn', status: 'completed', items: [{ id: 'historic-message', type: 'agentMessage', text: 'Retained conversation history.' }] }] });
   if (method === 'mcpServerStatus/list') return reply(id, { data: [] });
   if (method === 'turn/start') {

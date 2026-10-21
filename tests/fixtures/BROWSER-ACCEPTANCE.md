@@ -25,3 +25,11 @@ Setup: choose a folder, analyze, inspect actual saved canonical folder/branch/na
 Use desktop and narrow screenshots outside the repository, inspect console errors and horizontal overflow, then stop the fixture server and close its tabs. Actual controller readiness and packaged native lifecycle are separate evidence.
 
 An optional third argument selects another compiled assets folder, for example `node tests/browser-fixture.mjs 4343 /tmp/crew-official-theme`, so official-theme builds can be rendered without replacing normal assets.
+
+## Unified conversation (#15)
+
+The fixture now uses the production conversation projection for both typed and spoken messages. JSON POST `/__control` with `protocol: { method, params }` drives canonical synthetic events: `thread/realtime/item/started`, `thread/realtime/item/transcript/delta`, `thread/realtime/item/completed`, ordinary `item/started` / `item/completed`, `item/agentMessage/delta`, and `thread/realtime/closed`. Use actual generated protocol shapes: a transcript item has `id`, `type: "transcriptSegment"`, `realtimeSessionId`, `role` and `text`; a delta has `itemId` and `delta`. Final text replaces its same-ID partial. Repeating a final item cannot add another message. The flat `event` transcript controls remain supported as a distinct older-protocol fixture path; don't mix both paths as if they were independent speech.
+
+Verify all messages occur under `#work-result` using the same message component; there is no separate voice transcript section. Interleave typed pairs and spoken segments, verify stable DOM identity during deltas/final, draft retention, identical text with distinct IDs, partial close, native promotion by referenced ID, SSE reconnect and full browser reload. `/__state` retains synthetic history for reload, while actual bridge recreation and disk persistence are covered by subprocess protocol tests.
+
+For the current open-mic default, explicit Connect requests **synthetic** capture once connected. Initial mount requests none; mute/end releases it. Connect/end/reconnect must retain every conversation row. The older no-capture-on-connect wording above is historical and superseded by AI-016. No physical media APIs are used by this fixture.

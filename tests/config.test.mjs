@@ -95,7 +95,7 @@ test('source package contains only allowlisted code/templates; excludes live sta
   await exec(process.execPath, [join(appRoot, 'cli.mjs'), 'package', '--output', destination]);
   const { stdout } = await exec('tar', ['-tzf', destination]);
   const entries = stdout.trim().split('\n');
-  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs'));
+  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs')); assert.ok(entries.includes('conversation-timeline.mjs')); assert.ok(entries.includes('renderer/src/manager/Message.jsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
   assert.equal(entries.some(path => /(^|\/)(\.orchestration|\.data|\.git|local.json|\.voice-chat.json|server.json)(\/|$)/.test(path)), false);
   assert.ok(entries.includes('docs/MACOS.md')); assert.ok(entries.includes('tests/config.test.mjs'));
 });
