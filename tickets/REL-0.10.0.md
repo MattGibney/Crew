@@ -1,6 +1,6 @@
 # REL-0.10.0 — Grouped integration and signed release
 
-Status: In progress.
+Status: Released and autonomously verified; physical audio and hands-on acceptance remain with the user.
 
 The user explicitly authorized merging PRs 4, 5, 6 and 7 after combined validation and publishing exactly 0.10.0. Preserve PR-first delivery for future work; this authorization applies only to the named grouped release. No business repository, shared runtime or physical microphone changes.
 
@@ -15,3 +15,9 @@ The first hosted release run stopped before signing/publication: three clean-run
 Independent review additionally reproduced missing process-row evidence permitting a live-lock takeover and abandoned candidates preventing reclamation. These are addressed in the same release-gate correction: unavailable liveness stays held; exact verified-dead observers can be reclaimed; unknown/overdue observer evidence remains preserved and blocks new admission. Tests must cover actual negative controls, normal multi-process throughput and conservative failure without increasing product lock timeouts.
 
 Corrected gate: all 397 tests passed with zero failures, skips or cancellations. Twelve focused capacity/lock checks pass; four negative controls fail prior source as intended. Independent final recheck of implementation 738a5be found both reported findings resolved and no remaining blocker in the reviewed ABA/reclamation/liveness logic. The signed retry and genuine upgrade check remain pending.
+
+Published [Crew 0.10.0](https://github.com/MattGibney/Crew/releases/tag/v0.10.0) from 43ec70009a5c1668c4d6951d65a586a3adc7c602 through [signed retry 39584823335](https://github.com/MattGibney/Crew/actions/runs/39584823335). Hosted regression passed 397/397; signing, notarization, artifact verification and publication succeeded. All six assets are present; independent SHA256 and update ZIP SHA512 checks, Developer ID/hardened signature, stapled ticket, Gatekeeper and DMG validation passed. Published payloads remain immutable.
+
+Genuine isolated signed 0.9.3 to 0.10.0 native replacement/relaunch passed on retry with the same project, port and native chat. Configuration, editable manager/worker instructions and saved-chat bytes were unchanged; 47 packaged runtime modules matched corrected source. No worker, manager turn or voice was started. Normal Quit and independent process/HTTP checks confirmed the test app/backend/listener stopped; generated registry/capacity records were preserved outside original storage, restoring their pre-test absence. Existing user installation was not replaced.
+
+Retained first-attempt boundary: the older 0.9.3 install deadline elapsed before native quit, recovery canceled its custom-project handoff, and a later native quit confirmation completed replacement but reopened the default project. It was stopped normally with zero workers and microphone off. A fresh unmodified signed baseline launched through ordinary LaunchServices then completed the native update immediately with correct retained-project recovery. This older-installer timeout is recorded, not claimed fixed by the downloaded payload. Private operational evidence/screenshots remain outside Git.
