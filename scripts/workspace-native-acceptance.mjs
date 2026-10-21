@@ -37,8 +37,8 @@ try{
  const registryFile=path.join(dir,'app-data','Crew','workspaces.json');let reg=JSON.parse(await readFile(registryFile,'utf8'));assert.equal(reg.projects.length,2);const second=reg.projects.find(p=>p.id!==a.selectedId);
  // Existing onboarding remains the production UI; use its supported native save
  // bridge with an explicit synthetic fixture to avoid any real repository/account.
- 
- 
+
+
  const secondRaw=JSON.parse(await readFile(second.configPath,'utf8'));secondRaw.project={...raw.project,id:'native-project-two',name:'Native project two',prompts:{manager:'prompts/manager.md',worker:'prompts/worker.md'}};secondRaw.runtime.codexBinary=binary;
  const setupBefore=await setup.evaluate(()=>window.crewSetup.snapshot());
  await setup.evaluate(input=>window.crewSetup.save(input),{revision:setupBefore.revision,config:secondRaw});
@@ -64,7 +64,7 @@ try{
  const running=await until(async()=>{const tasks=await Promise.all([readTask(stateA,taskId),readTask(stateB,taskId)]);return tasks.every(t=>t.threadId&&t.execution?.live)?tasks:null;},'both native workers running');
  assert.notEqual(running[0].worktree,running[1].worktree);assert.notEqual(running[0].runId,running[1].runId);
 
- 
+
  await page.evaluate(id=>window.crewWorkspaces.rename({id,name:'Renamed project two'}),second.id);
  await page.getByLabel('Project: Renamed project two. Manage projects').waitFor();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).fill('Unsent native project two draft');
