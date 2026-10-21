@@ -39,6 +39,7 @@ let modelWrites=Promise.resolve();
 const modelEvidence=(status,message,extra={})=>{if(!selectedModel)return Promise.resolve();const evidence={runId:config.runId,requestId:config.modelSelection.id,requestedModel:selectedModel,threadId,turnId,status,message,...extra,at:new Date().toISOString()};modelWrites=modelWrites.then(()=>atomic('model-selection.json',evidence));return modelWrites;};
 const prompt=config.project?.mode === 'repository' ? repositoryPrompt : fixturePrompt;
 let reroutedModel=null;
+const pendingModelReroutes=new Map();
 let threadId=config.threadId||null,nativeTurnStatus=null,completedTurn=false,finalMessage='',commands=[],errorMessage=null,stopRequest=null,stopPromise=null,spawnError=null;
 // npm-distributed Codex is a Node entry point. Its harness uses Crew's bundled
 // runtime; project commands still use the selected managed Node through PATH.
@@ -61,6 +62,12 @@ worker.stdin.on('error',error=>{errorMessage=errorMessage||`Worker protocol chan
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++nextId,timer=setTimeout(()=>{pending.delete(id);reject(new Error(`${method} timed out.`));},90000);pending.set(id,{resolve,reject,timer});send({id,method,params});});}
 function interruptTurn(){if(interruptRequested||!turnId||ending)return;interruptRequested=true;void rpc('turn/interrupt',{threadId,turnId}).catch(error=>{errorMessage=error.message;});}
 function saveRuntime(){writes=writes.then(()=>atomic('runtime.json',{runId:config.runId,threadId,turnId,completedTurn,commands,updatedAt:new Date().toISOString()}));return writes;}
+async function applyModelReroute(params){
+ if(!selectedModel||params.threadId!==threadId||!turnId||params.turnId!==turnId)return;
+ reroutedModel=params.toModel;
+ await modelEvidence('rerouted',`The native provider rerouted this turn from ${params.fromModel} to ${params.toModel}. Review the reported model with the manager; Crew did not substitute a model.`,{selectedModel:params.toModel,source:'native-model-rerouted',reason:params.reason});
+}
+async function reconcileModelReroute(){const observed=pendingModelReroutes.get(turnId);pendingModelReroutes.clear();if(observed)await applyModelReroute(observed);}
 async function finish(){if(ending)return;if(turnStartPending){finishPending=true;return;}ending=true;await saveRuntime();await writeFile(finalFile,finalMessage,{mode:0o600});await invalidateWorkerRequests({...requestContext(),reason:'Worker turn ended; this native request is no longer actionable.'});worker.stdin.end();}
 const approvalMethods=new Set(['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','item/tool/requestUserInput','mcpServer/elicitation/request']);
 async function handle(message){
@@ -79,11 +86,14 @@ async function handle(message){
  }
  if(params.threadId&&params.threadId!==threadId)return;
  if(method==='thread/started'&&!threadId&&params.thread?.id){threadId=params.thread.id;await saveRuntime();}
- if(method==='turn/started'){turnId=params.turn.id;await saveRuntime();if(stopRequest?.cooperative)interruptTurn();}
- if(method==='model/rerouted'&&selectedModel){
-  if(turnId&&params.turnId!==turnId)return;
-  reroutedModel=params.toModel;
-  await modelEvidence('rerouted',`The native provider rerouted this turn from ${params.fromModel} to ${params.toModel}. Review the reported model with the manager; Crew did not substitute a model.`,{selectedModel:params.toModel,source:'native-model-rerouted',reason:params.reason});
+ if(method==='turn/started'){turnId=params.turn.id;await reconcileModelReroute();await saveRuntime();if(stopRequest?.cooperative)interruptTurn();}
+ if(method==='model/rerouted'&&selectedModel&&params.threadId===threadId){
+  if(turnId)await applyModelReroute(params);
+  else if(turnStartPending&&typeof params.turnId==='string'){
+   // Early notifications are not evidence until the actual current turn binds.
+   if(pendingModelReroutes.size>=20)throw new Error('Too many uncorrelated native model notifications; model selection is unverified.');
+   pendingModelReroutes.set(params.turnId,params);
+  }
  }
  if(method==='item/completed'){
   const item=params.item;
@@ -129,7 +139,7 @@ const bootstrap=(async()=>{
   await atomic('effective-policy.json',{runId:config.runId,threadId,configResolutionCwd:config.worktree,source:started.sandbox?'native-thread-response':'config-read',sandboxType:started.sandbox?.type??null,configSandboxMode:settings.config?.sandbox_mode??null,approvalPolicy:started.approvalPolicy??settings.config?.approval_policy??null,approvalsReviewer:started.approvalsReviewer??null,permissionsProfile:settings.config?.default_permissions??null});
   if(ending||stopRequest){await finish();return;}
   turnStartPending=true;const result=await rpc('turn/start',{threadId,...(selectedModel?{model:selectedModel}:{}),input:[{type:'text',text:prompt}]});
-  turnStartPending=false;if(!turnId)turnId=result.turn.id;await saveRuntime();if(!errorMessage&&!reroutedModel)await modelEvidence('selected',`Native worker selected ${selectedModel} for the resumed turn.`,{selectedModel,source:'native-thread-resume-response-and-turn-start',turnStartAcknowledged:true});if(finishPending)await finish();else if(stopRequest?.cooperative)interruptTurn();
+  turnStartPending=false;if(selectedModel&&turnId&&turnId!==result.turn.id)throw new Error('Native model continuation returned a different turn identity; selection was not confirmed.');if(!turnId)turnId=result.turn.id;await reconcileModelReroute();await saveRuntime();if(!errorMessage&&!reroutedModel)await modelEvidence('selected',`Native worker selected ${selectedModel} for the resumed turn.`,{selectedModel,source:'native-thread-resume-response-and-turn-start',turnStartAcknowledged:true});if(finishPending)await finish();else if(stopRequest?.cooperative)interruptTurn();
  }catch(error){turnStartPending=false;if(!stopRequest&&!nativeTurnStatus){errorMessage=error.message;await modelEvidence('failed',`Model change failed: ${error.message} Retained task, worktree and native conversation were preserved.`,{selectedModel:null});}await finish();}
 })();
 async function capture(){if(tree){const records=await tree.capture();await atomic('ownership.json',{runId:config.runId,records,at:new Date().toISOString()});}}
