@@ -360,7 +360,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
         }
         if(task.harnessStarted&&!confirmedExit(task,task.runDir?await json(path.join(task.runDir,'exit.json')):null))continue;
         const runId=randomUUID();const admission=await capacity.acquire({taskId:task.id,runId});maxConcurrent=admission.limit;
-        if(!admission.admitted){await updateTask(stateDir,task.id,n=>{n.capacityWait=admission.admissionPaused?'Waiting while Crew prepares an update':'Waiting for shared worker capacity';});continue;}
+        if(!admission.admitted){await updateTask(stateDir,task.id,n=>{if(n.status!==task.status||n.runId!==task.runId||!['queued','resume_queued'].includes(n.status))return;n.capacityWait=admission.admissionPaused?'Waiting while Crew prepares an update':'Waiting for shared worker capacity';});continue;}
         await updateTask(stateDir,task.id,n=>{delete n.capacityWait;});
         const job=launch(task,task.status==='resume_queued',runId);launches.set(task.id,job);void job.catch(error=>{controllerError=error.message;}).finally(()=>{launches.delete(task.id);void tick();});
       }

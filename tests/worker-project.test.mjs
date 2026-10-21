@@ -200,12 +200,25 @@ test('cooperative update pause verifies an already-finished durable result inste
  await createTask(state,{requestId:id,ticket:'EX-12',brief:'Inspect only',projectId:project.id,repositoryId:'app'});let controller=await createController({stateDir:state,sourceDir,executable,project});
  t.after(async()=>{await controller.stop();});
  await requestWorkerAction(state,{taskId:id,actionId:'explicit-start-finished-pause',action:'start'});
- const first=await waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),'finished result before cooperative pause',30000);assert.equal(first.status,'completed');await controller.stop();
+ // Stop this controller once the detached harness owns its run. Await the
+ // real durable terminal directly: this test needs the pre-verification window,
+ // not an extra completion/reconciliation pass before recreating that window.
+ const first=await waitFor(controller,()=>readTask(state,id),task=>task.harnessStarted===true,'owned harness before terminal');await controller.stop();
+ const terminalExit=await waitFor(controller,async()=>{try{return JSON.parse(await readFile(path.join(first.runDir,'exit.json'),'utf8'));}catch(error){if(error.code==='ENOENT')return null;throw error;}},exit=>exit?.runId===first.runId&&exit.stopConfirmed===true,'actual matching terminal before cooperative pause',30000);
  // Recreate the deterministic window after durable result/terminal publication,
  // before the next controller verification tick. The actual command/exit data is retained.
  await updateTask(state,id,n=>{n.status='verifying';delete n.result;n.handledReports=[];});
  await requestWorkerAction(state,{taskId:id,actionId:'update-pause-finished',action:'pause',cooperative:true,expectedRunId:first.runId});
  controller=await createController({stateDir:state,sourceDir,executable,project,admissionHeld:async()=>true});
- try{const done=await readTask(state,id);assert.equal(done.status,'completed');assert.equal(done.result.message,'Audit complete');assert.equal(done.runId,first.runId);assert.equal(done.threadId,first.threadId);assert.equal(done.lifecycleRequests.at(-1).status,'completed');assert.equal(done.result.verification.clean,true);}
+ try{const done=await readTask(state,id);assert.equal(done.status,'completed');assert.equal(done.result.message,'Audit complete');assert.equal(done.runId,first.runId);assert.equal(done.threadId,terminalExit.threadId);assert.equal(done.lifecycleRequests.at(-1).status,'completed');assert.equal(done.result.verification.clean,true);}
  finally{await controller.stop();}
+});
+
+test('capacity denial never annotates retained history after a queued task changes during admission',async t=>{
+ const base=await mkdtemp(path.join(os.tmpdir(),'crew-capacity-stale-')),state=path.join(base,'state'),project={id:'stale-capacity',mode:'fixture',worker:{maxConcurrent:1},readiness:{ready:true}},id='becomes-retained';
+ await createTask(state,{requestId:'unknown-owned-run',ticket:'AI-018',brief:'Retain uncertain ownership',projectId:project.id});
+ await updateTask(state,'unknown-owned-run',n=>{n.status='failed';n.harnessStarted='pending';n.runId='retained-unconfirmed';n.runDir=path.join(state,'runs',n.id,n.runId);});
+ let captured;const controller=await createController({stateDir:state,sourceDir,executable:process.execPath,project,admissionHeld:async({taskId})=>{if(taskId===id&&!captured)captured=await updateTask(state,id,n=>{n.status='failed';});return false;}});t.after(()=>controller.stop());
+ await createTask(state,{requestId:id,ticket:'AI-018',brief:'Queued before the admission observation',projectId:project.id});
+ await waitFor(controller,()=>readTask(state,id),n=>captured&&n.status==='failed','state changes before capacity denial');await controller.tick();assert.deepEqual(await readTask(state,id),captured);assert.equal(captured.capacityWait,undefined);
 });
