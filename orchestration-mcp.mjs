@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import readline from 'node:readline';
 import path from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction, updateWorkNotes } from './orchestration-store.mjs';
 import { requestWorkerRecovery } from './orchestration-store.mjs';
 import { reviewProjectRecovery } from './project-environment.mjs';
 import { listWorkerRequests, decideWorkerRequest } from './worker-approvals.mjs';
-import { requestWorkerModel } from './orchestration-store.mjs';
+import { requestWorkerModel, requestWorkerFollowup, requestWorkerFollowupAdoption, currentAssignment } from './orchestration-store.mjs';
+
+import {captureWorktreeEvidence} from './worker-worktree-evidence.mjs';
+import {selectWorktreeRoot} from './worktree-paths.mjs';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+const exec=promisify(execFile);
 
 const [stateDirArg, role, taskId, runId] = process.argv.slice(2);
 if (!stateDirArg || !['manager', 'worker'].includes(role) || (role === 'worker' && (!taskId || !runId))) {
@@ -24,6 +30,19 @@ function scoped(task) {
 const object = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const string = (description, maxLength = 12000) => ({ type: 'string', description, minLength: 1, maxLength });
 const taskIdentifier = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$' };
+async function reviewedWorktree(task) {
+  if(!task.worktree||task.status==='disposed')throw new Error('A retained available worktree is required for review');
+  const fixtureMeta=repositoryMode?null:JSON.parse(await readFile(path.join(stateDir,'fixture.json'),'utf8'));
+  const actual=await realpath(task.worktree),expected=await realpath(path.join(repositoryMode?await selectWorktreeRoot(stateDir,task):fixtureMeta.base,task.worktreeName||(repositoryMode?task.id:`worker-${task.id}`)));
+  if(actual!==expected)throw new Error('Worktree does not match this instance owned path');
+  const repo=repositoryMode?project.repositories?.find(item=>item.id===task.repositoryId)?.path:fixtureMeta.repo;
+  if(!repo)throw new Error('Configured repository is unavailable for worktree review');
+  const root=await realpath(repo);
+  const {stdout:list}=await exec('git',['-C',root,'worktree','list','--porcelain'],{maxBuffer:1048576});
+  const {stdout:top}=await exec('git',['-C',actual,'rev-parse','--show-toplevel']);
+  if(root===actual||await realpath(top.trim())!==actual||!list.includes(`worktree ${actual}\n`))throw new Error('Worktree Git ownership could not be verified');
+  return captureWorktreeEvidence(actual);
+}
 const tools = role === 'manager' ? [
   { name: 'review_worker_recovery', description: 'Read retained versus current lifecycle configuration and exact blockers for one inactive worker. Shows source-backed command changes and a reviewHash. No commands or model work execute. Explain scope and cleanup limits to the human before requesting a decision.', inputSchema: object({ taskId: taskIdentifier, action: {type:'string',enum:['reconcile_plan','retire_missing']} }, ['taskId','action']) },
   { name: 'request_worker_recovery', description: 'Queue one explicitly human-reviewed recovery decision using the exact reviewHash and current run. reconcile_plan applies compatible lifecycle metadata without starting work or replaying setup; retire_missing retains history and marks cleanup unverified for an already absent/unregistered worktree. Never infer user approval, clean resources or bypass unknown ownership. Read status for actual completion; reuse actionId only for exact retries.', inputSchema: object({ taskId:taskIdentifier, actionId:taskIdentifier, action:{type:'string',enum:['reconcile_plan','retire_missing']}, expectedRunId:{type:['string','null'],description:'Exact current run ID, or JSON null for no run'}, reviewHash:string('Exact reviewHash from review_worker_recovery',64), decision:string('Actual human decision approving these exact changes and their resource scope; retirement acknowledges unverified cleanup',2000) }, ['taskId','actionId','action','expectedRunId','reviewHash','decision']) },
@@ -33,6 +52,9 @@ const tools = role === 'manager' ? [
     description: repositoryMode ? 'Start an explicitly user-authorized bounded task in a configured repository, separate worker and isolated Git worktree. Verify the existing Linear ticket first. No backlog selection, push, PR, production or external ticket mutations. Independent tasks may run concurrently in separate workers. Queued dispatch is not completion. Reuse requestId for retries.' : 'Start an explicitly user-authorized read-only disposable fixture audit in a separate worker and Git worktree. Independent tasks may run concurrently in separate workers. Queued dispatch is not completion. Reuse requestId for retries.',
     inputSchema: object({ requestId: taskIdentifier, ticket: string('Development ticket, e.g. AI-004', 120), brief: string('Agreed bounded task brief and explicit scope limits'), repositoryId: string('Exact configured repository ID', 80) }, ['requestId', 'ticket', 'brief', ...(repositoryMode ? ['repositoryId'] : [])]),
   },
+  { name: 'review_worker_followup', description: 'Read current retained worktree changes and fingerprint before requesting explicit adoption of unknown edits. Does not start work, edit files or grant permission. Show changedFiles to the user and relay their actual decision through assignment or adoption. Re-review if content changes.', inputSchema: object({taskId:taskIdentifier},['taskId']) },
+  { name: 'approve_worker_followup_changes', description: 'Record actual explicit user authorization to preserve and adopt the exact reviewed worktree changes for a queued or current inactive assignment. Use the fingerprint from review_worker_followup after discussing the changed paths with the user. Does not launch work or widen the assignment brief, sandbox or other approvals. Exact request retries are idempotent.', inputSchema: object({taskId:taskIdentifier,assignmentId:taskIdentifier,requestId:taskIdentifier,expectedRunId:{type:['string','null'],maxLength:160},fingerprint:string('Exact reviewed fingerprint',64),userDecision:string('Actual human decision adopting these reviewed changes',4000)},['taskId','assignmentId','requestId','expectedRunId','fingerprint','userDecision']) },
+  { name: 'assign_worker_followup', description: 'Queue a fresh explicitly user-authorized assignment for a retained worker, preserving the same Codex conversation, Git worktree and prior assignment results. Use after completion or while busy: queued intent does not interrupt work or prove launch. Read current run/assignment IDs from get_status, verify the actual configured ticket, and provide the new bounded brief and actual user decision. This is the operation for research-to-implementation scope changes; never infer authorization. Permissions and approvals remain enforced. Reuse requestId only for exact retries. Disposed workers cannot accept work.', inputSchema: object({ taskId: taskIdentifier, requestId: taskIdentifier, expectedRunId: { type: ['string', 'null'], description: 'Exact current run ID or JSON null before first run', maxLength: 160 }, expectedAssignmentId: string('Exact current assignment ID; initial for legacy tasks', 80), ticket: string('Verified configured development ticket', 120), brief: string('New agreed bounded assignment and scope limits'), userDecision: string('Actual explicit human authorization for this assignment and any change of scope', 4000), reviewedWorktreeFingerprint: string('Optional exact review_worker_followup fingerprint after actual human adoption of the shown edits',64) }, ['taskId','requestId','expectedRunId','expectedAssignmentId','ticket','brief','userDecision']) },
   { name: 'get_status', description: 'Read durable actual worker status, meaningful reports, questions and pending attention. Dispatch is not completion. Do not repeat low-level logs aloud.', inputSchema: object({ taskId: taskIdentifier }) },
   { name: 'answer_worker_approval', description: 'Relay an actual explicit user response to one native worker approval or input request from get_status. Never approve automatically, infer consent from the task brief, expand requested permissions, or answer for the user. Copy every request identity exactly; this continues the same worker request and does not resume or start a turn. Supply exactly one of turnId or turnIdJson; startup connector requests may have JSON null as their native turn.', inputSchema: object({ taskId: taskIdentifier, runId: string('Exact current run ID', 200), approvalId: taskIdentifier, threadId: string('Exact native thread ID', 200), turnId: string('Exact native turn ID; omit when using turnIdJson', 200), turnIdJson: string('The literal JSON null for a connector request whose native turnId is null; omit turnId', 4), requestIdJson: string('JSON encoding of the exact native request ID, preserving number versus string', 250), responseJson: string('Actual user response JSON: decision must match an offered native choice; permissions may select a requested subset and turn/session scope; connectors use action and content; input uses answers keyed by question ID', 16000) }, ['taskId', 'runId', 'approvalId', 'threadId', 'requestIdJson', 'responseJson']) },
   { name: 'answer_question', description: 'Relay the user answer to the currently pending worker question. This queues a controller resume; never invent user consent or expand the brief.', inputSchema: object({ taskId: taskIdentifier, questionId: string('Exact active question ID', 160), answer: string('User answer within agreed scope') }, ['taskId', 'questionId', 'answer']) },
@@ -50,6 +72,7 @@ function validateArgs(tool, args) {
     const schema = tool.inputSchema.properties[key];
     if (!schema) throw new Error(`Unknown argument ${key}`);
     if (schema.type === 'string' && (typeof value !== 'string' || !value.trim() || value.length > (schema.maxLength || 80) || (schema.pattern && !new RegExp(schema.pattern).test(value)) || (schema.enum && !schema.enum.includes(value)))) throw new Error(`Invalid ${key}`);
+    if (Array.isArray(schema.type) && !(value === null && schema.type.includes('null') || typeof value === 'string' && schema.type.includes('string') && value.trim() && value.length <= (schema.maxLength || 160))) throw new Error(`Invalid ${key}`);
     if (schema.type === 'boolean' && typeof value !== 'boolean') throw new Error(`Invalid ${key}`);
     if (schema.type === 'array' && (!Array.isArray(value) || value.length > schema.maxItems || value.some(item => typeof item !== 'string' || !item.trim() || item.length > schema.items.maxLength))) throw new Error(`Invalid ${key}`);
   }
@@ -70,6 +93,21 @@ async function callTool(name, args) {
         if (!key || !/^[A-Z][A-Z0-9]*$/.test(key) || !args.ticket.startsWith(`${key}-`) || !/^[1-9][0-9]*$/.test(args.ticket.slice(key.length + 1))) throw new Error('Ticket must match the configured Linear team key; manager must verify the actual ticket');
       } else if (args.repositoryId) throw new Error('Fixture tasks do not accept repositoryId');
       return createTask(stateDir, { ...args, projectId: project?.id || null });
+    }
+    case 'review_worker_followup': {
+      const task=scoped(await readTask(stateDir,args.taskId)),snapshot=await reviewedWorktree(task);
+      const known=task.result?.verification?.worktreeFingerprint || [...(task.assignments||[])].reverse().find(item=>item.status==='completed')?.result?.verification?.worktreeFingerprint;
+      return {taskId:task.id,expectedRunId:task.runId||null,expectedAssignmentId:currentAssignment(task).id,worktreeFingerprint:snapshot.fingerprint,dirty:snapshot.dirty,changedFiles:snapshot.changedFiles,knownRetainedChanges:known===snapshot.fingerprint};
+    }
+    case 'approve_worker_followup_changes': scoped(await readTask(stateDir,args.taskId)); return requestWorkerFollowupAdoption(stateDir,args);
+    case 'assign_worker_followup': {
+      const task = scoped(await readTask(stateDir, args.taskId));
+      if (repositoryMode) {
+        if (!project.repositories.some(repo => repo.id === task.repositoryId)) throw new Error('Unknown configured repositoryId');
+        const key = project.linear?.teamKey;
+        if (!key || !/^[A-Z][A-Z0-9]*$/.test(key) || !args.ticket.startsWith(`${key}-`) || !/^[1-9][0-9]*$/.test(args.ticket.slice(key.length + 1))) throw new Error('Ticket must match the configured Linear team key; manager must verify the actual ticket');
+      }
+      return requestWorkerFollowup(stateDir, args);
     }
     case 'get_status': {
       const requests = await listWorkerRequests({ stateDir });

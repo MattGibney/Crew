@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, Clock3, FolderGit2, Hand, Layers, LoaderCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { formatElapsed, groupWorkers, pendingAttention, workerProgress, workerStatus, workerTiming } from './worker-model.js';
+import { currentAssignment, queuedAssignments, formatElapsed, groupWorkers, pendingAttention, workerProgress, workerStatus, workerTiming } from './worker-model.js';
 
 export function WorkerStatus({ task }) {
   const tone = ['failed', 'blocked'].includes(task.status) ? 'border-destructive/25 bg-destructive/10 text-destructive' : ['awaiting_answer', 'paused'].includes(task.status) || pendingAttention(task).length ? 'border-chart-4/35 bg-chart-4/10 text-foreground' : task.status === 'completed' ? 'border-chart-2/30 bg-chart-2/10 text-foreground' : ['running', 'launching', 'verifying'].includes(task.status) ? 'border-primary/20 bg-primary/10 text-primary' : 'border-border bg-muted text-muted-foreground';
@@ -10,11 +10,13 @@ export function WorkerStatus({ task }) {
 }
 function WorkerCard({ task, now, onSelect, compact }) {
   const timing = workerTiming(task, now), attention = pendingAttention(task);
-  const title = task.brief?.trim().split('\n')[0] || 'Worker task';
+  const assignment = currentAssignment(task), queued = queuedAssignments(task).length;
+  const title = assignment.brief?.trim().split('\n')[0] || 'Worker task';
   return <article data-worker-id={task.id} className="h-full min-w-0">
-    <button type="button" onClick={() => onSelect(task.id)} aria-label={`Open worker ${task.ticket || task.id}: ${title}`} className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-      <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5"><span className="truncate text-[11px] font-medium text-muted-foreground" title={task.id}>{task.ticket || task.id}</span><WorkerStatus task={task} /></div>
+    <button type="button" onClick={() => onSelect(task.id)} aria-label={`Open worker ${assignment.ticket || task.id}: ${title}`} className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5"><span className="truncate text-[11px] font-medium text-muted-foreground" title={task.id}>{assignment.ticket || task.id}</span><WorkerStatus task={task} /></div>
       <h3 className="mt-2 min-h-10 line-clamp-2 break-words text-sm font-semibold leading-5" title={title}>{title}</h3>
+      {queued > 0 && <p className="mt-1 text-[11px] text-muted-foreground">{queued} follow-up{queued === 1 ? '' : 's'} queued</p>}
       {!compact && <p className="mt-1 min-h-5 line-clamp-1 break-words text-xs leading-5 text-muted-foreground" title={workerProgress(task)}>{workerProgress(task)}</p>}
       {!compact && <div className="mt-auto flex items-center justify-between gap-2 pt-2 text-[10px] text-muted-foreground"><span className="flex min-w-0 items-center gap-1"><Clock3 className="size-3 shrink-0" aria-hidden="true" />{timing.elapsed !== null ? `${formatElapsed(timing.elapsed)} elapsed` : 'Timing unavailable'}</span><span className="flex items-center gap-1">{attention.length ? <><Hand className="size-3" aria-hidden="true" />{attention.length} to review</> : <>{timing.live === true ? 'Process live' : timing.live === false ? 'Process ended' : 'Liveness unverified'}<ArrowUpRight className="size-3 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" /></>}</span></div>}
     </button>

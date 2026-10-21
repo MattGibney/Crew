@@ -12,7 +12,8 @@ import { randomUUID } from 'node:crypto';
 import { promptSnapshot, promptVersion } from './prompt-settings.mjs';
 import path from 'node:path';
 import os from 'node:os';
-import { loadTasks, readTask, updateTask } from './orchestration-store.mjs';
+import { loadTasks, readTask, updateTask, currentAssignment, ensureAssignments } from './orchestration-store.mjs';
+import {captureWorktreeEvidence} from './worker-worktree-evidence.mjs';
 import { createGlobalCapacity } from './global-capacity.mjs';
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -34,7 +35,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
   }
   await lock.writeFile(JSON.stringify({ pid: process.pid, at: now() })); await lock.close();
   let busy = false, timer, lastView = '', stopped = false, controllerError = null;
-  const launches=new Map(), launchAbort=new Map(), operations=new Map();
+  const launches=new Map(), launchAbort=new Map(), operations=new Map(), followupBlocked=new Map();
   let processSnapshot=new Map();
   async function ownedRunnerAlive(task){if(!task.runnerPid||!task.runDir)return false;const owner=await json(path.join(task.runDir,'owner.json'));const actual=processSnapshot.get(task.runnerPid),expected=owner?.supervisorIdentity;return Boolean(owner?.runId===task.runId&&owner.supervisorPid===task.runnerPid&&actual&&expected&&actual.start===expected.start&&actual.commandHash===expected.commandHash&&!actual.state?.includes('Z'));}
   let maxConcurrent=Number.isInteger(project?.worker?.maxConcurrent)?Math.max(1,Math.min(8,project.worker.maxConcurrent)):2;
@@ -54,6 +55,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
     });
   }
   const startupQueued = new Map((await loadTasks(stateDir)).filter(task=>['queued','resume_queued'].includes(task.status)).map(task=>[task.id, JSON.stringify(task.answer||null)]));
+  const startupFollowups = new Map(startupTasks.map(task=>[task.id,new Set((task.assignments||[]).filter(item=>item.status==='queued'&&item.id!==task.currentAssignmentId).map(item=>item.id))]));
   let fixturePromise;
   async function fixture(){if(!fixturePromise)fixturePromise=createFixture().catch(error=>{fixturePromise=null;throw error;});return fixturePromise;}
   async function createFixture() {
@@ -73,6 +75,56 @@ export async function createController({ stateDir, sourceDir, executable, projec
   }
   async function fail(id, message) {
     await updateTask(stateDir, id, task => { task.status = 'failed'; task.endedAt=now(); task.failure = message; attention(task, `${task.runId || task.id}:failure`, 'failure', message); });
+  }
+  // Assignment admission is separate from resuming an unfinished turn. The
+  // completed assignment remains immutable; environment/thread ownership stays
+  // attached to this worker envelope throughout the transition.
+  async function verifyRetainedIdentity(task) {
+    if(!task.worktree||!task.repositoryPath)throw new Error('Retained worktree/repository identity is unavailable. Review recovery before follow-up.');
+    const repo=await realpath(task.repositoryPath),actual=await realpath(task.worktree);
+    if(project?.mode==='repository'){
+      const configured=project.repositories.find(item=>item.id===task.repositoryId);
+      if(!configured||await realpath(configured.path)!==repo)throw new Error('Retained repository no longer matches this project. Review recovery.');
+    }
+    const expected=path.join(project?.mode==='repository'?await selectWorktreeRoot(stateDir,task):(await fixture()).base,task.worktreeName||(project?.mode==='repository'?task.id:`worker-${task.id}`));
+    if(actual===repo||actual!==await realpath(expected))throw new Error('Retained worktree ownership does not match this worker. Review recovery.');
+    const {stdout:list}=await exec('git',['-C',repo,'worktree','list','--porcelain']);
+    if(!list.includes(`worktree ${actual}\n`))throw new Error('Retained worktree is not registered. Review recovery before follow-up.');
+    const {stdout:head}=await exec('git',['-C',actual,'rev-parse','HEAD']);
+    if(head.trim()!==task.baseCommit)throw new Error('Retained baseline changed. Review recovery before follow-up.');
+  }
+  async function activateFollowup(task, {explicit = false} = {}) {
+    if(launches.has(task.id)||operations.has(task.id))return task;
+    const pending=(task.assignments||[]).find(item=>item.status==='queued'&&item.id!==task.currentAssignmentId);
+    if(!pending)return task;
+    if(!explicit&&followupBlocked.get(task.id)===task.revision)return task;
+    if(!explicit&&task.status!=='completed')return task;
+    if(!explicit&&startupFollowups.get(task.id)?.has(pending.id)){await updateTask(stateDir,task.id,n=>{n.followupWait='Follow-up retained after reopening. Ask the manager to start this worker explicitly.';});return task;}
+    if(task.lifecycleRequests?.some(r=>['pending','processing'].includes(r.status)&&!['start','resume'].includes(r.action)))return task;
+    if(await admissionHeld({taskId:task.id,resume:true}))return task;
+    if(task.harnessStarted&&!confirmedExit(task,task.runDir?await json(path.join(task.runDir,'exit.json')):null))throw new Error('Previous execution has no confirmed exit. Retain the queued assignment and review worker ownership.');
+    if(!task.worktree||!task.threadId)throw new Error('Follow-up needs the retained worktree and native conversation. Review recovery; no replacement worker was created.');
+    const environment=await reconcileEnvironment({stateDir,taskId:task.id});
+    if(environment?.pending)throw new Error('An earlier environment command is still pending. Follow-up remains queued until ownership is confirmed.');
+    // A known worker diff is retained. Unattributed changes require a fresh,
+    // explicit review rather than being silently adopted by a new assignment.
+    await verifyRetainedIdentity(task);
+    const evidence=await captureWorktreeEvidence(task.worktree);
+    const knownFingerprint=(task.retainedWorktreeEvidence?.runId===task.runId?task.retainedWorktreeEvidence.fingerprint:null)||task.result?.verification?.worktreeFingerprint||currentAssignment(task).result?.verification?.worktreeFingerprint;
+    const adopted=pending.adoptions?.at(-1)?.fingerprint||pending.reviewedWorktreeFingerprint;
+    if(evidence.fingerprint!==knownFingerprint&&evidence.fingerprint!==adopted&&(!evidence.clean||knownFingerprint))throw new Error('Retained worktree has unreviewed changes. Ask the manager to review_worker_followup and approve_worker_followup_changes for this exact queued assignment; files and context were retained.');
+    task=await updateTask(stateDir,task.id,n=>{
+      if(n.runId!==task.runId||n.currentAssignmentId!==task.currentAssignmentId)throw new Error('Worker assignment changed before follow-up admission.');
+      ensureAssignments(n);
+      const prior=currentAssignment(n),next=n.assignments.find(item=>item.id===pending.id);
+      if(next?.status!=='queued')throw new Error('Follow-up is no longer queued.');
+      if(prior.status!=='completed'){prior.status='stopped';prior.endedAt=n.endedAt||now();}
+      n.currentAssignmentId=next.id;next.status='active';next.worktreeFingerprint=evidence.fingerprint;
+      n.result=null;n.question=null;n.answer=null;n.progress=null;n.failure=null;n.candidateReportId=null;n.endedAt=null;n.completedAt=null;delete n.followupWait;
+      n.status='resume_queued';delete n.capacityWait;
+    });
+    startupQueued.delete(task.id);followupBlocked.delete(task.id);if(explicit)startupFollowups.delete(task.id);
+    return task;
   }
   async function launch(task, resume, runId) {
     if(stopped||await admissionHeld({taskId:task.id,resume})){await capacity.releasePreparation({taskId:task.id,runId});return;}
@@ -130,6 +182,14 @@ export async function createController({ stateDir, sourceDir, executable, projec
       if ((resume||task.worktree) && task.repositoryPath !== meta.repo) throw new Error('Repository changed since this task started; review before resuming');
       if(resume||task.worktree){try{await realpath(worktree);}catch(error){if(error.code==='ENOENT')throw new Error('Retained worktree is missing. Ask the manager to review missing-worktree recovery; cleanup is unverified.');throw error;}const {stdout}=await exec('git',['-C',worktree,'rev-parse','HEAD']);if(stdout.trim()!==task.baseCommit)throw new Error('Worker baseline changed; refusing resume.');}
       if(task.worktree){const actual=await realpath(worktree),expected=await realpath(path.join(meta.base,task.worktreeName||(repositoryMode?task.id:`worker-${task.id}`)));const {stdout:list}=await exec('git',['-C',meta.repo,'worktree','list','--porcelain']);if(actual!==expected||actual===meta.repo)throw new Error('Retained worktree path ownership does not match this task.');if(!list.includes(`worktree ${actual}\n`))throw new Error('Retained worktree is not registered with its repository. Review Git registration before resuming.');}
+      const assignment=currentAssignment(task);
+      if(assignment.worktreeFingerprint){
+        const current=await captureWorktreeEvidence(worktree);
+        const terminal=task.retainedWorktreeEvidence?.assignmentId===assignment.id?task.retainedWorktreeEvidence:null;
+        const adoption=assignment.adoptions?.at(-1);
+        const reviewed=adoption&&(!terminal||Date.parse(adoption.at)>Date.parse(terminal.at))?adoption.fingerprint:terminal?.fingerprint||assignment.worktreeFingerprint;
+        if(current.fingerprint!==reviewed)throw new Error('Worktree changed since follow-up admission. Review and approve the exact retained changes before explicit resume; no new native turn was started.');
+      }
       const runDir = path.join(stateDir, 'runs', task.id, runId); await mkdir(runDir, { recursive: true, mode: 0o700 });
       await updateTask(stateDir,task.id,next=>{next.worktree=worktree;next.repositoryPath=meta.repo;next.baseCommit=task.worktree?task.baseCommit:meta.commit;next.runDir=runDir;next.harnessStarted=false;next.fixtureRepo=repositoryMode?null:meta.repo;next.fixtureCommit=repositoryMode?null:meta.commit;});
       const existingEnvironment=await json(environmentFile(stateDir,task.id));
@@ -145,7 +205,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       if(abort.signal.aborted)throw new Error('Worker environment preparation canceled.');
 
       await pauseBoundary();
-      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, modelSelection: task.modelSelection || null, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
+      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: currentAssignment(task).ticket, brief: currentAssignment(task).brief, assignmentId: currentAssignment(task).id, userDecision: currentAssignment(task).userDecision || null, worktreeAdoptionDecision: currentAssignment(task).adoptions?.at(-1)?.userDecision || null, modelSelection: task.modelSelection || null, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
       if (resume && !config.threadId) throw new Error('Cannot resume: no recorded worker Codex session.');
       await atomic(path.join(runDir, 'config.json'), config);
       await updateTask(stateDir, task.id, next => { next.worktree = worktree; next.fixtureRepo = repositoryMode ? null : meta.repo; next.fixtureCommit = repositoryMode ? null : meta.commit; next.repositoryPath = meta.repo; next.baseCommit = task.worktree ? task.baseCommit : meta.commit; next.workerSandbox = config.sandbox; next.runDir = runDir; next.runId = runId; next.status = 'running'; next.harnessStarted='pending'; next.spawnIntentAt=now(); next.startedAt=null; next.endedAt=null; next.execution=null; next.handledReports = next.handledReports || []; });
@@ -171,7 +231,9 @@ export async function createController({ stateDir, sourceDir, executable, projec
       const expectedWorktree = await realpath(path.join(await selectWorktreeRoot(stateDir,task), task.worktreeName||task.id));
       if (await realpath(root.trim()) !== actualWorktree || actualWorktree !== expectedWorktree || actualWorktree === actualRepo || !list.includes(`worktree ${actualWorktree}\n`) || commit.trim() !== task.baseCommit) throw new Error('Repository worktree isolation or baseline verification failed');
       if (task.workerSandbox === 'read-only' && changes.trim()) throw new Error('Read-only worker changed the worktree');
-      const verification = { scope: 'execution-evidence-only', semanticCorrectnessVerified: false, productionValidated: false, worktree: actualWorktree, commit: commit.trim(), clean: !changes.trim(), changedFiles: changes.trim() ? changes.trimEnd().split('\n') : [], successfulCommands: successfulCommands.length, at: now() };
+      const worktreeEvidence=await captureWorktreeEvidence(task.worktree);
+      if(task.retainedWorktreeEvidence?.runId===task.runId&&task.retainedWorktreeEvidence.fingerprint!==worktreeEvidence.fingerprint)throw new Error('Worktree changed after the worker confirmed exit. Review the retained changes before further work.');
+      const verification = { worktreeFingerprint:worktreeEvidence.fingerprint, scope: 'execution-evidence-only', semanticCorrectnessVerified: false, productionValidated: false, worktree: actualWorktree, commit: commit.trim(), clean: !changes.trim(), changedFiles: changes.trim() ? changes.trimEnd().split('\n') : [], successfulCommands: successfulCommands.length, at: now() };
       await updateTask(stateDir, task.id, next => { next.status = 'completed'; next.endedAt=now(); next.threadId = exit.threadId; next.result = { message: report.message, evidence: report.evidence, finalMessage: exit.finalMessage, verification }; next.question = null; attention(next, `${next.runId}:completion`, 'completion', 'Worker finished; isolated execution evidence checked. Code correctness and production behavior are not independently validated. Review the result and tests with the manager.'); });
       return;
     }
@@ -207,7 +269,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       else await runEnvironmentHooks({stateDir,taskId:task.id,worktree:task.worktree,hooks:project?.worker?.environment||{},phases:['cleanup'],existing,env:applyProjectToolchain(existing?.toolchain),onEvidence:e=>updateTask(stateDir,task.id,n=>{n.environment=e;})});
       await exec('git',['-C',repo,'worktree','remove',actual]);
     }
-    await updateTask(stateDir,task.id,n=>{n.status='disposed';n.disposedAt=now();n.endedAt=n.endedAt||now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};});
+    await updateTask(stateDir,task.id,n=>{n.status='disposed';n.disposedAt=now();for(const assignment of n.assignments||[])if(assignment.status==='queued'){assignment.status='stopped';assignment.endedAt=n.disposedAt;assignment.stopReason='worker-disposed';}n.endedAt=n.endedAt||now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};});
   }
   async function completeStop(task,request){
     if(task.environment?.kind!=='project-execution')return false;
@@ -261,12 +323,15 @@ export async function createController({ stateDir, sourceDir, executable, projec
         await atomic(path.join(task.runDir,'control.json'),{runId:task.runId,requestId:request.id,action:request.action,cooperative:request.cooperative===true,at:now()});
         task=await updateTask(stateDir,task.id,n=>{n.status=request.action==='pause'?'pausing':'stopping';});
       }else if(['resume','start'].includes(request.action)){
-        if(!['queued','paused','stopped','failed','blocked','awaiting_answer'].includes(task.status))throw new Error('This worker is already active or finished.');
+        if(currentAssignment(task).status==='completed'&&!(task.assignments||[]).some(item=>item.status==='queued'&&item.id!==task.currentAssignmentId))throw new Error('The latest assignment is complete. Use assign_worker_followup with a new explicitly authorized brief; retained history and context are available.');
+        if(!['queued','paused','stopped','failed','blocked','awaiting_answer'].includes(task.status)&&!(task.status==='completed'&&(task.assignments||[]).some(item=>item.status==='queued'&&item.id!==task.currentAssignmentId)))throw new Error('This worker is already active or finished.');
         if(task.question&&task.question.runId===task.runId&&task.answer?.questionId!==task.question.id)throw new Error('Answer this worker’s question before resuming it.');
         const environment=await reconcileEnvironment({stateDir,taskId:task.id});if(environment?.pending)throw new Error('An earlier environment command is still running or lacks a stop confirmation. Wait for its bounded supervisor and retry.');
         if(task.harnessStarted&&!confirmedExit(task,task.runDir?await json(path.join(task.runDir,'exit.json')):null))throw new Error('The previous worker run has no matching confirmed terminal record. Wait for verified shutdown before resuming.');
         if(task.worktree&&!task.threadId&&task.harnessStarted)throw new Error('This worker has no saved conversation to resume. Preserve its worktree and start another worker.');
         if(!task.harnessStarted&&task.runId)await capacity.releasePreparation({taskId:task.id,runId:task.runId});
+        task=await activateFollowup(task,{explicit:true});
+        startupFollowups.delete(task.id);
         task=await updateTask(stateDir,task.id,n=>{n.status=n.threadId?'resume_queued':'queued';n.failure=null;startupQueued.delete(n.id);});await finishRequest(task.id,request.id);
       }else if(['reconcile_plan','retire_missing'].includes(request.action)){
         if(await admissionHeld({taskId:task.id,resume:false}))throw new Error('Recovery is held while the manager or application reserves lifecycle changes. Return to work before recovery.');
@@ -276,7 +341,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
             if((n.runId||null)!==request.expectedRunId)throw new Error('Worker run changed during recovery. Preserve its decision evidence.');
             if(request.action==='reconcile_plan')n.environment=value;
             else {
-              n.status='disposed';n.disposedAt=now();n.endedAt=n.endedAt||n.disposedAt;
+              n.status='disposed';n.disposedAt=now();for(const assignment of n.assignments||[])if(assignment.status==='queued'){assignment.status='stopped';assignment.endedAt=n.disposedAt;assignment.stopReason='worker-disposed';}n.endedAt=n.endedAt||n.disposedAt;
               n.retirement={reason:'worktree-already-missing',cleanupVerified:false,at:n.disposedAt,reviewHash:request.reviewHash,decision:request.decision};
               if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};
               for(const item of n.attention)if(!item.ackedAt){item.ackedAt=n.disposedAt;item.resolution='Retired missing-worktree record; cleanup unverified';}
@@ -309,6 +374,13 @@ export async function createController({ stateDir, sourceDir, executable, projec
       }
     }
     if(task.environment?.preset)throw new Error('Obsolete project-specific state is retained; recover it with its original project tooling.');
+    if(task.runDir){
+      const terminal=await json(path.join(task.runDir,'exit.json'));
+      const evidence=await json(path.join(task.runDir,'worktree-evidence.json'));
+      if(confirmedExit(task,terminal)&&evidence?.taskId===task.id&&evidence.runId===task.runId&&evidence.assignmentId===currentAssignment(task).id&&/^[a-f0-9]{64}$/.test(evidence.fingerprint||'')&&task.retainedWorktreeEvidence?.runId!==task.runId){
+        task=await updateTask(stateDir,task.id,n=>{if(n.runId===evidence.runId&&currentAssignment(n).id===evidence.assignmentId)n.retainedWorktreeEvidence={runId:evidence.runId,assignmentId:evidence.assignmentId,fingerprint:evidence.fingerprint,at:evidence.at};});
+      }
+    }
     task=await lifecycle(task);
     if(!task.runDir)return;
     const runtime=await json(path.join(task.runDir,'runtime.json')),started=await json(path.join(task.runDir,'started.json')),owner=await json(path.join(task.runDir,'owner.json')),exit=await json(path.join(task.runDir,'exit.json'));
@@ -376,6 +448,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       const foreign=task=>project&&task.projectId!==project.id&&!(project.mode==='fixture'&&!task.projectId);
       controllerError=null;
       for(const task of await loadTasks(stateDir)){if(foreign(task)){controllerError='Stored task belongs to another project; refusing to process it';continue;}try{await reconcile(task);}catch(error){await fail(task.id,`Worker controller error: ${error.message}`).catch(()=>{});}}
+      for(const retained of await loadTasks(stateDir)){if(foreign(retained))continue;try{await activateFollowup(retained);}catch(error){await updateTask(stateDir,retained.id,n=>{const pending=(n.assignments||[]).find(a=>a.status==='queued'&&a.id!==n.currentAssignmentId);if(pending)n.followupWait=error.message;});followupBlocked.set(retained.id,retained.revision);}}
       const tasks=await loadTasks(stateDir);
       const shared = await capacity.view(); maxConcurrent = shared.limit;
       for(const task of tasks){

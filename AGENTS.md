@@ -202,3 +202,7 @@
 
 - The user's bottom-follow preference supersedes turn anchoring: open at the bottom, follow appended/streamed output only while at the bottom, and preserve the reader's position through state refreshes and new messages while scrolled back. Do not mark user rows as scroll anchors or reapply opening position on updates. Jump to latest explicitly resumes following. Verify repeated refresh, near-bottom reading, new user/assistant rows, streaming, completion and composer resizing in the real compiled renderer.
 - The user explicitly authorized releasing the chat-scroll fix in PR #33 as patch 0.13.1. Merge through that PR, preserve published 0.13.0, and use the existing signed/notarized workflow and public artifact verification. This authorization covers this patch only.
+
+## Continuing workers (GitHub #42)
+
+- A retained worker is an ongoing collaborator. Completed assignments stay completed historically; explicit human-authorized follow-up assignments may repeatedly use the same registered worktree/environment/native conversation with fresh correlated runs. Keep original task identity, completed briefs/results and pinned behavior snapshots immutable. Busy directions queue; they do not silently interrupt current work or expand scope. Controller reopen retains queued intent behind explicit start, without duplicate dispatch or setup replay.

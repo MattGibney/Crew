@@ -96,6 +96,7 @@ test('source package contains only allowlisted code/templates; excludes live sta
   const { stdout } = await exec('tar', ['-tzf', destination]);
   const entries = stdout.trim().split('\n');
   assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs'));
+  for(const file of ['worker-worktree-evidence.mjs','tests/worker-followup.test.mjs','tests/worker-followup-store.test.mjs','scripts/worker-followup-native-acceptance.mjs'])assert.ok(entries.includes(file),`Missing retained-worker follow-up source: ${file}`);
   for(const file of ['worker-approvals.mjs','tests/worker-app-server.test.mjs','tests/worker-approvals.test.mjs','tests/worker-app-server.test.mjs','tests/worker-bootstrap.test.mjs','tests/helpers/worker-app-server-fixture.mjs'])assert.ok(entries.includes(file),`Missing worker protocol source: ${file}`);
 
   assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs')); assert.ok(entries.includes('conversation-timeline.mjs')); assert.ok(entries.includes('renderer/src/manager/Message.jsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
