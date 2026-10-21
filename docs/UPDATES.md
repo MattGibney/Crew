@@ -50,3 +50,9 @@ The native parent now applies Pause work and update to every registered project,
 The existing idle-update reservation journal remains separate. Grouped updates use their own retained plan and confirmed local barriers, so queued recovery work is not mistaken for an unsafe idle-update restart. After the exact version launches, every child confirms eligible recovery before shared admission is released. An interrupted manager request is not replayed, and stopped manager intent stays stopped.
 
 Cancel holds all projects. Resume paused work creates only correlated eligible resumes. Return to work creates no new resumes: paused workers stay paused, while already queued work, including previously admitted resumes, may continue. Switching projects remains available to inspect history and pending approvals; adding projects, changing shared capacity or starting/restarting managers cannot cross the update hold.
+
+## 0.11.0 portable-profile boundary
+
+A genuine signed 0.10.0 to 0.11.0 test passed native application replacement and post-install signature/notarization checks, but failed automatic recovery of an isolated CREW_APP_DATA profile. The native relaunch opened the ordinary default profile and left the custom-root restart handoff unconsumed. Configuration/prompts/chat files in the isolated root remained intact. File preservation does not establish correct profile selection.
+
+CREW_APP_DATA portable/disposable runs must not assume that Squirrel.Mac retains the process environment. Recover an intact portable profile by explicitly launching with its original root and configuration; that is manual recovery, not automatic update acceptance. Do not retry through a user's shared registry or overwrite unknown user state merely to obtain a passing test. This boundary is unresolved in 0.11.0; published artifacts remain unchanged.
