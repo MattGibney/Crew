@@ -60,21 +60,21 @@ const sendResponse=message=>new Promise((resolve,reject)=>{
 });
 worker.stdin.on('error',error=>{errorMessage=errorMessage||`Worker protocol channel closed (${error.code||'error'}).`;});
 function rpc(method,params={}){return new Promise((resolve,reject)=>{const id=++nextId,timer=setTimeout(()=>{pending.delete(id);reject(new Error(`${method} timed out.`));},90000);pending.set(id,{resolve,reject,timer});send({id,method,params});});}
-function interruptTurn(){if(interruptRequested||!turnId||ending)return;interruptRequested=true;void rpc('turn/interrupt',{threadId,turnId}).catch(error=>{errorMessage=error.message;});}
+function interruptTurn(){if(interruptRequested||!turnId||ending||(selectedModel&&turnStartPending))return;interruptRequested=true;void rpc('turn/interrupt',{threadId,turnId}).catch(error=>{errorMessage=error.message;});}
 function saveRuntime(){writes=writes.then(()=>atomic('runtime.json',{runId:config.runId,threadId,turnId,completedTurn,commands,updatedAt:new Date().toISOString()}));return writes;}
 async function applyModelReroute(params){
- if(!selectedModel||params.threadId!==threadId||!turnId||params.turnId!==turnId)return;
+ if(!selectedModel||turnStartPending||params.threadId!==threadId||!turnId||params.turnId!==turnId)return;
  reroutedModel=params.toModel;
  await modelEvidence('rerouted',`The native provider rerouted this turn from ${params.fromModel} to ${params.toModel}. Review the reported model with the manager; Crew did not substitute a model.`,{selectedModel:params.toModel,source:'native-model-rerouted',reason:params.reason});
 }
-async function reconcileModelReroute(){const observed=pendingModelReroutes.get(turnId);pendingModelReroutes.clear();if(observed)await applyModelReroute(observed);}
+async function reconcileModelReroute(){if(selectedModel&&turnStartPending)return;const observed=pendingModelReroutes.get(turnId);pendingModelReroutes.clear();if(observed)await applyModelReroute(observed);}
 async function completeTurn(params){
  if(turnId&&params.turn.id!==turnId)return;
  nativeTurnStatus=params.turn.status;completedTurn=nativeTurnStatus==='completed';
  if(params.turn.error){errorMessage=params.turn.error.message||'Codex turn failed';await modelEvidence('failed',`Native worker failed after model selection: ${errorMessage}`,{selectedModel:null});}
  await finish();
 }
-async function reconcileModelCompletion(){const observed=pendingModelCompletions.get(turnId);pendingModelCompletions.clear();if(observed)await completeTurn(observed);}
+async function reconcileModelCompletion(){if(selectedModel&&turnStartPending)return;const observed=pendingModelCompletions.get(turnId);pendingModelCompletions.clear();if(observed)await completeTurn(observed);}
 async function finish(){if(ending)return;if(turnStartPending){finishPending=true;return;}ending=true;await saveRuntime();await writeFile(finalFile,finalMessage,{mode:0o600});await invalidateWorkerRequests({...requestContext(),reason:'Worker turn ended; this native request is no longer actionable.'});worker.stdin.end();}
 const approvalMethods=new Set(['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','item/tool/requestUserInput','mcpServer/elicitation/request']);
 async function handle(message){
@@ -98,12 +98,11 @@ async function handle(message){
   turnId=params.turn.id;await reconcileModelReroute();await reconcileModelCompletion();await saveRuntime();if(stopRequest?.cooperative)interruptTurn();
  }
  if(method==='model/rerouted'&&selectedModel&&params.threadId===threadId){
-  if(turnId)await applyModelReroute(params);
-  else if(turnStartPending&&typeof params.turnId==='string'){
+  if(turnStartPending&&typeof params.turnId==='string'){
    // Early notifications are not evidence until the actual current turn binds.
    if(pendingModelReroutes.size>=20)throw new Error('Too many uncorrelated native model notifications; model selection is unverified.');
    pendingModelReroutes.set(params.turnId,params);
-  }
+  }else if(turnId)await applyModelReroute(params);
  }
  if(method==='item/completed'){
   const item=params.item;
@@ -116,7 +115,7 @@ async function handle(message){
  }
  if(method==='turn/completed'){
   if(selectedModel&&params.threadId!==threadId)return;
-  if(selectedModel&&!turnId){
+  if(selectedModel&&(turnStartPending||!turnId)){
    if(turnStartPending&&typeof params.turn?.id==='string'){
     if(pendingModelCompletions.size>=20)throw new Error('Too many uncorrelated native turn completions; model selection is unverified.');
     pendingModelCompletions.set(params.turn.id,params);
