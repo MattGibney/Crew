@@ -1,7 +1,7 @@
 // Same-origin backend contract. No direct Codex credentials or model calls in the renderer.
-export async function api(path, body = {}) {
+export async function api(path, body = {}, { method = 'POST' } = {}) {
   const response = await fetch(`/api/${path}`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    method, headers: { 'Content-Type': 'application/json' }, ...(method === 'GET' ? {} : { body: JSON.stringify(body) }),
   });
   const result = await response.json();
   if (!response.ok) {

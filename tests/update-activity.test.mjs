@@ -16,3 +16,8 @@ test('fresh process and pending evidence overrides failed history with specific 
  const value=idle();value.work.status='completed';value.view.tasks=[{id:'named-worker',status:'failed',updateEvidence:evidence}];const result=updateActivity(value);assert.equal(result.safe,false);assert.ok(result.reasons.every(reason=>reason.includes('named-worker')));}
  const value=idle();value.work.status='completed';value.work.activeTurnId='newer-turn';assert.equal(updateActivity(value).safe,false);
 });
+
+test('retained unanswered and blocked tasks require fresh shutdown evidence and never need an answer to install',()=>{
+ const work={status:'completed',activeTurnId:null,workStarting:false,voiceActive:false,voiceConnecting:false,approvals:[]};
+ for(const status of ['awaiting_answer','blocked']){const task={id:'retained-question',status,question:{id:'unanswered'},updateEvidence:{worker:'stopped',runtime:'absent',hooks:[]}};assert.equal(updateActivity({work,view:{tasks:[task]}}).safe,true);for(const state of ['live','unknown']){task.updateEvidence.worker=state;assert.equal(updateActivity({work,view:{tasks:[task]}}).safe,false);}delete task.updateEvidence;assert.equal(updateActivity({work,view:{tasks:[task]}}).safe,false);}
+});

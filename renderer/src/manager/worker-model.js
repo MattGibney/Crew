@@ -11,6 +11,14 @@ export function groupWorkers(tasks) {
   return { active, history: history.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)), retained: tasks.filter(task => task.worktree && task.status !== 'disposed').length };
 }
 export function workerStatus(task) { return LABELS[task.status] || 'Status unavailable'; }
+export function workerProgress(task) {
+  if (['queued', 'resume_queued'].includes(task.status)) {
+    // Only the controller knows whether capacity, an update or explicit manager start is blocking admission.
+    if (typeof task.capacityWait === 'string' && task.capacityWait.trim()) return task.capacityWait;
+    return task.status === 'resume_queued' ? 'Waiting to resume.' : 'Waiting to start.';
+  }
+  return task.failure || task.result?.message || task.progress || (task.status === 'launching' ? 'Preparing the project environment.' : 'Waiting for the next progress report.');
+}
 export function workerTiming(task, now = Date.now()) {
   const execution = task.execution;
   if (!execution || (execution.runId && execution.runId !== task.runId)) return { live: null, elapsed: null, observedAt: null };

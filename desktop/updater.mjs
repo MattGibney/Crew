@@ -8,6 +8,7 @@ import {snapshotProcesses} from '../process-ownership.mjs';
 const exec=promisify(execFile);
 export const RELEASE_URL='https://github.com/MattGibney/crew/releases/latest';
 export const UPDATE_ACTIONS=new Set(['status','check','download','restart']);
+export const PAUSE_UPDATE_ACTIONS=new Set(['pause-update','cancel-pause-update']);
 export function newerVersion(candidate,current){
  const parse=value=>typeof value==='string'?value.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([\da-z.-]+))?(?:\+[\da-z.-]+)?$/i):null;
  const a=parse(candidate),b=parse(current);if(!a||!b||a[4])return false;
@@ -24,17 +25,16 @@ export async function signedUpdateSupport({packaged,executable=process.execPath,
   return {supported:true,error:null};
  }catch{return {supported:false,error:'This Crew build is unsigned or its Developer ID signature could not be verified. Install a signed release to enable automatic updates.'};}
 }
-export async function otherNativeInstances({executable=process.execPath,pid=process.pid,backendPid,run=exec}={}){
+export async function otherNativeInstances({executable=process.execPath,pid=process.pid,backendPid,backendPids=backendPid?[backendPid]:[],run=exec}={}){
  const {stdout}=await run('/bin/ps',['-axo','pid=,ppid=,command='],{timeout:5000,maxBuffer:8*1024*1024});
  const rows=stdout.split('\n').flatMap(line=>{const m=line.match(/^\s*(\d+)\s+(\d+)\s+(.*)$/);return m?[{pid:Number(m[1]),ppid:Number(m[2]),command:m[3]}]:[];});
  if(!rows.some(row=>row.pid===pid))throw new Error('Native process ownership snapshot is unavailable.');
  const allowed=new Set([pid]);
  // Only this instance's currently owned backend tree may be stopped during an
  // idle restart. Detached supervisors from closed instances remain blockers.
- if(Number.isSafeInteger(backendPid)&&rows.some(row=>row.pid===backendPid&&row.ppid===pid)){
-  allowed.add(backendPid);let changed=true;
-  while(changed){changed=false;for(const row of rows)if(allowed.has(row.ppid)&&row.ppid!==pid&&!allowed.has(row.pid)){allowed.add(row.pid);changed=true;}}
- }
+ for(const backend of backendPids)if(Number.isSafeInteger(backend)&&rows.some(row=>row.pid===backend&&row.ppid===pid))allowed.add(backend);
+ let changed=true;
+ while(changed){changed=false;for(const row of rows)if(allowed.has(row.ppid)&&row.ppid!==pid&&!allowed.has(row.pid)){allowed.add(row.pid);changed=true;}}
  return rows.filter(row=>!allowed.has(row.pid)&&(row.command===executable||row.command.startsWith(executable+' '))).map(row=>row.pid);
 }
 // Atomic nonempty directory publication avoids the empty-lock crash window.
@@ -123,7 +123,7 @@ export function createUpdateCoordinator({updater,currentVersion,support={support
   try{if((await otherInstances()).length)reasons.push('Quit other Crew instances before restarting to update.');}catch{reasons.push('Other Crew instances could not be checked.');}
   return publish({installBlocked:reasons.length>0,reasons,notices});
  }
- async function request(action){
+ async function request(action,{beforeInstall}={}){
   if(!UPDATE_ACTIONS.has(action))throw new Error('Unknown update action.');
   if(action==='status')return refresh();
   if(busy)throw new Error('An update operation is already in progress.');
@@ -147,6 +147,7 @@ export function createUpdateCoordinator({updater,currentVersion,support={support
     // Recheck under the global lease; a new native process must acquire this
     // same lease before starting its backend. Never terminate another instance.
     if((await otherInstances()).length)throw new Error('Another Crew instance opened. Quit it before updating.');
+    if(beforeInstall)await beforeInstall();
     publish({phase:'installing',installBlocked:true,error:null});await stopBackend();await install();
     // Successful install owns the lease until this process exits. A replacement
     // launch recovers the dead PID/start owner; ordinary Quit never installs.
@@ -160,4 +161,67 @@ export function createUpdateCoordinator({updater,currentVersion,support={support
   }finally{if(release)await release();busy=false;}
  }
  return {request,refresh,getStatus:()=>({...state,reasons:[...state.reasons],notices:[...state.notices]})};
+}
+
+// Durable pause plans come only from the owned backend. Polling observes consent;
+// it never invents a plan, drains work itself, or bypasses normal install gates.
+export function createPauseUpdateCoordinator({native,begin,status,cancel,markInstalling,markBlocked}){
+ let plan=null,advancing=false,commandPending=false;
+ const attempted=new Set();
+ const valid=value=>value&&typeof value.id==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(value.id)&&value.kind==='pause-update'&&value.consent===true&&typeof value.targetVersion==='string';
+ const read=async()=>{const value=await status();plan=value?.plan??null;return plan;};
+ const approvedReady=value=>valid(value)&&value.phase==='ready';
+ const targetMatches=value=>{const state=native.getStatus();return state.supported&&state.phase==='downloaded'&&value.targetVersion===state.availableVersion&&newerVersion(value.targetVersion,state.currentVersion);};
+ const key=value=>`${value.id}:${value.targetVersion}`;
+ async function installPlan(value){
+  if(!approvedReady(value)||!targetMatches(value))throw new Error('The approved pause plan does not match the downloaded update.');
+  if(attempted.has(key(value)))throw new Error('This pause plan already attempted installation. Review it before starting a new update plan.');
+  attempted.add(key(value));if(attempted.size>100)attempted.delete(attempted.values().next().value);
+  try{
+   return await native.request('restart',{beforeInstall:async()=>{
+    const marked=await markInstalling({planId:value.id,targetVersion:value.targetVersion});
+    if(marked?.marked!==true)throw new Error('The update plan changed or was canceled before installation.');
+    plan=marked.plan??{...value,phase:'installing'};
+   }});
+  }catch(error){
+   try{const blocked=await markBlocked({planId:value.id,targetVersion:value.targetVersion,reason:'The native update restart did not finish. Choose Resume paused work or Return to work before another update.'});plan=blocked?.plan??plan;}catch{/* A durable installing plan remains fail closed; never retry it by polling. */}
+   throw error;
+  }
+ }
+ return {
+  getPlan:()=>plan?structuredClone(plan):null,
+  isCommandPending:()=>commandPending,
+  refreshPlan:read,
+  async request(action){
+   if(!PAUSE_UPDATE_ACTIONS.has(action))throw new Error('Unknown pause update action.');
+   if(commandPending)throw new Error('A pause update action is already pending.');
+   commandPending=true;
+   try{
+    if(action==='pause-update'){
+     const state=native.getStatus();if(!state.supported||state.phase!=='downloaded'||!newerVersion(state.availableVersion,state.currentVersion))throw new Error('Download a newer signed update before pausing work.');
+     const value=await begin({targetVersion:state.availableVersion});plan=value?.plan??null;
+     if(!valid(plan)||plan.targetVersion!==state.availableVersion)throw new Error('The backend did not confirm an approved update plan.');
+    }else{const current=await read();if(!valid(current))throw new Error('There is no approved pause update plan to cancel.');const value=await cancel({planId:current.id});plan=value?.plan??null;}
+    return native.getStatus();
+   }finally{commandPending=false;}
+  },
+  async restart(){
+   if(advancing)throw new Error('The pause update restart is already pending.');
+   advancing=true;
+   try{
+    const current=await read();
+    if(current){
+     if(approvedReady(current))return await installPlan(current);
+     if(current.phase!=='complete')throw new Error('Choose Resume paused work or Return to work before another update.');
+    }
+    return await native.request('restart');
+   }finally{advancing=false;}
+  },
+  async advancePlan(){
+   if(advancing||commandPending)return native.getStatus();
+   advancing=true;
+   try{const current=await read();if(approvedReady(current)&&targetMatches(current)&&!attempted.has(key(current)))return await installPlan(current);return native.getStatus();}
+   finally{advancing=false;}
+  }
+ };
 }

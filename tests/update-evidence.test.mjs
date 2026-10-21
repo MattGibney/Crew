@@ -115,3 +115,18 @@ test('interrupted harness publication cannot hide existing durable ownership or 
  await rm(path.join(f.runDir,'owner.json'));f.task.execution={live:true};
  assert.equal((await inspect(f)).tasks[0].updateEvidence.worker,'unknown');
 });
+
+
+test('compact toolchain hook environments retain strict ownership and terminal evidence checks',async t=>{
+ const f=await fixture(t);await confirmed(f);delete f.environment.kind;delete f.environment.runtime;f.environment.toolchain={nodeVersion:'22.14.0'};await f.save(f.envFile,f.environment);
+ let evidence=(await inspect(f)).tasks[0].updateEvidence;assert.equal(evidence.runtime,'absent');assert.equal(evidence.hooks[0].state,'stopped');
+ await rm(path.join(f.hookDir,'exit.json'));evidence=(await inspect(f)).tasks[0].updateEvidence;assert.equal(evidence.hooks[0].state,'unknown');
+ await confirmed(f);const owned=processIdentity();await f.save(path.join(f.hookDir,'ownership.json'),{id:f.hookId,records:[owned]});assert.equal((await inspect(f,new Map([[owned.pid,row(owned)]]))).tasks[0].updateEvidence.hooks[0].state,'live');
+ for(const invalid of ['crew-'+ 'b'.repeat(31),'crew-'+ 'B'.repeat(32),'crew-foreign-task-deadbeef']){f.environment.id=invalid;await f.save(f.envFile,f.environment);assert.equal((await inspect(f)).tasks[0].updateEvidence.runtime,'unknown');}
+ f.environment.id=f.environmentId;f.environment.taskId='foreign-task';await f.save(f.envFile,f.environment);assert.equal((await inspect(f)).tasks[0].updateEvidence.runtime,'unknown');
+});
+
+test('legacy hook IDs still require the exact owning task ID',async t=>{
+ const f=await fixture(t);await confirmed(f);delete f.environment.kind;delete f.environment.runtime;f.environment.id=`crew-${f.id}-deadbeef`;await f.save(f.envFile,f.environment);assert.equal((await inspect(f)).tasks[0].updateEvidence.runtime,'absent');assert.equal((await inspect(f)).tasks[0].updateEvidence.hooks[0].state,'stopped');
+ f.environment.id='crew-another-task-deadbeef';await f.save(f.envFile,f.environment);assert.equal((await inspect(f)).tasks[0].updateEvidence.runtime,'unknown');
+});

@@ -82,7 +82,11 @@ export async function inspectUpdateEvidence({ stateDir, view, processes } = {}) 
     if (!disk && !task.environment) return { hooks: [], runtime: 'absent' };
     if (!disk || !task.environment || disk.taskId !== task.id || disk.id !== task.environment.id || disk.kind !== task.environment.kind || typeof disk.worktree !== 'string' || !path.isAbsolute(disk.worktree) || disk.worktree !== task.worktree || disk.worktree !== task.environment.worktree) throw new Error('Environment identity mismatch');
     const project = disk.kind === 'project-execution';
-    if (project ? !/^crew-[a-f0-9]{32}$/.test(disk.id || '') : disk.kind !== undefined || typeof disk.id !== 'string' || !disk.id.startsWith(`crew-${task.id}-`) || !/^[a-f0-9]{8}$/.test(disk.id.slice(`crew-${task.id}-`.length))) throw new Error('Environment identity mismatch');
+    const generatedId = /^crew-[a-f0-9]{32}$/.test(disk.id || '');
+    const legacyHookId = typeof disk.id === 'string' && disk.id.startsWith(`crew-${task.id}-`) && /^[a-f0-9]{8}$/.test(disk.id.slice(`crew-${task.id}-`.length));
+    // Project plans and controller-created toolchain hook environments use a
+    // compact UUID; legacy hook producers embed the exact owning task ID.
+    if (project ? !generatedId : disk.kind !== undefined || !(generatedId || legacyHookId)) throw new Error('Environment identity mismatch');
     if (!Array.isArray(disk.hooks) || disk.hooks.length > 128) throw new Error('Environment evidence exceeds limits');
     const hooks = [];
     for (const hook of disk.hooks) {

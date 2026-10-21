@@ -8,9 +8,9 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,executionPlanHash} from '../project-environment.mjs';
 const exec=promisify(execFile);
-async function fixture(t,{ready=true,teardown=true,failSetup=false}={}){
+async function fixture(t,{ready=true,teardown=true,failSetup=false,gracefulStop=false}={}){
  const dir=await mkdtemp(path.join(tmpdir(),'crew-project-runtime-')),repo=path.join(dir,'repo'),worktree=path.join(dir,'worker-unique'),stateDir=path.join(dir,'state');await mkdir(repo);await mkdir(path.join(stateDir,'runs','project-test'),{recursive:true});
- const script=`import fs from 'node:fs';const phase=process.argv[2],file='.test-data/state.json';fs.mkdirSync('.test-data',{recursive:true});const data=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};const save=()=>fs.writeFileSync(file,JSON.stringify(data));if(phase==='setup'){data.seeds=(data.seeds||0)+1;save();${failSetup?'process.exit(7);':''}}else if(phase==='start'){data.starts=(data.starts||0)+1;data.pid=process.pid;data.resources=true;save();setInterval(()=>{},1000);}else if(phase==='ready'){process.kill(data.pid,0);if(data.seeds!==1)process.exit(5);}else if(phase==='stop'){data.resources=false;save();}else if(phase==='teardown'){data.disposed=true;save();}`;
+ const script=`import fs from 'node:fs';const phase=process.argv[2],file='.test-data/state.json';fs.mkdirSync('.test-data',{recursive:true});const data=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};const save=()=>fs.writeFileSync(file,JSON.stringify(data));if(phase==='setup'){data.seeds=(data.seeds||0)+1;save();${failSetup?'process.exit(7);':''}}else if(phase==='start'){data.starts=(data.starts||0)+1;data.pid=process.pid;data.resources=true;data.stopRequested=false;save();${gracefulStop?"process.on('SIGTERM',()=>{data.forced=true;save();process.exit(0);});setInterval(()=>{if(JSON.parse(fs.readFileSync(file)).stopRequested)process.exit(0);},100);":'setInterval(()=>{},1000);'}}else if(phase==='ready'){process.kill(data.pid,0);if(data.seeds!==1)process.exit(5);}else if(phase==='stop'){data.resources=false;${gracefulStop?'data.stopRequested=true;':''}save();}else if(phase==='teardown'){data.disposed=true;save();}`;
  await writeFile(path.join(repo,'action.mjs'),script);await writeFile(path.join(repo,'.gitignore'),'.test-data/\n');await writeFile(path.join(repo,'AGENTS.md'),'Fixture project instructions.\n');await exec('git',['init','-q','-b','main',repo]);await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Generic project scripts']);const {stdout}=await exec('git',['-C',repo,'rev-parse','HEAD']);await exec('git',['-C',repo,'worktree','add','--detach',worktree,stdout.trim()]);
  const source={path:'action.mjs',sha256:createHash('sha256').update(script).digest('hex')},action=phase=>({command:`${JSON.stringify(process.execPath)} action.mjs ${phase}`,source,timeoutMs:10000});
  const plan={schemaVersion:1,sources:[source],setup:action('setup'),start:action('start'),resume:null,ready:ready?action('ready'):null,stop:action('stop'),teardown:teardown?action('teardown'):null};
@@ -79,4 +79,33 @@ test('legacy ordered plan hash migrates on a reordered equivalent stop/resume wi
  const f=await fixture(t),first=await prepareProjectEnvironment(f.args);await stopProjectEnvironment(f.args);const file=path.join(f.args.stateDir,'runs',f.args.taskId,'environment.json'),saved=JSON.parse(await readFile(file,'utf8'));saved.planHash=createHash('sha256').update(JSON.stringify(saved.plan)).digest('hex');await writeFile(file,JSON.stringify(saved));
  const reorder=value=>Array.isArray(value)?value.map(reorder):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([k,v])=>[k,reorder(v)])):value,reordered=reorder(f.args.plan),resumed=await prepareProjectEnvironment({...f.args,plan:reordered,resume:true});assert.equal(resumed.id,first.id);assert.equal(resumed.worktree,first.worktree);assert.equal(resumed.planHash,executionPlanHash(reordered));assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
  await assert.rejects(prepareProjectEnvironment({...f.args,plan:{...reordered,start:{...reordered.start,timeoutMs:reordered.start.timeoutMs+1}},resume:true}),/plan or worktree ownership changed/);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
+});
+
+
+test('cooperative project pause executes its declared stop without signals and resumes retained data once',async t=>{
+ const f=await fixture(t,{gracefulStop:true}),first=await prepareProjectEnvironment(f.args);
+ const stopped=await stopProjectEnvironment({...f.args,cooperative:true});assert.equal(stopped.status,'stopped');assert.equal((await f.read()).forced,undefined);
+ const terminal=JSON.parse(await readFile(path.join(first.runtime.runDir,'exit.json'),'utf8'));assert.equal(terminal.stopConfirmed,true);assert.equal(terminal.requestedStop,true);
+ const stopHook=stopped.hooks.find(h=>h.phase==='stop');assert.equal(stopHook.status,'succeeded');assert.equal(JSON.parse(await readFile(path.join(stopHook.runDir,'config.json'),'utf8')).cooperative,true);
+ const resumed=await prepareProjectEnvironment({...f.args,resume:true});assert.equal(resumed.id,first.id);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);assert.notEqual(resumed.runtime.id,first.runtime.id);
+ await stopProjectEnvironment({...f.args,cooperative:true});
+});
+
+test('missing graceful project stop leaves its owned runtime alive rather than force-killing for update',async t=>{
+ const f=await fixture(t);f.args.plan.stop=null;const first=await prepareProjectEnvironment(f.args);const pid=(await f.read()).pid;
+ await assert.rejects(stopProjectEnvironment({...f.args,cooperative:true}),/no declared graceful stop action/);assert.doesNotThrow(()=>process.kill(pid,0));
+ assert.equal((await inspectProjectEnvironment(f.args)).runtime.id,first.runtime.id);assert.equal((await inspectProjectEnvironment(f.args)).runtime.status,'running');
+});
+
+
+test('completed work retains its result while update pause gracefully stops its live project runtime',async t=>{
+ const {createController}=await import('../controller.mjs');const {createTask,updateTask,readTask,requestWorkerAction}=await import('../orchestration-store.mjs');const {randomUUID}=await import('node:crypto');
+ const f=await fixture(t,{gracefulStop:true}),environment=await prepareProjectEnvironment(f.args),runId=randomUUID(),runDir=path.join(f.args.stateDir,'runs',f.args.taskId,runId);await mkdir(runDir);
+ await createTask(f.args.stateDir,{requestId:f.args.taskId,ticket:'AI-018',brief:'Already completed local fixture',projectId:'completed-project',repositoryId:'repo'});
+ await writeFile(path.join(runDir,'exit.json'),JSON.stringify({runId,stopConfirmed:true,exitCode:0,completedTurn:true,threadId:'completed-chat'}));
+ await updateTask(f.args.stateDir,f.args.taskId,n=>{n.status='completed';n.runId=runId;n.runDir=runDir;n.harnessStarted=true;n.worktree=f.args.worktree;n.environment=environment;n.threadId='completed-chat';n.result={message:'Previously verified work',verification:{clean:true}};});
+ await requestWorkerAction(f.args.stateDir,{taskId:f.args.taskId,actionId:'pause-completed-runtime',action:'pause',cooperative:true,expectedRunId:runId});
+ const controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:{id:'completed-project',mode:'repository',worker:{maxConcurrent:1}},admissionHeld:async()=>true});
+ try{const until=Date.now()+10000;let task;for(;;){task=await readTask(f.args.stateDir,f.args.taskId);if(task.lifecycleRequests.at(-1).status==='completed')break;if(Date.now()>until)throw new Error('Completed runtime did not stop');await new Promise(r=>setTimeout(r,50));await controller.tick();}assert.equal(task.status,'completed');assert.equal(task.result.message,'Previously verified work');assert.equal(task.environment.runtime.status,'stopped');assert.equal((await f.read()).forced,undefined);assert.equal(task.threadId,'completed-chat');assert.equal(task.runId,runId);}
+ finally{await controller.stop();}
 });

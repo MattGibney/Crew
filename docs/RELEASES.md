@@ -1,3 +1,7 @@
+# Delivery policy
+
+Develop features/fixes on codex/ branches and open pull requests targeting main. Review and merge are separate from release publication; agents must not automatically merge or publish a release for each small change. The user chooses the set of changes and explicitly authorizes the intended grouped release. Existing releases and main history remain intact. The workflow stays manual-dispatch only; creating a branch, PR, merge or tag must not automatically publish.
+
 # Building and publishing Crew
 
 Crew releases are deliberately initiated through **Build or release Crew for macOS** in GitHub Actions. Normal pushes, pull requests and tag creation never publish installers.
@@ -29,7 +33,7 @@ Local equivalent: `npm ci && npm run desktop:build:mac`. Output is `dist/desktop
 
 ## Signed production release
 
-1. Commit the intended source and matching stable `package.json`/lockfile version to `main`. Run the required checks.
+1. After the user explicitly chooses the grouped release, review/merge its feature PRs through the agreed workflow. Prepare the matching stable `package.json`/lockfile version through a PR targeting `main`, then run the required checks. Do not push implementation directly to `main`.
 2. Create and push the matching `vMAJOR.MINOR.PATCH` tag deliberately. Tags do not trigger publishing.
 3. Run the workflow from its default branch, selecting that exact tag as `ref`, `mode: release`, and `publish: true`.
 4. The workflow validates exact version/tag identity and main ancestry, public repository status and required credentials. It builds with hardened runtime, Developer ID signing and notarization, then checks signatures, team, stapled ticket, Gatekeeper, DMG integrity and ZIP metadata.
@@ -51,3 +55,7 @@ Primary references: [electron-builder v26 updates](https://www.electron.build/v2
 The public [0.9.0](https://github.com/MattGibney/crew/releases/tag/v0.9.0) and [0.9.1](https://github.com/MattGibney/crew/releases/tag/v0.9.1) releases completed signing, notarization and publication. The [0.9.1 workflow](https://github.com/MattGibney/crew/actions/runs/39559911796) passed 200 tests and all production verification gates. Independent local verification accepted the downloaded/installed applications as Notarized Developer ID with bundle identifier `local.voice.manager`.
 
 An isolated signed 0.9.0 installation fetched 0.9.1 from the production feed, downloaded it through electron-updater and completed a native install/relaunch after explicit Restart. It retained the same configured project and byte-identical configuration, editable prompts and saved-chat files. The upgraded application again passed signature, stapled-ticket and Gatekeeper checks. No physical microphone or business worker was started; the test copy was stopped afterward and the existing user installation was preserved.
+
+## Grouped release 0.10.0
+
+The user explicitly selected PRs 4–7 and version 0.10.0 for one grouped signed release. Their complete histories are retained through the integration branch and reviewable integration PR; no squash or history rewrite is required. Combined acceptance covers shared toolchains, prompt/manager lifecycle, multi-project capacity and all-project pause/update recovery. Publication is authorized for this named release only. Later features continue through PRs and wait for another explicit release selection.

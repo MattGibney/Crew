@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
+import { promptSnapshot } from './prompt-settings.mjs';
 
 const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
@@ -28,6 +29,7 @@ function validate(task, expectedId) {
       || typeof task.status !== 'string' || !task.status || !Number.isSafeInteger(task.revision) || task.revision < 1
       || !Number.isFinite(Date.parse(task.createdAt)) || !Number.isFinite(Date.parse(task.updatedAt))
       || (task.lifecycleRequests !== undefined && (!Array.isArray(task.lifecycleRequests) || task.lifecycleRequests.some(request => !request || typeof request.id !== 'string' || !ID.test(request.id) || !LIFECYCLE_ACTIONS.has(request.action) || !LIFECYCLE_STATES.has(request.status) || !Number.isFinite(Date.parse(request.at)) || (request.expectedRunId != null && (typeof request.expectedRunId !== 'string' || !request.expectedRunId.trim())))))
+      || (task.workerPromptSnapshot !== undefined && (!task.workerPromptSnapshot || typeof task.workerPromptSnapshot.text !== 'string' || task.workerPromptSnapshot.version !== promptSnapshot(task.workerPromptSnapshot.text).version))
       || !Array.isArray(task.reports) || !Array.isArray(task.attention)
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
@@ -57,7 +59,7 @@ async function ownerActive(owner){
   try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')return false;return true;}
   try{const actual=(await snapshotProcesses()).get(owner.pid);return Boolean(actual&&actual.start===owner.start&&!actual.state?.includes('Z'));}catch{return true;}
 }
-async function lock(dir,name,fn){
+export async function withStateLock(dir,name,fn){
   await fs.mkdir(dir,{recursive:true,mode:0o700});
   const lockPath=path.join(dir,name),token=randomUUID(),candidate=`${lockPath}.candidate-${token}`,owner={...await ownIdentity(),token,at:now()};
   // Publish a complete, nonempty owner directory atomically. A process killed
@@ -115,24 +117,25 @@ export async function loadTasks(dir) { return loadUnlocked(dir); }
 export async function createTask(dir, { requestId, ticket, brief, projectId = null, repositoryId = null }) {
   for (const [name, value] of Object.entries({ projectId, repositoryId })) if (value !== null && (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) throw new Error(`Invalid ${name}`);
   identifier(requestId); text(ticket, 'ticket', 120); text(brief, 'brief');
-  return lock(dir, '.schedule.lock', async () => {
+  return withStateLock(dir, '.schedule.lock', async () => {
     const tasks = await loadUnlocked(dir);
     const existing = tasks.find(task => task.id === requestId);
     if (existing) {
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
-    return lock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
+    return withStateLock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
   });
 }
 export async function updateTask(dir, id, fn) {
   identifier(id);
-  return lock(dir, '.schedule.lock', () => lock(dir, `.${id}.lock`, async () => {
+  return withStateLock(dir, '.schedule.lock', () => withStateLock(dir, `.${id}.lock`, async () => {
     const task = await readUnlocked(dir, id);
-    const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision };
+    const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision, workerPromptSnapshot: task.workerPromptSnapshot ? JSON.stringify(task.workerPromptSnapshot) : null };
     const returned = await fn(task);
     const next = returned === undefined ? task : returned;
     if (!next || next.id !== identity.id || next.ticket !== identity.ticket || next.brief !== identity.brief || next.projectId !== identity.projectId || next.repositoryId !== identity.repositoryId || next.createdAt !== identity.createdAt) throw new Error('Task identity is immutable');
+    if (identity.workerPromptSnapshot && JSON.stringify(next.workerPromptSnapshot) !== identity.workerPromptSnapshot) throw new Error('Worker prompt snapshot is immutable');
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
     next.revision = identity.revision + 1; next.updatedAt = now();
     validate(next, id);
@@ -180,22 +183,23 @@ export async function acknowledgeAttention(dir, { taskId, attentionId }) {
 
 // Requests are durable intent, not evidence that a process has stopped or restarted.
 // The controller alone performs lifecycle transitions and marks each request handled.
-export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId }) {
+export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
   if (!LIFECYCLE_ACTIONS.has(action)) throw new Error('Invalid worker action');
+  if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {
     const requests = task.lifecycleRequests ||= [];
     const existing = requests.find(request => request.id === actionId);
     if (existing) {
       // An exact retry remains valid even after the controller advances to a new run.
-      if (existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
+      if (Boolean(existing.cooperative) !== cooperative || existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
       return;
     }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId) throw new Error('Stale worker run for lifecycle action');
     if (task.status === 'disposed') throw new Error('Worker has been disposed');
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
-    requests.push({ id: actionId, action, expectedRunId: task.runId || null, status: 'pending', at: now() });
+    requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
   });
 }

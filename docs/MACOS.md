@@ -29,13 +29,13 @@ Preparation must show the configured project, ChatGPT sign-in and an enabled Con
 
 Closing the window ends voice and releases its microphone, then leaves the controller and menu-bar icon running. **Open [project]** recreates the window with the same durable task state. Pending worker questions/results appear as raised-hand attention in the app and menu bar. They do not start a call or speak unsolicited.
 
-**Quit this instance…** (also Command-Q) asks for confirmation and displays active-work status. It ends voice and shuts down the controller owned by that instance. Independently dispatched worker supervisors are not canceled; they can finish and write reports while the controller is stopped. Reopen the same instance to process those reports. Quit never guesses which unrelated OS process to stop. Restart the app after a reboot; a sleeping or offline Mac cannot continue active model work.
+**Quit Crew…** (also Command-Q) asks for confirmation and displays all-project active-work status. It ends voice and shuts down every controller owned by this native app. Independently dispatched worker supervisors are not canceled; they can finish and write reports while the controller is stopped. Reopen the same instance to process those reports. Quit never guesses which unrelated OS process to stop. Restart the app after a reboot; a sleeping or offline Mac cannot continue active model work.
 
 Do not use CLI `stop` against a controller currently owned by Electron as the normal desktop shutdown workflow. Use the desktop Quit action so the ownership and lifecycle checks run together.
 
 ## Another project or business
 
-Run a separate instance of the same app with a separate config file. There is no runtime project switcher. Initialize the files first with the bundled runtime, then edit the project, port and state directory before launching:
+Use the project switcher beside the current project name and choose Add project. Onboarding creates isolated settings, instructions, state and port; the existing project keeps running. Rename is in the switcher. Removal is deferred. For an existing external config, an explicit launch registers/selects it in the same installed app, preserving its paths. Initialize missing external files first with the bundled runtime, then edit project/port/state before launching:
 
 ```sh
 app='/Applications/Crew.app/Contents'

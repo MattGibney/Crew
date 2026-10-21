@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, Check, ChevronDown, Clock3, FolderGit2, GitBranch, Hand, LoaderCircle, Pause, Play, Square, Trash2, TriangleAlert } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { formatElapsed, groupWorkers, pendingAttention, pendingLifecycle, workerActions, workerStatus, workerTiming } from './worker-model.js';
+import { formatElapsed, groupWorkers, pendingAttention, pendingLifecycle, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.js';
 
 const ACTIONS = { pause: { label: 'Pause', Icon: Pause }, stop: { label: 'Stop', Icon: Square }, resume: { label: 'Resume', Icon: Play }, dispose: { label: 'Remove worktree', Icon: Trash2 } };
 function AttentionItem({ taskId, item, onReview, disabled }) {
@@ -19,7 +19,7 @@ function WorkerCard({ task, onReview, onAction, disabled, now }) {
   const [busy, setBusy] = useState(false), [confirmRemove, setConfirmRemove] = useState(false), [error, setError] = useState(''), [requested, setRequested] = useState('');
   const attention = pendingAttention(task), pending = pendingLifecycle(task), timing = workerTiming(task, now);
   const title = task.brief?.trim().split('\n')[0] || 'Worker task';
-  const progress = task.failure || task.result?.message || task.progress || (task.status === 'launching' ? 'Preparing the project environment.' : task.status === 'queued' ? 'Waiting for an available worker slot.' : 'Waiting for the next progress report.');
+  const progress = workerProgress(task);
   const actions = workerActions(task), retained = task.worktree && task.status !== 'disposed';
   const recentAction = task.lifecycleRequests?.at(-1);
   useEffect(() => { setRequested(''); setConfirmRemove(false); }, [task.runId, task.status, recentAction?.status]);
@@ -59,6 +59,7 @@ function WorkerCard({ task, onReview, onAction, disabled, now }) {
         <div><dt className="font-medium text-foreground">Worktree</dt><dd className="break-all select-text">{task.worktree || 'Not created yet'}</dd></div>
         {task.environment && <div><dt className="font-medium text-foreground">Project environment</dt><dd>{task.environment.status || 'Status unavailable'}{task.environment.urls?.web && <span className="mt-1 block break-all select-text">{task.environment.urls.web}</span>}</dd></div>}
         <div><dt className="font-medium text-foreground">Linear ticket</dt><dd>{task.ticket || 'Reference unavailable'} · title and status not available in this local record. Worker status above is separate.</dd></div>
+        <div><dt className="font-medium text-foreground">Worker instructions</dt><dd>{task.workerPromptSnapshot?.text && task.workerPromptSnapshot?.version ? <details className="mt-1"><summary className="cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`Instruction version: ${task.workerPromptSnapshot.version}`}>Original snapshot · {String(task.workerPromptSnapshot.version).slice(0, 10)}</summary><p className="mt-2">Retained for this worker. Settings edits apply to newly launched workers.</p><pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md border bg-background p-3 font-mono text-[11px] text-foreground" tabIndex={0} aria-label={`Original instructions for worker ${task.ticket || task.id}`}>{task.workerPromptSnapshot.text}</pre></details> : 'Snapshot unavailable in this record. New workers record their instructions on first launch.'}</dd></div>
         <div><dt className="font-medium text-foreground">Agreed task</dt><dd className="whitespace-pre-wrap break-words">{task.brief}</dd></div>
         <div><dt className="font-medium text-foreground">Latest report</dt><dd className="whitespace-pre-wrap break-words">{progress}</dd></div>
         {timing.observedAt && <div><dt className="font-medium text-foreground">Process last checked</dt><dd><time dateTime={timing.observedAt}>{new Date(timing.observedAt).toLocaleString()}</time></dd></div>}
