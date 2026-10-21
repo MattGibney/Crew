@@ -87,7 +87,17 @@ export async function withStateLock(dir,name,fn){
     if(acquired){const current=await lockOwner(lockPath);if(current?.token!==token)throw new Error(`State lock ownership changed: ${name}; no other lock was removed`);
       // Move the entire lock away before deleting it: removing owner.json in
       // place would briefly create an empty directory another writer can replace.
-      const released=`${lockPath}.released-${token}`;await fs.rename(lockPath,released);await fs.rm(released,{recursive:true});
+      // Recovery and ordinary release retire into the SAME token-specific
+      // barrier. A delayed observer of this owner must never rename its successor.
+      await fs.rename(lockPath,`${lockPath}.stale-${token}`);
+      // Each observer publishes its candidate before reading an owner and keeps
+      // it until acquisition/failure. Capture retired barriers BEFORE checking
+      // candidates: when none remain, nobody can still act on those old owners.
+      // New candidates cannot observe an owner already retired before this scan.
+      // Crash candidates conservatively retain barriers; never expire by age.
+      const retired=(await fs.readdir(dir)).filter(entry=>entry.startsWith(`${name}.stale-`));
+      const observing=(await fs.readdir(dir)).some(entry=>entry.startsWith(`${name}.candidate-`));
+      if(!observing)for(const entry of retired)await fs.rm(path.join(dir,entry),{recursive:true,force:true});
     }else await fs.rm(candidate,{recursive:true,force:true});
   }
 }

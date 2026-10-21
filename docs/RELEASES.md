@@ -59,3 +59,9 @@ An isolated signed 0.9.0 installation fetched 0.9.1 from the production feed, do
 ## Grouped release 0.10.0
 
 The user explicitly selected PRs 4–7 and version 0.10.0 for one grouped signed release. Their complete histories are retained through the integration branch and reviewable integration PR; no squash or history rewrite is required. Combined acceptance covers shared toolchains, prompt/manager lifecycle, multi-project capacity and all-project pause/update recovery. Publication is authorized for this named release only. Later features continue through PRs and wait for another explicit release selection.
+
+### Unpublished 0.10.0 attempt provenance
+
+The first hosted attempt, [39582116047](https://github.com/MattGibney/Crew/actions/runs/39582116047), tested tag v0.10.0 at d03f7baf10188978141e3b792a9aaf07e0fc1ec1. It stopped before signing, artifact upload or publication: three HTTP tests lacked clean-runner renderer assets and a concurrent-process test exposed a stale lock-owner recovery race. GitHub reported no release and zero artifacts. Keep this run and SHA as failed-attempt evidence.
+
+Within the user's explicitly authorized exact 0.10.0 release, the failed unpublished tag may be corrected only after its release-gate fix PR merges and validation passes. Record its replacement SHA and retry run. Verify no version release/assets/feed or competing publication exists immediately before correcting it. This is not permission to rewrite a published release or unrelated tag/history.
