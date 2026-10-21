@@ -49,6 +49,9 @@ try {
 const runtimeProjectPath = path.join(orchestrationDir, 'project-runtime.json');
 const shutdownToken = randomUUID();
 const broadcast = event => {
+  if (typeof process.send === 'function' && process.env.ELECTRON_RUN_AS_NODE === '1' && ['work-state', 'orchestration-state'].includes(event.type)) {
+    try { process.send({ type: 'crew:attention:state', event }, () => {}); } catch { /* The native owner may already be quitting. */ }
+  }
   for (const client of clients) {
     try { client.write(`data: ${JSON.stringify(event)}\n\n`); }
     catch { clients.delete(client); }
@@ -145,7 +148,7 @@ const server = http.createServer(async (req, res) => {
       const reservation=await updateAdmission.reserve(activity);if(reservation.reserved){try{await bridge.shutdown({cooperative:true});}catch(error){updateAdmission.cancel();throw error;}}return send(200,reservation);
     }
     if (updateAdmission.reserved && ['/api/work','/api/connect','/api/discuss-attention','/api/prepare','/api/voice-ready'].includes(req.url)) return send(409,{error:'Crew is preparing a safe update restart. Wait for it to finish before starting work.'});
-    if (req.url === '/api/config') return send(200, { name: 'Crew', project: { id: project.id, name: project.name, mode: project.mode, readiness: project.readiness }, legacyState: configuration.legacyState });
+    if (req.url === '/api/config') return send(200, { name: 'Crew', nativeAttentionSound: Boolean(process.send && process.env.ELECTRON_RUN_AS_NODE === '1'), project: { id: project.id, name: project.name, mode: project.mode, readiness: project.readiness }, legacyState: configuration.legacyState });
     if (req.url === '/api/shutdown') {
       if (input.token !== shutdownToken) return send(403, { error: 'Use this instance’s local stop command.' });
       send(202, { stopping: true });

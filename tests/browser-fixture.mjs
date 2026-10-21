@@ -25,6 +25,7 @@ let managerLifecycle = { state: 'running' };
 const fixturePrompt = 'You are the Crew fixture manager. Help the user plan work and report verified progress.';
 let settings = { projectId: 'crew-acceptance-fixture', projectName: 'Crew acceptance fixture', manager: { saved: { text: fixturePrompt, version: 'manager-1' }, activeVersion: 'manager-1', pendingRestart: false, defaultText: fixturePrompt }, worker: { saved: { text: 'Complete the agreed fixture task and report evidence.', version: 'worker-1' }, defaultText: 'Complete the agreed fixture task and report evidence.' } };
 let promptRevision = 1, promptSaveDelay = 0;
+let nativeAttentionSound = false;
 let proof = { calls: [], media: null, setup: [] };
 const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
 const settingsView = () => ({ ...settings, managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
@@ -46,6 +47,7 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/__setup-proof') { proof.setup.push(body); return send({ ok: true }); }
       if (url.pathname === '/__control') {
         if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
+        if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
         if (body.work) { work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
         if (body.orchestration) { orchestration = body.orchestration; emit({ type: 'orchestration-state', state: orchestration }); }
         if (body.workerApprovals) { workerApprovals = body.workerApprovals; emit({ type: 'worker-approval-state', requests: workerApprovals }); }
@@ -55,6 +57,7 @@ const server = http.createServer(async (req, res) => {
         return send({ ok: true });
       }
       const name = url.pathname.replace('/api/', ''); proof.calls.push({ name, body });
+      if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
       if (name === 'settings/prompts') {
         if (promptSaveDelay) await new Promise(resolve => setTimeout(resolve, promptSaveDelay));
         const item = settings[body.role];
@@ -71,7 +74,7 @@ const server = http.createServer(async (req, res) => {
         emit({ type: 'manager-lifecycle', state: lifecycleView() }); emit({ type: 'work-state', state: work });
         return send({ managerLifecycle: lifecycleView(), state: work });
       }
-      if (name === 'config') return send({ project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
+      if (name === 'config') return send({ nativeAttentionSound, project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
       if (name === 'prepare') return send({ plan: 'synthetic fixture', state: work });
       if (name === 'state') return send(work);
       if (name === 'orchestration') return send(orchestration);
@@ -84,6 +87,7 @@ const server = http.createServer(async (req, res) => {
       if (['voice-ready', 'voice-status', 'disconnect', 'approval', 'stop-work', 'discuss-attention'].includes(name)) return send({ ok: true });
       return send({ error: `Unknown fixture endpoint ${name}` }, 404);
     }
+    if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (url.pathname === '/__proof') return send(proof);
     if (url.pathname === '/__state') return send({ work, orchestration });
     if (url.pathname === '/__media.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(await readFile(path.join(root, 'tests/fixtures/browser-media.js'))); }

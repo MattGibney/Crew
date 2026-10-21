@@ -2,10 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorText } from './api.js';
 import { createVoiceInput, voiceActivityEvent } from './voice-input.js';
 import { createSilentAudio } from './voice-silence.js';
+import { createCallCues } from './sounds.js';
 
 // Media resources belong to this hook, never to a worker or an SSE notification.
-export function useVoiceSession(onError) {
+export function useVoiceSession(onError, sounds) {
   const audioRef = useRef(null);
+  const cues = useRef(null);
+  if (!cues.current) cues.current = createCallCues(kind => sounds.play(kind));
   const resource = useRef({ generation: 0, pc: null, stream: null, channel: null, busy: false, disconnecting: false });
   const [mode, setMode] = useState('open-mic');
   // User mute intent survives call teardown; track availability is not intent.
@@ -18,7 +21,7 @@ export function useVoiceSession(onError) {
   if (!input.current) input.current = createVoiceInput({
     acquire: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
     idleTrack: () => resource.current.silence?.track || null,
-    onChange: value => patch({ ...value, muted: !value.transmitting }),
+    onChange: value => { cues.current.input(value.transmitting, value.inputPending); patch({ ...value, muted: !value.transmitting }); },
     onError: error => {
       const message = error.name === 'NotAllowedError' ? 'Microphone permission was denied. Allow microphone access in system or browser settings, then try again.' : errorText(error);
       patch({ inputError: message });
@@ -32,6 +35,7 @@ export function useVoiceSession(onError) {
   }, []);
   const release = useCallback(() => {
     const state = resource.current;
+    cues.current.ended();
     clearTimeout(state.timer); clearInterval(state.diagnosticsTimer);
     input.current.reset();
     state.timer = null; state.diagnosticsTimer = null;
@@ -80,6 +84,7 @@ export function useVoiceSession(onError) {
   const connect = useCallback(async selectedVoice => {
     const state = resource.current;
     if (state.busy || state.disconnecting || state.pc || !selectedVoice) return;
+    sounds.unlock();
     state.busy = true; state.playbackError = null;
     const attempt = ++state.generation;
     patch({ busy: true, inputError: '', status: mode === 'open-mic' && openMicWanted.current ? 'Connecting voice and microphone…' : 'Connecting voice. Microphone muted…' });
@@ -125,6 +130,7 @@ export function useVoiceSession(onError) {
         if (!current()) return;
         if (connection.connectionState === 'connected') {
           clearTimeout(state.timer); state.busy = false;
+          cues.current.connected();
           patch({ active: true, busy: false, status: 'Connected.' });
           // One attempt per call. Repeated transport events cannot retry permission,
           // override a mute, or recapture a disconnected device.
@@ -159,10 +165,12 @@ export function useVoiceSession(onError) {
     } catch (error) {
       if (attempt === state.generation) { reportError(error); await disconnect('Could not connect. Microphone off.'); }
     }
-  }, [mode, patch, disconnect, reportError, startInput]);
+  }, [mode, patch, disconnect, reportError, startInput, sounds]);
   const toggleMute = useCallback(() => {
+    if (resource.current.pc?.connectionState !== 'connected' || resource.current.disconnecting) return;
+    sounds.unlock(); cues.current.requestInput();
     if (input.current.stream || input.current.pending) { openMicWanted.current = false; stopInput(); }
     else { openMicWanted.current = true; startInput(); }
-  }, [startInput, stopInput]);
+  }, [startInput, stopInput, sounds]);
   return { ...view, mode, openMicMuted: !openMicWanted.current, changeMode, startInput, stopInput, audioRef, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
 }

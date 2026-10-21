@@ -1,16 +1,17 @@
 // AI-002: native Codex protocol adapter. No separate model/tool loop.
 import { spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { conversationMessage } from './conversation.mjs';
+import { managerAttention } from './manager-attention.mjs';
 import { buildManagerInstructions } from './prompt-settings.mjs';
 import { workerApprovalResponse } from './worker-approvals.mjs';
 export const safeError = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1500);
 export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent = () => {} }) {
   // Keep app-owned MCP scripts rooted in cwd; project configuration resolves in sessionCwd.
   const sessionCwd = project?.repositories?.find(repository => repository.path)?.path || cwd;
-  let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0;
+  let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0, requestEpoch;
   let voiceActive = false, connecting = false, negotiation, activeTurnId = null, status = 'idle', voiceGeneration = 0, workStarting = false;
   let connectors = [], connectorError = null, voiceCatalog, greetingSession, lastVoice = null;
   const pending = new Map(), approvals = new Map(), items = new Map(), messages = new Map(), workRequests = new Map();
@@ -33,7 +34,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     const message = conversationMessage(item, turnId);
     if (message) messages.set(item.id, message);
     if (item.type === 'commandExecution') items.set(item.id, { id: item.id, turnId, type: item.type, name: item.command, status: item.status, exitCode: item.exitCode, output: safeError(item.aggregatedOutput || '').slice(0, 2500) });
-    if (item.type === 'mcpToolCall') items.set(item.id, { id: item.id, turnId, type: item.type, name: `${item.server}/${item.tool}`, status: item.status, resultPresent: item.result != null, error: item.error ? safeError(item.error.message || 'MCP call failed') : null });
+    if (item.type === 'mcpToolCall') items.set(item.id, { id: item.id, turnId, type: item.type, name: `${item.server}/${item.tool}`, status: item.status, resultPresent: item.result != null, error: item.error ? safeError(item.error.message || 'MCP call failed') : null, attention: managerAttention(item) });
     if (item.type === 'fileChange') items.set(item.id, { id: item.id, turnId, type: item.type, name: 'File changes', status: item.status, changes: item.changes });
     if (items.size > 80) items.delete(items.keys().next().value);
     if (messages.size > 40) messages.delete(messages.keys().next().value);
@@ -47,7 +48,8 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     if (message.id !== undefined && method) {
       if (method === 'currentTime/read') return send({ id: message.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } });
       if (params.threadId === threadId && ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput', 'mcpServer/elicitation/request', 'item/permissions/requestApproval'].includes(method)) {
-        approvals.set(String(message.id), { id: message.id, method, params }); changed(); return;
+        const attentionId = approvals.get(String(message.id))?.attentionId || createHash('sha256').update(JSON.stringify([params.turnId || items.get(params.itemId)?.turnId || activeTurnId || requestEpoch, params.itemId || '', method, String(message.id)])).digest('hex');
+        approvals.set(String(message.id), { id: message.id, attentionId, method, params }); changed(); return;
       }
       send({ id: message.id, error: { code: -32601, message: `This minimal client does not support ${method}. No action was approved.` } });
       emit('notice', { message: `Codex requested ${method}, which this client cannot handle.` }); return;
@@ -81,6 +83,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       const args = ['app-server', '--stdio', '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"'];
       if (orchestrationDir) args.push('-c', `mcp_servers.local_orchestration.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.local_orchestration.args=${JSON.stringify([`${cwd}/orchestration-mcp.mjs`, orchestrationDir, 'manager', ...(runtimeProjectPath ? [runtimeProjectPath] : [])])}`, '-c', 'mcp_servers.local_orchestration.required=true', '-c', 'mcp_servers.local_orchestration.default_tools_approval_mode="approve"');
       if (orchestrationDir && process.env.ELECTRON_RUN_AS_NODE === '1') args.push('-c', 'mcp_servers.local_orchestration.env.ELECTRON_RUN_AS_NODE="1"');
+      requestEpoch = randomUUID();
       child = spawn(executable, args, { cwd:sessionCwd, env, stdio: ['pipe', 'pipe', 'ignore'] });
       const proc = child;
       const fail = error => {

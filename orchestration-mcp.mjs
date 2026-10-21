@@ -22,6 +22,7 @@ const object = (properties, required = []) => ({ type: 'object', properties, req
 const string = (description, maxLength = 12000) => ({ type: 'string', description, minLength: 1, maxLength });
 const taskIdentifier = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$' };
 const tools = role === 'manager' ? [
+  { name: 'request_attention', description: 'Notify the user only when their response or action is required. Explain the specific decision/action in message. Reuse requestId for retries. Never use for routine completion, progress, failures you can resolve yourself, or duplicate native input requests/worker question alerts. Does not start work or microphone capture.', inputSchema: object({ requestId: taskIdentifier, message: string('Specific question or action the user needs to address', 2000) }, ['requestId', 'message']) },
   {
     name: 'submit_task',
     description: repositoryMode ? 'Start an explicitly user-authorized bounded task in a configured repository, separate worker and isolated Git worktree. Verify the existing Linear ticket first. No backlog selection, push, PR, production or external ticket mutations. Independent tasks may run concurrently in separate workers. Queued dispatch is not completion. Reuse requestId for retries.' : 'Start an explicitly user-authorized read-only disposable fixture audit in a separate worker and Git worktree. Independent tasks may run concurrently in separate workers. Queued dispatch is not completion. Reuse requestId for retries.',
@@ -51,6 +52,7 @@ async function callTool(name, args) {
   validateArgs(tool, args);
   if (role === 'worker') return reportTask(stateDir, taskId, runId, args);
   switch (name) {
+    case 'request_attention': return { ok: true, attention: { requestId: args.requestId, message: args.message } };
     case 'submit_task': {
       if (project && !project.readiness?.ready) throw new Error(`Project configuration is not ready: ${(project.readiness?.issues || ['configuration incomplete']).join('; ')}`);
       if (repositoryMode) {
@@ -91,7 +93,10 @@ async function request(message) {
     case 'ping': result({}); return;
     case 'tools/list': result({ tools }); return;
     case 'tools/call':
-      try { result({ content: [{ type: 'text', text: JSON.stringify(await callTool(message.params?.name, message.params?.arguments ?? {})) }] }); }
+      try {
+        const value = await callTool(message.params?.name, message.params?.arguments ?? {});
+        result({ content: [{ type: 'text', text: JSON.stringify(value) }], ...(message.params?.name === 'request_attention' ? { structuredContent: value } : {}) });
+      }
       catch (error) { result({ isError: true, content: [{ type: 'text', text: error.message }] }); }
       return;
     default: send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'Method not found' } });
