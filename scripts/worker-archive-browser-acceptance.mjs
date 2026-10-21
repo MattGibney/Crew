@@ -80,7 +80,7 @@ try {
   // Large project archive with known, unknown legacy and cross-project records.
   const legacy = state.tasks.find(task => task.id === 'fixture-task-10');
   legacy.status = 'removed'; legacy.attention = [attention];
-  const older = state.tasks.find(task => task.id === 'fixture-task-9'); older.status = 'disposed'; older.archivedAt = '2026-10-20T09:00:00.000Z';
+  const older = state.tasks.find(task => task.id === 'fixture-task-9'); older.status = 'disposed'; older.archivedAt = '2026-10-20T09:00:00.000Z'; older.attention = [{ id: 'old-question-9', kind: 'question', message: 'Historical question must not reactivate.' }]; older.question = { id: 'old-question-9', runId: older.runId, message: 'Historical question must not reactivate.' };
   const foreign = { ...legacy, id: 'foreign-archive', projectId: 'other-project', brief: 'Other project archive must stay private', archivedAt: '2026-10-22T09:00:00.000Z' };
   const largeArchive = Array.from({ length: 45 }, (_, index) => ({ ...legacy, id: `older-archive-${index}`, brief: `Historical fixture assignment ${index}`, ticket: `HIST-${index}`, archivedAt: new Date(Date.UTC(2026, 8, 1, 0, index)).toISOString() }));
   state.tasks.push(foreign, ...largeArchive); await post({ orchestration: state });
@@ -123,28 +123,63 @@ try {
   assert.ok(persisted.some(task => task.id === foreign.id), 'Other project history remains intact');
   assert.ok(persisted.some(task => task.id === older.id) && persisted.some(task => task.id === legacy.id), 'Other archived history remains intact');
   assert.deepEqual(await media(), connected, 'Delete preserves the established synthetic call');
+  // Restore returns only the retained record; the removed environment stays unavailable.
+  const restorationRow = archive.locator('[data-archived-worker-id="fixture-task-9"]');
+  const beforeRestoreCalls = await proof();
+  const retainedDetail = await (await context.request.get(`${origin}/api/workers/${older.id}`)).json();
+  await post({ workerApprovals: [{ approvalId: 'old-approval-9', taskId: older.id, runId: older.runId, threadId: 'fixture-worker-9', requestId: 49, method: 'item/commandExecution/requestApproval', params: { command: 'historical synthetic command' } }] });
+  await restorationRow.getByRole('button', { name: 'Restore', exact: true }).click();
+  await restorationRow.waitFor({ state: 'detached' });
+  assert.equal(await archiveRows.count(), 46, 'Restored history leaves archive table');
+  const restoration = (await proof()).filter(call => call.name === 'archived-worker-action').at(-1).body;
+  assert.equal(restoration.taskId, older.id); assert.equal(restoration.action, 'restore');
+  assert.equal(restoration.expectedRevision, older.revision); assert.match(restoration.operationId, /^archive-/);
+  const restored = (await (await context.request.get(`${origin}/__state`)).json()).orchestration.tasks.find(task => task.id === older.id);
+  assert.equal(restored.status, 'blocked'); assert.equal(restored.archiveRestoration.requiresRecovery, true);
+  assert.deepEqual(await (await context.request.get(`${origin}/api/workers/${older.id}`)).json(), retainedDetail, 'Restore preserves all recorded conversation, notes, links and evidence');
+  assert.equal(restored.brief, older.brief); assert.equal(restored.runId, older.runId);
+  assert.equal(restored.worktree, older.worktree, 'Restoration preserves provenance without creating a worktree');
+  assert.ok(restored.attention.every(item => item.ackedAt), 'Historical attention stays retained but inactive');
+  assert.equal(restored.question, null); assert.equal(restored.archivedQuestions[0].id, 'old-question-9');
+  assert.deepEqual(await media(), connected, 'Restore preserves the established synthetic call');
+  const afterRestoreCalls = await proof();
+  for (const name of ['work', 'prepare', 'connect', 'manager/lifecycle']) assert.equal(afterRestoreCalls.filter(call => call.name === name).length, beforeRestoreCalls.filter(call => call.name === name).length, `Restore does not invoke ${name}`);
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('navigation', { name: 'Workspace views' }).getByRole('button', { name: /^Conversation/ }).click();
   assert.equal(await nav.getByRole('button', { name: /approval/ }).count(), 0, 'Deleting archived history cannot resurrect its stale approval badge');
   assert.equal(await page.getByRole('region', { name: /^Worker approval/ }).count(), 0, 'Deleting archived history cannot resurrect a native approval form');
-  // Delayed stale native approval snapshots are still positively matched to current task/run.
-  await post({ workerApprovals: [{ approvalId: 'archive-stale-approval', taskId: target.id, runId: target.runId, threadId: 'fixture-worker-7', requestId: 43, method: 'item/commandExecution/requestApproval', params: { command: 'synthetic command' } }] });
+  // Delayed deleted/restored native snapshots stay inactive in the ordinary conversation.
+  await post({ workerApprovals: [{ approvalId: 'archive-stale-approval', taskId: target.id, runId: target.runId, threadId: 'fixture-worker-7', requestId: 43, method: 'item/commandExecution/requestApproval', params: { command: 'synthetic command' } }, { approvalId: 'old-approval-9', taskId: older.id, runId: older.runId, threadId: 'fixture-worker-9', requestId: 49, method: 'item/commandExecution/requestApproval', params: { command: 'historical synthetic command' } }] });
   assert.equal(await nav.getByRole('button', { name: /approval/ }).count(), 0, 'Delayed deleted-task approval snapshot remains hidden');
   assert.equal(await page.getByRole('region', { name: /^Worker approval/ }).count(), 0, 'Delayed deleted-task snapshot offers no actionable form');
   await page.getByRole('tab', { name: 'Text', exact: true }).click();
   assert.equal(await page.getByRole('textbox', { name: 'Message your manager', exact: true }).inputValue(), 'Keep this draft through archive completion.', 'Delete preserves manager draft');
+  await sidebar.locator('[data-worker-id="fixture-task-9"]').waitFor();
+  await sidebar.locator('[data-worker-id="fixture-task-9"]').click();
+  await visibleDetail.getByText('Inspect fixture area 9 and report verified evidence.', { exact: true }).waitFor();
+  assert.equal(await visibleDetail.getByRole('button', { name: /Review approval with manager|Review with manager/ }).count(), 0, 'Restored history does not reactivate old approvals or attention');
+  await visibleDetail.getByRole('tab', { name: 'Overview', exact: true }).click();
+  await visibleDetail.getByText(/environment was removed or is unavailable/).waitFor();
+  assert.equal(await visibleDetail.getByRole('button', { name: 'Resume', exact: true }).count(), 0, 'Missing restored environment is never offered as runnable');
+  await visibleDetail.getByText(/Restore has not recreated this worker/).waitFor();
+  await visibleDetail.getByRole('button', { name: 'Discuss with manager', exact: true }).waitFor();
+  assert.equal(await visibleDetail.getByRole('button', { name: 'Recreate environment', exact: true }).count(), 0, 'Restoration does not invent a reconstruction action');
+  assert.deepEqual(await media(), connected, 'Restored ordinary detail keeps the same call');
+  await page.screenshot({ path: path.join(output, 'restored-history-recovery-needed.png'), fullPage: true });
+  await visibleDetail.getByRole('button', { name: 'Back to manager', exact: true }).click();
   // A page reload reconnects only to retained fixture state; archive projection must persist.
   await page.reload(); await sidebar.waitFor();
   assert.equal(await sidebar.locator('[data-worker-id="fixture-task-7"]').count(), 0);
   assert.equal(await sidebar.locator('[data-worker-id="fixture-task-10"]').count(), 0);
+  assert.equal(await sidebar.locator('[data-worker-id="fixture-task-9"]').count(), 1, 'Restored record remains ordinary workspace history after reload');
   assert.equal((await media()).calls, 0, 'Reload does not capture a microphone');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   await page.getByRole('button', { name: 'Archived workers', exact: true }).click();
   await archiveRows.first().waitFor();
-  assert.equal(await archiveRows.count(), 47, 'Archive and deletion survive reload');
+  assert.equal(await archiveRows.count(), 46, 'Archive, deletion and restoration survive reload');
   assert.equal(await deletionRow.count(), 0);
   assert.equal(errors.length, 0, errors.join('\n'));
-  const evidence = { pass: true, output, syntheticMediaOnly: true, managerDisposeCorrelation: true, pendingAndFailedVisible: true, retainedCompletedPausedStopped: true, successfulActiveAbsence: true, callAndDraftContinuity: true, projectScopedArchiveCount: 48, unknownLegacyTime: true, archiveTableOnly: true, deleteConfirmationCancelAndCommit: true, deletedApprovalNeverResurrects: true, restoreDeferred: true, reload: true };
+  const evidence = { pass: true, output, syntheticMediaOnly: true, managerDisposeCorrelation: true, pendingAndFailedVisible: true, retainedCompletedPausedStopped: true, successfulActiveAbsence: true, callAndDraftContinuity: true, projectScopedArchiveCount: 48, unknownLegacyTime: true, archiveTableOnly: true, deleteConfirmationCancelAndCommit: true, deletedApprovalNeverResurrects: true, historyOnlyRestore: true, restoredEnvironmentNotRunnable: true, restoredAttentionInactive: true, reload: true };
   await writeFile(path.join(output, 'evidence.json'), JSON.stringify(evidence, null, 2));
   console.log(JSON.stringify(evidence));
 } finally { await cleanup(); }

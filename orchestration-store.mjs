@@ -332,6 +332,11 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
   });
 }
 
+export async function ensureArchiveExecutionStopped(dir,task) {
+  const checked=await inspectUpdateEvidence({stateDir:dir,view:{tasks:[task]}});const evidence=checked.tasks[0].updateEvidence;
+  if(!['stopped','absent'].includes(evidence.worker)||!['stopped','absent'].includes(evidence.runtime)||evidence.hooks.some(hook=>!['stopped','absent'].includes(hook.state)))throw new Error('Archived worker execution is live or unverified; preserve its records until ownership and terminal evidence are resolved');
+}
+
 // Explicit archive record operations never run project commands or touch provider history.
 export async function manageArchivedTask(dir, {taskId, action, operationId, expectedRevision}, project) {
   identifier(taskId);identifier(operationId,'operation ID');
@@ -357,9 +362,10 @@ export async function manageArchivedTask(dir, {taskId, action, operationId, expe
       if(task.revision!==expectedRevision)throw new Error('Archived worker changed; refresh and confirm again');
     }
     if(action==='restore'){
+      await ensureArchiveExecutionStopped(dir,task);
       const previous=structuredClone(task),at=now();
-      task.status='blocked';task.failure='Restored archive history. Its environment was removed or is unavailable; review retained resources before explicit recovery. No worker or setup was started.';
-      task.archiveRestorations ||= [];task.archiveRestoration={operationId,at,requiresRecovery:true,archiveRevision:expectedRevision};task.archiveRestorations.push({...task.archiveRestoration});
+      task.status='blocked';task.failure='Restored worker history only. Its environment is absent or unavailable. Environment reconstruction is not currently supported; no setup or worker was started.';
+      task.archiveRestorations ||= [];task.archiveRestoration={operationId,at,requiresRecovery:true,reason:'history-only',archiveRevision:expectedRevision,previousStatus:previous.status,previousFailure:previous.failure||null};task.archiveRestorations.push({...task.archiveRestoration});
       for(const item of task.attention)if(!item.ackedAt){item.ackedAt=at;item.resolution='Historical attention retained from archived worker';}
       if(task.question){task.archivedQuestions ||= [];task.archivedQuestions.push(task.question);task.question=null;}
       (task.history ||= []).push({id:`archive-restore:${operationId}`,actor:'controller',kind:'lifecycle',message:task.failure,at,runId:task.runId||null});
@@ -368,8 +374,7 @@ export async function manageArchivedTask(dir, {taskId, action, operationId, expe
     }
     return withStateLock(root,'.worker-approvals.lock',async()=>{
     if(task&&journal?.status!=='deleting'){
-      const checked=await inspectUpdateEvidence({stateDir:dir,view:{tasks:[task]}});const evidence=checked.tasks[0].updateEvidence;
-      if(!['stopped','absent'].includes(evidence.worker)||!['stopped','absent'].includes(evidence.runtime)||evidence.hooks.some(hook=>!['stopped','absent'].includes(hook.state)))throw new Error('Archived worker execution is live or unverified; preserve its records until ownership and terminal evidence are resolved');
+      await ensureArchiveExecutionStopped(dir,task);
     }
     const records=['json','md','notes.md'].map(extension=>path.join(root,'tasks',`${taskId}.${extension}`));
     for(const file of records)await safeFile(file);

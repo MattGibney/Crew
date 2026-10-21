@@ -85,3 +85,11 @@ test('archive preserves authoritative fixture-only legacy scope without exposing
   assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'fixture'), [legacy]);
   assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'repository'), []);
 });
+
+test('history-only restore is visible and offers no runnable resume or invented environment readiness', () => {
+  const restored = worker({ status: 'blocked', worktree: '/removed', archiveRestoration: { requiresRecovery: true }, failure: 'Restore did not recreate the environment.' });
+  assert.equal(workerStatus(restored), 'History restored');
+  assert.deepEqual(workerActions(restored), ['dispose']);
+  assert.equal(workerProgress(restored), 'Restore did not recreate the environment.');
+  assert.deepEqual(workerActions({ ...restored, execution: { live: true } }), ['pause', 'stop']);
+});

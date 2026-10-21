@@ -3,9 +3,9 @@ import {resolveProjectToolchain,applyProjectToolchain} from './project-toolchain
 // Deterministic local controller. Polls files; never polls a model or starts voice.
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdir, readFile, writeFile, rename, mkdtemp, open, unlink, realpath } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, mkdtemp, open, unlink, realpath, lstat } from 'node:fs/promises';
 import { runEnvironmentHooks, environmentFile, reconcileEnvironment } from './worker-environment.mjs';
-import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,applyProjectRecovery} from './project-environment.mjs';
+import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,applyProjectRecovery,reviewProjectRecovery} from './project-environment.mjs';
 import {selectWorktreeRoot,ensureWorktreeRoot} from './worktree-paths.mjs';
 import {snapshotProcesses} from './process-ownership.mjs';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +13,7 @@ import { promptSnapshot, promptVersion } from './prompt-settings.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import { isArchivedTask } from './worker-archive.mjs';
-import { loadTasks, readTask, updateTask } from './orchestration-store.mjs';
+import { loadTasks, readTask, updateTask, ensureArchiveExecutionStopped } from './orchestration-store.mjs';
 import { createGlobalCapacity } from './global-capacity.mjs';
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -195,6 +195,28 @@ export async function createController({ stateDir, sourceDir, executable, projec
   }
   async function finishRequest(id,requestId,error=null){await updateTask(stateDir,id,next=>{const r=next.lifecycleRequests?.find(r=>r.id===requestId);if(r){r.status=error?'failed':'completed';r.handledAt=now();if(error)r.error=error;}});}
   async function dispose(task,request){
+    if(task.archiveRestoration?.requiresRecovery){
+      await ensureArchiveExecutionStopped(stateDir,task);
+      if(task.worktree){
+        if(project?.mode==='repository'&&task.environment?.kind==='project-execution'){
+          const review=await reviewProjectRecovery({stateDir,task,project,mode:'retire_missing'});
+          if(!review.allowed)throw new Error(`Restored history cannot be archived while resource ownership is unresolved: ${review.blockers.join('; ')}`);
+        }else{
+          const repositoryMode=project?.mode==='repository';
+          const repository=repositoryMode?project.repositories?.find(item=>item.id===task.repositoryId):null;
+          const meta=repositoryMode?{repo:repository?.path,base:await selectWorktreeRoot(stateDir,task)}:await json(path.join(stateDir,'fixture.json'));
+          const expected=meta&&path.join(meta.base,task.worktreeName||(repositoryMode?task.id:`worker-${task.id}`));
+          if(!meta?.repo||task.worktree!==expected||await realpath(task.repositoryPath||task.fixtureRepo)!==await realpath(meta.repo))throw new Error('Restored worktree identity is unverified; history was retained.');
+          const exists=await lstat(task.worktree).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;});
+          if(exists)throw new Error('Restored worker worktree path exists; preserve it for explicit review.');
+          const canonical=path.join(await realpath(path.dirname(expected)),path.basename(expected));
+          const {stdout}=await exec('git',['-C',meta.repo,'worktree','list','--porcelain','-z']);
+          if(stdout.split('\0').some(field=>field===`worktree ${expected}`||field===`worktree ${canonical}`))throw new Error('Restored worker worktree remains registered with Git; history was retained.');
+        }
+      }
+      await updateTask(stateDir,task.id,n=>{const at=now();n.status='disposed';n.archivedAt=at;n.archiveRestoration={...n.archiveRestoration,rearchivedAt:at};(n.history ||= []).push({id:`archive-restored:${request.id}`,actor:'controller',kind:'lifecycle',at,runId:n.runId||null,message:task.worktree?'Re-archived restored history after verified absent worktree and terminal execution. No environment cleanup was run.':'Re-archived restored history with no recorded worktree path. Resource cleanup remains unverified. No environment cleanup was run.'});const current=n.lifecycleRequests.find(r=>r.id===request.id);current.status='completed';current.handledAt=at;});
+      return;
+    }
     const environment=await reconcileEnvironment({stateDir,taskId:task.id});if(environment?.pending)throw new Error('An environment command has not confirmed it stopped. Wait for its bounded supervisor before removing this worktree.');
     const previousExit=task.runDir?await json(path.join(task.runDir,'exit.json')):null;if(task.harnessStarted&&(!previousExit||previousExit.runId!==task.runId||previousExit.stopConfirmed!==true))throw new Error('This worker has no matching confirmed terminal record. Preserve this environment until its process ownership can be reconciled.');
     if(task.runnerPid&&alive(task.runnerPid)&&!(await json(path.join(task.runDir,'exit.json'))))throw new Error('Wait until the worker has stopped before removing its environment.');
@@ -262,7 +284,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
         await atomic(path.join(task.runDir,'control.json'),{runId:task.runId,requestId:request.id,action:request.action,cooperative:request.cooperative===true,at:now()});
         task=await updateTask(stateDir,task.id,n=>{n.status=request.action==='pause'?'pausing':'stopping';});
       }else if(['resume','start'].includes(request.action)){
-        if(task.archiveRestoration?.requiresRecovery)throw new Error('Restored archive has no runnable environment. Review missing-worktree recovery with the manager; no setup was started.');
+        if(task.archiveRestoration?.requiresRecovery)throw new Error('This restore returned history only. Its environment is unavailable and environment reconstruction is not currently supported. No setup or worker was started.');
         if(!['queued','paused','stopped','failed','blocked','awaiting_answer'].includes(task.status))throw new Error('This worker is already active or finished.');
         if(task.question&&task.question.runId===task.runId&&task.answer?.questionId!==task.question.id)throw new Error('Answer this worker’s question before resuming it.');
         const environment=await reconcileEnvironment({stateDir,taskId:task.id});if(environment?.pending)throw new Error('An earlier environment command is still running or lacks a stop confirmation. Wait for its bounded supervisor and retry.');

@@ -14,7 +14,7 @@ export function groupWorkers(tasks) {
   }
   return { active, history: history.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)), retained: workspaceWorkers(tasks).filter(task => task.worktree).length };
 }
-export function workerStatus(task) { return task.retirement?.reason === 'worktree-already-missing' ? 'Retired' : LABELS[task.status] || 'Status unavailable'; }
+export function workerStatus(task) { if (task.archiveRestoration?.requiresRecovery) return 'History restored'; return task.retirement?.reason === 'worktree-already-missing' ? 'Retired' : LABELS[task.status] || 'Status unavailable'; }
 export function workerProgress(task) {
   if(task.retirement?.reason === 'worktree-already-missing') return 'Worktree already missing. History retained; resource cleanup unverified.';
   if (['queued', 'resume_queued'].includes(task.status)) {
@@ -42,6 +42,7 @@ export function formatElapsed(ms) {
 export function workerActions(task) {
   if (isArchivedTask(task) || pendingLifecycle(task) || ['disposed', 'stopping', 'pausing'].includes(task.status)) return [];
   if (task.execution?.live === true) return ['pause', 'stop'];
+  if (task.archiveRestoration?.requiresRecovery) return ['dispose'];
   if (['running', 'queued', 'launching', 'resume_queued', 'verifying', 'awaiting_answer'].includes(task.status)) return ['pause', 'stop'];
   if (['paused', 'stopped', 'failed', 'blocked'].includes(task.status)) return [...(task.question?.runId === task.runId && task.answer?.questionId !== task.question.id ? [] : ['resume']), 'dispose'];
   return task.status === 'completed' ? ['dispose'] : [];

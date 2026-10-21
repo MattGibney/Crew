@@ -44,7 +44,7 @@ After teardown succeeds, the worker disappears from ordinary cards, counts and a
 
 Delete permanently asks for confirmation before removing that worker's saved local Crew history, result, notes and per-run evidence. It does not delete unrelated tasks, existing worktrees/services, credentials or global Codex conversation history. Cancellation leaves the record intact; stale confirmations cannot act on a changed worker.
 
-Restore behavior is awaiting the owner's clarification about rebuilding the removed environment versus returning history for explicit manager recovery. Restoration must never invent running/ready state or silently start a worker assignment.
+Restore returns the same worker's saved history to the ordinary workspace, labelled History restored with environment-needed guidance. It does not recreate its worktree or environment, run setup, queue an assignment, or start a worker/model turn. Discuss any later resource recreation with the manager: reconstruction is a separate explicitly directed operation, not a capability implemented by Restore. Saved briefs, results, run evidence and native conversation identity remain intact. Old questions and approvals remain historical rather than becoming active requests again. You can explicitly archive restored history again; record-only rearchive does not claim cleanup ran a second time, and refuses live/uncertain or reappeared resources.
 
 Assignment completion, stop and pause do not archive a worker. Retained workers stay in the workspace until explicitly archived. Finishing an archive while its detail is open returns you to the manager without reconnecting the established call or discarding your draft.
 

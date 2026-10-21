@@ -106,7 +106,19 @@ const server = http.createServer(async (req, res) => {
         const target = orchestration.tasks.find(task => task.id === body.taskId);
         if (!target || target.projectId !== settings.projectId || !isArchivedTask(target)) return send({ error: 'Archived worker not found in this project.' }, 409);
         if (!Number.isInteger(body.expectedRevision) || body.expectedRevision !== target.revision || typeof body.operationId !== 'string' || !body.operationId.startsWith('archive-')) return send({ error: 'Archived worker changed. Refresh before retrying.' }, 409);
-        if (body.action !== 'delete') return send({ error: 'Restore is not simulated by this acceptance fixture.' }, 409);
+        if (body.action === 'restore') {
+          const at = new Date().toISOString();
+          target.status = 'blocked';
+          target.failure = 'Restored archive history. Its environment was removed or is unavailable; review retained resources before explicit recovery. No worker or setup was started.';
+          target.archiveRestoration = { operationId: body.operationId, at, requiresRecovery: true, archiveRevision: body.expectedRevision };
+          target.archiveRestorations = [...(target.archiveRestorations || []), target.archiveRestoration];
+          target.attention = (target.attention || []).map(item => item.ackedAt ? item : { ...item, ackedAt: at, resolution: 'Historical attention retained from archived worker' });
+          if (target.question) { target.archivedQuestions = [...(target.archivedQuestions || []), target.question]; target.question = null; }
+          target.revision++; target.updatedAt = at;
+          emit({ type: 'orchestration-state', state: orchestration });
+          return send({ taskId: target.id, action: 'restore', status: 'restored' });
+        }
+        if (body.action !== 'delete') return send({ error: 'Unknown archive action.' }, 409);
         orchestration = { ...orchestration, tasks: orchestration.tasks.filter(task => task.id !== target.id) };
         workerDetails.delete(target.id);
         emit({ type: 'orchestration-state', state: orchestration });

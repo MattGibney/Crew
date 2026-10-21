@@ -237,3 +237,19 @@ test('permanent archive deletion is scoped, stale guarded, idempotent and remove
  const denied=await f.request('/api/archived-worker-action',{body:{...body,taskId:foreign.id,expectedRevision:foreign.revision,operationId:'foreign-delete-operation'}});assert.equal(denied.status,400);assert.match(denied.value.error,/another project/);
  assert.equal((await f.calls()).some(call=>call.method==='turn/start'),false);
 });
+
+test('history-only restore HTTP preserves records across restart and never revives old questions or approvals', async t => {
+ const f=await fixture(t),taskId='http-history-restore',projectId='http-settings-fixture';
+ await createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Restore recorded history only',projectId});
+ await updateTask(f.stateDir,taskId,n=>{n.status='running';n.runId='historical-restore-run';n.threadId='historical-restore-thread';});
+ const native=await recordWorkerRequest({stateDir:f.stateDir,taskId,runId:'historical-restore-run',threadId:'historical-restore-thread',turnId:'old-restore-turn',requestId:101,method:'item/commandExecution/requestApproval',params:{threadId:'historical-restore-thread',turnId:'old-restore-turn',command:'historical fixture',availableDecisions:['accept','decline','cancel']}});
+ const archived=await updateTask(f.stateDir,taskId,n=>{n.status='disposed';n.archivedAt='2026-10-21T12:00:00Z';n.result={message:'Retained result'};n.question={id:'historical-question',runId:n.runId,message:'Old question'};n.attention=[{id:'historical-attention',kind:'question',message:'Old question'}];});
+ await f.start();const body={taskId,action:'restore',operationId:'http-restore-operation',expectedRevision:archived.revision};
+ const response=await f.request('/api/archived-worker-action',{body});assert.equal(response.status,200,JSON.stringify(response.value));
+ let restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.match(restored.failure,/reconstruction is not currently supported/);assert.equal(restored.question,null);assert.ok(restored.attention[0].ackedAt);assert.deepEqual(restored.result,archived.result);assert.equal(restored.archivedAt,archived.archivedAt);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].approvalId,native.approvalId,'native historical approval is retained without answering');
+ for(const decision of ['accept','decline','cancel']){const denied=await f.request('/api/worker-approval',{body:{taskId,runId:native.runId,threadId:native.threadId,turnId:native.turnId,approvalId:native.approvalId,requestId:native.requestId,response:{decision}}});assert.equal(denied.status,400);assert.match(denied.value.error,/historical approvals/);}
+ assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].status,'pending');
+ await f.stop();await f.start();assert.equal((await f.request('/api/archived-worker-action',{body})).status,200);restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.equal(restored.runId,archived.runId);assert.equal(restored.history.filter(event=>event.id==='archive-restore:http-restore-operation').length,1);assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ assert.equal((await f.calls()).some(call=>['turn/start','thread/start'].includes(call.method)),false);
+});

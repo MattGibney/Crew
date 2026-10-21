@@ -34,7 +34,7 @@ export function App() {
   const openPane = next => { setPane(next); };
   const showWorker = id => { setSelectedWorker(id); openPane('detail'); };
   const recordedTasks = manager.orchestration.tasks || [];
-  const tasks = workspaceWorkers(recordedTasks).map(task => ({ ...task, pendingApprovalCount: (manager.workerApprovals || []).filter(request => request.taskId === task.id && request.runId === task.runId).length }));
+  const tasks = workspaceWorkers(recordedTasks).map(task => ({ ...task, pendingApprovalCount: task.archiveRestoration?.requiresRecovery ? 0 : (manager.workerApprovals || []).filter(request => request.taskId === task.id && request.runId === task.runId).length }));
   useEffect(() => {
     if (workerSelectionRemoved(recordedTasks, selectedWorker)) {
       setSelectedWorker(null);
@@ -43,7 +43,7 @@ export function App() {
     }
   }, [recordedTasks, selectedWorker]);
   const selectedTask = tasks.find(task => task.id === selectedWorker);
-  const workspaceManager = { ...manager, workerApprovals: (manager.workerApprovals || []).filter(request => tasks.some(task => task.id === request.taskId && task.runId === request.runId)) };
+  const workspaceManager = { ...manager, workerApprovals: (manager.workerApprovals || []).filter(request => tasks.some(task => task.id === request.taskId && task.runId === request.runId && !task.archiveRestoration?.requiresRecovery)) };
   const approvalCount = workspaceManager.workerApprovals.length;
   const workerView = { ...manager.orchestration, tasks };
   const pending = tasks.reduce((count, task) => count + (task.attention || []).filter(item => !item.ackedAt).length, 0);
@@ -70,7 +70,7 @@ export function App() {
         <WorkerAttention compact={pane === 'conversation'} view={workerView} onSelect={showWorker} />
       </aside>
     </main>
-    <div className={`${pane === 'detail' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col`}>{selectedTask ? <WorkerDetail key={selectedTask.id} task={selectedTask} manager={manager} onBack={() => openPane('conversation')} onManager={() => openPane('conversation')} /> : <section className="flex-1 p-8"><p>This worker is no longer available in this project.</p><Button onClick={() => openPane('conversation')}>Back to manager</Button></section>}</div>
+    <div className={`${pane === 'detail' ? 'flex' : 'hidden'} min-h-0 flex-1 flex-col`}>{selectedTask ? <WorkerDetail key={selectedTask.id} task={selectedTask} manager={workspaceManager} onBack={() => openPane('conversation')} onManager={() => openPane('conversation')} /> : <section className="flex-1 p-8"><p>This worker is no longer available in this project.</p><Button onClick={() => openPane('conversation')}>Back to manager</Button></section>}</div>
     {pane !== 'conversation' && pane !== 'settings' && <ManagerCallBar manager={manager} onManager={() => openPane('conversation')} />}
     <audio id="audio" ref={manager.voice.audioRef} autoPlay className="hidden" aria-label="Manager voice playback" />
     <div className={`${pane === 'settings' ? 'flex' : 'hidden'} min-h-0 flex-1`}><Settings manager={manager} /></div>
