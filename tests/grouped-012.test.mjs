@@ -8,10 +8,11 @@ import {promisify} from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
 import {createController} from '../controller.mjs';
-import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../orchestration-store.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction,requestWorkerModel} from '../orchestration-store.mjs';
+import {prepareProjectEnvironment} from '../project-environment.mjs';
 const exec=promisify(execFile);
 async function wait(fn,predicate,label){const end=Date.now()+30000;let value;while(Date.now()<end){value=await fn();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out ${label}: ${JSON.stringify(value)}`);}
-test('GH-20/24/22 reviewed retained plan, cooperative model continuation and restored handoff presentation preserve one context',async t=>{
+test('GH-20/24/22 explicitly provisioned legacy plan recovery, model continuation and restored handoff preserve one context',async t=>{
  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'crew-grouped-012-'))),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');await mkdir(repo);await exec('git',['init','-b','main',repo]);const script=`import fs from 'node:fs';const phase=process.argv[2],file='.fixture/state.json';fs.mkdirSync('.fixture',{recursive:true});const data=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};if(phase==='setup')data.seeds=(data.seeds||0)+1;if(phase==='teardown')data.disposed=true;fs.writeFileSync(file,JSON.stringify(data));`;
  await writeFile(path.join(repo,'action.mjs'),script);await writeFile(path.join(repo,'.gitignore'),'.fixture/\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
  await writeFile(binary,`#!${process.execPath}
@@ -44,6 +45,13 @@ if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,tu
  await requestWorkerModel(state,request);await controller.tick();assert.equal((await readTask(state,taskId)).runId,initial.runId);assert.equal((await readTask(state,taskId)).status,'running');
  const calls=async()=>JSON.parse('['+(await readFile(log,'utf8')).trim().split('\n').join(',')+']');assert.equal((await calls()).filter(c=>c.method==='model/list').length,0,'model intent does not affect running provider');
  await action('pause',{cooperative:true});const paused=await wait(()=>readTask(state,taskId),x=>x.status==='paused','cooperative pause');const exit=JSON.parse(await readFile(path.join(paused.runDir,'exit.json')));assert.equal(exit.stopConfirmed,true);assert.equal(exit.nativeTurnStatus,'interrupted');
+
+ // This is a legacy recovery fixture, not current dispatch preparation. Crew
+ // starts the native worker without executing project commands. Explicitly
+ // provision the historical environment here so its recovery remains covered.
+ await assert.rejects(readFile(path.join(paused.worktree,'.fixture/state.json')),{code:'ENOENT'});
+ const legacyEnvironment=await prepareProjectEnvironment({stateDir:state,taskId,worktree:paused.worktree,repositoryPath:paused.repositoryPath,baseCommit:paused.baseCommit,plan:originalPlan});
+ await updateTask(state,taskId,next=>{next.environment=legacyEnvironment;});
 
  // Add teardown to current settings only after the retained worker has exited.
  await controller.stop();const currentPlan={...originalPlan,teardown:hook('teardown')};project.worker.environment.executionPlan=currentPlan;

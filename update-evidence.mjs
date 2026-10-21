@@ -58,24 +58,48 @@ export async function inspectUpdateEvidence({ stateDir, view, processes } = {}) 
     } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     finally { await file?.close(); }
   }
-  async function worker(task) {
+  async function workerRun(task, runId, current) {
     if (!(rows instanceof Map)) return 'unknown';
-    const unstarted = !task.harnessStarted && !task.spawnIntentAt;
-    if (!uuid(task.runId)) return unstarted && !task.runDir && task.execution?.live !== true ? 'absent' : 'unknown';
-    const expected = path.resolve(stateDir, 'runs', task.id, task.runId);
-    if (!sameDirectory(task.runDir, expected)) return 'unknown';
-    const location = ['runs', task.id, task.runId];
+    const unstarted = current && !task.harnessStarted && !task.spawnIntentAt;
+    if (!uuid(runId)) return unstarted && !task.runDir && task.execution?.live !== true ? 'absent' : 'unknown';
+    const expected = path.resolve(stateDir, 'runs', task.id, runId);
+    if (current && !sameDirectory(task.runDir, expected)) return 'unknown';
+    const location = ['runs', task.id, runId];
     const [owner, started, ownership, exit] = await Promise.all(['owner.json', 'started.json', 'ownership.json', 'exit.json'].map(name => json(...location, name)));
-    if ([owner, started, ownership, exit].some(item => item && item.runId !== task.runId)) return 'unknown';
+    if ([owner, started, ownership, exit].some(item => item && item.runId !== runId)) return 'unknown';
     if (unstarted && !owner && !started && !ownership && !exit && task.execution?.live !== true) return 'absent';
     const records = [...(ownership?.records || []), ...(exit?.ownership?.tracked || [])];
+    // New native-connection terminal records intentionally leave independently
+    // running services alone. Their remaining list is a historical observation;
+    // refresh its exact identities instead of treating nonempty as permanent.
+    if (exit?.connectionClosed === true) {
+      if (exit.ownership?.remaining !== undefined && !Array.isArray(exit.ownership.remaining)) return 'unknown';
+      records.push(...(exit.ownership?.remaining || []));
+    }
     if (owner?.supervisorIdentity) records.push(owner.supervisorIdentity);
     else if (started?.identity) records.push(started.identity);
-    // Legacy started.json has only a PID: a live process with no captured
-    // identity is uncertain, never grounds for claiming it stopped.
-    const pid = owner?.supervisorPid || started?.pid || task.runnerPid;
+    const pid = owner?.supervisorPid || started?.pid || (current ? task.runnerPid : null);
     const uncaptured = Number.isSafeInteger(pid) && live(rows.get(pid)) && !records.some(record => record.pid === pid);
-    return verdict({ records, terminal: exit?.stopConfirmed === true, processes: rows, contradictory: uncaptured || Boolean(exit?.ownership?.remaining?.length) });
+    const closed = exit?.connectionClosed === true;
+    const missingOwnership=closed&&exit.stopConfirmed!==true&&!((ownership?.records?.length||0)+(exit.ownership?.tracked?.length||0)+(exit.ownership?.remaining?.length||0));
+    return verdict({ records, terminal: closed || exit?.stopConfirmed === true, processes: rows, contradictory: uncaptured || missingOwnership || !closed && Boolean(exit?.ownership?.remaining?.length) });
+  }
+  async function worker(task) {
+    if (!(rows instanceof Map)) return 'unknown';
+    let current;
+    try { current = await workerRun(task,task.runId,true); } catch { current='unknown'; }
+    if (task.retainedResourceRuns === undefined) return current;
+    if (!Array.isArray(task.retainedResourceRuns) || task.retainedResourceRuns.length > 256) return current==='live'?'live':'unknown';
+    const states=[current],seen=new Set([task.runId]);
+    for (const retained of task.retainedResourceRuns) {
+      if(!retained||!uuid(retained.runId)){states.push('unknown');continue;}
+      if(seen.has(retained.runId))continue;
+      seen.add(retained.runId);
+      try { states.push(await workerRun(task,retained.runId,false)); } catch { states.push('unknown'); }
+    }
+    if(states.includes('live'))return 'live';
+    if(states.includes('unknown'))return 'unknown';
+    return states.includes('stopped')?'stopped':'absent';
   }
   async function environment(task) {
     const disk = await json('runs', task.id, 'environment.json');

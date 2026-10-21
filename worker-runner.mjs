@@ -1,5 +1,4 @@
 import {requireWorkerModel} from './worker-model-selection.mjs';
-import {applyProjectToolchain} from './project-toolchain.mjs';
 // Detached per-run supervisor: survives controller/browser/voice closure.
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
@@ -7,7 +6,6 @@ import { readFile, writeFile, rename, open, appendFile } from 'node:fs/promises'
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {OwnedProcessTree,snapshotProcesses} from './process-ownership.mjs';
-import {captureWorktreeEvidence} from './worker-worktree-evidence.mjs';
 import { buildWorkerInstructions } from './prompt-settings.mjs';
 import {waitOwnedNatural} from './cooperative-process.mjs';
 import {recordWorkerRequest,workerRequestDecisions,deliverWorkerRequest,markWorkerRequestResolved,invalidateWorkerRequests} from './worker-approvals.mjs';
@@ -20,14 +18,10 @@ async function atomic(name, value) {
 }
 const claim = await open(path.join(runDir, 'runner.claim'), 'wx', 0o600); await claim.close();
 await atomic('started.json', { runId: config.runId, pid: process.pid, at: new Date().toISOString() });
-const env = { ...applyProjectToolchain(config.environment?.toolchain), GIT_OPTIONAL_LOCKS: '0' };
+const env = { ...process.env, GIT_OPTIONAL_LOCKS: '0' };
 for (const key of ['OPENAI_API_KEY', 'CODEX_API_KEY', 'OPENAI_BASE_URL']) delete env[key];
-if (!['read-only', 'workspace-write'].includes(config.sandbox || 'read-only')) throw new Error('Invalid worker sandbox');
 const finalFile = path.join(runDir, 'final.txt');
 const mcpArgs = [config.mcpScript, config.stateDir, 'worker', config.taskId, config.runId];
-const projectRuntime=config.environment?.kind==='project-execution';
-if(config.environment?.preset)throw new Error('Obsolete project-specific runtime state is not supported.');
-if(projectRuntime&&!['ready','running'].includes(config.environment.status))throw new Error('Project execution plan has no completed setup and running foreground action.');
 // Codex resolves user, trusted project and managed policy itself. Only the
 // subscription identity and this run's orchestration endpoint are Crew-owned.
 const args = ['app-server', '--stdio', '-c', 'forced_login_method="chatgpt"', '-c', 'model_provider="openai"', '-c', `mcp_servers.local_orchestration.command=${JSON.stringify(process.execPath)}`, '-c', `mcp_servers.local_orchestration.args=${JSON.stringify(mcpArgs)}`, '-c', 'mcp_servers.local_orchestration.required=true', '-c', 'mcp_servers.local_orchestration.default_tools_approval_mode="approve"'];
@@ -182,7 +176,7 @@ await atomic('owner.json',{runId:config.runId,supervisorPid:process.pid,supervis
 let cooperative=false;
 const stopOwnedWorker=()=>{if(!stopPromise)stopPromise=tree?tree.stop({graceMs:2000}):Promise.resolve({confirmed:Boolean(spawnError),remaining:[]});return stopPromise;};
 const timeoutMs=Number.isSafeInteger(config.timeoutMs)&&config.timeoutMs>=1000&&config.timeoutMs<=86400000?config.timeoutMs:300000;
-let timeout;const checkTimeout=()=>{timeout=setTimeout(()=>{void(async()=>{await acceptControl().catch(()=>{});if(cooperative)return;if(nativeRequests.size){checkTimeout();return;}errorMessage=`Bounded worker run exceeded ${timeoutMs} milliseconds.`;void stopOwnedWorker();})();},timeoutMs);};checkTimeout();
+let timeout;const checkTimeout=()=>{timeout=setTimeout(()=>{void(async()=>{await acceptControl().catch(()=>{});if(cooperative)return;if(nativeRequests.size){checkTimeout();return;}errorMessage=`Bounded worker run exceeded ${timeoutMs} milliseconds.`;void stopOwnedWorker();})();},timeoutMs);};if(config.project?.mode!=='repository')checkTimeout();
 let checking=false,protocolFailure=null;
 async function retainProtocolFailure(error,stage){
  if(protocolFailure)return;
@@ -197,19 +191,20 @@ const controlTimer=setInterval(async()=>{if(checking)return;checking=true;let st
 process.on('SIGTERM',()=>{errorMessage='Worker supervisor was stopped.';if(cooperative){cooperative=false;stopPromise=null;}void stopOwnedWorker();});
 const exitCode=await closed;
 clearTimeout(timeout);clearInterval(controlTimer);
-// A natural CLI exit must also leave no captured command/MCP descendant behind.
+// Natural native closure is not an environment teardown request. Retain
+// observed descendants for agent-managed cleanup and archive/update checks.
 await acceptControl().catch(()=>{});
 let observedStop=stopPromise;
-let ownership=await(observedStop||(cooperative?waitOwnedNatural(tree):null)||tree?.stop({graceMs:1000})||Promise.resolve({confirmed:Boolean(spawnError),remaining:[]}));
+let ownership;
+if(observedStop||cooperative)ownership=await(observedStop||waitOwnedNatural(tree));
+else if(tree){
+ await tree.capture();let remaining=await tree.remaining();const deadline=Date.now()+1000;
+ while(remaining.length&&Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,50));remaining=await tree.remaining();}
+ ownership={confirmed:Boolean(tree.rootIdentity)&&remaining.length===0,remaining,tracked:[...tree.records.values()]};
+}
+else ownership={confirmed:Boolean(spawnError),remaining:[],tracked:[]};
 if(stopPromise&&stopPromise!==observedStop)ownership=await stopPromise;
 for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(new Error('Codex worker exited.'));}pending.clear();
 await bootstrap;await handling;await writes;
 await invalidateWorkerRequests({...requestContext(),reason:'Worker process exited.'});
-// Record the final owned file state only after the worker and descendants exit.
-// This allows later question/pause continuations to preserve their own edits,
-// while changes made after this boundary still require explicit adoption.
-if(ownership.confirmed){
- try{const snapshot=await captureWorktreeEvidence(config.worktree);await atomic('worktree-evidence.json',{taskId:config.taskId,assignmentId:config.assignmentId||'initial',runId:config.runId,...snapshot});}
- catch{await atomic('worktree-evidence.json',{taskId:config.taskId,assignmentId:config.assignmentId||'initial',runId:config.runId,unavailable:true});}
-}
-await atomic('exit.json',{runId:config.runId,threadId,nativeTurnStatus,exitCode:errorMessage&&exitCode===0?1:exitCode,completedTurn,commands,finalMessage,error:errorMessage,stopped:Boolean(stopRequest)&&ownership.confirmed,stopConfirmed:ownership.confirmed,ownership:{confirmed:ownership.confirmed,remaining:ownership.remaining||[],tracked:ownership.tracked||[]},stopAction:stopRequest?.action||null,stopRequestId:stopRequest?.requestId||null,supervisorPid:process.pid,workerPid:worker.pid||null,at:new Date().toISOString()});
+await atomic('exit.json',{runId:config.runId,connectionClosed:true,threadId,nativeTurnStatus,exitCode:errorMessage&&exitCode===0?1:exitCode,completedTurn,commands,finalMessage,error:errorMessage,stopped:Boolean(stopRequest)&&ownership.confirmed,stopConfirmed:ownership.confirmed,ownership:{confirmed:ownership.confirmed,remaining:ownership.remaining||[],tracked:ownership.tracked||[]},stopAction:stopRequest?.action||null,stopRequestId:stopRequest?.requestId||null,supervisorPid:process.pid,workerPid:worker.pid||null,at:new Date().toISOString()});

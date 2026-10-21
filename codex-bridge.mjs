@@ -19,6 +19,8 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   let loadingHistory = false, journalThreadId = null, recoveredJournalSource = null;
   const historyNotifications = [];
   let activeManagerInstructions = null;
+  let workDelivery = Promise.resolve(), queuedWork = 0, workGeneration = 0;
+  const cancelPendingWork = () => { workGeneration++; };
   let canonicalTimeline = false, realtimeMode = null, journalWrites = Promise.resolve(), queuedJournal = null, writingJournal = false;
   function persistTimeline() {
     if (!threadId || loadingHistory || journalThreadId !== threadId) return;
@@ -361,6 +363,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     timeline.partial(); voiceActive = false; negotiation?.reject(new Error('Disconnected.')); changed();
   }
   async function shutdown({cooperative=false}={}) {
+    cancelPendingWork();
     if (shuttingDown) return shuttingDown;
     shuttingDown = (async () => {
       const proc = child;
@@ -384,6 +387,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     try { await shuttingDown; } finally { shuttingDown = undefined; }
   }
   async function stopManager({ timeoutMs = 12000 } = {}) {
+    cancelPendingWork();
     // Never terminate an app-server while native tools/approval execution is unverified.
     const deadline = Date.now() + timeoutMs;
     await stopVoice({ preserveWork: true });
@@ -406,35 +410,48 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   async function startWork(text, requestId, { background = false, canReview = () => true, beforeReview = async () => true } = {}) {
     // User work or an explicitly scoped controller review; never transcript/handoff events.
     if (workRequests.has(requestId)) return workRequests.get(requestId);
-    const result = (async () => {
-      if (activeTurnId || workStarting) throw new Error('Codex is already working. Use voice to steer it or Stop work.');
-      if (background && (voiceActive || connecting || approvals.size || !canReview())) return { accepted: false };
-      workStarting = true; changed();
+    if (background && (activeTurnId || workStarting || voiceActive || connecting || approvals.size || !canReview())) return { accepted: false };
+    const generation = workGeneration;
+    const requireCurrentDelivery = () => { if (generation !== workGeneration) throw new Error('Manager work was stopped before this message was delivered. Your unsent message is kept; send it again when ready.'); };
+    queuedWork++; workStarting = true; changed();
+    const result = workDelivery.then(async () => {
       try {
+        requireCurrentDelivery();
         await ensureThread();
-        // Resumed history can reveal an already active native turn. Never launch
-        // a replacement merely because it was unknown before thread loading.
-        if(activeTurnId)throw new Error('Codex is already working. Use voice to steer it or Stop work.');
+        requireCurrentDelivery();
+        // Resumed history can reveal an active turn. Human directions steer
+        // that exact native turn; autonomous background reviews remain idle-only.
         if (background && !await beforeReview()) return { accepted: false };
         if (background && (activeTurnId || voiceActive || connecting || approvals.size || !canReview())) return { accepted: false };
+        requireCurrentDelivery();
+        if (activeTurnId) {
+          const expectedTurnId = activeTurnId;
+          const directed = await rpc('turn/steer', { threadId, expectedTurnId, clientUserMessageId: requestId, input: [{ type: 'text', text }] });
+          if (directed?.turnId !== expectedTurnId) throw new Error('Native steering acknowledged another turn; direction delivery is unverified.');
+          return directed;
+        }
         const result=await rpc('turn/start', { threadId, clientUserMessageId: requestId, additionalContext: { crewManagerInstructions: { kind: 'application', value: activeManagerInstructions } }, input: [{ type: 'text', text }] });
         // The response may arrive before turn/started, or after turn/completed.
         // Close the former idle gap without resurrecting the latter finished turn.
         if(result?.turn?.status==='inProgress'&&!completedTurns.has(result.turn.id)&&!activeTurnId){activeTurnId=result.turn.id;status='working';changed();}
+        // Stop can precede the native start acknowledgement. Interrupt only
+        // that acknowledged turn; later explicit messages use a new generation.
+        if(generation!==workGeneration&&activeTurnId===result?.turn?.id&&!completedTurns.has(result.turn.id))await rpc('turn/interrupt',{threadId,turnId:result.turn.id});
         return result;
       }
-      finally { workStarting = false; changed(); }
-    })();
+      finally { queuedWork--; workStarting = queuedWork > 0; changed(); }
+    });
+    workDelivery = result.catch(() => {});
     workRequests.set(requestId, result);
     result.catch(() => { if (workRequests.get(requestId) === result) workRequests.delete(requestId); });
     if (workRequests.size > 100) workRequests.delete(workRequests.keys().next().value);
     return result;
   }
-  async function interrupt({expectedTurnId}={}) { if(expectedTurnId&&activeTurnId!==expectedTurnId)throw new Error('The active manager turn changed. Review the update plan before interrupting work.'); if (activeTurnId) await rpc('turn/interrupt', { threadId, turnId: activeTurnId }); }
+  async function interrupt({expectedTurnId}={}) { if(expectedTurnId&&activeTurnId!==expectedTurnId)throw new Error('The active manager turn changed. Review the update plan before interrupting work.'); cancelPendingWork(); if (activeTurnId) await rpc('turn/interrupt', { threadId, turnId: activeTurnId }); }
   function answerApproval(id, response) {
     const request = approvals.get(String(id)); if (!request) throw new Error('This request has already been resolved.');
     const result = workerApprovalResponse(request, response);
     send({ id: request.id, result }); approvals.delete(String(id)); changed();
   }
-  return { stopManager, setManagerPrompt, prepare, ensureThread, listVoices, startVoice, greetVoice, reportVoiceStatus, stopVoice, shutdown, startWork, interrupt, answerApproval, state };
+  return { cancelPendingWork, stopManager, setManagerPrompt, prepare, ensureThread, listVoices, startVoice, greetVoice, reportVoiceStatus, stopVoice, shutdown, startWork, interrupt, answerApproval, state };
 }

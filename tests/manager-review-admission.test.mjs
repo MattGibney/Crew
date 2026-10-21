@@ -54,6 +54,7 @@ createInterface({ input: process.stdin }).on('line', line => {
  if (method === 'thread/turns/list') return reply(id, {data:${JSON.stringify(history)}});
  if (method === 'mcpServerStatus/list') return reply(id, {data:[]});
  if (method === 'thread/realtime/listVoices') return reply(id, {voices:{v3:['cove'],defaultV1:'cove'}});
+ if (method === 'turn/steer') return reply(id,{turnId:params.expectedTurnId});
  if (method === 'turn/start') return reply(id, {turn:{id:'review-turn-'+process.pid+'-'+(++sequence),status:'inProgress'}});
  if (method === 'thread/realtime/start') { send({method:'thread/realtime/started',params:{threadId:'manager-thread'}}); send({method:'thread/realtime/sdp',params:{threadId:'manager-thread',sdp:'v=0 synthetic'}}); return reply(id,{}); }
  return reply(id, {});
@@ -92,15 +93,23 @@ test('conversation and scheduled review compete for one native turn, including d
     const f = await fixture(t, { gateThread: true });
     const first = f.bridge.startWork('first', `first-${backgroundFirst}`, { background: backgroundFirst });
     await until(async () => (await f.calls()).some(call => call.method === 'thread/resume'));
-    await assert.rejects(f.bridge.startWork('second', `second-${backgroundFirst}`, { background: !backgroundFirst }), /already working/);
-    await f.ready(); await first;
+    const second = f.bridge.startWork('second', `second-${backgroundFirst}`, { background: !backgroundFirst });
+    await f.ready();
+    const [, outcome] = await Promise.all([first, second]);
     assert.equal((await starts(f)).length, 1);
+    const steers = (await f.calls()).filter(call => call.method === 'turn/steer');
+    assert.equal(steers.length, backgroundFirst ? 1 : 0);
+    if (backgroundFirst) {
+      assert.equal(outcome.turnId, f.bridge.state().activeTurnId);
+      assert.equal(steers[0].params.expectedTurnId, f.bridge.state().activeTurnId);
+      assert.equal(steers[0].params.clientUserMessageId, `second-${backgroundFirst}`);
+    } else assert.deepEqual(outcome, { accepted: false });
   }
 });
 
 test('saved native in-progress turn cannot receive a replacement scheduled review', async t => {
   const f = await fixture(t, { history: [{ id: 'retained-turn', status: 'inProgress', items: [] }] });
-  await assert.rejects(f.bridge.startWork('review', 'retained-native-work', { background: true }), /already working/);
+  assert.deepEqual(await f.bridge.startWork('review', 'retained-native-work', { background: true }), { accepted: false });
   assert.equal(f.bridge.state().activeTurnId, 'retained-turn');
   assert.equal((await starts(f)).length, 0);
   assert.equal(f.bridge.state().workStarting, false);
@@ -141,10 +150,11 @@ test('real lifecycle Stop during scheduled native initialization finishes stoppe
     background: true, canReview: () => manager.view().state === 'running',
   }));
   await until(async () => (await f.calls()).some(call => call.method === 'thread/resume'));
+  const canceled = assert.rejects(pending, /stopped before.*delivered/);
   const stopping = manager.request('stop');
   assert.equal(manager.view().state, 'stopping');
   await f.ready();
-  assert.deepEqual(await pending, { accepted: false });
+  await canceled;
   await stopping;
   assert.equal(manager.view().state, 'stopped');
   assert.equal((await starts(f)).length, 0);
@@ -174,19 +184,34 @@ test('global guard await is followed by fresh local lifecycle, voice and native-
       beforeReview: async () => { guardEntered = true; await guard; return true; },
     });
     await until(() => guardEntered);
-    await assert.rejects(f.bridge.startWork('human input', `human-${mutation}`), /already working/);
-    if (mutation === 'stop') locallyAllowed = false;
+    const human = f.bridge.startWork('human input', `human-${mutation}`);
+    const humanOutcome = human.then(value => ({ value }), error => ({ error }));
+    if (mutation === 'stop') { locallyAllowed = false; f.bridge.cancelPendingWork(); }
     if (mutation === 'voice') await f.bridge.startVoice('v=0 synthetic-offer', 'cove');
     if (mutation === 'native-turn') {
       await f.notify('turn/started', { turn: { id: 'externally-observed-turn', status: 'inProgress', items: [] } });
       await until(() => f.bridge.state().activeTurnId === 'externally-observed-turn');
     }
-    // Attach the rejection observer before releasing the blocked native guard.
+    // Release the transport guard before awaiting queued human input.
     const outcome = pending.then(value => ({ value }), error => ({ error }));
     release();
     const result = await outcome;
     assert.deepEqual(result.value, { accepted: false });
-    assert.equal((await starts(f)).length, 0);
+    const directed = await humanOutcome;
+    const steers = (await f.calls()).filter(call => call.method === 'turn/steer');
+    if (mutation === 'stop') {
+      assert.match(directed.error?.message || '', /stopped before.*delivered/);
+      assert.equal((await starts(f)).length, 0);
+      assert.equal(steers.length, 0);
+    } else if (mutation === 'native-turn') {
+      assert.equal((await starts(f)).length, 0);
+      assert.equal(steers.length, 1);
+      assert.equal(steers[0].params.expectedTurnId, 'externally-observed-turn');
+      assert.equal(directed.value.turnId, 'externally-observed-turn');
+    } else {
+      assert.equal((await starts(f)).length, 1, 'Explicit human input remains allowed while a voice session makes background review ineligible');
+      assert.equal(steers.length, 0);
+    }
   }
 });
 

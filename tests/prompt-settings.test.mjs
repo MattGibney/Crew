@@ -47,13 +47,13 @@ test('custom behavior fully replaces Crew defaults in actual instruction builder
   assert.ok(manager.startsWith('MANAGER_REPLACEMENT\n'));
   assert.doesNotMatch(manager, /technical lead|Be concise|spoken progress|Invariant manager role|Never choose backlog/);
   assert.match(manager, /Crew runtime context/); assert.match(manager, /exact question\/run/);
-  const worker = buildWorkerInstructions({ workerPrompt: 'WORKER_REPLACEMENT', project: { id: 'example' }, taskId: 'example-task', runId: 'run', sandbox: 'workspace-write', brief: 'Implement agreed scope' });
+  const worker = buildWorkerInstructions({ workerPrompt: 'WORKER_REPLACEMENT', project: { id: 'example' }, taskId: 'example-task', runId: 'run', worktree:'/retained/worktree', sandbox: 'workspace-write', brief: 'Implement agreed scope' });
   assert.ok(worker.startsWith('WORKER_REPLACEMENT\n'));
   assert.doesNotMatch(worker, /You are the ONE|Give one useful progress|Investigate whether|Inspect actual files|technical lead/);
   assert.match(worker, /local_orchestration.report/); assert.match(worker, /workspace|worktree/);
-  assert.match(worker,/effective Codex configuration controls sandbox and approval/);
+  assert.match(worker,/effective native Codex configuration and its normal sandbox and approval/);
   assert.doesNotMatch(worker,/Read-only sandbox/);
-  assert.match(buildWorkerInstructions({project:{mode:'fixture'},sandbox:'workspace-write'}),/Read-only fixture/);
+  assert.match(buildWorkerInstructions({project:{mode:'fixture'},sandbox:'workspace-write'}),/native read-only sandbox/);
   assert.equal(promptVersion('same'), promptVersion('same'));
 });
 
@@ -95,4 +95,62 @@ test('concurrent store saves serialize version checks and abandoned atomic files
   assert.equal(updated.manager.text, 'Saved after restart');
   assert.equal(await readFile(abandoned, 'utf8'), '{"incomplete"');
   assert.deepEqual((await readdir(directory)).sort(), ['example.json', 'example.json.00000000-abandoned.tmp', 'example.json.lock']);
+});
+
+test('runtime protocol names explicit workflow and environment context without forcing report termination',()=>{
+ const worker=buildWorkerInstructions({workerPrompt:'Project behavior',project:{id:'example'},taskId:'worker-test',runId:'run-test',brief:'Continue implementation'});
+ assert.match(worker,/set_workflow_state/);assert.match(worker,/get_project_environment/);assert.match(worker,/Reports are messages/);assert.doesNotMatch(worker,/END after reporting|END and wait|must.*commit|never.*pull request/i);
+ const manager=buildManagerInstructions({managerPrompt:'Project manager behavior',project:{id:'example'}});assert.match(manager,/set_workflow_state/);assert.match(manager,/does not run setup, Start or readiness/);
+});
+
+test('default manager owns ordinary delegation and supervision while cleanup and native approvals remain explicit',async()=>{
+ const manager=await readFile(new URL('../prompts/manager.md',import.meta.url),'utf8'),worker=await readFile(new URL('../prompts/worker.md',import.meta.url),'utf8');
+ assert.match(manager,/Own delegation, supervision/);assert.match(manager,/ordinary delegation, start and resume do not need a separate human lifecycle instruction/);assert.match(manager,/Destructive teardown, archive cleanup/);
+ assert.doesNotMatch(manager,/only for the user's requested lifecycle action|Before repository dispatch.*verify|If project readiness is false/);
+ assert.doesNotMatch(worker,/even if the brief requests|do not commit, push|end your turn; resume only/);assert.match(worker,/set_workflow_state/);assert.match(worker,/normal native tools and approvals/);
+});
+
+test('persisted v0.14 defaults upgrade per role without changing active manager or historical worker context',async()=>{
+ const {createManagerLifecycle}=await import('../manager-lifecycle.mjs');
+ const old=JSON.parse(await readFile(new URL('./fixtures/prompts-v0.14.0.json',import.meta.url),'utf8'));
+ assert.equal(promptVersion(old.manager),'4104031ce2d5130424cc649c52ae5d10347ae1e200fa534c6fff325ab4a14f7a');
+ assert.equal(promptVersion(old.worker),'ee36c566b334978c7a21d72e401d373afe510087fb589a13d045847ce0cc2dd8');
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'crew-prompt-upgrade-')),directory=path.join(stateDir,'prompt-settings');
+ const {mkdir,rm}=await import('node:fs/promises');await mkdir(directory);
+ try{
+  const settingsFile=path.join(directory,'example.json');await writeFile(settingsFile,JSON.stringify({schemaVersion:1,projectId:'example',prompts:old}));
+  const lifecycleFile=path.join(stateDir,'manager-lifecycle.json');await writeFile(lifecycleFile,JSON.stringify({projectId:'example',intent:'running',active:{text:old.manager,version:promptVersion(old.manager)}}));
+  const workerConfig=path.join(stateDir,'historical-worker-config.json'),workerBytes=JSON.stringify({taskId:'retained-worker',threadId:'same-worker-chat',worktree:'/retained/worker',workerPrompt:old.worker,workerPromptVersion:promptVersion(old.worker)})+'\n';await writeFile(workerConfig,workerBytes);
+  const prompts=await createPromptSettings({stateDir,projectId:'example'}),instructions=[];let connected=false;
+  const messages=[{id:'retained-message',text:'Existing manager conversation'}];
+  const bridge={setManagerPrompt:text=>instructions.push(text),state:()=>({managerConnected:connected,threadId:'same-manager-chat',messages}),prepare:async()=>({type:'chatgpt'}),ensureThread:async()=>{connected=true;return{thread:{id:'same-manager-chat'}};},stopVoice:async()=>{},stopManager:async()=>{connected=false;}};
+  const lifecycle=await createManagerLifecycle({stateDir,projectId:'example',bridge,prompts});await lifecycle.prepare();
+  assert.equal(instructions[0],old.manager);const activeBytes=await readFile(lifecycleFile,'utf8');
+  const [saved,retry]=await Promise.all([prompts.read(),prompts.read()]);assert.deepEqual(retry,saved);
+  assert.equal(saved.manager.isDefault,true);assert.equal(saved.worker.isDefault,true);
+  assert.match(saved.manager.text,/Own delegation, supervision/);assert.match(saved.manager.text,/set_workflow_state/);assert.match(saved.worker.text,/get_project_environment/);
+  assert.notEqual(saved.manager.version,lifecycle.view().retainedVersion,'Migrated saved default remains pending explicit Restart');
+  assert.equal(await readFile(lifecycleFile,'utf8'),activeBytes,'Reading migrated defaults does not replace active manager instructions');
+  const migrated=JSON.parse(await readFile(settingsFile,'utf8'));assert.deepEqual(migrated.promptOrigins,{manager:'default',worker:'default'});assert.equal(migrated.promptUpgradeHistory.length,2);
+  for(const role of ['manager','worker']){const entry=migrated.promptUpgradeHistory.find(item=>item.role===role);assert.equal(entry.from.text,old[role]);assert.equal(entry.from.version,promptVersion(old[role]));assert.equal(entry.toVersion,saved[role].version);}
+  const nextWorker=await prompts.snapshot('worker');assert.match(nextWorker.text,/set_workflow_state/);assert.match(nextWorker.text,/get_project_environment/);assert.equal(await readFile(workerConfig,'utf8'),workerBytes);
+  await lifecycle.request('restart');assert.equal(lifecycle.view().activeVersion,saved.manager.version);assert.equal(bridge.state().threadId,'same-manager-chat');assert.deepEqual(bridge.state().messages,messages);assert.equal(instructions.at(-1),saved.manager.text);
+  // An explicit edit can intentionally retain exact old default bytes. This
+  // user choice differs from an unmarked legacy pristine-default record.
+  await prompts.save({role:'manager',text:old.manager,expectedVersion:saved.manager.version});
+  const reopened=await createPromptSettings({stateDir,projectId:'example'});assert.equal((await reopened.read()).manager.text,old.manager);
+  const custom=JSON.parse(await readFile(settingsFile,'utf8'));assert.equal(custom.promptOrigins.manager,'custom');assert.deepEqual(custom.promptUpgradeHistory,migrated.promptUpgradeHistory);
+ }finally{await rm(stateDir,{recursive:true,force:true});}
+});
+
+test('persisted customized prompt bytes remain exact when the other pristine role upgrades',async()=>{
+ const old=JSON.parse(await readFile(new URL('./fixtures/prompts-v0.14.0.json',import.meta.url),'utf8'));
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'crew-custom-prompt-upgrade-'));const {mkdir,rm}=await import('node:fs/promises');await mkdir(path.join(stateDir,'prompt-settings'));
+ const custom=old.manager+'\nCustomer preferences: naïve café 🧪\n';
+ try{
+  const file=path.join(stateDir,'prompt-settings','example.json');await writeFile(file,JSON.stringify({schemaVersion:1,projectId:'example',prompts:{manager:custom,worker:old.worker}}));
+  const prompts=await createPromptSettings({stateDir,projectId:'example'}),saved=await prompts.read();assert.equal(saved.manager.text,custom);assert.equal(saved.manager.isDefault,false);assert.equal(saved.worker.isDefault,true);
+  const migrated=JSON.parse(await readFile(file,'utf8'));assert.equal(migrated.prompts.manager,custom);assert.equal(migrated.promptUpgradeHistory.length,1);assert.equal(migrated.promptUpgradeHistory[0].role,'worker');
+  assert.equal((await prompts.snapshot('manager')).text,custom);
+ }finally{await rm(stateDir,{recursive:true,force:true});}
 });

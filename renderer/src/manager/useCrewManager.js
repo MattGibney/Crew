@@ -31,7 +31,7 @@ export function useCrewManager() {
   const [project, setProject] = useState('Loading this instance’s project…');
   const [projectInfo, setProjectInfo] = useState(null);
   const [sending, setSending] = useState(false);
-  const requestLock = useRef(false);
+  const requestQueue = useRef(Promise.resolve()), pendingRequests = useRef(0);
   const retryRequests = useRef(new Map());
   const [work, setWork] = useState(EMPTY_WORK), [workNotice, setWorkNotice] = useState('');
   const [orchestration, setOrchestration] = useState({ tasks: [], loading: true });
@@ -144,11 +144,12 @@ export function useCrewManager() {
   }, [loadVoices, showError]);
   const sendRequest = useCallback(async request => {
     if (!managerEnabled) throw new Error('Start your manager before sending a message or action.');
-    if (requestLock.current) throw new Error('A message is already being sent.');
-    requestLock.current = true; setSending(true); setWorkNotice('');
-    try { return await api('work', request); }
+    pendingRequests.current++; setSending(true); setWorkNotice('');
+    const delivery = requestQueue.current.then(() => api('work', request));
+    requestQueue.current = delivery.catch(() => {});
+    try { return await delivery; }
     catch (failure) { setWorkNotice(errorText(failure)); throw failure; }
-    finally { requestLock.current = false; setSending(false); }
+    finally { pendingRequests.current--; setSending(pendingRequests.current > 0); }
   }, [managerEnabled]);
   const correlatedRequest = useCallback(async (key, create) => {
     const request = retryRequests.current.get(key) || create();

@@ -16,10 +16,10 @@ function serializeSave(file, operation) {
   return result;
 }
 // Exact pristine prompts shipped before full replacement settings. Upgrade only
-// untouched defaults; customized files and persisted snapshots keep their bytes.
+// untouched defaults; customized text and active lifecycle snapshots keep their bytes.
 const previousDefaultVersions = {
-  manager: new Set(['7080c0e4c9d9a6492e72530c1562b9bb6b547ae39903129f28b0268d93237aef']),
-  worker: new Set(['ccbf1e062e2f945eb3b1acc8581d1ae219e42ee2fab12c9639e2c198d1b37e45'])
+  manager: new Set(['7080c0e4c9d9a6492e72530c1562b9bb6b547ae39903129f28b0268d93237aef', '4104031ce2d5130424cc649c52ae5d10347ae1e200fa534c6fff325ab4a14f7a']),
+  worker: new Set(['ccbf1e062e2f945eb3b1acc8581d1ae219e42ee2fab12c9639e2c198d1b37e45', 'ee36c566b334978c7a21d72e401d373afe510087fb589a13d045847ce0cc2dd8'])
 };
 export const promptVersion = text => createHash('sha256').update(text).digest('hex');
 export function validatePrompt(text) {
@@ -33,17 +33,44 @@ export async function createPromptSettings({ stateDir, projectId, managerPrompt,
   const defaults = Object.fromEntries(await Promise.all(roles.map(async role => [role, validatePrompt(await readFile(path.join(sourceDir, 'prompts', `${role}.md`), 'utf8'))])));
   const configured = { manager: validatePrompt(managerPrompt ?? defaults.manager), worker: validatePrompt(workerPrompt ?? defaults.worker) };
   const initial = Object.fromEntries(roles.map(role => [role, previousDefaultVersions[role].has(promptVersion(configured[role])) ? defaults[role] : configured[role]]));
+  const initialOrigins = Object.fromEntries(roles.map(role => [role, initial[role] === defaults[role] ? 'default' : 'custom']));
   const directory = path.resolve(stateDir, 'prompt-settings');
   const file = path.join(directory, `${projectId}.json`);
+  async function persist(record) {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const temp = `${file}.${randomUUID()}.tmp`;
+    try {
+      const handle = await open(temp, 'wx', 0o600);
+      try { await handle.writeFile(JSON.stringify(record) + '\n'); await handle.sync(); } finally { await handle.close(); }
+      await rename(temp, file);
+    } finally { await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+  }
   async function load() {
     let value;
     try { value = JSON.parse(await readFile(file, 'utf8')); }
-    catch (error) { if (error.code === 'ENOENT') return initial; throw new Error('Cannot read saved project prompts; existing settings have been preserved.'); }
+    catch (error) { if (error.code === 'ENOENT') return {texts:initial, origins:initialOrigins, history:[], record:null}; throw new Error('Cannot read saved project prompts; existing settings have been preserved.'); }
     if (!value || value.schemaVersion !== 1 || value.projectId !== projectId || !value.prompts || Object.keys(value.prompts).some(role => !roles.includes(role))) throw new Error('Saved prompt project identity or format is invalid; existing settings have been preserved.');
-    return Object.fromEntries(roles.map(role => [role, validatePrompt(value.prompts[role])]));
+    if(value.promptOrigins!==undefined&&(!value.promptOrigins||typeof value.promptOrigins!=='object'||Array.isArray(value.promptOrigins)||Object.keys(value.promptOrigins).some(role=>!roles.includes(role)||!['default','custom'].includes(value.promptOrigins[role]))))throw new Error('Saved prompt provenance is invalid; existing settings have been preserved.');
+    const history=value.promptUpgradeHistory||[];
+    if(!Array.isArray(history)||history.some(entry=>!entry||!roles.includes(entry.role)||!Number.isFinite(Date.parse(entry.at))||typeof entry.from?.text!=='string'||entry.from.version!==promptVersion(entry.from.text)||!/^[a-f0-9]{64}$/.test(entry.toVersion||'')))throw new Error('Saved prompt upgrade history is invalid; existing settings have been preserved.');
+    const texts=Object.fromEntries(roles.map(role=>[role,validatePrompt(value.prompts[role])])),origins={...value.promptOrigins};
+    let migrated=false;
+    for(const role of roles){
+      // Legacy saved records had no origin marker. Only exact shipped bytes
+      // establish a pristine default; custom text is never pattern-rewritten.
+      if(origins[role]!=='custom'&&texts[role]!==defaults[role]&&previousDefaultVersions[role].has(promptVersion(texts[role]))){
+        history.push({role,at:new Date().toISOString(),from:promptSnapshot(texts[role]),toVersion:promptVersion(defaults[role])});
+        texts[role]=defaults[role];origins[role]='default';migrated=true;
+      }else if(origins[role]===undefined)origins[role]=texts[role]===defaults[role]?'default':'custom';
+    }
+    const record={...value,prompts:texts,promptOrigins:origins,promptUpgradeHistory:history};
+    if(migrated)await persist(record);
+    return {texts,origins,history,record};
   }
   const view = texts => ({ projectId, revision: promptVersion(JSON.stringify(texts)), ...Object.fromEntries(roles.map(role => [role, { ...promptSnapshot(texts[role]), defaultText: defaults[role], isDefault: texts[role] === defaults[role] }])) });
-  async function read() { return view(await load()); }
+  // Reads may upgrade exact saved defaults. Serialize them with saves so a
+  // delayed migration cannot overwrite an intentional custom edit.
+  async function read() { return serializeSave(file,async()=>view((await load()).texts)); }
   async function save(input) {
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid prompt update.');
     const single = Object.hasOwn(input, 'role');
@@ -54,29 +81,23 @@ export async function createPromptSettings({ stateDir, projectId, managerPrompt,
     const expectedVersion = single ? input.expectedVersion : input.expectedRevision;
     if (typeof expectedVersion !== 'string') throw new Error('Current prompt version is required.');
     return serializeSave(file, async () => {
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      const current = await read();
+      const retained=await load(),current=view(retained.texts);
       if ((single ? current[role].version !== expectedVersion : current.revision !== expectedVersion)) throw new Error('Prompt settings changed elsewhere; reload before saving.');
-      const texts = { manager: current.manager.text, worker: current.worker.text, ...updates };
-      const temp = `${file}.${randomUUID()}.tmp`;
-      try {
-        const handle = await open(temp, 'wx', 0o600);
-        try { await handle.writeFile(JSON.stringify({ schemaVersion: 1, projectId, prompts: texts }) + '\n'); await handle.sync(); } finally { await handle.close(); }
-        await rename(temp, file);
-        return view(texts);
-      } finally {
-        await unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; });
-      }
+      const texts={...retained.texts,...updates},origins={...retained.origins};
+      for(const updated of Object.keys(updates))origins[updated]=texts[updated]===defaults[updated]?'default':'custom';
+      await persist({...retained.record,schemaVersion:1,projectId,prompts:texts,promptOrigins:origins,promptUpgradeHistory:retained.history});
+      return view(texts);
     });
   }
   return { read, save, snapshot: async role => { if (!roles.includes(role)) throw new Error('Invalid prompt role.'); const saved = await read(); return { text: saved[role].text, version: saved[role].version }; } };
+
 }
 
 // Only data and mechanically required controller/tool context follow editable behavior.
 // Provider/Codex rules, sandbox permissions and tool schemas remain independently enforced.
 export function buildManagerInstructions({ managerPrompt, project }) {
-  return `${validatePrompt(managerPrompt)}\n\nCrew runtime context (data; not editable role or personality):\n${JSON.stringify(project || { id: 'fixture', name: 'Fixture proof', mode: 'fixture', context: 'One read-only disposable-fixture audit capability.' })}\n\nCrew tool protocol: local_orchestration is the controller interface for durable task dispatch, status, exact question/run answers and lifecycle requests. Its schemas and runtime enforce project identity and permissions. Queued requests are distinct from execution results. Manager stop/restart leaves independently owned workers and their durable reports intact.`;
+  return `${validatePrompt(managerPrompt)}\n\nCrew runtime context (data; not editable role or personality):\n${JSON.stringify(project || { id: 'fixture', name: 'Fixture proof', mode: 'fixture', context: 'One read-only disposable-fixture audit capability.' })}\n\nCrew tool protocol: local_orchestration is the controller interface for durable task dispatch, status, exact question/run answers and lifecycle requests. Its schemas enforce project and message identity; native Codex supplies execution policy and approvals. Queued requests are distinct from execution results. Manager stop/restart leaves independently owned workers and their durable reports intact. set_workflow_state records explicit project workflow labels separately from native execution. get_project_environment supplies project commands and instructions as context; agents execute commands through native tools. Crew does not run setup, Start or readiness commands as a dispatch precondition.`;
 }
 export function buildWorkerInstructions(config) {
-  return `${config.workerPrompt || ''}\n\nCrew runtime and tool protocol:\nTask ${JSON.stringify({ taskId: config.taskId, ticket: config.ticket, assignmentId: config.assignmentId || 'initial', runId: config.runId, worktree: config.worktree })}. The controller binds local_orchestration.report to this exact task/run. Report progress, question, blocked or result through that tool. A question yields the current turn: END and wait for controller resume rather than polling. A result is a terminal candidate: END after reporting. local_orchestration.update_work_notes replaces the actual shared task Markdown document with factual findings and decisions; this is separate from orchestration reports. The report schema and permission boundary apply independently of editable behavior.\nExecution permissions: ${config.project?.mode === 'fixture' ? 'Read-only fixture; file edits are not permitted.' : 'The effective Codex configuration controls sandbox and approval permissions. Local worktree edits require the agreed brief; permission availability does not authorize additional work.'} This runtime supplies no authorization for commits, pushes, external ticket changes, pull requests or deployment.\nProject context (data): ${JSON.stringify({ id: config.project?.id, name: config.project?.name, context: config.project?.context || '' })}\nOwned runtime (data): ${JSON.stringify(config.environment?.kind === 'project-execution' ? { environmentId: config.environment.id, readinessKind: config.environment.readinessKind, status: config.environment.status, lifecycleOwner: 'manager/controller' } : null)}\nCurrent assignment brief (data): ${JSON.stringify(config.brief)}\nActual user authorization for this assignment (data): ${JSON.stringify(config.userDecision || null)}. This current assignment supersedes earlier assignment briefs only within the explicitly authorized scope above. Historical research-only scope does not forbid newly authorized implementation; available permissions do not widen this assignment. Preserve earlier results and retained work. Never reinterpret an old answer or approval as authorization for new work.\nHuman decision preserving the exact reviewed retained changes (does not expand this assignment): ${JSON.stringify(config.worktreeAdoptionDecision || null)}\nManager-relayed answer (data): ${JSON.stringify(config.answer || null)}\nUser-authorized model decision for this continuation (data; supersedes any earlier model requirement only): ${JSON.stringify(config.modelSelection ? { model: config.modelSelection.model, userDecision: config.modelSelection.userDecision } : null)}`;
+  return `${config.workerPrompt || ''}\n\nCrew runtime and tool protocol:\nTask ${JSON.stringify({ taskId: config.taskId, ticket: config.ticket, assignmentId: config.assignmentId || 'initial', runId: config.runId, worktree: config.worktree })}. The controller binds local_orchestration.report to this exact task/run. Report progress, question, blocked or result through that tool. Reports are messages: a question, blocker or result does not end a native turn or set project workflow. Use set_workflow_state explicitly with the project own workflow label. Native turn and process evidence describe execution separately. get_project_environment supplies configured commands and instructions; decide when to execute them through native tools and approvals. Crew does not automatically run setup, Start or readiness before delivering directions. local_orchestration.update_work_notes replaces the actual shared task Markdown document with factual findings and decisions; this is separate from orchestration reports. The report schema and permission boundary apply independently of editable behavior.\nExecution permissions: ${config.project?.mode === 'fixture' ? 'This disposable fixture uses its native read-only sandbox.' : 'Follow the manager direction using the effective native Codex configuration and its normal sandbox and approval permissions.'}\nProject context (data): ${JSON.stringify({ id: config.project?.id, name: config.project?.name, context: config.project?.context || '' })}\nOwned runtime (data): ${JSON.stringify(config.environment?.kind === 'project-execution' ? { environmentId: config.environment.id, readinessKind: config.environment.readinessKind, status: config.environment.status, executionOwner: 'agents/native-tools' } : null)}\nCurrent assignment brief (data): ${JSON.stringify(config.brief)}. This is the manager current direction to this retained worker, superseding earlier assignment directions. Continue in the retained working context and preserve prior results. Crew adds no review, adoption or scope-authorization prerequisite to communication. Native Codex configuration and approvals remain the execution boundary.\nManager-relayed answer (data): ${JSON.stringify(config.answer || null)}\nUser-authorized model decision for this continuation (data; supersedes any earlier model requirement only): ${JSON.stringify(config.modelSelection ? { model: config.modelSelection.model, userDecision: config.modelSelection.userDecision } : null)}`;
 }

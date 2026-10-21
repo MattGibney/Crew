@@ -8,7 +8,7 @@ import {createBridge} from '../codex-bridge.mjs';
 import {updateActivity} from '../update-activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
-async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,configuredInstructions=null,timelinePages=null,timelineDelay=0,timelineError=null,writerConflict=false,conflictThreadIds=null,recoveryActive=false,turnsError=null,startupApproval=false,startupThreadNotification=true,startupResultThreadId=null}={}){
+async function fixture(t,{history=[],saved=false,threadDelay=0,turnAckDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,configuredInstructions=null,timelinePages=null,timelineDelay=0,timelineError=null,writerConflict=false,conflictThreadIds=null,recoveryActive=false,turnsError=null,startupApproval=false,startupThreadNotification=true,startupResultThreadId=null}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-turn-state-')),statePath=join(directory,'manager.json'),control=join(directory,'notifications.jsonl'),calls=join(directory,'calls.jsonl'),executable=join(directory,'fake-codex.mjs');
  await writeFile(control,'');await writeFile(calls,'');if(saved)await writeFile(statePath,JSON.stringify({threadId:'manager-thread'}));
  const program=`#!${process.execPath}
@@ -43,13 +43,14 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(method==='thread/realtime/stop'&&${voiceStopFails})return send({id,error:{message:'fixture stop unavailable'}});
  if(method==='turn/start'){
   const turn={id:'turn-'+(++sequence),status:'inProgress',items:[]},text=params.input[0].text;
-  if(text==='rpc-first')return reply(id,{turn});
+  if(text==='rpc-first')return setTimeout(()=>reply(id,{turn}),${turnAckDelay});
   notify('turn/started',{turn});
   if(text==='completion-first'){notify('turn/completed',{turn:{...turn,status:'completed'}});return reply(id,{turn});}
   reply(id,{turn});
   if(text==='complete')setTimeout(()=>notify('turn/completed',{turn:{...turn,status:'completed'}}),15);
   return;
  }
+ if(method==='turn/steer')return reply(id,{turnId:params.expectedTurnId});
  if(method==='turn/interrupt'){notify('turn/completed',{turn:{id:params.turnId,status:'interrupted',items:[]}});return reply(id,{});}
  return reply(id,{});
 });
@@ -87,11 +88,12 @@ test('completion preceding turn/start RPC response cannot resurrect that finishe
  assert.equal(bridge.state().status,'completed');assert.equal(bridge.state().activeTurnId,null);assert.equal(bridge.state().workStarting,false);assert.equal(canUpdate(bridge),true);
  assert.equal(events.filter(event=>event.type==='work-state').at(-1).state.workStarting,false);
 });
-test('resuming a saved in-progress native turn refuses a new turn rather than starting replacement work',async t=>{
+test('resuming a saved in-progress native turn steers it without starting replacement work',async t=>{
  const {bridge,calls}=await fixture(t,{saved:true,history:[{id:'existing-live-turn',status:'inProgress',items:[]}]});
- await assert.rejects(bridge.startWork('remain','request-resume'),/already working/);
+ const directed=await bridge.startWork('remain','request-resume');assert.equal(directed.turnId,'existing-live-turn');
  assert.equal(bridge.state().activeTurnId,'existing-live-turn');assert.equal(bridge.state().workStarting,false);assert.equal(canUpdate(bridge),false);
  assert.equal((await calls()).filter(call=>call.method==='turn/start').length,0);assert.equal((await calls()).filter(call=>call.method==='thread/fork').length,0);
+ const steer=(await calls()).find(call=>call.method==='turn/steer');assert.equal(steer.params.expectedTurnId,'existing-live-turn');
 });
 test('pending thread initialization is busy and duplicate request IDs still launch once',async t=>{
  const {bridge,calls}=await fixture(t,{threadDelay:50});const first=bridge.startWork('rpc-first','request-dedup'),duplicate=bridge.startWork('rpc-first','request-dedup');
@@ -551,4 +553,91 @@ test('bounded canonical hydration retains exact saved delegation origin without 
  const recreated=f.create();t.after(()=>recreated.shutdown());await recreated.ensureThread();
  assert.deepEqual(recreated.state().messages,messages);await recreated.shutdown();
  assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,0);
+});
+
+test('GH50 human directions steer the active native turn and exact retries do not duplicate delivery', async t => {
+ const {bridge,calls}=await fixture(t);
+ await bridge.startWork('remain','initial-manager-work');
+ const first=bridge.startWork('Tell the retained worker to continue with the edits','manager-direction-one');
+ const duplicate=bridge.startWork('Tell the retained worker to continue with the edits','manager-direction-one');
+ const [result]=await Promise.all([first,duplicate]);
+ assert.equal(result.turnId,'turn-1');
+ const records=await calls();
+ assert.equal(records.filter(call=>call.method==='turn/start').length,1);
+ const steers=records.filter(call=>call.method==='turn/steer');
+ assert.equal(steers.length,1);
+ assert.deepEqual(steers[0].params,{threadId:'manager-thread',expectedTurnId:'turn-1',clientUserMessageId:'manager-direction-one',input:[{type:'text',text:'Tell the retained worker to continue with the edits'}]});
+ assert.equal(bridge.state().activeTurnId,'turn-1');
+ assert.equal(bridge.state().workStarting,false);
+ assert.deepEqual(await bridge.startWork('autonomous review','background-review',{background:true}),{accepted:false});
+ assert.equal((await calls()).filter(call=>call.method==='turn/steer').length,1,'Background reviews do not steer');
+});
+
+test('GH50 concurrent human input during manager bootstrap serializes then steers one turn', async t => {
+ const {bridge,calls}=await fixture(t,{threadDelay:50});
+ const first=bridge.startWork('rpc-first','bootstrap-first');
+ const direction=bridge.startWork('Then relay my next direction','bootstrap-direction');
+ assert.equal(bridge.state().workStarting,true);
+ await Promise.all([first,direction]);
+ const records=await calls();
+ assert.equal(records.filter(call=>call.method==='turn/start').length,1);
+ assert.equal(records.filter(call=>call.method==='turn/steer').length,1);
+ assert.equal(records.find(call=>call.method==='turn/steer').params.expectedTurnId,'turn-1');
+ assert.equal(bridge.state().activeTurnId,'turn-1');
+ assert.equal(bridge.state().workStarting,false);
+});
+
+test('GH50 steering leaves native approvals pending until their explicit answer', async t => {
+ const {bridge,request,calls}=await fixture(t);
+ await bridge.startWork('remain','approval-steer-initial');
+ await request(9400,'item/commandExecution/requestApproval',{turnId:'turn-1',itemId:'approval-steer-command',command:'fixture command',availableDecisions:['accept','decline']});
+ await until(()=>bridge.state().approvals.length===1);
+ const approval=bridge.state().approvals[0];
+ await bridge.startWork('Relay this new worker direction','approval-steer-direction');
+ assert.equal(bridge.state().approvals[0].attentionId,approval.attentionId);
+ assert.equal((await calls()).filter(call=>call.id===9400&&!call.method).length,0,'Direction never auto-answers native approval');
+ bridge.answerApproval(approval.id,{decision:'accept'});
+ await until(async()=> (await calls()).some(call=>call.id===9400&&!call.method));
+ assert.deepEqual((await calls()).find(call=>call.id===9400&&!call.method).result,{decision:'accept'});
+});
+
+test('explicit stop during thread bootstrap cancels queued messages before any native turn starts', async t => {
+ const {bridge,calls}=await fixture(t,{threadDelay:80});
+ const first=bridge.startWork('remain','stop-bootstrap-first'),queued=bridge.startWork('queued direction','stop-bootstrap-queued');
+ const rejectedFirst=assert.rejects(first,/stopped before.*delivered/),rejectedQueued=assert.rejects(queued,/stopped before.*delivered/);
+ await until(async()=> (await calls()).some(call=>call.method==='thread/start'));
+ await bridge.interrupt();
+ await Promise.all([rejectedFirst,rejectedQueued]);
+ assert.equal((await calls()).filter(call=>call.method==='turn/start'||call.method==='turn/steer').length,0);
+ assert.equal(bridge.state().workStarting,false);
+ await bridge.startWork('remain','explicit-new-work-after-stop');
+ assert.equal((await calls()).filter(call=>call.method==='turn/start').length,1,'Only a fresh explicit request starts work');
+});
+
+test('explicit stop before native start acknowledgement interrupts that turn and cancels queued directions', async t => {
+ const {bridge,calls}=await fixture(t,{turnAckDelay:80});
+ const first=bridge.startWork('rpc-first','stop-before-start-ack');
+ await until(async()=> (await calls()).some(call=>call.method==='turn/start'));
+ const queued=bridge.startWork('must not start after stop','queued-before-stop');
+ const rejected=assert.rejects(queued,/stopped before.*delivered/);
+ await bridge.interrupt();
+ await first;await rejected;
+ await until(()=>bridge.state().activeTurnId===null);
+ const records=await calls();
+ assert.equal(records.filter(call=>call.method==='turn/start').length,1);
+ assert.equal(records.filter(call=>call.method==='turn/steer').length,0);
+ assert.deepEqual(records.find(call=>call.method==='turn/interrupt').params,{threadId:'manager-thread',turnId:'turn-1'});
+ assert.equal(bridge.state().workStarting,false);
+});
+
+test('Stop manager cancels accepted queued deliveries instead of draining them into new native work', async t => {
+ const {bridge,calls}=await fixture(t,{threadDelay:80});
+ const first=bridge.startWork('remain','stop-manager-bootstrap'),queued=bridge.startWork('another direction','stop-manager-queued');
+ const rejectedFirst=assert.rejects(first,/stopped before.*delivered/),rejectedQueued=assert.rejects(queued,/stopped before.*delivered/);
+ await until(async()=> (await calls()).some(call=>call.method==='thread/start'));
+ await bridge.stopManager();
+ await Promise.all([rejectedFirst,rejectedQueued]);
+ assert.equal((await calls()).filter(call=>call.method==='turn/start'||call.method==='turn/steer').length,0);
+ assert.equal(bridge.state().status,'stopped');
+ assert.equal(bridge.state().workStarting,false);
 });

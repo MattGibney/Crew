@@ -43,6 +43,7 @@ export async function createManagerLifecycle({ stateDir, projectId, bridge, prom
     }
     if (action === 'start' && state === 'running') return Promise.resolve({ managerLifecycle: view() });
     if (action === 'stop' && state === 'stopped') return Promise.resolve({ managerLifecycle: view() });
+    if (action !== 'start') bridge.cancelPendingWork?.();
     state = action === 'start' ? 'starting' : action === 'restart' ? 'restarting' : 'stopping'; error = null; publish();
     const promise = (async () => {
       try {
