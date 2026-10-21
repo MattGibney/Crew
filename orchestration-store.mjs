@@ -30,6 +30,7 @@ function validate(task, expectedId) {
       || !Number.isFinite(Date.parse(task.createdAt)) || !Number.isFinite(Date.parse(task.updatedAt))
       || (task.lifecycleRequests !== undefined && (!Array.isArray(task.lifecycleRequests) || task.lifecycleRequests.some(request => !request || typeof request.id !== 'string' || !ID.test(request.id) || !LIFECYCLE_ACTIONS.has(request.action) || !LIFECYCLE_STATES.has(request.status) || !Number.isFinite(Date.parse(request.at)) || (request.expectedRunId != null && (typeof request.expectedRunId !== 'string' || !request.expectedRunId.trim())))))
       || (task.workerPromptSnapshot !== undefined && (!task.workerPromptSnapshot || typeof task.workerPromptSnapshot.text !== 'string' || task.workerPromptSnapshot.version !== promptSnapshot(task.workerPromptSnapshot.text).version))
+      || (task.history !== undefined && (!Array.isArray(task.history) || task.history.some(event => !event || typeof event.id !== 'string' || !['manager', 'worker', 'controller'].includes(event.actor) || typeof event.kind !== 'string' || typeof event.message !== 'string')))
       || !Array.isArray(task.reports) || !Array.isArray(task.attention)
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
@@ -141,6 +142,21 @@ async function atomic(file, content) {
     await fs.rename(temp, file);
   } finally { await fs.unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
 }
+function recordHistory(task, previous = null) {
+  const history = task.history ||= [];
+  const add = (id, actor, kind, message, extra = {}) => {
+    if (!history.some(event => event.id === id)) history.push({ id, actor, kind, message, at: now(), runId: task.runId || null, ...extra });
+  };
+  if (!previous) add('assignment', 'manager', 'instruction', task.brief, { at: task.createdAt, runId: null });
+  for (const report of task.reports) add(`report:${report.runId}:${report.reportId}`, 'worker', report.kind, report.message, { at: report.at, runId: report.runId, evidence: report.evidence || [] });
+  if (task.answer && JSON.stringify(task.answer) !== JSON.stringify(previous?.answer)) add(`answer:${task.answer.questionId}`, 'manager', 'answer', task.answer.text, { at: task.answer.at, questionId: task.answer.questionId });
+  for (const request of task.lifecycleRequests || []) {
+    const before = previous?.lifecycleRequests?.find(item => item.id === request.id);
+    if (!before) add(`action:${request.id}`, request.cooperative ? 'controller' : 'manager', 'lifecycle_request', `Requested ${request.action}`, { at: request.at, runId: request.expectedRunId });
+    if (before && before.status !== request.status) add(`action:${request.id}:${request.status}`, 'controller', 'lifecycle', `${request.action}: ${request.status}${request.error ? ` — ${request.error}` : ''}`, { at: request.handledAt || now(), runId: request.expectedRunId });
+  }
+  if (previous && (task.status !== previous.status || task.runId !== previous.runId)) add(`state:${previous.revision + 1}`, 'controller', 'status', `Worker status: ${task.status}${task.failure ? ` — ${task.failure}` : ''}`, { status: task.status });
+}
 async function save(dir, task) {
   validate(task, task.id);
   await fs.mkdir(path.join(dir, 'tasks'), { recursive: true, mode: 0o700 });
@@ -166,19 +182,22 @@ export async function createTask(dir, { requestId, ticket, brief, projectId = nu
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
-    return withStateLock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
+    return withStateLock(dir, `.${requestId}.lock`, () => { const task = { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null, historyVersion: 1, history: [] }; recordHistory(task); return save(dir, task); });
   });
 }
 export async function updateTask(dir, id, fn) {
   identifier(id);
   return withStateLock(dir, '.schedule.lock', () => withStateLock(dir, `.${id}.lock`, async () => {
     const task = await readUnlocked(dir, id);
+    const previous = structuredClone(task);
     const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision, workerPromptSnapshot: task.workerPromptSnapshot ? JSON.stringify(task.workerPromptSnapshot) : null };
     const returned = await fn(task);
     const next = returned === undefined ? task : returned;
     if (!next || next.id !== identity.id || next.ticket !== identity.ticket || next.brief !== identity.brief || next.projectId !== identity.projectId || next.repositoryId !== identity.repositoryId || next.createdAt !== identity.createdAt) throw new Error('Task identity is immutable');
     if (identity.workerPromptSnapshot && JSON.stringify(next.workerPromptSnapshot) !== identity.workerPromptSnapshot) throw new Error('Worker prompt snapshot is immutable');
+    if (previous.history && JSON.stringify(next.history?.slice(0, previous.history.length)) !== JSON.stringify(previous.history)) throw new Error('Retained task history is immutable');
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
+    recordHistory(next, previous);
     next.revision = identity.revision + 1; next.updatedAt = now();
     validate(next, id);
     return save(dir, next);
@@ -243,5 +262,22 @@ export async function requestWorkerAction(dir, { taskId, actionId, action, expec
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
     requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
+  });
+}
+
+// Shared prose is a real separate Markdown document, never the generated task projection.
+export async function updateWorkNotes(dir, id, { updateId, markdown, runId = null }) {
+  text(updateId, 'note update ID', 160); text(markdown, 'work notes', 60000);
+  if (Buffer.byteLength(markdown) > 60000) throw new Error('Work notes exceed the document byte limit');
+  return updateTask(dir, id, async task => {
+    if (runId && task.runId !== runId) throw new Error('Stale worker run');
+    if (runId && task.status !== 'running') throw new Error('Worker is not running');
+    if (task.workNotes?.updateId === updateId) {
+      if (await fs.readFile(path.join(dir, 'tasks', `${id}.notes.md`), 'utf8') !== markdown) throw new Error('Note update ID reused with changed content');
+      return;
+    }
+    await atomic(path.join(dir, 'tasks', `${id}.notes.md`), markdown);
+    task.workNotes = { updateId, updatedAt: now(), actor: runId ? 'worker' : 'manager', runId };
+    (task.history ||= []).push({ id: `notes:${randomUUID()}`, at: task.workNotes.updatedAt, actor: task.workNotes.actor, kind: 'notes', message: 'Updated shared work notes', runId });
   });
 }

@@ -8,6 +8,7 @@ import { createPromptSettings } from './prompt-settings.mjs';
 import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
+import { readWorkerDetail } from './worker-detail.mjs';
 import { readTask, requestWorkerAction } from './orchestration-store.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRendererAssets } from './renderer-assets.mjs';
@@ -95,6 +96,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(body);
       }
     }
+    if (req.method === 'GET' && /^\/api\/workers\/[a-zA-Z0-9_-]{8,80}$/.test(req.url || '')) return send(200, await readWorkerDetail(orchestrationDir, req.url.split('/').at(-1), project));
     if (req.method === 'GET' && req.url === '/api/settings') return send(200, await settingsView());
     if (req.method === 'GET' && req.url === '/events') {
       if (clients.size) return send(409, { error: 'Only one browser tab can control this chat.' });

@@ -56,8 +56,8 @@ lines.on('line',line=>{
  if(event.type==='turn.failed'||event.type==='error')errorMessage=event.error?.message||event.message||'Codex run failed';
  if(event.type==='item.completed'&&item?.type==='agent_message')finalMessage=item.text;
  if(event.type==='item.completed'&&item?.type==='command_execution')commands.push({command:item.command,exitCode:item.exit_code,output:String(item.aggregated_output||'').slice(0,5000)});
- const safe=event.type==='thread.started'?{type:event.type,threadId}:item?.type==='command_execution'?{type:event.type,item:{type:item.type,status:item.status,command:item.command,exitCode:item.exit_code}}:{type:event.type,itemType:item?.type,status:item?.status};
- writes=writes.then(()=>appendFile(path.join(runDir,'events.jsonl'),JSON.stringify(safe)+'\n',{mode:0o600})).then(()=>atomic('runtime.json',{runId:config.runId,threadId,completedTurn,commands,updatedAt:new Date().toISOString()}));
+ const safe=item?.type==='agent_message'&&event.type==='item.completed'?{type:event.type,item:{type:item.type,text:item.text}}:event.type==='thread.started'?{type:event.type,threadId}:item?.type==='command_execution'?{type:event.type,item:{type:item.type,status:item.status,command:item.command,exitCode:item.exit_code}}:{type:event.type,itemType:item?.type,status:item?.status};
+ writes=writes.then(()=>appendFile(path.join(runDir,'events.jsonl'),JSON.stringify({...safe,taskId:config.taskId,runId:config.runId,at:new Date().toISOString()})+'\n',{mode:0o600})).then(()=>atomic('runtime.json',{runId:config.runId,threadId,completedTurn,commands,updatedAt:new Date().toISOString()}));
 });
 async function capture(){if(tree){const records=await tree.capture();await atomic('ownership.json',{runId:config.runId,records,at:new Date().toISOString()});}}
 await capture();

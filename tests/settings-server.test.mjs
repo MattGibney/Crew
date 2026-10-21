@@ -139,3 +139,22 @@ test('HTTP origin checks, stale writes and invalid saves preserve the prior proj
   assert.deepEqual((await f.request('/api/settings', { method: 'GET' })).value.worker.saved, current.worker.saved);
   assert.equal((await f.calls()).length, 0);
 });
+
+test('worker detail HTTP is read-only, same-origin and project scoped', async t => {
+  const f = await fixture(t);
+  await createTask(f.stateDir, { requestId: 'http-detail-task', ticket: 'AI-004', brief: 'Read-only detail fixture, never execute.', projectId: 'http-settings-fixture' });
+  await updateTask(f.stateDir, 'http-detail-task', task => { task.status = 'completed'; });
+  await f.start();
+  const before = await readTask(f.stateDir, 'http-detail-task');
+  const response = await f.request('/api/workers/http-detail-task', { method: 'GET' });
+  assert.equal(response.status, 200);
+  assert.equal(response.value.taskId, 'http-detail-task');
+  assert.equal(response.value.conversation[0].message, before.brief);
+  assert.equal((await f.request('/api/workers/http-detail-task', { method: 'GET', requestOrigin: 'https://untrusted.invalid' })).status, 403);
+  assert.equal((await f.request('/api/workers/http-detail-task', { body: { markdown: 'not authorized' } })).status, 404);
+  assert.equal((await readTask(f.stateDir, 'http-detail-task')).revision, before.revision);
+  await createTask(f.stateDir, { requestId: 'http-other-project', ticket: 'AI-004', brief: 'Different project', projectId: 'other-project' });
+  const other = await f.request('/api/workers/http-other-project', { method: 'GET' });
+  assert.equal(other.status, 400); assert.match(other.value.error, /another project/);
+  assert.equal((await f.calls()).some(call => call.method === 'turn/start'), false);
+});

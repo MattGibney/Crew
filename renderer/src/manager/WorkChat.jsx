@@ -53,7 +53,7 @@ export function WorkChat({ manager, children }) {
     finally { submitLock.current = false; }
   };
   return <div className="relative flex min-h-0 flex-1 flex-col">
-    <div ref={scrollRef} onScroll={() => { const node = scrollRef.current; nearBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 100; setScrolledUp(!nearBottom.current); }} className="min-h-72 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 sm:px-7 lg:min-h-0" aria-label="Manager conversation">
+    <div ref={scrollRef} onScroll={() => { const node = scrollRef.current; nearBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 100; setScrolledUp(!nearBottom.current); }} className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 sm:px-7 lg:min-h-0" aria-label="Manager conversation">
       <div className="mx-auto max-w-3xl space-y-6">
         {(manager.projectInfo?.readiness?.ready === false || (!manager.projectInfo && manager.project.startsWith('Project configuration unavailable'))) && <Alert role="alert"><AlertDescription className="break-words">{manager.project}<p className="mt-2">Open Set up Crew in the app menu to review your project. You can still discuss setup with your manager.</p></AlertDescription></Alert>}
         {!manager.managerEnabled && <Alert><AlertDescription>Your manager is {manager.managerLifecycle.state === 'stopped' ? 'stopped' : 'unavailable while its state is checked'}. Open Settings to start or restart it. Your conversation and worker history stay here.</AlertDescription></Alert>}

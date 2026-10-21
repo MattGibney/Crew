@@ -2,7 +2,7 @@
 import readline from 'node:readline';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction } from './orchestration-store.mjs';
+import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction, updateWorkNotes } from './orchestration-store.mjs';
 
 const [stateDirArg, role, taskId, runId] = process.argv.slice(2);
 if (!stateDirArg || !['manager', 'worker'].includes(role) || (role === 'worker' && (!taskId || !runId))) {
@@ -33,6 +33,7 @@ const tools = role === 'manager' ? [
 ] : [
   { name: 'report', description: 'Write a durable report for this bound task/run only. Give one useful progress update. For question: record the question, END this turn and wait for controller resume; do not keep polling or continue without the answer. For result: provide concrete evidence; this is a terminal candidate, not verified completion. Reuse reportId for retries.', inputSchema: object({ reportId: string('Unique stable report ID within this run', 160), kind: { type: 'string', enum: ['progress', 'question', 'result', 'blocked'] }, message: string('Useful bounded progress, question, result or blocker'), evidence: { type: 'array', maxItems: 20, items: string('Concrete evidence; no secrets', 2000) } }, ['reportId', 'kind', 'message']) },
 ];
+tools.push({ name: 'update_work_notes', description: 'Replace the actual shared Markdown work document for this task. Record factual findings and decisions, never private reasoning or secrets. The UI reads this document separately from structured task state. Reuse updateId on retries.', inputSchema: object({ ...(role === 'manager' ? { taskId: taskIdentifier } : {}), updateId: string('Stable unique note revision ID', 160), markdown: string('Complete factual shared Markdown document', 60000) }, [...(role === 'manager' ? ['taskId'] : []), 'updateId', 'markdown']) });
 function validateArgs(tool, args) {
   if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('Arguments must be an object');
   for (const key of tool.inputSchema.required) if (!(key in args)) throw new Error(`Missing ${key}`);
@@ -47,6 +48,7 @@ async function callTool(name, args) {
   const tool = tools.find(item => item.name === name);
   if (!tool) throw new Error('Unknown tool for this role');
   validateArgs(tool, args);
+  if (name === 'update_work_notes') { const id = role === 'worker' ? taskId : args.taskId; scoped(await readTask(stateDir, id)); return updateWorkNotes(stateDir, id, { ...args, runId: role === 'worker' ? runId : null }); }
   if (role === 'worker') return reportTask(stateDir, taskId, runId, args);
   switch (name) {
     case 'submit_task': {
