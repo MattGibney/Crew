@@ -8,9 +8,9 @@ export function createAttentionSounds(play, storage) {
   let seen;
   try { const saved = JSON.parse(storage?.getItem(key) || '[]'); seen = new Set(Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : []); }
   catch { seen = new Set(); }
-  return (work, orchestration) => {
+  return (work, orchestration, workerApprovals) => {
     let fresh = false;
-    for (const id of attentionKeys(work, orchestration)) if (!seen.has(id)) { seen.add(id); fresh = true; }
+    for (const id of attentionKeys(work, orchestration, workerApprovals)) if (!seen.has(id)) { seen.add(id); fresh = true; }
     if (!fresh) return;
     // One chime for a snapshot containing several new requests; no sound storm.
     // Retain all IDs for this instance, so old replay cannot sound again.

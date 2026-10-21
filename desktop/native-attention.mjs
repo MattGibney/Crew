@@ -6,7 +6,7 @@ import { attentionKeys } from '../attention-keys.mjs';
 // One owner per desktop instance. Persist before playing so reloads, IPC replay
 // and polling cannot repeat a sound. A ledger failure fails closed.
 export function createNativeAttention({ ledgerPath, soundPath, spawnImpl = spawn, platform = process.platform, onStatus = () => {}, timeoutMs = 3000 }) {
-  let seen = new Set(), work = {}, orchestration = {}, disposed = false, player, drain, scheduled = false;
+  let seen = new Set(), work = {}, orchestration = {}, workerApprovals = [], disposed = false, player, drain, scheduled = false;
   const pending = new Set();
   let status = { available: false, error: null, playing: false };
   const publish = change => { status = { ...status, ...change }; onStatus({ ...status }); };
@@ -56,7 +56,8 @@ export function createNativeAttention({ ledgerPath, soundPath, spawnImpl = spawn
   async function flush() {
     if (!await ready || disposed || !status.available) return;
     while (pending.size && !disposed) {
-      const next = [...pending].filter(key => !seen.has(key)); pending.clear();
+      const actionable = new Set(attentionKeys(work, orchestration, workerApprovals));
+      const next = [...pending].filter(key => !seen.has(key) && actionable.has(key)); pending.clear();
       if (!next.length) continue;
       if (seen.size + next.length > 20000) throw new Error('Attention sound history is full.');
       const retained = new Set([...seen, ...next]);
@@ -64,7 +65,8 @@ export function createNativeAttention({ ledgerPath, soundPath, spawnImpl = spawn
       const temporary = `${ledgerPath}.${process.pid}.tmp`;
       await writeFile(temporary, JSON.stringify({ version: 1, keys: [...retained] }) + '\n', { mode: 0o600 });
       await rename(temporary, ledgerPath); seen = retained;
-      if (!disposed) await play();
+      const stillActionable = new Set(attentionKeys(work, orchestration, workerApprovals));
+      if (!disposed && next.some(key => stillActionable.has(key))) await play();
     }
   }
   function schedule() {
@@ -78,7 +80,8 @@ export function createNativeAttention({ ledgerPath, soundPath, spawnImpl = spawn
     if (disposed || status.error) return;
     if (snapshot.work && typeof snapshot.work === 'object' && !Array.isArray(snapshot.work)) work = snapshot.work;
     if (snapshot.orchestration && typeof snapshot.orchestration === 'object' && !Array.isArray(snapshot.orchestration)) orchestration = snapshot.orchestration;
-    for (const key of attentionKeys(work, orchestration)) if (!seen.has(key)) pending.add(key);
+    if (Array.isArray(snapshot.workerApprovals)) workerApprovals = snapshot.workerApprovals;
+    for (const key of attentionKeys(work, orchestration, workerApprovals)) if (!seen.has(key)) pending.add(key);
     schedule();
   }
   return {

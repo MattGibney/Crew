@@ -114,3 +114,10 @@
 - Typed and spoken manager messages share one timeline and message renderer. Prefer native canonical timeline/item identities, including referenced promoted execution items; never deduplicate by matching transcript text or group an entire voice call separately. Transcript/handoff observation remains passive.
 - Keep stable partial rows during deltas and final reconciliation, preserve mixed text/speech ordering, drafts and reconnect history, and label unfinished observed speech honestly. Connect never clears the conversation. Canonical persistence and a legacy flat transcript fallback are different evidence; never fabricate missing words, speech delivery or acoustic acceptance.
 - Generated Codex protocol types do not prove installed method support. Handle only verified unsupported-method and exact native empty-history responses as compatibility cases; preserve operational errors and durable native-fork provenance across failed hydration and retries.
+
+## Grouped 0.11.0 integration
+
+- The user explicitly authorized combining PRs #10, #16, #17 and #18, testing them together, merging main and publishing one signed/notarized 0.11.0 release. This authorization applies to those named changes and their required integration fixes only. Preserve complete PR histories and immutable published tags/assets.
+- Worker approval requests are an attention source separate from the manager timeline. Preserve exact native request/task/run/thread/turn identities through detail navigation, sounds and decisions; transcript deltas never imply new attention. Native visible worker replies/commands must retain correlated safe reader envelopes.
+- Keep the single App-owned call/audio lifetime through unified timeline updates and secondary views. A hidden Settings view suppresses call UI while preserving the established call; project/window/quit lifecycle remains separately verified.
+- Combined validation uses synthetic media, real subscription Allow/Cancel, source packaging and isolated signed prior-version update. Never substitute unsigned download/replacement for native production-update acceptance; user acoustic preference remains hands-on acceptance.

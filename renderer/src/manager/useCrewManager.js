@@ -44,7 +44,7 @@ export function useCrewManager() {
     window.addEventListener('keydown', unlock, true);
     return () => { window.removeEventListener('pointerdown', unlock, true); window.removeEventListener('keydown', unlock, true); sounds.dispose(); };
   }, [sounds]);
-  useEffect(() => { if (nativeAttentionSound.current === false) attentionRef.current(work, orchestration); }, [work, orchestration, projectInfo]);
+  useEffect(() => { if (nativeAttentionSound.current === false) attentionRef.current(work, orchestration, workerApprovals); }, [work, orchestration, workerApprovals, projectInfo]);
   const showError = useCallback(value => setError(errorText(value)), []);
   const loadVoices = useCallback(async () => {
     setVoiceLoading(true); setVoiceNotice('Loading available Codex voices. Microphone stays off.');

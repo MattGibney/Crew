@@ -67,3 +67,28 @@ test('new approval incarnation or turn can reuse a transport request ID without 
  observe({threadId:'manager',approvals:[{id:'2',params:{turnId:'turn-b'}}]});
  assert.equal(sounds.length,4);
 });
+
+const workerApproval = (extra = {}) => ({ status: 'pending', taskId: 'worker-task', runId: 'worker-run', threadId: 'native-worker-thread', turnId: 'native-worker-turn', requestId: 17, method: 'item/commandExecution/requestApproval', ...extra });
+test('worker native approvals sound once across timeline deltas, reconnect and renderer reload', () => {
+ let stored; const storage = { getItem: () => stored, setItem: (_, value) => { stored = value; } };
+ const played = [], play = cue => played.push(cue), task = { id: 'worker-task', runId: 'worker-run' };
+ let observe = createAttentionSounds(play, storage);
+ observe({}, { tasks: [task] }, [workerApproval()]);
+ observe({ messages: [{ id: 'timeline-delta', text: 'ordinary progress' }] }, { tasks: [task] }, [workerApproval({ params: { reason: 'same request updated' } })]);
+ observe({}, { tasks: [task] }, []); observe({}, { tasks: [task] }, [workerApproval()]);
+ observe = createAttentionSounds(play, storage); observe({}, { tasks: [task] }, [workerApproval()]);
+ assert.deepEqual(played, ['attention']);
+ observe({}, { tasks: [task] }, [workerApproval({ requestId: '17' })]);
+ assert.equal(played.length, 2, 'native numeric and string request IDs are different');
+ observe({}, { tasks: [{ ...task, runId: 'worker-run-new' }] }, [workerApproval({ runId: 'worker-run-new' })]);
+ assert.equal(played.length, 3);
+});
+test('only genuinely pending current-run worker requests qualify, including nullable-turn connector requests', () => {
+ const view = { tasks: [{ id: 'worker-task', runId: 'worker-run' }] };
+ for (const status of ['decided', 'delivered', 'delivery-unknown', 'resolved', 'stale', undefined]) assert.deepEqual(attentionKeys({}, view, [workerApproval({ status })]), []);
+ assert.deepEqual(attentionKeys({}, view, [null, {}, workerApproval({ runId: 'old-run' }), workerApproval({ turnId: null }), workerApproval({ requestId: {} })]), []);
+ for (const status of ['completed', 'stopped', 'paused', 'disposed', 'failed']) assert.deepEqual(attentionKeys({}, { tasks: [{ ...view.tasks[0], status }] }, [workerApproval()]), []);
+ const connector = workerApproval({ turnId: null, method: 'mcpServer/elicitation/request' });
+ const keys = attentionKeys({}, view, [connector]);
+ assert.equal(keys.length, 1); assert.deepEqual(JSON.parse(keys[0]), ['worker-approval', 'worker-task', 'worker-run', 'native-worker-thread', null, 17]);
+});

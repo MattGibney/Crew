@@ -98,3 +98,30 @@ test('missing exit confirmation remains visibly active until a late close arrive
  f.children[0].emit('close', null);
  assert.equal(owner.getStatus().playing, false); await owner.dispose();
 });
+
+const workerRequest = (extra = {}) => ({ status: 'pending', taskId: 'native-worker-task', runId: 'native-worker-run', threadId: 'worker-thread', turnId: 'worker-turn', requestId: 17, method: 'item/commandExecution/requestApproval', ...extra });
+test('native owner sounds worker approvals without a renderer and deduplicates polling, IPC and owner reopen', async t => {
+ const f = await fixture(t), owner = f.create(); await owner.ready;
+ const orchestration = { tasks: [{ id: 'native-worker-task', runId: 'native-worker-run' }] };
+ owner.update({ orchestration, workerApprovals: [workerRequest()] }); await owner.idle();
+ assert.equal(f.calls.length, 1);
+ owner.update({ work: { messages: [{ id: 'ordinary-timeline-delta', text: 'working' }] } });
+ owner.update({ workerApprovals: [workerRequest()] }); await owner.idle();
+ assert.equal(f.calls.length, 1);
+ owner.update({ workerApprovals: [workerRequest({ status: 'decided' })] }); await owner.idle();
+ assert.equal(f.calls.length, 1);
+ await owner.dispose();
+ const reopened = f.create(); await reopened.ready;
+ reopened.update({ orchestration, workerApprovals: [workerRequest()] }); await reopened.idle();
+ assert.equal(f.calls.length, 1);
+ reopened.update({ workerApprovals: [workerRequest({ requestId: 18, turnId: null, method: 'mcpServer/elicitation/request' })] }); await reopened.idle();
+ assert.equal(f.calls.length, 2);
+ reopened.update({ workerApprovals: [workerRequest({ requestId: 19, status: 'delivery-unknown' })] }); await reopened.idle();
+ assert.equal(f.calls.length, 2); await reopened.dispose();
+});
+test('native owner drops an approval resolved before queued attention playback', async t => {
+ const f = await fixture(t), owner = f.create();
+ owner.update({ workerApprovals: [workerRequest()] });
+ owner.update({ workerApprovals: [workerRequest({ status: 'resolved' })] });
+ await owner.idle(); assert.equal(f.calls.length, 0); await owner.dispose();
+});

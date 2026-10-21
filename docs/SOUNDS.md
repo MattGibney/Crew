@@ -8,11 +8,11 @@ The connection cue plays when WebRTC reports connected, not when Connect is clic
 
 ## When attention sounds
 
-A notification means Crew needs your response or action. Supported evidence is a native manager question/approval/connector request, a current unanswered worker question, or the manager's explicit `local_orchestration.request_attention` signal. A worker completion, failure or blocker by itself stays quiet. The manager can recover a failure quietly; if it needs a decision, it explicitly signals that need.
+A notification means Crew needs your response or action. Supported evidence is a native manager question/approval/connector request, a pending native worker approval or connector request, a current unanswered worker question, or the manager's explicit `local_orchestration.request_attention` signal. A worker completion, failure or blocker by itself stays quiet. The manager can recover a failure quietly; if it needs a decision, it explicitly signals that need.
 
 Conversational questions use `request_attention({requestId,message})` with a stable unique request ID. The manager must ask the question in its normal conversation and reuse the ID on retries. It must not emit another signal for a native input request or an existing worker question. The adapter accepts only a completed, validated successful call to this exact tool. Text content and punctuation are never used to guess intent. This depends on the manager following the explicit tool protocol, rather than claiming perfect detection of arbitrary prose questions.
 
-Call cues deduplicate per call and actual input transition. Attention keys include manager thread/request identity or worker task/run/question identity. Multiple new requests in one snapshot produce one chime. Repeated snapshots, reconnect/replay and reopening do not replay recorded identities. Answered and stale worker questions do not sound.
+Call cues deduplicate per call and actual input transition. Attention keys include manager thread/request identity, worker task/run/question identity, or the native worker approval's task/run/thread/optional-turn/request identity. Numeric and string native request IDs stay distinct, and startup connector requests retain their genuine null turn. Multiple new requests in one snapshot produce one chime. Repeated snapshots, timeline deltas, reconnect/replay and reopening do not replay recorded identities. Answered and stale worker questions do not sound. Decided, delivered, uncertain, resolved and stale worker approvals stay quiet; the native owner also drops requests that resolve before queued playback.
 
 ## Playback ownership and limits
 

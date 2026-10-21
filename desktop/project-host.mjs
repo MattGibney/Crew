@@ -30,6 +30,7 @@ let window, config, origin, backend, pollTimer, starting = false, quitting = fal
 
 let stoppedForUpdate=false;
 let counts = { active: null, pending: null }, lastError = null, backendReady = false;
+let attentionRevision = 0;
 // Each registered project retains its own history and background notification
 // owner, independent of which project's renderer is currently visible.
 const attentionSound = createNativeAttention({ ledgerPath:join(desktopData,'attention-sounds.json'), soundPath:join(root,'desktop/sounds/attention.wav'), onStatus:()=>{void statusFile().catch(()=>{});} });
@@ -88,9 +89,12 @@ async function openWindow() {
 async function poll() {
   if (!backendReady || quitting) return;
   try {
-    const [view,work] = await Promise.all([api('orchestration'),api('state')]);
+    const observedAttentionRevision = attentionRevision;
+    const [view,work,approvals] = await Promise.all([api('orchestration'),api('state'),api('worker-approvals')]);
     counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null;
-    attentionSound.update({work,orchestration:view});
+    // IPC may resolve an approval while its older poll response is in flight.
+    // Do not let that stale response restore a request already cleared natively.
+    if (observedAttentionRevision === attentionRevision) attentionSound.update({work,orchestration:view,workerApprovals:approvals.requests});
   }
   catch (error) { counts = { active:null, pending:null }; lastError = safe(error); }
   // Parent polls all controllers; update refresh is shared.
@@ -126,8 +130,10 @@ async function startup({ showWindow = true } = {}) {
     const owned = backend;
     owned.on('message',message=>{
       if(backend===owned&&!quitting&&message?.type==='crew:attention:state'){
+        attentionRevision++;
         if(message.event?.type==='work-state')attentionSound.update({work:message.event.state});
         if(message.event?.type==='orchestration-state')attentionSound.update({orchestration:message.event.state});
+        if(message.event?.type==='worker-approval-state')attentionSound.update({workerApprovals:message.event.requests});
         return;
       }
       if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action)&&!PAUSE_UPDATE_ACTIONS.has(message.action)&&!['resume-paused-work','return-to-work'].includes(message.action))return;

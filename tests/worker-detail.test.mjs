@@ -109,3 +109,40 @@ test('MCP shared notes are bound to exact worker run and manager project', async
   assert.equal((await call(['manager', runtime], { ...args, taskId: id })).isError, true);
   assert.equal((await readWorkerDetail(dir, id, project)).notes.markdown, args.markdown);
 });
+
+test('app-server normalized replies and commands stay visible across live refresh and terminal fallback', async t => {
+  const { dir, id } = await fixture(t), runId = 'native-detail-run-123';
+  const runDir = path.join(dir, 'runs', id, runId), threadId = 'native-thread-one', turnId = 'native-turn-one';
+  await mkdir(runDir, { recursive: true });
+  await writeFile(path.join(runDir, 'config.json'), JSON.stringify({ taskId: id, runId, project }));
+  await updateTask(dir, id, task => { task.runId = runId; task.status = 'running'; task.threadId = threadId; });
+  const at = new Date().toISOString();
+  // This is the bounded visible envelope emitted by the app-server runner;
+  // private native reasoning/content is intentionally absent from the envelope.
+  const visible = item => ({ taskId: id, runId, at, type: 'item.completed', nativeMethod: 'item/completed', turnId, item });
+  const events = [
+    visible({ id: 'native-before', type: 'agent_message', text: 'Before the approved command' }),
+    visible({ id: 'native-command', type: 'command_execution', command: '/bin/echo native-result', status: 'completed', exitCode: 0 }),
+    visible({ id: 'native-reasoning', type: 'reasoning', status: 'completed' }),
+    { ...visible({ type: 'agent_message', text: 'Wrong run reply' }), runId: 'unrelated-run' },
+    { ...visible({ type: 'agent_message', text: 'Wrong task reply' }), taskId: 'unrelated-task' },
+  ];
+  const eventFile = path.join(runDir, 'events.jsonl');
+  await writeFile(eventFile, events.map(JSON.stringify).join('\n') + '\n{"inFlight":');
+  let detail = await readWorkerDetail(dir, id, project);
+  assert.deepEqual(detail.conversation.filter(row => row.kind === 'reply').map(row => row.message), ['Before the approved command']);
+  assert.deepEqual(detail.conversation.filter(row => row.kind === 'execution').map(row => [row.message, row.exitCode, row.runId]), [['/bin/echo native-result', 0, runId]]);
+  events.push(visible({ id: 'native-after', type: 'agent_message', text: 'After the approved command' }));
+  events.push(visible({ id: 'native-final', type: 'agent_message', text: 'Final visible result' }));
+  await writeFile(eventFile, events.map(JSON.stringify).join('\n') + '\n');
+  await writeFile(path.join(runDir, 'exit.json'), JSON.stringify({ runId, threadId, finalMessage: 'Final visible result', commands: [{ command: '/bin/echo native-result', exitCode: 0 }], at }));
+  await reportTask(dir, id, runId, { reportId: 'native-result', kind: 'result', message: 'Durable result evidence', evidence: ['Observed native-result output'] });
+  await updateTask(dir, id, task => { task.status = 'completed'; });
+  detail = await readWorkerDetail(dir, id, project);
+  assert.deepEqual(detail.conversation.filter(row => row.kind === 'reply').map(row => row.message), ['Before the approved command', 'After the approved command', 'Final visible result']);
+  assert.equal(detail.conversation.filter(row => row.kind === 'execution').length, 1);
+  assert.equal(detail.conversation.filter(row => row.kind === 'result' && row.message === 'Durable result evidence').length, 1);
+  assert.ok(detail.conversation.filter(row => ['reply', 'execution', 'result'].includes(row.kind)).every(row => row.runId === runId));
+  assert.equal(detail.conversation.some(row => /Wrong run|Wrong task|reasoning/.test(row.message)), false);
+  assert.equal(detail.historyNotice, null);
+});

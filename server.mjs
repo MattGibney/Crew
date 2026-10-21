@@ -50,7 +50,7 @@ try {
 const runtimeProjectPath = path.join(orchestrationDir, 'project-runtime.json');
 const shutdownToken = randomUUID();
 const broadcast = event => {
-  if (typeof process.send === 'function' && process.env.ELECTRON_RUN_AS_NODE === '1' && ['work-state', 'orchestration-state'].includes(event.type)) {
+  if (typeof process.send === 'function' && process.env.ELECTRON_RUN_AS_NODE === '1' && ['work-state', 'orchestration-state', 'worker-approval-state'].includes(event.type)) {
     try { process.send({ type: 'crew:attention:state', event }, () => {}); } catch { /* The native owner may already be quitting. */ }
   }
   for (const client of clients) {
@@ -163,6 +163,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/voices') return send(200, await updateAdmission.run(() => manager.run(() => bridge.listVoices())));
     if (req.url === '/api/state') return send(200, bridge.state());
     if (req.url === '/api/orchestration') return send(200, await controller.view());
+    if (req.url === '/api/worker-approvals') return send(200, { requests: await publishWorkerApprovals() });
     if (req.url === '/api/discuss-attention') return send(200,await updateAdmission.run(()=>manager.run(async()=>{
       const task = await readTask(orchestrationDir, input.taskId);
       const item = task.attention.find(a => a.id === input.attentionId && !a.ackedAt);

@@ -161,9 +161,11 @@ async function packageSource(options) {
   allowed.push('tests/browser-fixture.mjs', 'tests/fixtures/browser-setup.js', 'tests/fixtures/BROWSER-ACCEPTANCE.md', 'docs/SOUNDS.md', 'docs/MANAGER-WORKSPACE.md', 'renderer/src/manager/attention-sounds.js', 'renderer/src/manager/sounds.js', 'renderer/src/manager/sounds.test.mjs', 'renderer/src/manager/conversation.js', 'renderer/src/manager/conversation.test.mjs', 'renderer/src/manager/worker-model.js', 'renderer/src/manager/worker-model.test.mjs', 'renderer/src/manager/voice-input.js', 'renderer/src/manager/voice-input.test.mjs', 'renderer/src/manager/voice-silence.js', 'renderer/src/manager/voice-silence.test.mjs', 'conversation.mjs', 'attention-keys.mjs', 'manager-attention.mjs', 'desktop/native-attention.mjs', 'desktop/sounds/attention.wav', 'tests/native-attention.test.mjs', 'tests/manager-attention.test.mjs');
 
   allowed.push('conversation.mjs','worker-detail.mjs','tests/worker-detail.test.mjs','tickets/GH-014.md','docs/MANAGER-WORKSPACE.md','renderer/src/manager/ManagerCallBar.jsx','renderer/src/manager/WorkerDetail.jsx','scripts/worker-overview-browser-acceptance.mjs','tests/browser-fixture.mjs','tests/fixtures/BROWSER-ACCEPTANCE.md','tests/fixtures/browser-setup.js','renderer/src/manager/conversation.js','renderer/src/manager/conversation.test.mjs','renderer/src/manager/voice-input.js','renderer/src/manager/voice-input.test.mjs','renderer/src/manager/voice-silence.js','renderer/src/manager/voice-silence.test.mjs','renderer/src/manager/worker-model.js','renderer/src/manager/worker-model.test.mjs');
-  for (const path of allowed) if (!(await stat(join(appRoot, path))).isFile()) throw new Error(`Missing package source file: ${path}.`);
+  allowed.push('tickets/REL-0.11.0.md');
+  const sources = [...new Set(allowed)];
+  for (const path of sources) if (!(await stat(join(appRoot, path))).isFile()) throw new Error(`Missing package source file: ${path}.`);
   await mkdir(dirname(output), { recursive: true });
-  try { await run('tar', ['-czf', output, '-C', appRoot, ...allowed], { timeout: 30000, maxBuffer: 65536 }); }
+  try { await run('tar', ['-czf', output, '-C', appRoot, ...sources], { timeout: 30000, maxBuffer: 65536 }); }
   catch { await unlink(output).catch(() => {}); throw new Error('Could not create source archive with tar. No partial archive was retained.'); }
   console.log(`Created ${output}\nAllowlisted source and templates only. No local configuration, state, chat history, Git repositories or credentials are included.\nOn the destination Mac: extract, install Node.js 22+ and Git, run npm ci and npm run renderer:build, sign into Codex with ChatGPT, then run node cli.mjs init --template set1.`);
 }

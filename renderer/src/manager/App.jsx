@@ -20,8 +20,8 @@ export function App() {
   const [settingsReturn, setSettingsReturn] = useState('conversation');
   const openPane = next => { if (manager.voice.mode === 'push-to-talk') manager.voice.stopInput(); setPane(next); };
   const showWorker = id => { setSelectedWorker(id); openPane('detail'); };
-  const selectedTask = manager.orchestration.tasks?.find(task => task.id === selectedWorker);
   const tasks = (manager.orchestration.tasks || []).map(task => ({ ...task, pendingApprovalCount: (manager.workerApprovals || []).filter(request => request.taskId === task.id && request.runId === task.runId).length }));
+  const selectedTask = tasks.find(task => task.id === selectedWorker);
   const approvalCount = (manager.workerApprovals || []).length;
   const workerView = { ...manager.orchestration, tasks };
   const pending = tasks.reduce((count, task) => count + (task.attention || []).filter(item => !item.ackedAt).length, 0);

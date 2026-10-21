@@ -39,6 +39,6 @@ test('manager-only notification MCP validates arguments, echoes structured succe
     assert.equal((await rpc('manager', 'tools/call', { name: 'request_attention', arguments: args })).isError, true);
   }
   const workerTools = await rpc('worker', 'tools/list', {});
-  assert.deepEqual(workerTools.tools.map(tool => tool.name), ['report']);
+  assert.deepEqual(workerTools.tools.map(tool => tool.name), ['report', 'update_work_notes']);
   assert.equal((await rpc('worker', 'tools/call', { name: 'request_attention', arguments: request })).isError, true);
 });
