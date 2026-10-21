@@ -24,6 +24,11 @@
 - Keep local configs, credentials, conversations, task/run/worktree state, installers and screenshots out of Git. Crew is the current product name; legacy names and local.voice.manager remain compatibility identities. Migration must preserve state/profile provenance and offer recovery rather than reset, merge, force-stop or blind relocation.
 - Historical test evidence stays separate from current human acceptance. Before a fresh human worker test, preserve automated records in an archive and leave the intended current task list empty. Never launch/answer/acknowledge the user's acceptance work on their behalf.
 
+## Retained worker recovery (GitHub #24)
+
+- Recovery begins with a read-only retained/current plan review and a decision bound to the exact task, run, environment and plan hashes. Compatible updates may change resume/readiness/stop/teardown and add verified source provenance; Setup, Start, existing source identities, environment and permissions stay pinned. Never replay incomplete setup or run project commands merely to reconcile metadata. Require fresh terminal worker/hook/runtime evidence and canonical registered worktree identity; unknown process evidence blocks.
+- Apply only the human-approved command/resource scope through the ordinary durable controller. Keep prior plans, decisions and task history across crash/retry. A missing worktree may be retired only when its owned canonical location is absent and Git registration is absent; do not prune Git or run cleanup for retirement. Label resource cleanup unverified, preserve records and resolve only that task's stale attention. A live runtime with no declared stop remains blocked rather than force-stopped.
+
 ## Release and publication scope (AI-015)
 
 - AI-015 authorizes public repository publication only after a full current-source and reachable-history privacy/secret audit, deliberate GitHub release automation and native auto-update. Never silently rewrite/delete history to hide findings. Keep publication private until concrete audit disposition is settled. A public repo needs no shipped GitHub token.
@@ -124,3 +129,18 @@
 
 - Native server requests may share numeric IDs with client RPCs: classify method-bearing requests before matching replies. Manager start/resume/fork can require connector input before their RPC resolves; bind observed native identity, preserve null turns, validate final correlation and invalidate failed-start forms without automatic answers.
 - A genuine native update of a CREW_APP_DATA portable profile can replace the bundle yet relaunch in the default root, leaving the custom-root handoff unconsumed. Verify actual post-update profile/config/voice identity; hashes of retained files alone do not prove automatic recovery. Do not use global environment changes or user-root registration to manufacture an isolated passing result. Capture a trustworthy before snapshot before any test that can touch shared user roots; unknown prior state is never permission for deletion/rollback.
+
+## Realtime handoff presentation (GitHub #20)
+
+- Native realtime delegation user items contain current input plus historical transcript context. Project only the current input for display; never render or split historical context into new conversation rows. Preserve native item/turn/promotion identity and passive handoff observation. Repair legacy presentation journals without rewriting native chat, and retain projection provenance so literal envelope examples in user wording are not unwrapped again on restore.
+## Worker model continuity (GitHub #22)
+
+- A model change is explicit user-authorized next-turn intent for one exact task/current run. Store the decision separately from the immutable brief and prompt snapshot; it supersedes only the resolved model requirement. Never change another worker or future-task defaults.
+- The current turn retains its model. For an immediate transition, the manager requests cooperative pause, waits for verified owned exit, then explicitly resumes the same native thread/worktree. A model request alone never pauses or launches work. Preserve native approvals and normal user/project configuration.
+- Pending intent is not provider availability or effective selection. Validate an exact model/list ID on continuation, require matching native thread/resume model and turn/start acknowledgement, and retain correlated result history. Missing, mismatched or unavailable selection fails without a fallback turn or replacement thread.
+- Correlate native model reroutes to the exact current thread and turn. Buffer early turn-start notifications by turn identity and never apply stale same-thread events.
+
+## Authorized grouped 0.12.0 release
+
+- The human explicitly authorized merging the three open PRs #23, #25 and #27 and publishing one new version while UI iteration continues separately. Integrate their complete histories, validate their interactions and publish one signed/notarized 0.12.0 release. This permission covers only those changes and necessary integration corrections; the independent UI playground, installed application, user profiles and business workers remain outside scope.
+- The known portable CREW_APP_DATA updater relaunch limitation is unchanged. Do not repeat a native installer test that could fall through to the user's default profile, or silently include a separate updater correction. Verify signed artifacts and isolated explicit-profile launch/manual replacement honestly; do not claim automatic profile preservation without independent safe evidence.

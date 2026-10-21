@@ -83,3 +83,9 @@ The genuine signed 0.10.0 native updater replaced the test app with 0.11.0. Its 
 Keep this failed acceptance separate from verified replacement and candidate/native lifecycle evidence. No published asset/tag was rewritten, and no extra patch release or shared-registry retry was performed. A separate updater correction requires user scope; physical sound preference remains hands-on acceptance. Full sanitized provenance is in tickets/REL-0.11.0.md.
 
 Manual recovery with the original explicit portable root/configuration restored the same project/chat/voice and unchanged configuration/prompts/chat bytes, then quit with all owned processes stopped. Recovery initially held admission; explicit Retry connection returned Ready after the retained update reservation recovered. This establishes recoverability, not automatic update profile preservation. Any separate updater implementation/release is held for user direction.
+
+## Grouped 0.12.0 release scope
+
+The human selected PRs #23, #25 and #27 for one new signed/notarized release. Version 0.12.0 combines clean realtime user-message presentation, reviewed retained-worker lifecycle recovery and explicit model continuation on the same task/worktree/native conversation. Full histories are preserved through a reviewable integration PR. The concurrently edited UI playground is excluded.
+
+The 0.11.0 portable CREW_APP_DATA relaunch limitation remains unresolved in this version. Verify payload signing/notarization and isolated explicit-profile launches without repeating a restart that could open the personal default profile. Manual replacement/recovery is not proof of native automatic profile preservation. See tickets/REL-0.12.0.md for current combined validation and publication evidence.

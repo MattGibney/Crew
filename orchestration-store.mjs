@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
 import { promptSnapshot } from './prompt-settings.mjs';
 
-const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose']);
+const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose', 'reconcile_plan', 'retire_missing']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(['progress', 'question', 'result', 'blocked']);
@@ -152,7 +152,7 @@ function recordHistory(task, previous = null) {
   if (task.answer && JSON.stringify(task.answer) !== JSON.stringify(previous?.answer)) add(`answer:${task.answer.questionId}`, 'manager', 'answer', task.answer.text, { at: task.answer.at, questionId: task.answer.questionId });
   for (const request of task.lifecycleRequests || []) {
     const before = previous?.lifecycleRequests?.find(item => item.id === request.id);
-    if (!before) add(`action:${request.id}`, request.cooperative ? 'controller' : 'manager', 'lifecycle_request', `Requested ${request.action}`, { at: request.at, runId: request.expectedRunId });
+    if (!before) add(`action:${request.id}`, request.cooperative ? 'controller' : 'manager', 'lifecycle_request', `Requested ${request.action}${request.decision ? `: ${request.decision}` : ''}`, { at: request.at, runId: request.expectedRunId });
     if (before && before.status !== request.status) add(`action:${request.id}:${request.status}`, 'controller', 'lifecycle', `${request.action}: ${request.status}${request.error ? ` — ${request.error}` : ''}`, { at: request.handledAt || now(), runId: request.expectedRunId });
   }
   if (previous && (task.status !== previous.status || task.runId !== previous.runId)) add(`state:${previous.revision + 1}`, 'controller', 'status', `Worker status: ${task.status}${task.failure ? ` — ${task.failure}` : ''}`, { status: task.status });
@@ -244,9 +244,30 @@ export async function acknowledgeAttention(dir, { taskId, attentionId }) {
 
 // Requests are durable intent, not evidence that a process has stopped or restarted.
 // The controller alone performs lifecycle transitions and marks each request handled.
+// Recovery is a separate reviewed decision, never an implicit lifecycle retry.
+export async function requestWorkerRecovery(dir, {taskId, actionId, action, expectedRunId, reviewHash, decision}) {
+  identifier(taskId); identifier(actionId, 'action ID');
+  if (!['reconcile_plan','retire_missing'].includes(action) || !/^[a-f0-9]{64}$/.test(reviewHash || '')) throw new Error('A matching recovery review is required');
+  text(decision, 'explicit user recovery decision', 2000);
+  if (expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
+  return updateTask(dir,taskId,task=>{
+    const requests=task.lifecycleRequests ||= [];
+    const previous=requests.find(request=>request.id===actionId);
+    if (previous) {
+      if (previous.action!==action || previous.expectedRunId!==expectedRunId || previous.reviewHash!==reviewHash || previous.decision!==decision) throw new Error('Recovery action ID reused with changed content');
+      return;
+    }
+    if ((task.runId||null)!==expectedRunId) throw new Error('Stale worker run for recovery');
+    if (!['paused','stopped','failed','blocked','completed'].includes(task.status)) throw new Error('Stop or pause this worker before reviewed recovery');
+    if (requests.some(request=>['pending','processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
+    if(requests.length>=1000)throw new Error('Worker lifecycle request limit reached');
+    requests.push({id:actionId,action,expectedRunId,reviewHash,decision,status:'pending',at:now()});
+  });
+}
+
 export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
-  if (!LIFECYCLE_ACTIONS.has(action)) throw new Error('Invalid worker action');
+  if (!['stop','pause','resume','start','dispose'].includes(action)) throw new Error('Invalid worker action');
   if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {
@@ -262,6 +283,30 @@ export async function requestWorkerAction(dir, { taskId, actionId, action, expec
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
     requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
+  });
+}
+
+// A model request is next-turn intent, never an in-flight model swap or resume.
+export async function requestWorkerModel(dir, { taskId, requestId, expectedRunId, model, userDecision }) {
+  identifier(taskId); identifier(requestId, 'model request ID');
+  text(expectedRunId, 'expected run ID', 160); text(model, 'model', 160); text(userDecision, 'user decision', 4000);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(model)) throw new Error('Use an exact provider model ID');
+  return updateTask(dir, taskId, task => {
+    const requests = task.modelRequests ||= [];
+    const existing = requests.find(request => request.id === requestId);
+    if (existing) {
+      if (existing.expectedRunId !== expectedRunId || existing.model !== model || existing.userDecision !== userDecision) throw new Error('Model request ID reused with changed content');
+      return;
+    }
+    if (task.runId !== expectedRunId) throw new Error('Stale worker run for model change');
+    if (!['running', 'paused', 'stopped', 'blocked', 'awaiting_answer', 'failed'].includes(task.status)) throw new Error('Worker must be running or retained for explicit resume before changing its model');
+    if (task.lifecycleRequests?.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker has a pending lifecycle action; wait for its boundary');
+    if (requests.length >= 100) throw new Error('Worker model request limit reached');
+    if (['pending', 'validating'].includes(task.modelSelection?.status)) throw new Error('Worker already has a pending model change; apply or review it before another change');
+    const request = { id: requestId, expectedRunId, model, userDecision, at: now() };
+    requests.push(request);
+    task.modelSelection = { ...request, status: 'pending', message: 'Pending provider validation on the next explicit resume; the current turn is unchanged.' };
+    (task.history ||= []).push({ id: `model:${requestId}`, actor: 'manager', kind: 'model_request', message: `Requested model ${model} for the next explicit resume. User decision: ${userDecision}`, at: request.at, runId: expectedRunId });
   });
 }
 

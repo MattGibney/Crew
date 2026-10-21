@@ -10,8 +10,9 @@ export function groupWorkers(tasks) {
   }
   return { active, history: history.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)), retained: tasks.filter(task => task.worktree && task.status !== 'disposed').length };
 }
-export function workerStatus(task) { return LABELS[task.status] || 'Status unavailable'; }
+export function workerStatus(task) { return task.retirement?.reason === 'worktree-already-missing' ? 'Retired' : LABELS[task.status] || 'Status unavailable'; }
 export function workerProgress(task) {
+  if(task.retirement?.reason === 'worktree-already-missing') return 'Worktree already missing. History retained; resource cleanup unverified.';
   if (['queued', 'resume_queued'].includes(task.status)) {
     // Only the controller knows whether capacity, an update or explicit manager start is blocking admission.
     if (typeof task.capacityWait === 'string' && task.capacityWait.trim()) return task.capacityWait;
@@ -45,4 +46,9 @@ export function workerActionRequest(task, action, id = `worker-${crypto.randomUU
   if (!workerActions(task).includes(action)) throw new Error('This worker action is no longer available. Refresh its status.');
   const selection = { taskId: task.id, action, actionId: id, expectedRunId: task.runId || null };
   return { requestId: id, text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Dispose is authorized only through the existing safe teardown, which must refuse dirty or unresolved work and retain task records. Report queued intent separately from confirmed completion.` };
+}
+
+export function workerRecoveryReviewRequest(task) {
+  if(!task.worktree || !['failed','blocked','paused','stopped','completed'].includes(task.status) || pendingLifecycle(task)) throw new Error('Recovery review is not available for this task state.');
+  return `CREW_WORKER_RECOVERY_REVIEW\nReview recovery options for only ${JSON.stringify({taskId:task.id,expectedRunId:task.runId||null})}. Read get_status and review_worker_recovery for reconcile_plan and retire_missing. Explain retained/current command differences, exact blockers and cleanup uncertainty. This requests review only: do not apply a recovery decision, start/resume work, stop a process, remove resources or retire records until I explicitly approve the exact reviewed action. Preserve history and normal approvals.`;
 }

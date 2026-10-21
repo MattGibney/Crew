@@ -456,3 +456,28 @@ test('failed manager startup correlation removes only its own pending forms with
  assert.equal((await f.calls()).some(call=>call.id===9100&&!call.method),false);
  assert.ok(f.events.some(event=>event.type==='notice'&&event.message.includes('No response was sent automatically')));
 });
+
+for (const canonical of [true, false]) test(`realtime handoff presentation is clean through ${canonical ? 'canonical' : 'fallback'} history, live completion and restart without dispatch`, async t => {
+ const envelope = input => `<realtime_delegation><input>${input}</input><transcript_delta>assistant: Historical context\nuser: Prior request</transcript_delta></realtime_delegation>`;
+ const item = {id:'handoff',type:'userMessage',content:[{type:'text',text:envelope('Current request')}]};
+ const f = await fixture(t,{saved:true,history:[{id:'voice-turn',status:'completed',items:[item]}],...(canonical ? {timelinePages:[{data:[{type:'item',position:5,turnId:'voice-turn',item}],nextCursor:null}]} : {})});
+ await writeFile(join(f.directory,'manager.json.conversation.json'),JSON.stringify({threadId:'manager-thread',messages:[{id:'old-overlay',turnId:'old-turn',role:'user',text:envelope('Saved request'),position:1,status:'complete'}]}));
+ await f.bridge.ensureThread();
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='handoff').text,'Current request');
+ if (!canonical) assert.equal(f.bridge.state().messages.find(m=>m.id==='old-overlay').text,'Saved request');
+ const live = {id:'live-handoff',type:'userMessage',content:[{type:'text',text:'<realtime_delegation><input>'}]};
+ await f.notify('item/started',{turnId:'live-turn',item:live});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='live-handoff'));
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='live-handoff').text,'Voice request (transcript unavailable).');
+ live.content[0].text=envelope('New live request');
+ await f.notify('item/completed',{turnId:'live-turn',item:live});
+ await until(()=>f.bridge.state().messages.some(m=>m.id==='live-handoff'&&m.text==='New live request'));
+ assert.equal(f.bridge.state().messages.filter(m=>m.id==='live-handoff').length,1);
+ assert.equal(f.bridge.state().messages.find(m=>m.id==='live-handoff').turnId,'live-turn');
+ await f.bridge.shutdown();await f.clearNotifications();
+ const restored=f.create();t.after(()=>restored.shutdown());await restored.ensureThread();
+ assert.equal(restored.state().messages.find(m=>m.id==='handoff').text,'Current request');
+ if (!canonical) assert.equal(restored.state().messages.find(m=>m.id==='live-handoff').text,'New live request');
+ const calls=await f.calls();
+ assert.equal(calls.filter(call=>['turn/start','thread/realtime/appendText','thread/realtime/start'].includes(call.method)).length,0);
+});
