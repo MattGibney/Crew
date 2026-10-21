@@ -6,8 +6,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createTask, readTask, updateTask } from '../orchestration-store.mjs';
+import { createTask, readTask, updateTask, answerQuestion } from '../orchestration-store.mjs';
 import { createController } from '../controller.mjs';
+import { promptSnapshot } from '../prompt-settings.mjs';
 const exec = promisify(execFile);
 const sourceDir = fileURLToPath(new URL('../', import.meta.url));
 async function repository(base) {
@@ -39,13 +40,16 @@ console.log(JSON.stringify({type:'turn.completed'}));
 // tick schedules launches independently so unrelated workers are never held behind one startup.
 // Wait for the observed durable outcome, preserving the original failure/safety assertions.
 async function waitFor(controller, observe, predicate, description='controller outcome') {
-  const deadline=Date.now()+5000;
+  // Parallel suite execution can take >5s to launch, stop owned descendants and
+  // verify a successful mock harness. Keep polling bounded without weakening
+  // the worker's own 10s runtime limit or any terminal/safety assertions.
+  const deadline=Date.now()+20000; let lastObserved;
   while(Date.now()<deadline){
-    await controller.tick();const value=await observe();
+    await controller.tick();const value=await observe(); lastObserved=value;
     if(predicate(value))return value;
     await new Promise(resolve=>setTimeout(resolve,25));
   }
-  throw new Error(`Timeout waiting for ${description}`);
+  throw new Error(`Timeout waiting for ${description}; last observed status: ${lastObserved?.status || 'unavailable'}${lastObserved?.failure ? ` (${lastObserved.failure})` : ''}`);
 }
 async function terminal(controller, state, id) {
   return waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),`terminal task ${id}`);
@@ -144,4 +148,45 @@ test('durable MCP result completes without assistant text, while assistant text 
   try{const task=await terminal(controller,state,id),exit=JSON.parse(await readFile(path.join(task.runDir,'exit.json'),'utf8'));assert.equal(exit.exitCode,0);assert.equal(exit.completedTurn,true);assert.equal(exit.stopConfirmed,true);if(resultOnly){assert.equal(task.status,'completed',task.failure);assert.equal(task.result.message,'Audit complete');assert.equal(task.result.finalMessage,'');assert.equal(exit.finalMessage,'');assert.equal(task.result.verification.semanticCorrectnessVerified,false);assert.equal(task.result.verification.clean,true);}else{assert.equal(task.status,'failed');assert.match(task.failure,/without a durable question or result/);assert.equal(task.result,undefined);}}
   finally{await controller.stop();}
  }
+});
+
+test('worker launch receives replacement prompt and immutable snapshots survive answer/resume and later edits', async () => {
+  const base=await mkdtemp(path.join(os.tmpdir(),'crew-prompt-workers-')),repo=await repository(base),state=path.join(base,'state');
+  const executable=path.join(base,'prompt-codex.mjs');
+  await writeFile(executable,`#!/usr/bin/env node
+import {execFileSync} from 'node:child_process';
+import {writeFileSync} from 'node:fs';
+import path from 'node:path';
+import {reportTask} from ${JSON.stringify(new URL('../orchestration-store.mjs', import.meta.url).href)};
+const args=process.argv.slice(2),raw=args.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));
+const [,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
+writeFileSync(path.join(state,run+'-prompt.txt'),args.at(-1));
+console.log(JSON.stringify({type:'thread.started',thread_id:'snapshot-thread'}));
+console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'git status --porcelain',exit_code:0,aggregated_output:execFileSync('git',['status','--porcelain'],{encoding:'utf8'})}}));
+await reportTask(state,task,run,{reportId:'report',kind:args.includes('resume')?'result':'question',message:args.includes('resume')?'Complete':'Which option?',evidence:[]});
+console.log(JSON.stringify({type:'turn.completed'}));
+`);await chmod(executable,0o700);
+  let current='ORIGINAL_CUSTOM_WORKER',reads=0;
+  const controller=await createController({stateDir:state,sourceDir,executable,project:profile(repo),getWorkerPrompt:async()=>{reads++;return promptSnapshot(current);}});
+  try {
+    await createTask(state,{requestId:'prompt-snapshot-task',ticket:'EX-81',brief:'Inspect only',projectId:'example',repositoryId:'app'});
+    const waiting=await waitFor(controller,()=>readTask(state,'prompt-snapshot-task'),task=>task.status==='awaiting_answer');
+    const launchedPrompt=await readFile(path.join(state,waiting.runId+'-prompt.txt'),'utf8');
+    assert.ok(launchedPrompt.startsWith('ORIGINAL_CUSTOM_WORKER\n'));
+    assert.doesNotMatch(launchedPrompt,/You are the ONE|Inspect actual files|Give one useful progress/);
+    assert.equal(waiting.workerPromptSnapshot.text,current);
+    await assert.rejects(updateTask(state,waiting.id,task=>{task.workerPromptSnapshot=promptSnapshot('MUTATED');}),/immutable/);
+    current='NEW_CUSTOM_WORKER';
+    await answerQuestion(state,{taskId:waiting.id,questionId:waiting.question.id,answer:'Proceed'});
+    const completed=await terminal(controller,state,waiting.id);
+    assert.equal(completed.status,'completed',completed.failure);
+    const resumed=JSON.parse(await readFile(path.join(completed.runDir,'config.json'),'utf8'));
+    assert.equal(resumed.workerPrompt,'ORIGINAL_CUSTOM_WORKER');
+    assert.equal(resumed.workerPromptVersion,promptSnapshot('ORIGINAL_CUSTOM_WORKER').version);
+    assert.equal(reads,1);
+    await createTask(state,{requestId:'prompt-snapshot-next',ticket:'EX-82',brief:'Inspect next',projectId:'example',repositoryId:'app'});
+    const next=await waitFor(controller,()=>readTask(state,'prompt-snapshot-next'),task=>task.status==='awaiting_answer');
+    assert.equal(next.workerPromptSnapshot.text,'NEW_CUSTOM_WORKER'); assert.equal(reads,2);
+    assert.ok((await readFile(path.join(state,next.runId+'-prompt.txt'),'utf8')).startsWith('NEW_CUSTOM_WORKER\n'));
+  } finally {await controller.stop();}
 });

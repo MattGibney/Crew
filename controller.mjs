@@ -9,6 +9,7 @@ import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironme
 import {selectWorktreeRoot,ensureWorktreeRoot} from './worktree-paths.mjs';
 import {snapshotProcesses} from './process-ownership.mjs';
 import { randomUUID } from 'node:crypto';
+import { promptSnapshot, promptVersion } from './prompt-settings.mjs';
 import path from 'node:path';
 import os from 'node:os';
 import { loadTasks, readTask, updateTask } from './orchestration-store.mjs';
@@ -19,7 +20,7 @@ async function json(file) { try { return JSON.parse(await readFile(file, 'utf8')
 async function atomic(file, value) { const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); await rename(temp, file); }
 const confirmedExit=(task,exit)=>Boolean(exit&&exit.runId===task.runId&&exit.stopConfirmed===true);
 const attention = (task, id, kind, message) => { if (!task.attention.some(a => a.id === id)) task.attention.push({ id, kind, message, at: now() }); };
-export async function createController({ stateDir, sourceDir, executable, project = null, workerPrompt = '', onChange = () => {} }) {
+export async function createController({ stateDir, sourceDir, executable, project = null, workerPrompt = '', getWorkerPrompt = null, onChange = () => {} }) {
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const lockPath = path.join(stateDir, 'controller.lock');
   let lock;
@@ -72,6 +73,18 @@ export async function createController({ stateDir, sourceDir, executable, projec
     try {
       if (project && task.projectId !== project.id && !(project.mode === 'fixture' && !task.projectId)) throw new Error('Task project does not match this controller');
       const repositoryMode = project?.mode === 'repository';
+      // Capture at the first actual launch, before provisioning. Retained workers
+      // keep the same behavior across answers, pause/resume and controller restart.
+      let workerPromptSnapshot = task.workerPromptSnapshot;
+      if (!workerPromptSnapshot && (resume || task.threadId)) {
+        const previous = task.runDir ? await json(path.join(task.runDir, 'config.json')) : null;
+        if (!previous || typeof previous.workerPrompt !== 'string' || !previous.workerPrompt.trim()) throw new Error('Original worker prompt is unavailable; refusing to resume with changed behavior.');
+        workerPromptSnapshot = promptSnapshot(previous.workerPrompt);
+      }
+      if (!workerPromptSnapshot) workerPromptSnapshot = getWorkerPrompt ? await getWorkerPrompt() : promptSnapshot(workerPrompt || await readFile(path.join(sourceDir, 'prompts', 'worker.md'), 'utf8'));
+      if (!workerPromptSnapshot || promptVersion(workerPromptSnapshot.text) !== workerPromptSnapshot.version) throw new Error('Worker prompt snapshot version is invalid.');
+      await updateTask(stateDir, task.id, next => { next.workerPromptSnapshot = workerPromptSnapshot; });
+
       if (project && !project.readiness?.ready) throw new Error('Project configuration is incomplete; no worktree was created');
       if (project && !['read-only', 'workspace-write'].includes(project.worker?.sandbox)) throw new Error('Invalid worker sandbox configuration');
       let meta;
@@ -109,7 +122,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
         :await runEnvironmentHooks({stateDir,taskId:task.id,worktree,hooks:project?.worker?.environment||{},phases:resume?['resume','ready']:['bootstrap','start','ready'],existing:existingEnvironment|| (plainToolchain?{id:`crew-${randomUUID().replace(/-/g,'')}`,taskId:task.id,worktree,hooks:[],toolchain:plainToolchain}:null),toolchain:plainToolchain,env:plainToolchain?applyProjectToolchain(plainToolchain):process.env,signal:abort.signal,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})});
       if(abort.signal.aborted)throw new Error('Worker environment preparation canceled.');
 
-      const config = { project, workerPrompt, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
+      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
       if (resume && !config.threadId) throw new Error('Cannot resume: no recorded worker Codex session.');
       await atomic(path.join(runDir, 'config.json'), config);
       await updateTask(stateDir, task.id, next => { next.worktree = worktree; next.fixtureRepo = repositoryMode ? null : meta.repo; next.fixtureCommit = repositoryMode ? null : meta.commit; next.repositoryPath = meta.repo; next.baseCommit = task.worktree ? task.baseCommit : meta.commit; next.workerSandbox = config.sandbox; next.runDir = runDir; next.runId = runId; next.status = 'running'; next.harnessStarted='pending'; next.spawnIntentAt=now(); next.startedAt=null; next.endedAt=null; next.execution=null; next.handledReports = next.handledReports || []; });
