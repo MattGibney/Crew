@@ -135,3 +135,31 @@
   summary:focus-visible, a:focus-visible, audio:focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
   [hidden] { display: none !important; }
 }
+/* The divider owns desktop resizing; narrow screens keep the existing view navigation. */
+@media (min-width: 1024px) {
+  .manager-split {
+    grid-template-columns: minmax(0, 1fr) 1px clamp(280px, var(--crew-worker-width, 560px), min(720px, 60vw));
+  }
+}
+
+/* Native controls sit above the branding so its normal left alignment is preserved. */
+.crew-window-header {
+  position: relative;
+  min-height: 100px;
+  padding-top: 28px;
+  -webkit-app-region: drag;
+}
+.crew-window-header :is(button, a, summary, input, select, textarea, [role="button"], [role="region"]) {
+  -webkit-app-region: no-drag;
+}
+
+.crew-window-header .crew-window-status {
+  position: absolute;
+  top: 5px;
+  right: 28px;
+  height: 28px;
+  -webkit-app-region: no-drag;
+}
+@media (max-width: 639px) {
+  .crew-window-header .crew-window-status { right: 20px; }
+}

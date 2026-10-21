@@ -5,6 +5,7 @@ import path from 'node:path';
 import { loadAppConfig } from './config.mjs';
 import { fileURLToPath } from 'node:url';
 import { createPromptSettings } from './prompt-settings.mjs';
+import { createManagerProfile } from './manager-profile.mjs';
 import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
@@ -68,6 +69,7 @@ const publishWorkerApprovals = async () => {
 const workerApprovalTimer = setInterval(() => void publishWorkerApprovals().catch(error => broadcast({ type: 'notice', message: safeError(error) })), 1000);
 let drainHeld=false,updatePlan,updatePlanTimer;
 const prompts = await createPromptSettings({ stateDir: orchestrationDir, sourceDir: root, projectId: project.id, managerPrompt, workerPrompt });
+const managerProfile = createManagerProfile({ stateDir: orchestrationDir, projectId: project.id });
 const controller = await createController({ admissionHeld:async()=>await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)||drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR ? {dir:process.env.CREW_GLOBAL_CAPACITY_DIR} : null, onChange: state => broadcast({ type: 'orchestration-state', state }) });
 await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
@@ -75,7 +77,8 @@ const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable
 const manager = await createManagerLifecycle({ stateDir: orchestrationDir, projectId: project.id, bridge, prompts, onChange: state => broadcast({ type: 'manager-lifecycle', state }) });
 const settingsView = async () => {
   const saved = await prompts.read(), lifecycle = manager.view();
-  return { projectId: project.id, projectName: project.name, managerLifecycle: lifecycle, manager: { saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: saved.manager.version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
+  const profile = await managerProfile.read();
+  return { projectId: project.id, projectName: project.name, managerProfile: profile, managerLifecycle: lifecycle, manager: { saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: saved.manager.version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
 };
 const version = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version;
 const updates = createUpdateBridge({version,onStatus:status=>broadcast({type:'update-state',status:{...status,plan:updatePlan?.status()||null}})});
@@ -93,7 +96,7 @@ await updatePlan.ready;synchronizePlan(updatePlan.status());await updatePlan.rec
 updatePlanTimer=setInterval(()=>void updatePlan.tick().catch(error=>broadcast({type:'notice',message:safeError(error)})),500);
 const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' https:; media-src 'self' blob:; frame-ancestors 'none'");
   res.setHeader('Permissions-Policy', 'microphone=(self), camera=()');
   const send = (code, value) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
   if (req.headers.host !== `127.0.0.1:${port}`) return send(403, { error: 'Use the loopback URL printed by the bridge.' });
@@ -126,8 +129,9 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
     const input = JSON.parse(body || '{}');
-    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
+    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts','/api/settings/manager-profile'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
     if (req.method === 'PUT') {
+      if (req.url === '/api/settings/manager-profile') { await managerProfile.save(input); return send(200, await settingsView()); }
       if (req.url !== '/api/settings/prompts') return send(404, { error: 'Not found.' });
       await prompts.save(input); return send(200, await settingsView());
     }

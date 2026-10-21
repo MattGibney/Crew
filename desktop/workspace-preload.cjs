@@ -1,4 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
+contextBridge.exposeInMainWorld('crewWindow', Object.freeze({
+  integratedTitlebar: process.platform === 'darwin',
+  copyText: text => {
+    if (typeof text !== 'string' || text.length > 1000000) throw new TypeError('Clipboard text must be a string of at most 1,000,000 characters.');
+    return ipcRenderer.invoke('crew:clipboard-write', text);
+  }
+}));
 const id = value => {
   if (typeof value !== 'string' || !value.trim() || value.length > 200) throw new TypeError('A valid project identity is required.');
   return value;

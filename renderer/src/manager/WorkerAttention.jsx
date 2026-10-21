@@ -11,12 +11,12 @@ export function WorkerStatus({ task }) {
 function WorkerCard({ task, now, onSelect, compact }) {
   const timing = workerTiming(task, now), attention = pendingAttention(task);
   const title = task.brief?.trim().split('\n')[0] || 'Worker task';
-  return <article data-worker-id={task.id} className="min-w-0">
-    <button type="button" onClick={() => onSelect(task.id)} aria-label={`Open worker ${task.ticket || task.id}: ${title}`} className="group w-full min-w-0 rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-      <div className="flex flex-wrap items-center justify-between gap-1.5"><span className="truncate text-[11px] font-medium text-muted-foreground" title={task.id}>{task.ticket || task.id}</span><WorkerStatus task={task} /></div>
-      <h3 className="mt-2 line-clamp-2 break-words text-sm font-semibold leading-5" title={title}>{title}</h3>
-      {!compact && <p className="mt-1 line-clamp-1 break-words text-xs leading-5 text-muted-foreground" title={workerProgress(task)}>{workerProgress(task)}</p>}
-      {!compact && <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted-foreground"><span className="flex min-w-0 items-center gap-1"><Clock3 className="size-3 shrink-0" aria-hidden="true" />{timing.elapsed !== null ? `${formatElapsed(timing.elapsed)} elapsed` : 'Timing unavailable'}</span><span className="flex items-center gap-1">{attention.length ? <><Hand className="size-3" aria-hidden="true" />{attention.length} to review</> : <>{timing.live === true ? 'Process live' : timing.live === false ? 'Process ended' : 'Liveness unverified'}<ArrowUpRight className="size-3 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" /></>}</span></div>}
+  return <article data-worker-id={task.id} className="h-full min-w-0">
+    <button type="button" onClick={() => onSelect(task.id)} aria-label={`Open worker ${task.ticket || task.id}: ${title}`} className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5"><span className="truncate text-[11px] font-medium text-muted-foreground" title={task.id}>{task.ticket || task.id}</span><WorkerStatus task={task} /></div>
+      <h3 className="mt-2 min-h-10 line-clamp-2 break-words text-sm font-semibold leading-5" title={title}>{title}</h3>
+      {!compact && <p className="mt-1 min-h-5 line-clamp-1 break-words text-xs leading-5 text-muted-foreground" title={workerProgress(task)}>{workerProgress(task)}</p>}
+      {!compact && <div className="mt-auto flex items-center justify-between gap-2 pt-2 text-[10px] text-muted-foreground"><span className="flex min-w-0 items-center gap-1"><Clock3 className="size-3 shrink-0" aria-hidden="true" />{timing.elapsed !== null ? `${formatElapsed(timing.elapsed)} elapsed` : 'Timing unavailable'}</span><span className="flex items-center gap-1">{attention.length ? <><Hand className="size-3" aria-hidden="true" />{attention.length} to review</> : <>{timing.live === true ? 'Process live' : timing.live === false ? 'Process ended' : 'Liveness unverified'}<ArrowUpRight className="size-3 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" aria-hidden="true" /></>}</span></div>}
     </button>
   </article>;
 }
@@ -31,7 +31,7 @@ export function WorkerAttention({ view, onSelect, onRetry, compact = false }) {
     {view.loading && <p role="status" className="flex gap-2 text-xs text-muted-foreground"><LoaderCircle className="size-4 animate-spin" />Loading workers…</p>}
     {tasks.length > 0 && <div className="flex gap-1" aria-label="Filter workers">{[['all', 'All'], ['active', 'Current'], ['attention', 'Needs attention']].map(([value, label]) => <Button key={value} size="sm" variant={filter === value ? 'secondary' : 'ghost'} aria-pressed={filter === value} onClick={() => setFilter(value)} className="h-7 px-2 text-[11px]">{label}</Button>)}</div>}
     {!view.loading && !tasks.length && <div className="rounded-xl border border-dashed px-5 py-9 text-center"><FolderGit2 className="mx-auto mb-3 size-6 text-muted-foreground" /><h3 className="text-sm font-medium">A workspace for every task</h3><p className="mt-2 text-xs leading-5 text-muted-foreground">Agree a task with your manager. Its worker and progress appear here.</p></div>}
-    <div id="worker-state" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-2.5">{shown.map(task => <WorkerCard key={task.id} task={task} now={now} onSelect={onSelect} compact={compact} />)}</div>
+    <div id="worker-state" className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-2.5">{shown.map(task => <WorkerCard key={task.id} task={task} now={now} onSelect={onSelect} compact={compact} />)}</div>
     {tasks.length > 0 && !shown.length && <p className="py-8 text-center text-xs text-muted-foreground">No workers in this view.</p>}
     {tasks.length > 0 && <p id="controller-status" className="text-[11px] leading-5 text-muted-foreground">Select a worker to follow its work. Give instructions and review decisions with your manager.</p>}
   </section>;

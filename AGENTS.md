@@ -1,5 +1,24 @@
 # Working scope and durable engineering guidance
 
+- The annotation-preview setup is explicitly exempt from ticket creation. Keep its Vite scenario harness developer-only, use the real Crew renderer/components/theme, and stub all effects before rendering. No physical media, native lifecycle, auth/model/worker operations or installed-profile changes. Preserve the running preview for direct user annotations; subsequent product changes still follow separately agreed scope and delivery policy.
+- UI annotation direction: the desktop worker panel resizes from its left edge; voice controls and typed input share one composer; omit the subscription/workspace footer beneath it. Preserve call lifetime, draft handling and the narrow-screen worker navigation while iterating this design.
+- Worker detail keeps a compact identity/status header. Put the full summary, execution timing, assignment, metadata and manager-mediated lifecycle actions in an Overview tab rather than consuming conversation space with a large fixed header.
+- Conversation/Workers navigation belongs only to the main manager views. Hide it in worker details and Settings; worker details use their own tabs and Back to manager.
+- Worker exchanges reuse the main Message renderer: manager instructions/answers on the right, worker replies on the left, with honest actor labels. Keep commands/execution visually secondary and retain timestamps, run correlation and reported evidence in expandable details. This remains read-only worker history, not a direct worker chat.
+- The manager composer defaults to Voice (user preference) and toggles between Text and Voice panels. Selecting the default Voice panel does not connect a call; explicit Connect is still required. Toggling preserves drafts and the established call without capture/reconnect. Keep mute/end available in Text during a call, and retain Stop current turn in either input panel.
+- Keep the Voice panel compact: one row for status and call/mute controls. Omit introductory/explanatory copy while retaining actionable errors.
+- Push-to-talk is no longer a separate mode or shortcut; its future relationship to mute is deferred. Voice selection belongs to the project manager profile in Settings, saved in project state and applied on the next call. Do not use global browser voice preferences or show voice/microphone mode selectors in the composer.
+- Settings uses simple vertical navigation: Sessions for live manager lifecycle controls, Manager profile for voice and manager instructions, and Worker profile for worker instructions. Preserve unsaved editors when switching pages. Perform these UI iterations in this chat and its existing preview, without handing them to another chat.
+- Settings navigation floats directly beside its centered content in a shared scrolling layout. Use a compact, content-height menu with whitespace, without a full-height sidebar background or divider; keep it beside the content while scrolling on desktop.
+- Do not expose saved/active instruction version badges. Keep internal version checks for safe saves, and show a plain message only when saved manager instructions still need an explicit Start/Restart in Sessions to take effect.
+- Instruction editors include plain-language, expandable guidance: useful context and preferences, a reusable example, replacement/default semantics and when edits take effect. Distinguish manager vs worker activation and keep permission/approval boundaries clear without exposing version identifiers.
+- Place expandable instruction-writing guidance below the input, so the editor stays first in the workflow.
+- Omit redundant visible prompt labels while retaining accessible input names. Settings save confirmations use a dismissible, polite toast rather than permanent inline success text; keep actionable errors and pending-restart guidance inline.
+- Settings follows the supplied Tailwind Plus reference direction: flat sections and divider rows, current values with a right-aligned Update action, and lightweight icon navigation with primary-color selection. Editing opens in place; retain drafts, guidance below the input, save toasts and explicit manager restart semantics. Use Crew's existing components and tokens rather than copying the reference's sample content or brand palette.
+- Updates popout dismisses on outside pointer interaction as well as Escape and its close button. Inside interactions and the trigger's toggle behaviour stay intact.
+- Worker cards use equal grid row heights, stretch to fill their cells, reserve two title lines and align summary/metadata consistently. Preserve equal sizing for compact manager cards and the full Workers view without truncating status information.
+- Settings explicitly separates Global settings (shared across projects on this Mac) from Project settings (selected project's sessions and profiles). Shared worker capacity belongs in Global → General, not the project switcher. Preserve native registry capacity operations and project-owned voice/instruction state.
+
 - Tie implementation to an appropriate Crew ticket and explicitly agreed scope. Keep AGENTS guidance current when the user corrects a working assumption. Maintain clear technical and user-facing documentation; private operational evidence belongs outside the public repository.
 - Use existing ChatGPT/Codex subscription sign-in and allowance. Never add API-key fallback, extract private credentials/endpoints or copy another machine's auth files. Keep feasibility checks bounded and disposable.
 - The human converses with one persistent manager. Preserve native server-managed realtime handoffs; transcript/handoff events must not launch duplicate turns or relay results twice. Keep normal approvals and truthful correlation of dispatch, execution and result evidence.
@@ -124,3 +143,30 @@
 
 - Native server requests may share numeric IDs with client RPCs: classify method-bearing requests before matching replies. Manager start/resume/fork can require connector input before their RPC resolves; bind observed native identity, preserve null turns, validate final correlation and invalidate failed-start forms without automatic answers.
 - A genuine native update of a CREW_APP_DATA portable profile can replace the bundle yet relaunch in the default root, leaving the custom-root handoff unconsumed. Verify actual post-update profile/config/voice identity; hashes of retained files alone do not prove automatic recovery. Do not use global environment changes or user-root registration to manufacture an isolated passing result. Capture a trustworthy before snapshot before any test that can touch shared user roots; unknown prior state is never permission for deletion/rollback.
+
+## Settings project naming correction
+
+- Project renaming belongs in Project settings > General, using the registered workspace identity. Keep the header dropdown focused on project selection and adding projects. Show registry name changes immediately in Settings and the header, preserving project paths, state and work.
+
+- Keep the manager conversation free of the redundant Your manager/tagline/readiness header bar; let messages use that vertical space.
+
+## Main chat reading behaviour
+
+- Use shadcn Message Scroller to anchor meaningful turns and preserve the reader's position during streaming; keep stable canonical message IDs. Offer Jump to latest instead of unconditional scrolling effects. Keep the compact composer outside the transcript, default to Voice, and preserve text drafts and call lifetime through navigation.
+- Trace UI shows recorded backend tool activity and supplied outcomes only. Never fill it with inferred reasoning, synthetic progress or guessed durations. Keep approvals actionable and errors visible; avoid announcing every streamed token.
+
+- Render assistant Markdown code blocks with language labels and code-specific copy controls; preserve exact code whitespace. Render supported image URLs responsively with alt text and explicit failure fallbacks. Keep user-entered text literal and never expose arbitrary local files as chat assets.
+
+## macOS window chrome
+
+- The project window integrates native traffic-light controls into the application header with no separate title bar. Reserve space for the real native controls, keep header whitespace draggable and all header controls/popovers non-draggable. Browser previews must not simulate native controls or reserve their space; use the bounded preload capability. Preserve native close/minimize/fullscreen semantics and the existing close/voice/backend lifecycle.
+
+- Native-header alignment correction: keep the Crew logo and project picker at the normal left edge. Place native traffic lights above the branding with a small top inset, rather than reserving a wide horizontal gutter beside the logo. Keep this one continuous application header, not an extra OS title bar.
+
+- Place Updates and connection/call status at the native header’s top right, aligned with macOS window controls. Keep Settings alongside the main branding row; browser layouts retain their ordinary single header row.
+
+## Native UI acceptance follow-through
+
+- The user authorized auditing and completing the annotation changes in the real Electron application, beyond the synthetic design preview. Use isolated candidate bundles/profiles and the real controller/storage/IPC with a synthetic provider for autonomous checks; preserve the running design preview and the user's installed app/profile. Physical microphone capture, human acoustic acceptance and signed production-update installation remain separate from synthetic/native UI evidence.
+- Browser clipboard success does not establish Electron clipboard support. The media-only permission policy remains intact: expose a bounded write-only clipboard action in the workspace preload, validate again in main and enforce the existing selected-window/main-frame/exact-origin guard. Never add clipboard read access or broadly grant browser clipboard permissions.
+- Show Enable audio only after playback is blocked, clear it after successful recovery/disconnect, and reject stale playback callbacks. Preserve prior project-partition voice choices with a one-time profile migration; an explicitly saved manager profile, including Codex default, remains authoritative.

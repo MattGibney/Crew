@@ -1,5 +1,5 @@
 // Issue #2: one native identity, one selected surface, isolated project controllers.
-import {app,Tray,Menu,nativeImage,dialog,ipcMain,shell} from 'electron';
+import {app,Tray,Menu,nativeImage,dialog,ipcMain,shell,clipboard} from 'electron';
 import {mkdir,readFile,writeFile,rename,access,realpath} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -8,6 +8,7 @@ import {randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {prepareCrewStorage} from './storage.mjs';
 import {instanceKey,childEnvironment} from './lifecycle.mjs';
+import {clipboardText} from './clipboard.mjs';
 import {createProjectHost} from './project-host.mjs';
 import {workspaceUpdateActivity,reserveWorkspaceUpdate,createWorkspaceUpdateReservation} from './workspace-update.mjs';
 import {assertWorkspaceIsolation} from './workspace-isolation.mjs';
@@ -198,6 +199,10 @@ async function initializeUpdates(){
 }
 ipcMain.handle('crew:setup',(event,action,input)=>{
   const host=selected();if(!host?.acceptsSetup(event.sender))throw Error('Setup request rejected.');return host.handleSetup(event,action,input);
+});
+ipcMain.handle('crew:clipboard-write',(event,text)=>{
+  if(!selected()?.acceptsWorkspace(event))throw Error('Clipboard request rejected.');
+  clipboard.writeText(clipboardText(text));
 });
 ipcMain.handle('crew:workspaces',async(event,action,input)=>{
   if(!selected()?.acceptsWorkspace(event))throw Error('Workspace request rejected.');

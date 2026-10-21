@@ -179,6 +179,18 @@ test('HTTP origin checks, stale writes and invalid saves preserve the prior proj
   assert.equal((await f.calls()).length, 0);
 });
 
+test('manager profile HTTP persists only the project voice and never starts work', async t => {
+  const f = await fixture(t); await f.start();
+  const before = (await f.request('/api/settings', { method: 'GET' })).value;
+  const saved = await f.request('/api/settings/manager-profile', { method: 'PUT', body: { voice: 'maple', expectedVersion: before.managerProfile.version } });
+  assert.equal(saved.status, 200); assert.equal(saved.value.managerProfile.voice, 'maple');
+  assert.equal(saved.value.manager.saved.version, before.manager.saved.version);
+  assert.equal((await f.request('/api/settings/manager-profile', { method: 'PUT', requestOrigin: 'https://untrusted.invalid', body: { voice: 'cove', expectedVersion: saved.value.managerProfile.version } })).status, 403);
+  await f.stop(); await f.start();
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.managerProfile.voice, 'maple');
+  assert.equal((await f.calls()).some(call => ['turn/start', 'thread/realtime/start'].includes(call.method)), false);
+});
+
 test('worker detail HTTP is read-only, same-origin and project scoped', async t => {
   const f = await fixture(t);
   await createTask(f.stateDir, { requestId: 'http-detail-task', ticket: 'AI-004', brief: 'Read-only detail fixture, never execute.', projectId: 'http-settings-fixture' });

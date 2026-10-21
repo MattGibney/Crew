@@ -1,12 +1,100 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, LoaderCircle, Play, RotateCcw, Save, Square } from 'lucide-react';
+import { Check, ChevronDown, CircleHelp, LoaderCircle, Play, RotateCcw, Save, Square, Radio, UserRound, Users, SlidersHorizontal, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
-const shortVersion = version => version ? String(version).slice(0, 10) : 'unavailable';
+function SettingsToast({ message, onDismiss }) {
+  const [paused, setPaused] = useState(false);
+  const dismissRef = useRef(onDismiss); dismissRef.current = onDismiss;
+  useEffect(() => {
+    if (paused) return;
+    const timer = setTimeout(() => dismissRef.current(), 5000);
+    return () => clearTimeout(timer);
+  }, [paused]);
+  return <div role="region" aria-label="Notifications" className="fixed bottom-5 right-5 z-50 flex w-[min(24rem,calc(100vw-2.5rem))] items-start gap-3 rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg" onPointerEnter={() => setPaused(true)} onPointerLeave={() => setPaused(false)} onFocusCapture={() => setPaused(true)} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget)) setPaused(false); }}>
+    <div role="status" aria-live="polite" aria-atomic="true" className="flex min-w-0 flex-1 items-start gap-2.5"><Check className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" /><p className="text-sm leading-5">{message}</p></div>
+    <Button type="button" variant="ghost" size="icon-sm" className="-mr-1 -mt-1 shrink-0" aria-label="Dismiss notification" onClick={onDismiss}><X aria-hidden="true" /></Button>
+  </div>;
+}
+
+function useWorkspaceSettings() {
+  const bridge = window.crewWorkspaces;
+  const [snapshot, setSnapshot] = useState(null), [error, setError] = useState('');
+  useEffect(() => {
+    if (!bridge) return;
+    let alive = true, changed = false;
+    const unsubscribe = bridge.subscribe(value => { changed = true; if (alive) setSnapshot(value); });
+    bridge.snapshot().then(value => { if (alive && !changed) setSnapshot(value); }).catch(error => { if (alive) setError(error.message); });
+    return () => { alive = false; unsubscribe(); };
+  }, [bridge]);
+  return { bridge, snapshot, setSnapshot, error };
+}
+
+function ProjectGeneral({ workspace, onNotify }) {
+  const { bridge, snapshot } = workspace;
+  const selected = snapshot?.projects.find(project => project.id === snapshot.selectedId);
+  const [draft, setDraft] = useState(null), [editing, setEditing] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const value = draft ?? selected?.name ?? '';
+  const save = async event => {
+    event.preventDefault();
+    const name = value.trim();
+    if (!selected || !name || saving) return;
+    setSaving(true); setError('');
+    try { await bridge.rename({ id: selected.id, name }); setDraft(null); setEditing(false); onNotify('Project name saved.'); }
+    catch (error) { setError(error.message || 'Could not save the project name.'); }
+    finally { setSaving(false); }
+  };
+  return <section aria-labelledby="project-name-heading" className="border-y py-6">
+    <form onSubmit={save} className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+      <h3 id="project-name-heading" className="text-sm font-medium">Project name</h3>
+      <div className="min-w-0">{editing ? <><Label htmlFor="settings-project-name" className="sr-only">Project name</Label><Input id="settings-project-name" maxLength={100} required value={value} disabled={saving} onChange={event => setDraft(event.target.value)} /></> : <p className="break-words text-sm leading-6 text-muted-foreground">{selected?.name || (!bridge ? 'Available in the Crew desktop app' : 'Loading…')}</p>}<p className="mt-2 text-xs leading-5 text-muted-foreground">The name shown in Crew. Renaming keeps your project folder, conversation and work unchanged.</p>{(error || workspace.error) && <p role="alert" className="mt-2 text-xs text-destructive">{error || workspace.error}</p>}</div>
+      <div className="flex items-center gap-3">{editing ? <><Button type="button" variant="link" className="h-auto p-0 text-xs text-muted-foreground" disabled={saving} onClick={() => { setDraft(null); setEditing(false); setError(''); }}>Cancel</Button><Button type="submit" size="sm" disabled={saving || !value.trim() || value.trim() === selected?.name}>{saving ? 'Saving…' : 'Save'}</Button></> : <Button type="button" variant="link" aria-label="Update project name" className="h-auto p-0 text-sm font-semibold" disabled={!selected} onClick={() => setEditing(true)}>Update</Button>}</div>
+    </form>
+  </section>;
+}
+
+function GlobalSettings({ workspace, onNotify }) {
+  const { bridge, snapshot, setSnapshot } = workspace;
+  const [draft, setDraft] = useState(null), [editing, setEditing] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const save = async event => {
+    event.preventDefault();
+    const value = Number(draft ?? snapshot?.workerLimit);
+    if (!Number.isInteger(value) || value < 1 || value > 64) { setError('Choose a whole number from 1 to 64.'); return; }
+    setSaving(true); setError('');
+    try { await bridge.setWorkerLimit(value); setSnapshot(await bridge.snapshot()); setDraft(null); setEditing(false); onNotify('Shared worker limit saved for all projects.'); }
+    catch (error) { setError(error.message || 'Could not save the shared worker limit.'); }
+    finally { setSaving(false); }
+  };
+  return <section aria-labelledby="global-capacity-heading" className="border-y py-6">
+    <form onSubmit={save} className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+      <div><h3 id="global-capacity-heading" className="text-sm font-medium">Worker limit</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">Shared across all projects.</p></div>
+      <div className="min-w-0">{editing ? <><Label htmlFor="global-worker-limit" className="sr-only">Workers across all projects</Label><Input id="global-worker-limit" type="number" min={1} max={64} step={1} required value={draft ?? snapshot?.workerLimit ?? ''} disabled={saving || !snapshot} onChange={event => setDraft(event.target.value)} /></> : <p className="text-sm leading-6 text-muted-foreground">{!bridge ? 'Available in the Crew desktop app' : snapshot ? snapshot.workerLimit == null ? 'Unavailable' : `${snapshot.workerLimit} concurrent workers` : 'Loading…'}</p>}<p className="mt-2 text-xs leading-5 text-muted-foreground">One shared limit for this Mac. Running workers continue; waiting work starts as capacity becomes available.</p>{error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}</div>
+      <div className="flex items-center gap-3">{editing ? <><Button type="button" variant="link" className="h-auto p-0 text-xs text-muted-foreground" disabled={saving} onClick={() => { setDraft(null); setEditing(false); setError(''); }}>Cancel</Button><Button type="submit" size="sm" disabled={saving || !snapshot || draft === null || Number(draft) === snapshot.workerLimit}>{saving ? 'Saving…' : 'Save'}</Button></> : <Button type="button" variant="link" aria-label="Update shared worker limit" className="h-auto p-0 text-sm font-semibold" disabled={!bridge || !snapshot} onClick={() => setEditing(true)}>Update</Button>}</div>
+    </form>
+  </section>;
+}
+
+function ManagerProfile({ manager, onNotify }) {
+  const profile = manager.settings?.managerProfile;
+  const [draft, setDraft] = useState(null), [editing, setEditing] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const value = draft ?? profile?.voice ?? '';
+  const unavailable = value && !manager.catalog?.voices.some(item => item.id === value);
+  const voiceName = manager.catalog?.voices.find(item => item.id === profile?.voice)?.name || (profile?.voice ? `${profile.voice} · unavailable` : `Codex default${manager.catalog?.defaultVoice ? ` · ${manager.catalog.voices.find(item => item.id === manager.catalog.defaultVoice)?.name || manager.catalog.defaultVoice}` : ''}`);
+  const save = async () => { setSaving(true); setError(''); try { await manager.saveManagerProfile(value || null, profile.version); setDraft(null); setEditing(false); onNotify('Manager voice saved for the next call.'); } catch (error) { setError(error.message); } finally { setSaving(false); } };
+  return <section aria-labelledby="manager-profile-heading" className="border-y py-6">
+    <div className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+      <div><h3 id="manager-profile-heading" className="text-sm font-medium">Voice</h3><p className="mt-1 text-xs leading-5 text-muted-foreground">For the next manager call.</p></div>
+      <div className="min-w-0">{editing ? <><Label htmlFor="manager-profile-voice" className="sr-only">Voice</Label><NativeSelect id="manager-profile-voice" className="w-full" disabled={!profile || !manager.catalog || manager.voiceLoading || saving} value={value} onChange={event => setDraft(event.target.value)}><option value="">Codex default{manager.catalog?.defaultVoice ? ` · ${manager.catalog.voices.find(item => item.id === manager.catalog.defaultVoice)?.name || manager.catalog.defaultVoice}` : ''}</option>{unavailable && <option value={value}>{value} · unavailable</option>}{manager.catalog?.voices.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</NativeSelect></> : <p className="text-sm leading-6 text-muted-foreground">{manager.voiceLoading ? 'Loading voices…' : voiceName}</p>}
+      {manager.voiceNotice && <p className="mt-2 text-xs leading-5 text-muted-foreground">{manager.voiceNotice}</p>}{!manager.catalog && !manager.voiceLoading && <Button variant="link" size="sm" className="mt-2 h-auto p-0" onClick={() => void manager.loadVoices()}>Reload voices</Button>}{error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}</div>
+      <div className="flex items-center gap-3">{editing ? <><Button variant="link" className="h-auto p-0 text-xs text-muted-foreground" disabled={saving} onClick={() => { setEditing(false); setDraft(null); setError(''); }}>Cancel</Button><Button size="sm" disabled={!profile || !manager.catalog || saving || value === (profile.voice || '') || Boolean(unavailable) || !manager.eventReady} onClick={() => void save()}>{saving ? 'Saving…' : 'Save'}</Button></> : <Button variant="link" aria-label="Update manager voice" className="h-auto p-0 text-sm font-semibold" onClick={() => setEditing(true)}>Update</Button>}</div>
+    </div>
+  </section>;
+}
 
 export function ManagerLifecycle({ manager }) {
   const { state, error, activeVersion } = manager.managerLifecycle;
@@ -29,8 +117,8 @@ export function ManagerLifecycle({ manager }) {
   </div>;
 }
 
-function PromptEditor({ role, data, manager }) {
-  const [draft, setDraft] = useState(null), [saving, setSaving] = useState(false), [notice, setNotice] = useState(''), [error, setError] = useState('');
+function PromptEditor({ role, data, manager, onNotify }) {
+  const [draft, setDraft] = useState(null), [editing, setEditing] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
   const [baseVersion, setBaseVersion] = useState(null);
   const text = draft ?? data.saved.text;
   const draftRef = useRef(text); draftRef.current = text;
@@ -43,45 +131,90 @@ function PromptEditor({ role, data, manager }) {
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [dirty]);
-  const edit = value => { if (draft === null) setBaseVersion(data.saved.version); setDraft(value); setNotice(''); setError(''); };
-  const cancel = () => { setDraft(null); setBaseVersion(null); setError(''); setNotice('Unsaved changes discarded.'); };
+  const edit = value => { if (draft === null) setBaseVersion(data.saved.version); setDraft(value); setError(''); };
+  const cancel = () => { setEditing(false); setDraft(null); setBaseVersion(null); setError(''); onNotify('Unsaved changes discarded.'); };
   const save = async () => {
     if (!dirty || saving) return;
     const submitted = text;
-    setSaving(true); setError(''); setNotice('');
+    setSaving(true); setError('');
     try {
       const saved = await manager.savePrompt(role, submitted, baseVersion);
-      if (draftRef.current === submitted) { setDraft(null); setBaseVersion(null); }
+      if (draftRef.current === submitted) { setDraft(null); setBaseVersion(null); setEditing(false); }
       else setBaseVersion(saved[role].saved.version);
-      setNotice(draftRef.current !== submitted ? 'Submitted version saved. Your newer edits are still unsaved.' : managerRole ? 'Saved. Restart your manager explicitly to apply these instructions.' : 'Saved. New workers will use these instructions. Existing workers keep their original instructions.');
+      onNotify(draftRef.current !== submitted ? 'Instructions saved. Your newer edits are still unsaved.' : managerRole ? 'Instructions saved.' : 'Worker instructions saved for new workers.');
     } catch (error) { setError(error.message); }
     finally { setSaving(false); }
   };
-  return <section aria-labelledby={`${role}-instructions-heading`} className="rounded-xl border bg-card p-5 sm:p-6">
+  return <section aria-labelledby={`${role}-instructions-heading`} className="pt-2">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h2 id={`${role}-instructions-heading`} className="font-semibold tracking-tight">{managerRole ? 'Manager instructions' : 'Worker instructions'}</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{managerRole ? 'The full Crew behavior for this project’s manager. Saved edits wait for an explicit manager restart.' : 'The full Crew behavior for newly launched workers in this project. Running and retained workers keep their original snapshot.'}</p></div>
-      <div className="flex flex-wrap gap-2"><Badge variant="outline" title={`Saved version: ${data.saved.version}`}>Saved {shortVersion(data.saved.version)}</Badge>{managerRole && <Badge variant="outline" title={`${data.activeVersion ? 'Active' : 'Last active'} version: ${data.activeVersion || data.retainedVersion || 'unavailable'}`}>{data.activeVersion ? 'Active' : 'Last active'} {shortVersion(data.activeVersion || data.retainedVersion)}</Badge>}{dirty && <Badge variant="secondary">Unsaved changes</Badge>}{managerRole && data.pendingRestart && <Badge variant="secondary">Restart pending</Badge>}</div>
+      <div><h2 id={`${role}-instructions-heading`} className="font-semibold tracking-tight">{managerRole ? 'Manager instructions' : 'Worker instructions'}</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{managerRole ? 'Set how your manager communicates, plans work and helps you make decisions.' : 'Set how workers approach agreed tasks and report their findings.'}</p></div>
+      <div className="flex items-center gap-3">{dirty && <Badge variant="secondary">Unsaved changes</Badge>}{!editing && <Button variant="link" className="h-auto p-0 text-sm font-semibold" aria-label={`Update ${role} instructions`} onClick={() => setEditing(true)}>Update</Button>}</div>
     </div>
-    <Label htmlFor={`${role}-prompt`} className="mt-5 mb-2 block">{managerRole ? 'Manager' : 'Worker'} prompt</Label>
-    <Textarea id={`${role}-prompt`} value={text} onChange={event => edit(event.target.value)} aria-describedby={`${role}-prompt-hint`} className="min-h-80 resize-y font-mono text-xs leading-6" spellCheck={false} />
-    <p id={`${role}-prompt-hint`} className="mt-2 text-xs leading-5 text-muted-foreground">Replaces Crew’s default behavior. Codex/provider rules and required runtime tool context still apply. Do not include credentials or secrets.</p>
+    {managerRole && data.pendingRestart && <Alert role="status" className="mt-4"><AlertDescription>{manager.managerLifecycle.state === 'stopped' ? 'Start' : 'Restart'} your manager in Sessions to apply these saved instructions.</AlertDescription></Alert>}
+    {editing ? <><Label htmlFor={`${role}-prompt`} className="sr-only">{managerRole ? 'Manager' : 'Worker'} prompt</Label>
+    <Textarea id={`${role}-prompt`} value={text} onChange={event => edit(event.target.value)} aria-describedby={`${role}-prompt-hint`} className="mt-6 min-h-64 resize-y font-mono text-xs leading-6" spellCheck={false} /></> : <div className="mt-6 border-y py-6"><p className="line-clamp-5 whitespace-pre-wrap text-sm leading-7 text-muted-foreground">{data.saved.text}</p></div>}
+    {editing && <p id={`${role}-prompt-hint`} className="mt-2 text-xs leading-5 text-muted-foreground">Applies only to this project. Don’t include passwords, API keys or other secrets.</p>}
+    <details className="group mt-5">
+      <summary className="flex w-fit cursor-pointer list-none items-center gap-2 rounded text-xs font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"><CircleHelp className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />What to include and how it’s used<ChevronDown className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180" aria-hidden="true" /></summary>
+      <div className="mt-4 space-y-4 border-l-2 pl-4 text-xs leading-6 text-muted-foreground">
+        <div><h3 className="font-medium text-foreground">What to include</h3><ul className="mt-1 list-disc space-y-1 pl-4">{(managerRole ? [
+          'Project context, priorities and any terminology your manager should understand.',
+          'Your preferred tone, level of detail and format for updates.',
+          'How to plan work, explain trade-offs and raise decisions that need your input.',
+        ] : [
+          'Project conventions and quality standards to follow during agreed tasks.',
+          'How to check changes and record findings, decisions and limitations.',
+          'When to raise a question or blocker with the manager.',
+        ]).map(item => <li key={item}>{item}</li>)}</ul><p className="mt-2">Keep these instructions reusable. Put individual tasks and changing requirements in the manager conversation.</p></div>
+        <div><h3 className="font-medium text-foreground">Example</h3><blockquote className="mt-2 border-l-2 border-primary/30 pl-3 text-foreground">{managerRole ? 'Keep updates concise and use plain language. Explain the options before recommending a direction. Ask me about unclear priorities, and distinguish verified results from assumptions.' : 'Follow the project’s existing conventions. Check the agreed behaviour, record what was verified and describe any remaining limitations. Raise unclear requirements with the manager before changing scope.'}</blockquote></div>
+        <div><h3 className="font-medium text-foreground">How it’s used</h3><p className="mt-1">{managerRole ? 'This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately.' : 'This text replaces Crew’s default worker instructions for this project. Saved changes apply to newly launched workers; existing workers keep the instructions they started with.'}</p><p className="mt-2">Crew still supplies project and task context. These instructions don’t change Codex permissions or approval requirements.</p></div>
+      </div>
+    </details>
     {stale && <Alert className="mt-3" role="alert"><AlertDescription>The saved version changed while you were editing. Your draft is preserved. Copy it before cancelling to load the latest saved instructions.</AlertDescription></Alert>}
     {error && <Alert variant="destructive" className="mt-3" role="alert"><AlertDescription>{error}</AlertDescription></Alert>}
-    {notice && <p role="status" className="mt-3 flex items-start gap-2 text-xs leading-5 text-muted-foreground"><Check className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />{notice}</p>}
-    <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+
+    {editing && <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
       <Button variant="ghost" disabled={saving || text === data.defaultText} onClick={() => edit(data.defaultText)}><RotateCcw aria-hidden="true" />Reset to default</Button>
-      <div className="flex gap-2"><Button variant="outline" disabled={!dirty || saving} onClick={cancel}>Cancel changes</Button><Button disabled={!dirty || saving || stale || !text.trim() || !manager.eventReady} onClick={() => void save()}>{saving ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Save aria-hidden="true" />}{saving ? 'Saving…' : 'Save instructions'}</Button></div>
-    </div>
+      <div className="flex gap-2"><Button variant="outline" disabled={saving} onClick={cancel}>Cancel changes</Button><Button disabled={!dirty || saving || stale || !text.trim() || !manager.eventReady} onClick={() => void save()}>{saving ? <LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Save aria-hidden="true" />}{saving ? 'Saving…' : 'Save instructions'}</Button></div>
+    </div>}
   </section>;
 }
 
 export function Settings({ manager }) {
-  return <section aria-label="Project settings" className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-7">
-    <div className="mx-auto max-w-4xl space-y-6">
-      <div><p className="mb-2 text-xs font-medium text-primary">{manager.settings?.projectName || manager.projectInfo?.name || 'This project'}</p><h1 className="text-2xl font-semibold tracking-tight">Settings</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Shape how your crew works. These instructions belong only to this project.</p></div>
-      <section aria-labelledby="manager-lifecycle-heading" className="rounded-xl border bg-card p-5 sm:p-6"><h2 id="manager-lifecycle-heading" className="mb-4 font-semibold tracking-tight">Manager session</h2><ManagerLifecycle manager={manager} /></section>
-      {manager.settingsError && <Alert variant="destructive" role="alert"><AlertDescription>{manager.settingsError}<Button className="ml-2" variant="outline" onClick={() => void manager.loadSettings().catch(() => {})}>Reload settings</Button></AlertDescription></Alert>}
-      {!manager.settings ? <p role="status" className="text-sm text-muted-foreground">Loading project instructions…</p> : <>{['manager', 'worker'].map(role => <PromptEditor key={`${manager.settings.projectId}:${role}`} role={role} data={manager.settings[role]} manager={manager} />)}</>}
+  const [page, setPage] = useState('sessions');
+  const workspace = useWorkspaceSettings();
+  const selectedProject = workspace.snapshot?.projects.find(project => project.id === workspace.snapshot.selectedId);
+  const [toast, setToast] = useState(null);
+  const notify = message => setToast({ id: crypto.randomUUID(), message });
+  const content = useRef(null);
+  useEffect(() => { if (content.current) content.current.scrollTop = 0; }, [page]);
+  const pages = [
+    { id: 'global', label: 'General', icon: SlidersHorizontal, description: 'Preferences shared across every project on this Mac.' },
+    { id: 'project', label: 'General', icon: SlidersHorizontal, description: 'Manage the details for this project.' },
+    { id: 'sessions', label: 'Sessions', icon: Radio, description: 'Manage the live manager session for this project.' },
+    { id: 'manager', label: 'Manager profile', icon: UserRound, description: 'Configure your manager’s voice and instructions.' },
+    { id: 'worker', label: 'Worker profile', icon: Users, description: 'Set the instructions for newly launched workers.' },
+  ];
+  const current = pages.find(item => item.id === page);
+  return <section ref={content} aria-label="Settings" className="min-h-0 flex-1 overflow-y-auto px-5 py-10 sm:px-10">
+    <div className="mx-auto grid max-w-6xl items-start gap-8 md:grid-cols-[192px_minmax(0,1fr)] md:gap-12 lg:grid-cols-[224px_minmax(0,1fr)] lg:gap-16">
+    <aside className="self-start md:sticky md:top-0">
+      <h1 className="mb-3 px-3 text-sm font-semibold tracking-tight">Settings</h1>
+      <nav aria-label="Settings pages" className="space-y-6">{[
+        { label: 'Global settings', items: pages.filter(item => item.id === 'global') },
+        { label: 'Project settings', items: pages.filter(item => item.id !== 'global') },
+      ].map(group => <div key={group.label}><h2 className="mb-2 px-3 text-[11px] font-medium text-muted-foreground">{group.label}</h2><div className="flex flex-wrap gap-2 md:flex-col">{group.items.map(({ id, label, icon: Icon }) => <Button key={id} type="button" variant="ghost" aria-label={id === 'global' ? 'Global general settings' : id === 'project' ? 'Project general settings' : label} aria-current={page === id ? 'page' : undefined} className={`h-11 justify-start gap-3 rounded-lg px-3 text-sm md:w-full ${page === id ? 'bg-muted/60 font-semibold text-primary' : 'font-medium text-muted-foreground hover:text-foreground'}`} onClick={() => setPage(id)}><Icon className={`size-5 ${page === id ? 'text-primary' : 'text-muted-foreground/70'}`} aria-hidden="true" />{label}</Button>)}</div></div>)}</nav>
+    </aside>
+    <div className="min-w-0 space-y-8">
+        <div><p className="mb-2 text-xs font-medium text-primary">{page === 'global' ? 'All projects · This Mac' : selectedProject?.name || manager.settings?.projectName || manager.projectInfo?.name || 'This project'}</p><h2 className="text-2xl font-semibold tracking-tight">{current.label}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{current.description}</p></div>
+        <div hidden={page !== 'global'} aria-label="Global settings"><GlobalSettings workspace={workspace} onNotify={notify} /></div>
+        <div hidden={page !== 'project'} aria-label="Project general settings"><ProjectGeneral key={selectedProject?.id || 'loading'} workspace={workspace} onNotify={notify} /></div>
+        {page !== 'global' && manager.settingsError && <Alert variant="destructive" role="alert"><AlertDescription>{manager.settingsError}<Button className="ml-2" variant="outline" onClick={() => void manager.loadSettings().catch(() => {})}>Reload settings</Button></AlertDescription></Alert>}
+        <div hidden={page !== 'sessions'} aria-label="Session settings"><section aria-labelledby="manager-lifecycle-heading" className="border-t pt-6"><h3 id="manager-lifecycle-heading" className="mb-4 font-semibold">Manager session</h3><ManagerLifecycle manager={manager} /></section></div>
+        <div hidden={page !== 'manager'} aria-label="Manager profile settings" className="space-y-12"><ManagerProfile key={manager.settings?.projectId || 'loading'} manager={manager} onNotify={notify} />{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:manager`} role="manager" data={manager.settings.manager} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading manager instructions…</p>}</div>
+        <div hidden={page !== 'worker'} aria-label="Worker profile settings">{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:worker`} role="worker" data={manager.settings.worker} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading worker instructions…</p>}</div>
     </div>
+    </div>
+    {toast && <SettingsToast key={toast.id} message={toast.message} onDismiss={() => setToast(null)} />}
   </section>;
 }

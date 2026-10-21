@@ -60,18 +60,15 @@ function harness({acquire,replaceTrack}={}){
 async function connected(h){const peer=await h.connect();peer.emit();await h.flush();return peer;}
 
 test('default open microphone captures once only after connection, despite repeated connected events',async t=>{
- const h=harness();t.after(()=>h.destroy());assert.equal(h.voice.mode,'open-mic');assert.equal(h.captures.length,0);
+ const h=harness();t.after(()=>h.destroy());assert.equal(h.voice.changeMode,undefined);assert.equal(h.captures.length,0);
  const peer=await h.connect();assert.equal(h.captures.length,0);assert.equal(h.voice.active,false);
  peer.emit();await h.flush();assert.equal(h.captures.length,1);assert.equal(h.voice.transmitting,true);assert.equal(peer.sender.track.enabled,true);
  peer.emit();peer.emit();await h.flush();assert.equal(h.captures.length,1);assert.equal(h.requests.filter(request=>request.route==='voice-ready').length,1);
 });
-test('established open microphone survives blur and hidden; PTT stops on either and never captures on Connect',async t=>{
+test('established open microphone survives blur and hidden without a separate PTT mode',async t=>{
  const open=harness();t.after(()=>open.destroy());const peer=await connected(open),mic=peer.sender.track;
  open.window.emit('blur');open.document.visibilityState='hidden';open.document.emit('visibilitychange');await open.flush();assert.equal(mic.readyState,'live');assert.equal(open.voice.transmitting,true);
- const ptt=harness();t.after(()=>ptt.destroy());ptt.voice.changeMode('push-to-talk');await ptt.flush();const held=await connected(ptt);assert.equal(ptt.captures.length,0);
- ptt.voice.startInput();await ptt.flush();const first=held.sender.track;assert.equal(ptt.voice.transmitting,true);
- ptt.window.emit('blur');await ptt.flush();assert.equal(first.readyState,'ended');assert.equal(ptt.voice.transmitting,false);
- ptt.voice.startInput();await ptt.flush();const second=held.sender.track;ptt.document.visibilityState='hidden';ptt.document.emit('visibilitychange');await ptt.flush();assert.equal(second.readyState,'ended');assert.equal(ptt.voice.transmitting,false);
+
 });
 test('explicit mute remains across normal disconnect/reconnect and transport loss/reconnect',async t=>{
  const h=harness();t.after(()=>h.destroy());await connected(h);h.voice.toggleMute();await h.flush();assert.equal(h.voice.openMicMuted,true);
@@ -101,7 +98,7 @@ test('mute while replaceTrack is pending never enables the acquired microphone a
  attachment.resolve();await h.flush();assert.equal(mic.audio.enabled,false);assert.equal(h.voice.transmitting,false);assert.notEqual(peer.sender.track,mic.audio);
 });
 test('page destruction releases physical and silent tracks, closes peer and removes listeners',async()=>{
- const h=harness();const peer=await connected(h),mic=peer.sender.track,silent=h.audioContexts[0].media.audio;assert.ok(h.window.count()>0);
+ const h=harness();const peer=await connected(h),mic=peer.sender.track,silent=h.audioContexts[0].media.audio;
  h.destroy();await h.flush();assert.equal(mic.readyState,'ended');assert.equal(silent.readyState,'ended');assert.equal(h.audioContexts[0].state,'closed');assert.equal(peer.closed,true);assert.equal(h.window.count(),0);assert.equal(h.document.count(),0);assert.equal(h.timers.size,0);
 });
 
@@ -140,4 +137,15 @@ test('real hook stays quiet for denied and canceled unmute and cancellation befo
 test('update plan immediately releases existing media and invalidates pending permission without reconnecting',async t=>{
  const h=harness();t.after(()=>h.destroy());const peer=await connected(h),mic=peer.sender.track;h.voice.handleEvent({type:'update-plan-state',plan:{phase:'draining'}});await h.flush();assert.equal(peer.closed,true);assert.equal(mic.readyState,'ended');assert.equal(h.voice.allocated,false);assert.equal(h.voice.transmitting,false);assert.match(h.voice.status,/update/);assert.equal(h.captures.length,1);
  const permission=deferred(),late=stream(),pending=harness({acquire:()=>permission.promise});t.after(()=>pending.destroy());const old=await connected(pending);pending.voice.handleEvent({type:'update-plan-state',plan:{phase:'draining'}});await pending.flush();permission.resolve(late);await pending.flush();assert.equal(late.audio.readyState,'ended');assert.equal(old.closed,true);assert.equal(pending.voice.allocated,false);assert.equal(pending.captures.length,1);
+});
+
+
+test('blocked playback offers explicit recovery and late failures do not revive a disconnected call', async t => {
+ const h=harness();t.after(()=>h.destroy());const peer=await connected(h);
+ let plays=0;
+ h.voice.audioRef.current={srcObject:null,play:async()=>{if(++plays===1)throw Object.assign(new Error('Autoplay blocked'),{name:'NotAllowedError'});}};
+ peer.ontrack({streams:[stream()]});await h.flush();assert.equal(h.voice.playbackBlocked,true);assert.equal(h.errors.length,0);
+ await h.voice.resumePlayback();await h.flush();assert.equal(h.voice.playbackBlocked,false);assert.equal(plays,2);
+ const late=deferred();h.voice.audioRef.current.play=()=>late.promise;peer.ontrack({streams:[stream()]});
+ await h.voice.disconnect();late.reject(new Error('Late playback failure'));await h.flush();assert.equal(h.voice.playbackBlocked,false);assert.equal(h.voice.active,false);
 });
