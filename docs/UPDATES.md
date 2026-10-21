@@ -13,3 +13,6 @@ Your project JSON, editable prompts, ChatGPT/Codex authentication, conversations
 Unsigned local candidates cannot automatically update: they show a clear explanation and a link to releases. Older builds that did not include an updater, or were unsigned, require one manual installation of a signed updater-enabled release. Keep the existing instance configuration and data when replacing the application.
 
 See [release setup and signing prerequisites](RELEASES.md) and [theme customization](UI-FOUNDATION.md).
+
+
+The signed 0.9.0 → 0.9.1 production-feed upgrade has been verified in an isolated native installation, including replacement/relaunch, signature/notarization checks and unchanged configuration/prompts/saved chat. See [release acceptance](RELEASES.md#signed-release-acceptance).

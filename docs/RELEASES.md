@@ -44,3 +44,10 @@ The workflow pins official GitHub Actions by immutable commit SHA and uses a fix
 A machine without a valid Developer ID identity and configured signing secrets can validate source, tests, candidate artifacts, update coordination, feed/checksum handling and state preservation. It cannot prove signed installation, notarization or the native two-version automatic upgrade. Do not publish placeholder credentials, unsigned candidates or a release described as working around that requirement. Existing unsigned installations need one manual installation of the first signed updater-enabled release.
 
 Primary references: [electron-builder v26 updates](https://www.electron.build/v26/docs/features/auto-update/), [macOS configuration](https://www.electron.build/v26/docs/mac/), [Electron autoUpdater signing requirement](https://www.electronjs.org/docs/latest/api/auto-updater).
+
+
+## Signed release acceptance
+
+The public [0.9.0](https://github.com/MattGibney/crew/releases/tag/v0.9.0) and [0.9.1](https://github.com/MattGibney/crew/releases/tag/v0.9.1) releases completed signing, notarization and publication. The [0.9.1 workflow](https://github.com/MattGibney/crew/actions/runs/39559911796) passed 200 tests and all production verification gates. Independent local verification accepted the downloaded/installed applications as Notarized Developer ID with bundle identifier `local.voice.manager`.
+
+An isolated signed 0.9.0 installation fetched 0.9.1 from the production feed, downloaded it through electron-updater and completed a native install/relaunch after explicit Restart. It retained the same configured project and byte-identical configuration, editable prompts and saved-chat files. The upgraded application again passed signature, stapled-ticket and Gatekeeper checks. No physical microphone or business worker was started; the test copy was stopped afterward and the existing user installation was preserved.
