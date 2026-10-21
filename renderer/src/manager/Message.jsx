@@ -14,4 +14,3 @@ export function Message({ message }) {
     </div>
   </article>;
 }
-
