@@ -1,3 +1,17 @@
+# Agent-initiated project environments (GitHub #50)
+
+Managers and workers decide when to set up, start, check or tear down a project environment. Crew exposes configured commands/instructions through `get_project_environment`; the agent uses existing project tooling through native Codex tools and normal approvals. Saving configuration, opening a worker and sending a direction run no environment command. Readiness is evidence for the agent, never a Crew dispatch prerequisite.
+
+Crew creates the registered isolated worktree and preserves the native conversation, files and history across directions. It does not automatically download managed tools or replay setup/resume hooks. Agents should follow the project's existing AGENTS/docs and developer commands. Local configuration and ordinary background integrations may be inherited; a worktree alone proves neither provider isolation nor service readiness.
+
+Legacy hook and execution-plan records remain readable. Their exact command hashes, setup attempts, supervised runtime ownership and cleanup results are historical evidence. Existing resources are not silently stopped, reset or migrated. Explicit destructive archive retains ownership, confirmed-exit and dirty-worktree safeguards, including legacy cleanup where configured. Commands successfully exiting do not prove every external resource was removed; preserve and disclose observed residuals.
+
+Workflow state is explicitly set by agents and remains separate from environment health, native process/session connectivity and pending approvals. Neither a successful readiness command nor a completed native turn establishes business acceptance.
+
+## Historical environment implementation and acceptance
+
+The following describes the earlier automatically prepared environment implementation and its historical evidence. It is retained for developers recovering existing records; it does not describe current worker-dispatch policy.
+
 # Existing project execution (AI-012)
 
 Crew reads the selected commit’s Codex environment configuration and bounded applicable AGENTS, Claude and linked development instructions. Setup discovers commands without executing them. The project remains authoritative: Crew requires no repository changes or new lifecycle API.

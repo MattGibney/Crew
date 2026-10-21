@@ -36,7 +36,7 @@ export function WorkChat({ manager }) {
     input.style.height = `${Math.min(160, Math.max(56, input.scrollHeight))}px`;
   }, [draft, inputMode]);
   const busy = Boolean(work.activeTurnId) || sending;
-  const ready = manager.managerEnabled && prepared && eventReady && !busy;
+  const ready = manager.managerEnabled && prepared && eventReady && !sending;
   const submit = async event => {
     event.preventDefault();
     const submittedDraft = draft, text = submittedDraft.trim();
@@ -94,7 +94,7 @@ export function WorkChat({ manager }) {
           <div id="input-panel-text" role="tabpanel" aria-labelledby="input-tab-text" hidden={inputMode !== 'text'} className="p-2">
           <label htmlFor="message-input" className="sr-only">Message your manager</label>
           <Textarea ref={inputRef} id="message-input" placeholder="Message your manager…" value={draft} maxLength={8000} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (ready) void submit(event); } }} className="min-h-14 max-h-40 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0" />
-          <div className="flex items-center justify-between gap-2 px-1"><p className="text-[11px] text-muted-foreground">{!manager.managerEnabled ? 'Manager is stopped or unavailable. Open Settings to start it. Your draft is kept.' : !prepared ? 'Preparing your manager…' : !eventReady ? 'Waiting for connection…' : busy ? 'You can draft your next message while work continues.' : 'Enter to send · Shift Enter for a new line'}</p>{busy ? <Button id="stop-work" type="button" variant="outline" size="sm" disabled={!work.activeTurnId} onClick={() => void manager.interruptManager()}><Square className="size-3" />Stop current turn</Button> : <Button id="send-message" type="submit" size="icon" aria-label="Send message" disabled={!ready || !draft.trim()}><ArrowUp /></Button>}</div>
+          <div className="flex items-center justify-between gap-2 px-1"><p className="text-[11px] text-muted-foreground">{!manager.managerEnabled ? 'Manager is stopped or unavailable. Open Settings to start it. Your draft is kept.' : !prepared ? 'Preparing your manager…' : !eventReady ? 'Waiting for connection…' : busy ? 'Send another message to guide the current work.' : 'Enter to send · Shift Enter for a new line'}</p>{work.activeTurnId && <Button id="stop-work" type="button" variant="outline" size="sm" disabled={!work.activeTurnId} onClick={() => void manager.interruptManager()}><Square className="size-3" />Stop current turn</Button>}<Button id="send-message" type="submit" size="icon" aria-label="Send message" disabled={!ready || !draft.trim()}><ArrowUp /></Button></div>
           </div>
           {inputMode === 'text' && (manager.voice.allocated || manager.voice.busy) && <ManagerCallBar manager={manager} onManager={() => selectInput('voice')} />}
         </form>

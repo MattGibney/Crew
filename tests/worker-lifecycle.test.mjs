@@ -58,7 +58,7 @@ test('legacy task records accept lifecycle requests; disposal never deletes dura
  await assert.rejects(updateWorkNotes(dir,'worker-legacy',{updateId:'archived-edit',markdown:'Do not overwrite historical notes'}),/read-only/);
  await assert.rejects(requestWorkerAction(dir,{taskId:'worker-legacy',actionId:'action-restart',action:'start'}),/archived/);
 });
-test('manager lifecycle MCP is project-scoped; bound worker exposes reports and shared notes only',async()=>{
+test('manager lifecycle MCP is project-scoped; bound worker exposes messaging, workflow and environment context without manager lifecycle controls',async()=>{
  const {spawn}=await import('node:child_process');const {writeFile}=await import('node:fs/promises');
  const dir=await fixture();await running(dir,'worker-alpha','run-worker-alpha');
  const runtime=join(dir,'runtime.json');await writeFile(runtime,JSON.stringify({project:{id:'crew',mode:'repository'}}));
@@ -84,7 +84,7 @@ test('manager lifecycle MCP is project-scoped; bound worker exposes reports and 
  const foreignHistory=await rpc('manager',[runtime],'tools/call',{name:'get_status',arguments:{taskId:'worker-alpha'}});
  assert.match(foreignHistory.content[0].text,/another project/);
  const tools=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/list',{});
- assert.deepEqual(tools.tools.map(t=>t.name),['report','update_work_notes']);
+ assert.deepEqual(tools.tools.map(t=>t.name),['report','set_workflow_state','get_project_environment','update_work_notes']);
  const workerDenied=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/call',{name:'worker_action',arguments:args});
  assert.equal(workerDenied.isError,true);assert.match(workerDenied.content[0].text,/Unknown tool/);
 });

@@ -2,7 +2,7 @@
 
 `node cli.mjs init --template set1` creates a private local config and editable prompt copies without overwriting existing files. `--config /absolute/path/instance.json` selects another local instance. Relative paths resolve against that JSON file's directory. Use real paths; shell variables and `~` are not expanded.
 
-The complete schema is illustrated by `config/set1.example.json` and `config/fixture.example.json`. Unknown keys, malformed JSON, missing prompt files, invalid ports/sandbox values, unusable runtime paths and missing Node/Git dependencies produce clear startup errors. Structurally valid but incomplete business settings allow conversation/setup, with worker dispatch blocked and explicit readiness issues. `validate` returns nonzero until dispatch configuration is ready.
+The complete schema is illustrated by `config/set1.example.json` and `config/fixture.example.json`. Unknown keys, malformed JSON, missing prompt files, invalid ports/sandbox values, unusable runtime paths and missing Node/Git dependencies produce clear startup errors. Structurally valid but incomplete business settings allow conversation/setup and expose readiness issues as context. Crew does not gate directions on business readiness; creating a worker still needs an actual configured repository and usable native session. `validate` reports configuration readiness; this does not establish application-service health.
 
 | Field | Meaning |
 |---|---|
@@ -18,7 +18,7 @@ The complete schema is illustrated by `config/set1.example.json` and `config/fix
 | project.prompts.manager/worker | Editable Markdown paths |
 | project.worker.sandbox | Legacy task edit-scope guard: read-only or workspace-write. Native sandbox permissions resolve through Codex configuration. |
 | project.worker.maxConcurrent | Executing capacity, 1–8; default 2. Explicit extra tasks queue. |
-| project.worker.environment | Optional bootstrap/start/ready/resume/cleanup hooks; see WORKERS.md. No hooks means application readiness is not established. |
+| project.worker.environment | Optional environment commands/instructions for agents; dispatch runs none automatically. Legacy supervised cleanup evidence remains retained. See WORKERS.md. |
 | project.worker.timeoutMs | Per-run ceiling, 10000–86400000 ms; questions end a run and resume starts the next |
 
 Repository work starts from the configured committed base ref, not uncommitted source-checkout changes. Fetch refs yourself when appropriate; the application does not invent or silently update a base. Keep task worktrees until reviewed. Worktree edits remain uncommitted; commit/publish/deploy actions require a later supported workflow.

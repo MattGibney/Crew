@@ -68,11 +68,11 @@ test('repository worker executes in a durable isolated worktree and verification
     assert.equal(task.status,'completed',task.failure); assert.equal(task.projectId,'example');
     assert.match(task.worktreeName,/^crew-[a-f0-9]{32}$/);
     assert.equal(task.worktreeName.length,37);
-    assert.equal(task.worktree,path.join(state,'worktrees',task.worktreeName));
+    assert.equal(task.worktree,await realpath(path.join(state,'worktrees',task.worktreeName)));
     assert.notEqual(await realpath(task.worktree),await realpath(repo));
     assert.equal(task.result.verification.semanticCorrectnessVerified,false); assert.equal(task.result.verification.clean,true);
     const run=JSON.parse(await readFile(path.join(task.runDir,'config.json'),'utf8'));
-    assert.equal(run.workerPrompt,'Be precise.');assert.equal(run.timeoutMs,10000);assert.equal(run.sandbox,'read-only');
+    assert.equal(run.workerPrompt,'Be precise.');assert.equal(run.agentOwnedEnvironment,true);assert.equal(run.timeoutMs,undefined);assert.equal(run.sandbox,undefined);
     assert.equal((await exec('git',['-C',repo,'status','--porcelain'])).stdout,'');
   } finally {await controller.stop();}
 });
@@ -81,7 +81,7 @@ test('incomplete configuration fails before creating a worktree',async()=>{
   await createTask(state,{requestId:'incomplete-test',ticket:'EX-1',brief:'Inspect',projectId:'example',repositoryId:'app'});
   const project=profile(null);project.readiness={ready:false,issues:['Set repository path']};
   const controller=await createController({stateDir:state,sourceDir,executable:'/unused',project});
-  try {const task=await terminal(controller,state,'incomplete-test');assert.equal(task.status,'failed');assert.match(task.failure,/incomplete/);assert.equal(task.worktree,undefined);} finally {await controller.stop();}
+  try {const task=await terminal(controller,state,'incomplete-test');assert.equal(task.status,'failed');assert.match(task.failure,/repository path and baseRef/);assert.equal(task.worktree,undefined);} finally {await controller.stop();}
 });
 test('task project and repository identity are immutable and dedupe includes scope',async()=>{
   const state=await mkdtemp(path.join(os.tmpdir(),'ai006-store-'));
@@ -100,18 +100,14 @@ async function mcp(state, runtime, name, args) {
   const code=await new Promise(resolve=>child.on('close',resolve));assert.equal(code,0,stderr);
   return JSON.parse(output.trim()).result;
 }
-test('manager MCP rejects incomplete profiles, wrong repository and wrong team ticket',async()=>{
-  const base=await mkdtemp(path.join(os.tmpdir(),'ai006-mcp-'));const state=path.join(base,'state');const runtime=path.join(base,'runtime.json');
-  const project=profile('/unused');await writeFile(runtime,JSON.stringify({project,workerPrompt:'Precise'}));
-  const request={requestId:'mcp-request-1',ticket:'EX-12',brief:'Inspect',repositoryId:'app'};
+test('manager MCP preserves repository identity without readiness or ticket workflow gates',async()=>{
+  const base=await mkdtemp(path.join(os.tmpdir(),'crew-mcp-identity-')),state=path.join(base,'state'),runtime=path.join(base,'runtime.json');
+  const project=profile('/unused');project.readiness={ready:false,issues:['Environment has not been prepared']};await writeFile(runtime,JSON.stringify({project}));
+  const request={requestId:'mcp-request-1',ticket:'CUSTOM-12',brief:'Inspect',repositoryId:'app'};
   assert.equal((await mcp(state,runtime,'submit_task',{...request,repositoryId:'unknown'})).isError,true);
-  assert.equal((await mcp(state,runtime,'submit_task',{...request,ticket:'OTHER-12'})).isError,true);
   assert.equal((await mcp(state,runtime,'submit_task',{...request,repositoryId:undefined})).isError,true);
-  project.readiness={ready:false,issues:['Unset repository path']};await writeFile(runtime,JSON.stringify({project}));
-  const rejected=await mcp(state,runtime,'submit_task',request);assert.match(rejected.content[0].text,/Unset repository path/);
-  project.readiness={ready:true,issues:[]};await writeFile(runtime,JSON.stringify({project}));
-  const result=await mcp(state,runtime,'submit_task',request);assert.equal(result.isError,undefined);
-  const task=await readTask(state,request.requestId);assert.equal(task.projectId,'example');assert.equal(task.repositoryId,'app');assert.equal(task.status,'queued');
+  assert.equal((await mcp(state,runtime,'submit_task',request)).isError,undefined);
+  const task=await readTask(state,request.requestId);assert.equal(task.projectId,'example');assert.equal(task.repositoryId,'app');assert.equal(task.ticket,'CUSTOM-12');assert.equal(task.status,'queued');
 });
 test('legacy fixture baseline still independently checks actual totals',async()=>{
   const base=await mkdtemp(path.join(os.tmpdir(),'ai006-fixture-'));const state=path.join(base,'state');
@@ -127,35 +123,27 @@ test('workspace-write records local changes while preserving original repository
   try{const task=await terminal(controller,state,'local-edit-test');assert.equal(task.status,'completed',task.failure);assert.equal(task.result.verification.clean,false);assert.match(task.result.verification.changedFiles.join('\n'),/example.txt/);assert.equal(await readFile(path.join(repo,'example.txt'),'utf8'),'original\n');}finally{await controller.stop();}
 });
 
-test('resume refuses changed sandbox without creating another run or supervisor',async()=>{
-  const base=await mkdtemp(path.join(os.tmpdir(),'ai006-sandbox-'));const repo=await repository(base);const state=path.join(base,'state');const project=profile(repo);
-  await createTask(state,{requestId:'sandbox-resume-test',ticket:'EX-3',brief:'Read-only inspection',projectId:project.id,repositoryId:'app'});
+test('resume preserves context when Crew sandbox metadata changes; native policy remains authoritative',async()=>{
+  const base=await mkdtemp(path.join(os.tmpdir(),'crew-native-policy-')),repo=await repository(base),state=path.join(base,'state'),project=profile(repo);
+  await createTask(state,{requestId:'sandbox-resume-test',ticket:'EX-3',brief:'Inspect',projectId:project.id,repositoryId:'app'});
   const controller=await createController({stateDir:state,sourceDir,executable:await mockedCodex(base),project});
-  try {
-    const prior=await terminal(controller,state,'sandbox-resume-test');assert.equal(prior.status,'completed',prior.failure);
-    const priorRunEntries=(await readdir(path.join(state,'runs',prior.id))).sort();
-    await updateTask(state,prior.id,task=>{task.status='resume_queued';task.answer={text:'Continue the same scope'};});
-    project.worker.sandbox='workspace-write';
-    const task=await terminal(controller,state,prior.id);
-    assert.equal(task.status,'failed');assert.match(task.failure,/sandbox configuration changed/);
-    assert.equal(task.runId,prior.runId);assert.equal(task.runnerPid,prior.runnerPid);
-    assert.deepEqual((await readdir(path.join(state,'runs',task.id))).sort(),priorRunEntries);
-    assert.ok(priorRunEntries.includes(prior.runId));
-    assert.equal(task.workerSandbox,'read-only');
+  try{const prior=await terminal(controller,state,'sandbox-resume-test');assert.equal(prior.status,'completed',prior.failure);
+    project.worker.sandbox='workspace-write';await updateTask(state,prior.id,n=>{n.status='resume_queued';n.answer={text:'Continue'};});
+    const task=await terminal(controller,state,prior.id);assert.equal(task.status,'completed',task.failure);assert.notEqual(task.runId,prior.runId);assert.equal(task.threadId,prior.threadId);assert.equal(task.worktree,prior.worktree);
+    const config=JSON.parse(await readFile(path.join(task.runDir,'config.json'),'utf8'));assert.equal(config.sandbox,undefined);assert.equal(config.threadId,prior.threadId);
   }finally{await controller.stop();}
 });
 
-
-test('durable MCP result completes without assistant text, while assistant text alone never replaces a result',async()=>{
+test('native completion retains durable report or final reply without setting workflow state',async()=>{
  for(const resultOnly of [true,false]){
   const base=await mkdtemp(path.join(os.tmpdir(),'crew-terminal-contract-')),repo=await repository(base),state=path.join(base,'state'),id=resultOnly?'worker-result-only':'worker-no-result';await createTask(state,{requestId:id,ticket:'EX-12',brief:'Verify terminal evidence without invented final text',projectId:'example',repositoryId:'app'});
   const controller=await createController({stateDir:state,sourceDir,executable:await mockedCodex(base,false,false,{finalMessage:!resultOnly,durableResult:resultOnly}),project:profile(repo)});
-  try{const task=await terminal(controller,state,id),exit=JSON.parse(await readFile(path.join(task.runDir,'exit.json'),'utf8'));assert.equal(exit.exitCode,0);assert.equal(exit.completedTurn,true);assert.equal(exit.stopConfirmed,true);if(resultOnly){assert.equal(task.status,'completed',task.failure);assert.equal(task.result.message,'Audit complete');assert.equal(task.result.finalMessage,'');assert.equal(exit.finalMessage,'');assert.equal(task.result.verification.semanticCorrectnessVerified,false);assert.equal(task.result.verification.clean,true);}else{assert.equal(task.status,'failed');assert.match(task.failure,/without a durable question or result/);assert.equal(task.result,undefined);}}
+  try{const task=await terminal(controller,state,id),exit=JSON.parse(await readFile(path.join(task.runDir,'exit.json'),'utf8'));assert.equal(exit.exitCode,0);assert.equal(exit.completedTurn,true);assert.equal(exit.stopConfirmed,true);if(resultOnly){assert.equal(task.status,'completed',task.failure);assert.equal(task.result.message,'Audit complete');assert.equal(task.result.finalMessage,'');assert.equal(exit.finalMessage,'');assert.equal(task.result.verification.semanticCorrectnessVerified,false);assert.equal(task.result.verification.clean,true);}else{assert.equal(task.status,'completed',task.failure);assert.ok(task.result.message);assert.equal(task.workflowState,undefined);assert.equal(task.reports.length,0);}}
   finally{await controller.stop();}
  }
 });
 
-test('worker launch receives replacement prompt and immutable snapshots survive answer/resume and later edits', async () => {
+test('worker directions use current saved instructions and retain original run snapshots', async () => {
   const base=await mkdtemp(path.join(os.tmpdir(),'crew-prompt-workers-')),repo=await repository(base),state=path.join(base,'state');
   const executable=path.join(base,'prompt-codex.mjs');
   await writeFile(executable,workerAppServerFixture(`#!/usr/bin/env node
@@ -180,18 +168,18 @@ console.log(JSON.stringify({type:'turn.completed'}));
     assert.ok(launchedPrompt.startsWith('ORIGINAL_CUSTOM_WORKER\n'));
     assert.doesNotMatch(launchedPrompt,/You are the ONE|Inspect actual files|Give one useful progress/);
     assert.equal(waiting.workerPromptSnapshot.text,current);
-    await assert.rejects(updateTask(state,waiting.id,task=>{task.workerPromptSnapshot=promptSnapshot('MUTATED');}),/immutable/);
+    const originalConfig=JSON.parse(await readFile(path.join(waiting.runDir,'config.json'),'utf8'));assert.equal(originalConfig.workerPrompt,'ORIGINAL_CUSTOM_WORKER');
     current='NEW_CUSTOM_WORKER';
     await answerQuestion(state,{taskId:waiting.id,questionId:waiting.question.id,answer:'Proceed'});
     const completed=await terminal(controller,state,waiting.id);
     assert.equal(completed.status,'completed',completed.failure);
     const resumed=JSON.parse(await readFile(path.join(completed.runDir,'config.json'),'utf8'));
-    assert.equal(resumed.workerPrompt,'ORIGINAL_CUSTOM_WORKER');
-    assert.equal(resumed.workerPromptVersion,promptSnapshot('ORIGINAL_CUSTOM_WORKER').version);
-    assert.equal(reads,1);
+    assert.equal(resumed.workerPrompt,'NEW_CUSTOM_WORKER');
+    assert.equal(resumed.workerPromptVersion,promptSnapshot('NEW_CUSTOM_WORKER').version);
+    assert.equal(reads,2);
     await createTask(state,{requestId:'prompt-snapshot-next',ticket:'EX-82',brief:'Inspect next',projectId:'example',repositoryId:'app'});
     const next=await waitFor(controller,()=>readTask(state,'prompt-snapshot-next'),task=>task.status==='awaiting_answer');
-    assert.equal(next.workerPromptSnapshot.text,'NEW_CUSTOM_WORKER'); assert.equal(reads,2);
+    assert.equal(next.workerPromptSnapshot.text,'NEW_CUSTOM_WORKER'); assert.equal(reads,3);
     assert.ok((await readFile(path.join(state,next.runId+'-prompt.txt'),'utf8')).startsWith('NEW_CUSTOM_WORKER\n'));
   } finally {await controller.stop();}
 });

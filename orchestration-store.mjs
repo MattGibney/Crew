@@ -75,7 +75,7 @@ function validateAssignments(task) {
     if (item.adoptions !== undefined && (!Array.isArray(item.adoptions) || new Set(item.adoptions.map(entry => entry?.id)).size !== item.adoptions.length || item.adoptions.some(entry => !entry || !ID.test(entry.id) || !/^[a-f0-9]{64}$/.test(entry.fingerprint || '') || !Number.isFinite(Date.parse(entry.at)) || entry.expectedRunId !== null && (typeof entry.expectedRunId !== 'string' || !entry.expectedRunId.trim())))) throw new Error('Malformed assignment adoption history');
     for (const adoption of item.adoptions || []) text(adoption.userDecision, 'assignment adoption decision', 4000);
     text(item.ticket, 'assignment ticket', 120); text(item.brief, 'assignment brief');
-    if (item.id !== 'initial') { identifier(item.id, 'assignment ID'); text(item.userDecision, 'assignment user decision', 4000); }
+    if (item.id !== 'initial') { identifier(item.id, 'assignment ID'); if(item.userDecision!=null)text(item.userDecision, 'assignment user decision', 4000); }
     ids.add(item.id);
   }
 }
@@ -84,7 +84,7 @@ function preserveAssignments(next, previous) {
   if (!Array.isArray(next.assignments) || next.assignments.length < previous.assignments.length) throw new Error('Assignment history is immutable');
   for (const [index, before] of previous.assignments.entries()) {
     const after = next.assignments[index];
-    if (!after || ['id','ticket','brief','userDecision','createdAt','expectedRunId','expectedAssignmentId','reviewedWorktreeFingerprint'].some(key => JSON.stringify(after[key]) !== JSON.stringify(before[key]))) throw new Error('Assignment identity is immutable');
+    if (!after || ['id','ticket','brief','userDecision','createdAt','expectedRunId','expectedAssignmentId','reviewedWorktreeFingerprint','requestTicket','enqueuedRunId','enqueuedAssignmentId','requestMetadata'].some(key => JSON.stringify(after[key]) !== JSON.stringify(before[key]))) throw new Error('Assignment identity is immutable');
     if (before.status === 'completed' && JSON.stringify(after) !== JSON.stringify(before)) throw new Error('Completed assignment is immutable');
     if (JSON.stringify(after.adoptions?.slice(0, (before.adoptions || []).length) || []) !== JSON.stringify(before.adoptions || [])) throw new Error('Assignment adoption history is immutable');
     if (JSON.stringify(after.runIds?.slice(0, before.runIds.length)) !== JSON.stringify(before.runIds)) throw new Error('Assignment run history is immutable');
@@ -105,6 +105,8 @@ function validate(task, expectedId) {
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
   validateAssignments(task);
+  if(task.workflowHistory!==undefined&&(!Array.isArray(task.workflowHistory)||task.workflowHistory.some(event=>!event||typeof event.requestId!=='string'||!['manager','worker'].includes(event.actor)||typeof event.value!=='string'||!event.value.trim()||!Number.isFinite(Date.parse(event.at)))))throw new Error('Malformed workflow history');
+  if(task.workflowState!==undefined&&(!task.workflowState||typeof task.workflowState.value!=='string'||!task.workflowState.value.trim()||!task.workflowHistory?.some(event=>JSON.stringify(event)===JSON.stringify(task.workflowState))))throw new Error('Malformed workflow state');
   return task;
 }
 async function readUnlocked(dir, id) {
@@ -218,6 +220,7 @@ function recordHistory(task, previous = null) {
   const add = (id, actor, kind, message, extra = {}) => {
     if (!history.some(event => event.id === id)) history.push({ id, actor, kind, message, at: now(), runId: task.runId || null, ...extra });
   };
+  if (previous && task.workerPromptSnapshot?.version !== previous.workerPromptSnapshot?.version && task.workerPromptSnapshot) add(`worker-prompt:${previous.revision+1}`, 'controller', 'configuration', 'Worker instructions refreshed for the current continuation.', {instructionVersion:task.workerPromptSnapshot.version});
   if (!previous) add('assignment', 'manager', 'instruction', task.brief, { at: task.createdAt, runId: null });
   for (const assignment of task.assignments || []) if (assignment.id !== 'initial') add(`assignment:${assignment.id}`, 'manager', 'instruction', assignment.brief, { at: assignment.createdAt, runId: null, assignmentId: assignment.id, ticket: assignment.ticket, userDecision: assignment.userDecision });
   for (const assignment of task.assignments || []) for (const adoption of assignment.adoptions || []) add(`adoption:${assignment.id}:${adoption.id}`, 'manager', 'instruction', `Authorized preservation and adoption of reviewed worktree changes: ${adoption.userDecision}`, {at:adoption.at,runId:adoption.expectedRunId,assignmentId:assignment.id,worktreeFingerprint:adoption.fingerprint});
@@ -275,7 +278,7 @@ export async function updateTask(dir, id, fn) {
     if (!next || next.id !== identity.id || next.ticket !== identity.ticket || next.brief !== identity.brief || next.projectId !== identity.projectId || next.repositoryId !== identity.repositoryId || next.createdAt !== identity.createdAt) throw new Error('Task identity is immutable');
     synchronizeAssignment(next, previous);
     preserveAssignments(next, previous);
-    if (identity.workerPromptSnapshot && JSON.stringify(next.workerPromptSnapshot) !== identity.workerPromptSnapshot) throw new Error('Worker prompt snapshot is immutable');
+    if (previous.workflowHistory && JSON.stringify(next.workflowHistory?.slice(0,previous.workflowHistory.length)) !== JSON.stringify(previous.workflowHistory)) throw new Error('Workflow history is immutable');
     if (previous.history && JSON.stringify(next.history?.slice(0, previous.history.length)) !== JSON.stringify(previous.history)) throw new Error('Retained task history is immutable');
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
     recordHistory(next, previous);
@@ -295,9 +298,6 @@ export async function reportTask(dir, id, runId, { reportId, kind, message, evid
       if (existing.kind !== kind || existing.message !== message || JSON.stringify(existing.evidence) !== JSON.stringify(evidence)) throw new Error('Report ID reused with changed content');
       return;
     }
-    if (task.reports.some(report => report.runId === runId && ['question', 'blocked', 'result'].includes(report.kind))) throw new Error('Worker run already yielded or finished; wait for controller resume');
-    if (task.status !== 'running') throw new Error('Worker is not running');
-    if (task.reports.filter(report => report.runId === runId).length >= 300) throw new Error('Report limit reached for this run');
     task.reports.push({ reportId, runId, assignmentId: currentAssignment(task).id, kind, message, evidence, at: now() });
   });
 }
@@ -398,7 +398,6 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
   return updateTask(dir, id, async task => {
     if (isArchivedTask(task)) throw new Error('Archived worker history is read-only');
     if (runId && task.runId !== runId) throw new Error('Stale worker run');
-    if (runId && task.status !== 'running') throw new Error('Worker is not running');
     if (task.workNotes?.updateId === updateId) {
       if (await fs.readFile(path.join(dir, 'tasks', `${id}.notes.md`), 'utf8') !== markdown) throw new Error('Note update ID reused with changed content');
       return;
@@ -409,42 +408,20 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
   });
 }
 
-// A follow-up is durable new scope, never an implicit resume or permission grant.
+// Direction is communication to this worker. Native Codex owns execution policy.
 export async function requestWorkerFollowup(dir, { taskId, requestId, expectedRunId, expectedAssignmentId, ticket, brief, userDecision, reviewedWorktreeFingerprint }) {
-  if (reviewedWorktreeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(reviewedWorktreeFingerprint)) throw new Error('Invalid reviewed worktree fingerprint');
-  identifier(taskId); identifier(requestId, 'follow-up request ID');
-  if (expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
-  text(expectedAssignmentId, 'expected assignment ID', 80);
-  text(ticket, 'ticket', 120); text(brief, 'brief'); text(userDecision, 'actual user authorization', 4000);
+  identifier(taskId); identifier(requestId, 'follow-up request ID'); text(brief, 'direction');
+  if(ticket!==undefined)text(ticket,'ticket',120);
+  if(expectedRunId!==undefined&&expectedRunId!==null)text(expectedRunId,'observed run ID',160);
+  if(expectedAssignmentId!==undefined&&expectedAssignmentId!==null)text(expectedAssignmentId,'observed assignment ID',80);
   return updateTask(dir, taskId, task => {
-    const assignments = ensureAssignments(task);
-    const existing = assignments.find(item => item.id === requestId);
-    if (existing) {
-      if (existing.ticket !== ticket || existing.brief !== brief || existing.userDecision !== userDecision || existing.expectedRunId !== expectedRunId || existing.expectedAssignmentId !== expectedAssignmentId || existing.reviewedWorktreeFingerprint !== reviewedWorktreeFingerprint) throw new Error('Follow-up request ID reused with changed content');
+    const assignments=ensureAssignments(task),existing=assignments.find(item=>item.id===requestId),requestMetadata=JSON.parse(JSON.stringify({userDecision,reviewedWorktreeFingerprint}));
+    if(existing){
+      if(existing.brief!==brief||JSON.stringify(Object.hasOwn(existing,'requestTicket')?existing.requestTicket:existing.ticket)!==JSON.stringify(ticket??null)||existing.expectedRunId!==expectedRunId||existing.expectedAssignmentId!==expectedAssignmentId||JSON.stringify(existing.requestMetadata||JSON.parse(JSON.stringify({userDecision:existing.userDecision,reviewedWorktreeFingerprint:existing.reviewedWorktreeFingerprint})))!==JSON.stringify(requestMetadata))throw new Error('Follow-up request ID reused with changed content');
       return;
     }
-    if (['disposed','removed','archived'].includes(task.status) || task.archiveRestoration?.requiresRecovery || task.lifecycleRequests?.some(item => ['dispose','archive'].includes(item.action) && ['pending','processing'].includes(item.status))) throw new Error('Worker is archived, history only, or archive/disposal is pending');
-    if ((task.runId || null) !== expectedRunId || task.currentAssignmentId !== expectedAssignmentId) throw new Error('Stale worker run or assignment for follow-up');
-    assignments.push({ id: requestId, ticket, brief, userDecision, expectedRunId, expectedAssignmentId, status: 'queued', createdAt: now(), runIds: [], ...(reviewedWorktreeFingerprint ? {reviewedWorktreeFingerprint} : {}) });
-  });
-}
-
-export async function requestWorkerFollowupAdoption(dir, {taskId, assignmentId, requestId, expectedRunId, fingerprint, userDecision}) {
-  identifier(taskId);identifier(assignmentId,'assignment ID');identifier(requestId,'adoption request ID');
-  if(expectedRunId!==null)text(expectedRunId,'expected run ID',160);
-  if(!/^[a-f0-9]{64}$/.test(fingerprint||''))throw new Error('Invalid reviewed worktree fingerprint');
-  text(userDecision,'actual user adoption authorization',4000);
-  return updateTask(dir,taskId,task=>{
-    const assignment=task.assignments?.find(item=>item.id===assignmentId);
-    if(!assignment)throw new Error('Unknown follow-up assignment');
-    const existing=assignment.adoptions?.find(item=>item.id===requestId);
-    if(existing){if(existing.expectedRunId!==expectedRunId||existing.fingerprint!==fingerprint||existing.userDecision!==userDecision)throw new Error('Adoption request ID reused with changed content');return;}
     if(['disposed','removed','archived'].includes(task.status)||task.archiveRestoration?.requiresRecovery||task.lifecycleRequests?.some(item=>['dispose','archive'].includes(item.action)&&['pending','processing'].includes(item.status)))throw new Error('Worker is archived, history only, or archive/disposal is pending');
-    const queued=assignment.status==='queued'&&assignment.id!==task.currentAssignmentId;
-    const inactive=assignment.id===task.currentAssignmentId&&assignment.status!=='completed'&&['failed','stopped','paused','blocked'].includes(task.status);
-    if(!queued&&!inactive)throw new Error('Only a queued or current inactive assignment can adopt reviewed worktree changes');
-    if((task.runId||null)!==expectedRunId)throw new Error('Stale worker run for worktree adoption');
-    (assignment.adoptions ||= []).push({id:requestId,expectedRunId,fingerprint,userDecision,at:now()});
+    assignments.push({id:requestId,ticket:ticket||currentAssignment(task).ticket||task.ticket,requestTicket:ticket??null,requestMetadata,brief,expectedRunId,expectedAssignmentId,enqueuedRunId:task.runId||null,enqueuedAssignmentId:task.currentAssignmentId,status:'queued',createdAt:now(),runIds:[]});
   });
 }
 
@@ -510,5 +487,21 @@ export async function manageArchivedTask(dir, {taskId, action, operationId, expe
     if(await safeFile(records[0]))await fs.unlink(records[0]);
     await atomic(journalFile,JSON.stringify({...identity,status:'completed',at:journal?.at||now()}));return{ok:true,taskId,action};
     });
+  });
+}
+
+// Project workflow is explicit agent communication, separate from execution.
+export async function setWorkflowState(dir,{taskId,requestId,state,actor='manager',runId=null}) {
+  identifier(taskId);identifier(requestId,'workflow request ID');text(state,'workflow state',400);
+  if(!['manager','worker'].includes(actor))throw new Error('Invalid workflow actor');
+  if(actor==='worker')text(runId,'bound worker run ID',160);
+  return updateTask(dir,taskId,task=>{
+    const history=task.workflowHistory ||= [];
+    const existing=history.find(event=>event.requestId===requestId&&event.actor===actor&&(actor==='manager'||event.runId===runId));
+    if(existing){if(existing.value!==state)throw new Error('Workflow request ID reused with changed content');return;}
+    if(actor==='worker'&&task.runId!==runId)throw new Error('Stale worker run');
+    const event={value:state,requestId,actor,runId:actor==='worker'?runId:task.runId||null,assignmentId:currentAssignment(task).id,at:now()};
+    history.push(event);task.workflowState={...event};
+    (task.history ||= []).push({id:`workflow:${actor}:${runId||'manager'}:${requestId}`,actor,kind:'workflow',message:`Project workflow: ${state}`,at:event.at,runId:event.runId,assignmentId:event.assignmentId});
   });
 }

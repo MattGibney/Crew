@@ -1,10 +1,10 @@
 import {workerAppServerFixture} from './helpers/worker-app-server-fixture.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';import path from 'node:path';import {tmpdir} from 'node:os';import {fileURLToPath,pathToFileURL} from 'node:url';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
-import {createController} from '../controller.mjs';import {createTask,readTask,updateTask,requestWorkerAction} from '../orchestration-store.mjs';
+import {createController} from '../controller.mjs';import {promptSnapshot} from '../prompt-settings.mjs';import {createTask,readTask,updateTask,requestWorkerAction} from '../orchestration-store.mjs';
 const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,label){const until=Date.now()+15000;while(Date.now()<until){const result=await fn();if(result)return result;await sleep(40);}throw new Error('Timed out '+label);}
-async function fixture(t,{environment={},timeoutMs=30000}={}){
+async function fixture(t,{environment={},timeoutMs=30000,getWorkerPrompt=null}={}){
  const dir=await mkdtemp(path.join(tmpdir(),'crew-cooperative-')),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'disposable fixture');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture']);
  const executable=path.join(dir,'fake-codex.mjs');await writeFile(executable,workerAppServerFixture(`#!${process.execPath}
 import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration-store.mjs')).href)};
@@ -14,7 +14,7 @@ process.on('SIGTERM',async()=>{await appendFile(state+'/'+id+'-signals','SIGTERM
 console.log(JSON.stringify({type:'thread.started',thread_id:thread}));await reportTask(state,id,run,{reportId:'progress',kind:'progress',message:'Worker running'});setInterval(()=>{},1000);
 `),{mode:0o700});
  let held=false;const project={id:'coop-project',mode:'repository',name:'Fixture',readiness:{ready:true},repositories:[{id:'repo',path:repo,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs,maxConcurrent:2,environment}};
- const controller=await createController({stateDir,sourceDir,executable,project,admissionHeld:async()=>held});const ids=[];
+ const controller=await createController({stateDir,sourceDir,executable,project,getWorkerPrompt,admissionHeld:async()=>held});const ids=[];
  const add=async(id,brief='cooperative')=>{ids.push(id);await createTask(stateDir,{requestId:id,ticket:'AI-018',brief,projectId:project.id,repositoryId:'repo'});await controller.tick();};
  const action=async(id,action,cooperative=false)=>{await requestWorkerAction(stateDir,{taskId:id,actionId:`${action}-${id}-${Date.now()}`,action,...(cooperative?{cooperative:true}:{})});await controller.tick();};
  t.after(async()=>{held=false;for(const id of ids){const task=await readTask(stateDir,id);await updateTask(stateDir,id,n=>{for(const r of n.lifecycleRequests||[])if(['pending','processing'].includes(r.status))r.status='failed';});if(task.harnessStarted&&!['paused','stopped','completed'].includes(task.status))await action(id,'stop').catch(()=>{});}await wait(async()=>{const tasks=await Promise.all(ids.map(id=>readTask(stateDir,id)));return tasks.every(task=>!task.harnessStarted||task.execution?.live===false);},'fixture cleanup').catch(()=>{});await controller.stop();await rm(dir,{recursive:true,force:true});});
@@ -33,10 +33,14 @@ test('concurrent workers cooperatively pause once and resume with their same cha
 
 test('held admission never launches queued tasks',async t=>{const f=await fixture(t);f.hold(true);await f.add('cooperative-queued');await sleep(350);let task=await readTask(f.stateDir,'cooperative-queued');assert.equal(task.status,'queued');assert.equal(task.worktree,undefined);f.hold(false);await f.controller.tick();await wait(async()=>(await readTask(f.stateDir,task.id)).threadId,'released queue');});
 
-test('cooperative pause during preparation finishes the current bounded phase and never spawns a late worker',async t=>{
- const f=await fixture(t,{environment:{bootstrap:{command:process.execPath,args:['-e',"setTimeout(()=>require('fs').writeFileSync('setup-finished','yes'),650)"],timeoutMs:3000}}});await f.add('cooperative-preparing');
- await wait(async()=>(await readTask(f.stateDir,'cooperative-preparing')).environment?.hooks[0]?.supervisorPid,'preparation');f.hold(true);await f.action('cooperative-preparing','pause',true);
- const task=await wait(async()=>{const n=await readTask(f.stateDir,'cooperative-preparing');return n.status==='paused'?n:null;},'preparation safe boundary');assert.equal(task.harnessStarted,false);assert.equal(task.spawnIntentAt,null);assert.equal(task.threadId,undefined);assert.equal(await readFile(path.join(task.worktree,'setup-finished'),'utf8'),'yes');assert.equal(task.environment.hooks[0].status,'succeeded');await sleep(300);assert.equal((await readTask(f.stateDir,task.id)).harnessStarted,false);
+test('cooperative pause during context preparation holds native spawn and runs no project setup',async t=>{
+ let release,entered;const ready=new Promise(resolve=>{entered=resolve;}),hold=new Promise(resolve=>{release=resolve;});
+ const f=await fixture(t,{getWorkerPrompt:async()=>{entered();await hold;return promptSnapshot('Disposable worker');},environment:{bootstrap:{command:process.execPath,args:['-e',"require('fs').writeFileSync('setup-finished','unexpected')"],timeoutMs:3000}}});
+ try{await f.add('cooperative-preparing');await ready;f.hold(true);await f.action('cooperative-preparing','pause',true);}finally{release();}
+ const task=await wait(async()=>{const n=await readTask(f.stateDir,'cooperative-preparing');return n.status==='paused'?n:null;},'native spawn pause boundary');
+ assert.equal(task.harnessStarted,false);assert.equal(task.spawnIntentAt,null);assert.equal(task.threadId,undefined);assert.equal(task.environment,undefined);assert.ok(task.worktree);await assert.rejects(readFile(path.join(task.worktree,'setup-finished')),{code:'ENOENT'});
+ await f.action(task.id,'resume');await sleep(250);assert.equal((await readTask(f.stateDir,task.id)).harnessStarted,false);f.hold(false);
+ const resumed=await wait(async()=>{const n=await readTask(f.stateDir,task.id);return n.threadId&&n.execution?.live?n:null;},'explicit released native start');assert.equal(resumed.worktree,task.worktree);
 });
 
 test('noncooperative worker remains live and blocking past its old timeout without force escalation',async t=>{
@@ -47,14 +51,13 @@ test('noncooperative worker remains live and blocking past its old timeout witho
 test('cooperative request correlation rejects a retry that silently changes pause semantics',async t=>{const f=await fixture(t);f.hold(true);await f.add('cooperative-correlation');const request={taskId:'cooperative-correlation',actionId:'cooperative-request',action:'pause',cooperative:true};await requestWorkerAction(f.stateDir,request);await assert.rejects(requestWorkerAction(f.stateDir,{...request,cooperative:false}),/changed content/);await assert.rejects(requestWorkerAction(f.stateDir,{...request,actionId:'cooperative-invalid',action:'stop'}),/only for pause/);});
 
 
-test('explicit controller shutdown exits held preparation after its current phase without releasing hold or launching a worker',async t=>{
- const f=await fixture(t,{environment:{bootstrap:{command:process.execPath,args:['-e',"setTimeout(()=>require('fs').writeFileSync('setup-finished','natural'),650)"],timeoutMs:10000}}});await f.add('cooperative-quitprep');
- await wait(async()=>(await readTask(f.stateDir,'cooperative-quitprep')).environment?.hooks[0]?.supervisorPid,'running preparation');f.hold(true);
- let shutdownTimer;try{await Promise.race([f.controller.stop(),new Promise((_,reject)=>{shutdownTimer=setTimeout(()=>reject(new Error('Held preparation deadlocked controller shutdown')),15000);})]);}finally{clearTimeout(shutdownTimer);}
- const task=await readTask(f.stateDir,'cooperative-quitprep');assert.equal(task.status,'paused');assert.equal(task.harnessStarted,false);assert.equal(task.spawnIntentAt,null);assert.equal(task.threadId,undefined);assert.equal(task.preparationPause.reason,'controller-shutdown');assert.equal(f.held,true);assert.equal(task.environment.hooks[0].status,'succeeded');assert.equal(await readFile(path.join(task.worktree,'setup-finished'),'utf8'),'natural');
+test('controller shutdown during context preparation preserves held intent without a late native spawn',async t=>{
+ let release,entered;const ready=new Promise(resolve=>{entered=resolve;}),hold=new Promise(resolve=>{release=resolve;});
+ const f=await fixture(t,{getWorkerPrompt:async()=>{entered();await hold;return promptSnapshot('Disposable worker');},environment:{bootstrap:{command:process.execPath,args:['-e',"require('fs').writeFileSync('setup-finished','unexpected')"],timeoutMs:3000}}});
+ await f.add('cooperative-quitprep');await ready;f.hold(true);const shutdown=f.controller.stop();release();await shutdown;
+ const task=await readTask(f.stateDir,'cooperative-quitprep');assert.equal(task.status,'queued');assert.equal(task.harnessStarted,false);assert.equal(task.spawnIntentAt,null);assert.equal(task.threadId,undefined);assert.equal(f.held,true);assert.equal(task.environment,undefined);assert.ok(task.worktree);await assert.rejects(readFile(path.join(task.worktree,'setup-finished')),{code:'ENOENT'});
  await f.add('cooperative-afterquit');await sleep(150);assert.equal((await readTask(f.stateDir,'cooperative-afterquit')).status,'queued');assert.equal((await readTask(f.stateDir,'cooperative-afterquit')).worktree,undefined);
 });
-
 
 test('a queued never-launched task pauses and resumes without a nonexistent question',async t=>{
  const f=await fixture(t);f.hold(true);await f.add('cooperative-neverlaunch');await f.action('cooperative-neverlaunch','pause',true);

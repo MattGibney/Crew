@@ -18,7 +18,7 @@ Tests for this foundation should check no microphone request on mount; stored vo
 
 ## Project instruction settings (GitHub #3)
 
-`Settings` edits the complete Crew manager and worker behavior for this project. Runtime/tool protocol context remains outside the editor, and provider rules still apply. Defaults are initially visible; Reset stages the full default text and still requires Save. Saving manager instructions does not activate them: the saved and active versions remain visible until an explicit manager restart. Worker saves apply to new worker launches; retained workers keep immutable snapshots.
+`Settings` edits the complete Crew manager and worker behavior for this project. Runtime/tool protocol context remains outside the editor, and provider rules still apply. Defaults are initially visible; Reset stages the full default text and still requires Save. Saving manager instructions does not activate them: the saved and active versions remain visible until an explicit manager restart. Worker saves apply to the next direction or launch; original run snapshots remain factual history.
 
 The settings view and conversation remain mounted while switching views, preserving both prompt and chat drafts. Optimistic version checks reject stale saves without losing text. A newer edit made while Save is in flight is retained and rebased to the confirmed saved version. No settings action requests microphone access. Stop and Restart dispose browser media before their backend lifecycle request; Start refreshes the voice catalog but never connects voice. Lifecycle errors and incomplete transitions remain visible, and approval answers stay available so the user can resolve a blocked stop.
 

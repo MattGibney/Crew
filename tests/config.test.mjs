@@ -31,7 +31,10 @@ test('default is one fixture project with no registry or business worker and iso
   assert.equal(value.managerStatePath, join(fixture.root, '.data', 'manager-chat.json'));
   assert.equal(value.serverStatePath, join(fixture.root, '.data', 'server.json'));
   assert.equal(value.configPath, null); assert.equal(value.legacyState, false);
-  assert.match(value.managerPrompt, /sole conversational contact/); assert.match(value.workerPrompt, /do not commit/i);
+  assert.match(value.managerPrompt, /sole conversational contact/);
+  assert.match(value.workerPrompt,/Native Codex configuration and its normal approvals govern execution/);
+  assert.match(value.workerPrompt,/requested development and delivery work/);
+  assert.doesNotMatch(value.workerPrompt,/do not commit|even if the brief requests|do not.*open PRs/i);
 });
 test('legacy state remains only for absent local configuration and fixture', async () => {
   const fixture = await setup();

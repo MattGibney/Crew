@@ -2,11 +2,12 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, Clock3, FolderGit2, Hand, Layers, LoaderCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { workspaceWorkers, currentAssignment, queuedAssignments, formatElapsed, groupWorkers, pendingAttention, workerProgress, workerStatus, workerTiming } from './worker-model.js';
+import { workspaceWorkers, currentAssignment, queuedAssignments, formatElapsed, groupWorkers, pendingAttention, workerProgress, workerWorkflow, workerStatus, workerTiming } from './worker-model.js';
 
 export function WorkerStatus({ task }) {
   const tone = ['failed', 'blocked'].includes(task.status) ? 'border-destructive/25 bg-destructive/10 text-destructive' : ['awaiting_answer', 'paused'].includes(task.status) || pendingAttention(task).length ? 'border-chart-4/35 bg-chart-4/10 text-foreground' : task.status === 'completed' ? 'border-chart-2/30 bg-chart-2/10 text-foreground' : ['running', 'launching', 'verifying'].includes(task.status) ? 'border-primary/20 bg-primary/10 text-primary' : 'border-border bg-muted text-muted-foreground';
-  return <Badge variant="outline" className={`shrink-0 gap-1.5 text-[10px] ${tone}`}><span className="size-1.5 rounded-full bg-current" aria-hidden="true" />{task.pendingApprovalCount ? 'Needs approval' : workerStatus(task)}</Badge>;
+  const workflow = workerWorkflow(task);
+  return <>{workflow && <Badge variant="outline" aria-label={`Workflow: ${workflow}`} title={workflow} className="max-w-64 text-[10px]"><span className="truncate">{workflow}</span></Badge>}<Badge variant="outline" aria-label={`Execution: ${workerStatus(task)}`} className={`shrink-0 gap-1.5 text-[10px] ${tone}`}><span className="size-1.5 rounded-full bg-current" aria-hidden="true" />{workerStatus(task)}</Badge>{task.pendingApprovalCount > 0 && <Badge variant="outline" aria-label="Native approval needed" className="shrink-0 text-[10px]">Needs approval</Badge>}</>;
 }
 function WorkerCard({ task, now, onSelect, compact }) {
   const timing = workerTiming(task, now), attention = pendingAttention(task);

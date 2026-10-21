@@ -43,7 +43,7 @@ try{
  const plan={schemaVersion:1,sources:[source],env:{PATH:'/exact/tools:/usr/bin'},networkAccess:false};
  for(const phase of ['setup','start','resume','ready','stop','teardown'])plan[phase]={command:`echo '${phase} script'`,source,timeoutMs:600000};
  await context.request.post(origin+'/__control',{data:{workerEnvironment:{executionPlan:plan}}});await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByRole('button',{name:'Worker environment',exact:true}).click();await form.getByRole('button',{name:'Update',exact:true}).click();
- for(const label of ['Set up once','Start','Resume','Check readiness','Stop','Tear down']){await form.getByRole('textbox',{name:`${label} shell script`,exact:true}).fill(`printf '%s\\n' '${label}'\n# exact multiline`);await form.getByRole('spinbutton',{name:`${label} timeout (milliseconds)`,exact:true}).fill('45678');}
+ for(const label of ['Set up','Start','Resume','Check readiness','Stop','Tear down']){await form.getByRole('textbox',{name:`${label} shell script`,exact:true}).fill(`printf '%s\\n' '${label}'\n# exact multiline`);await form.getByRole('spinbutton',{name:`${label} timeout (milliseconds)`,exact:true}).fill('45678');}
  await page.getByRole('region',{name:'Settings',exact:true}).evaluate(el=>el.scrollTop=0);
  await page.screenshot({path:path.join(output,'project-plan-editor.png'),fullPage:true});
  await form.getByRole('button',{name:'Save environment',exact:true}).click();await form.getByRole('button',{name:'Update',exact:true}).waitFor();

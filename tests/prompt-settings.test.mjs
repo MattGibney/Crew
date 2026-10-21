@@ -47,13 +47,13 @@ test('custom behavior fully replaces Crew defaults in actual instruction builder
   assert.ok(manager.startsWith('MANAGER_REPLACEMENT\n'));
   assert.doesNotMatch(manager, /technical lead|Be concise|spoken progress|Invariant manager role|Never choose backlog/);
   assert.match(manager, /Crew runtime context/); assert.match(manager, /exact question\/run/);
-  const worker = buildWorkerInstructions({ workerPrompt: 'WORKER_REPLACEMENT', project: { id: 'example' }, taskId: 'example-task', runId: 'run', sandbox: 'workspace-write', brief: 'Implement agreed scope' });
+  const worker = buildWorkerInstructions({ workerPrompt: 'WORKER_REPLACEMENT', project: { id: 'example' }, taskId: 'example-task', runId: 'run', worktree:'/retained/worktree', sandbox: 'workspace-write', brief: 'Implement agreed scope' });
   assert.ok(worker.startsWith('WORKER_REPLACEMENT\n'));
   assert.doesNotMatch(worker, /You are the ONE|Give one useful progress|Investigate whether|Inspect actual files|technical lead/);
   assert.match(worker, /local_orchestration.report/); assert.match(worker, /workspace|worktree/);
-  assert.match(worker,/effective Codex configuration controls sandbox and approval/);
+  assert.match(worker,/effective native Codex configuration and its normal sandbox and approval/);
   assert.doesNotMatch(worker,/Read-only sandbox/);
-  assert.match(buildWorkerInstructions({project:{mode:'fixture'},sandbox:'workspace-write'}),/Read-only fixture/);
+  assert.match(buildWorkerInstructions({project:{mode:'fixture'},sandbox:'workspace-write'}),/native read-only sandbox/);
   assert.equal(promptVersion('same'), promptVersion('same'));
 });
 
@@ -95,4 +95,17 @@ test('concurrent store saves serialize version checks and abandoned atomic files
   assert.equal(updated.manager.text, 'Saved after restart');
   assert.equal(await readFile(abandoned, 'utf8'), '{"incomplete"');
   assert.deepEqual((await readdir(directory)).sort(), ['example.json', 'example.json.00000000-abandoned.tmp', 'example.json.lock']);
+});
+
+test('runtime protocol names explicit workflow and environment context without forcing report termination',()=>{
+ const worker=buildWorkerInstructions({workerPrompt:'Project behavior',project:{id:'example'},taskId:'worker-test',runId:'run-test',brief:'Continue implementation'});
+ assert.match(worker,/set_workflow_state/);assert.match(worker,/get_project_environment/);assert.match(worker,/Reports are messages/);assert.doesNotMatch(worker,/END after reporting|END and wait|must.*commit|never.*pull request/i);
+ const manager=buildManagerInstructions({managerPrompt:'Project manager behavior',project:{id:'example'}});assert.match(manager,/set_workflow_state/);assert.match(manager,/does not run setup, Start or readiness/);
+});
+
+test('default manager owns ordinary delegation and supervision while cleanup and native approvals remain explicit',async()=>{
+ const manager=await readFile(new URL('../prompts/manager.md',import.meta.url),'utf8'),worker=await readFile(new URL('../prompts/worker.md',import.meta.url),'utf8');
+ assert.match(manager,/Own delegation, supervision/);assert.match(manager,/ordinary delegation, start and resume do not need a separate human lifecycle instruction/);assert.match(manager,/Destructive teardown, archive cleanup/);
+ assert.doesNotMatch(manager,/only for the user's requested lifecycle action|Before repository dispatch.*verify|If project readiness is false/);
+ assert.doesNotMatch(worker,/even if the brief requests|do not commit, push|end your turn; resume only/);assert.match(worker,/set_workflow_state/);assert.match(worker,/normal native tools and approvals/);
 });

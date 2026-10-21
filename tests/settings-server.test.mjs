@@ -395,67 +395,59 @@ test('chunked worker environment HTTP preserves UTF-8 commands and arguments spl
 });
 
 
-test('HTTP configuration fix survives restart and explicitly retries failed bootstrap in the same retained worker', async t => {
-  const f = await fixture(t); await f.start();
-  const phaseFile = '.crew-http-partial.json';
-  const initialScript = `require('node:fs').writeFileSync(${JSON.stringify(phaseFile)}, JSON.stringify({seeds:1,partial:true}));process.exit(17)`;
-  const initialEnvironment = {bootstrap:{command:process.execPath,args:['-e',initialScript],timeoutMs:5000}};
-  const before = (await f.request('/api/settings',{method:'GET'})).value;
-  const initialSaved = await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:before.workerEnvironment.revision,environment:initialEnvironment}});
-  assert.equal(initialSaved.status,200,JSON.stringify(initialSaved.value));
-  const taskId='http-lifecycle-retry';
-  await createTask(f.stateDir,{requestId:taskId,ticket:'GH-45',brief:'Disposable synthetic lifecycle acceptance only.',projectId:'http-settings-fixture'});
-  async function waitTask(predicate, description) {
-    const until=Date.now()+25000;let task;
-    while(Date.now()<until) {
-      task=await readTask(f.stateDir,taskId);
-      if(await predicate(task)) return task;
-      await delay(40);
-    }
+test('HTTP command edits survive restart as agent context without automatic bootstrap or retry', async t => {
+  const f=await fixture(t);await f.start();
+  const phaseFile='.crew-http-partial.json';
+  const initialScript=`require('node:fs').writeFileSync(${JSON.stringify(phaseFile)},JSON.stringify({seeds:1,partial:true}));process.exit(17)`;
+  const initialEnvironment={bootstrap:{command:process.execPath,args:['-e',initialScript],timeoutMs:5000}};
+  const before=(await f.request('/api/settings',{method:'GET'})).value;
+  const saved=await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:before.workerEnvironment.revision,environment:initialEnvironment}});
+  assert.equal(saved.status,200,JSON.stringify(saved.value));
+  const taskId='http-agent-environment';
+  await createTask(f.stateDir,{requestId:taskId,ticket:'GH-50',brief:'Inspect agent-owned command context in this disposable fixture.',projectId:'http-settings-fixture'});
+  async function waitTask(predicate,description){
+    const until=Date.now()+15000;let task;
+    while(Date.now()<until){task=await readTask(f.stateDir,taskId);if(await predicate(task))return task;await delay(40);}
     throw new Error(description+': '+JSON.stringify({status:task?.status,failure:task?.failure,harnessStarted:task?.harnessStarted,lifecycleRequests:task?.lifecycleRequests}));
   }
-  const failed=await waitTask(task=>task.status==='failed'&&task.environment?.hooks?.some(h=>h.phase==='bootstrap'&&h.status==='failed'),'Initial bootstrap did not fail');
-  assert.equal(failed.harnessStarted,false);
-  const failedAttempt=failed.environment.hooks.find(h=>h.phase==='bootstrap');
-  assert.equal(failedAttempt.exitCode,17);
-  assert.deepEqual(JSON.parse(await readFile(join(failed.worktree,phaseFile),'utf8')),{seeds:1,partial:true});
-  const correctedScript = `const fs=require('node:fs');const state=JSON.parse(fs.readFileSync(${JSON.stringify(phaseFile)},'utf8'));if(state.seeds!==1||!state.partial)process.exit(31);state.repaired=true;fs.writeFileSync(${JSON.stringify(phaseFile)},JSON.stringify(state))`;
+  const nativeEnded=async task=>{if(!task.threadId||!task.runDir)return false;try{const exit=JSON.parse(await readFile(join(task.runDir,'exit.json'),'utf8'));return exit.runId===task.runId&&(exit.connectionClosed===true||exit.stopConfirmed===true);}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+  async function environmentContext(task){
+    const child=spawn(process.execPath,[join(root,'orchestration-mcp.mjs'),f.stateDir,'worker',taskId,task.runId],{stdio:['pipe','pipe','pipe']});let output='',errors='';
+    child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>errors+=chunk);
+    child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'get_project_environment',arguments:{}}})+'\n');
+    assert.equal(await new Promise(resolve=>child.on('close',resolve)),0,errors);
+    const result=JSON.parse(output).result;assert.ok(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);
+  }
+  const first=await waitTask(nativeEnded,'Initial native connection did not finish');
+  assert.equal(first.harnessStarted,true,'Native execution is not conditional on bootstrap success');
+  assert.equal(first.environment?.hooks?.length||0,0,'Crew creates no automatic bootstrap attempt');
+  await assert.rejects(readFile(join(first.worktree,phaseFile),'utf8'),{code:'ENOENT'});
+  assert.deepEqual((await environmentContext(first)).configuredEnvironment,initialEnvironment);
+  const firstConfig=JSON.parse(await readFile(join(first.runDir,'config.json'),'utf8'));
+  assert.deepEqual(firstConfig.project.worker.environment,initialEnvironment);
+  // Fixture-owned partial state proves subsequent command edits do not replay
+  // commands or reset retained work. The configured repair would modify it.
+  await writeFile(join(first.worktree,phaseFile),JSON.stringify({seeds:1,partial:true}));
+  const correctedScript=`const fs=require('node:fs');const state=JSON.parse(fs.readFileSync(${JSON.stringify(phaseFile)},'utf8'));state.repaired=true;fs.writeFileSync(${JSON.stringify(phaseFile)},JSON.stringify(state))`;
   const correctedEnvironment={bootstrap:{command:process.execPath,args:['-e',correctedScript],timeoutMs:5000}};
-  const fixed=await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:initialSaved.value.workerEnvironment.revision,environment:correctedEnvironment}});
+  const fixed=await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:saved.value.workerEnvironment.revision,environment:correctedEnvironment}});
   assert.equal(fixed.status,200,JSON.stringify(fixed.value));
-  assert.deepEqual((await readTask(f.stateDir,taskId)).environment,failed.environment,'Save does not execute or rewrite retained attempt evidence');
-  assert.deepEqual(await f.calls(),[],'Failed lifecycle and settings do not dispatch a native turn');
   await f.stop();await f.start();
   assert.deepEqual((await f.request('/api/settings',{method:'GET'})).value.workerEnvironment.environment,correctedEnvironment);
-  const retained=await readTask(f.stateDir,taskId);
-  assert.equal(retained.runId,failed.runId);
-  assert.equal(retained.worktree,failed.worktree);
-  const action={taskId,actionId:'http-explicit-setup-retry',action:'retry_setup',expectedRunId:failed.runId};
+  const retained=await readTask(f.stateDir,taskId);assert.equal(retained.runId,first.runId);assert.equal(retained.worktree,first.worktree);assert.equal(retained.threadId,first.threadId);
+  const turnsBefore=(await f.calls()).filter(call=>call.method==='turn/start').length;
+  const action={taskId,actionId:'http-obsolete-setup-retry',action:'retry_setup',expectedRunId:first.runId};
   await requestWorkerAction(f.stateDir,action);
-  const retried=await waitTask(async task=> {
-    if(!task.harnessStarted||!task.runDir||!['failed','completed','stopped'].includes(task.status))return false;
-    let exit;try{exit=JSON.parse(await readFile(join(task.runDir,'exit.json'),'utf8'));}catch(error){if(error.code==='ENOENT')return false;throw error;}
-    return exit.runId===task.runId&&exit.stopConfirmed===true&&task.environment?.hooks?.some(h=>h.phase==='bootstrap'&&h.status==='succeeded');
-  },'Corrected bootstrap and synthetic worker did not reach confirmed terminal exit');
-  assert.equal(retried.worktree,failed.worktree);
-  assert.equal(retried.environment.id,failed.environment.id);
-  assert.notEqual(retried.runId,failed.runId);
-  const attempts=retried.environment.hooks.filter(h=>h.phase==='bootstrap');
-  assert.equal(attempts.length,2);
-  assert.deepEqual(attempts[0],failedAttempt);
-  assert.equal(attempts[1].status,'succeeded');
-  assert.equal(attempts[1].exitCode,0);
-  assert.deepEqual(attempts[1].args,correctedEnvironment.bootstrap.args);
-  assert.equal(retried.environment.setupRetryHistory[0].requestId,action.actionId);
-  assert.deepEqual(JSON.parse(await readFile(join(retried.worktree,phaseFile),'utf8')),{seeds:1,partial:true,repaired:true});
-  await requestWorkerAction(f.stateDir,action); // Exact duplicate is idempotent after the run advanced.
-  assert.equal((await readTask(f.stateDir,taskId)).environment.hooks.filter(h=>h.phase==='bootstrap').length,2);
-  const calls=await f.calls();
-  assert.equal(calls.some(call=>call.method==='turn/start'),true,'The synthetic provider executes only after explicit retry and successful bootstrap');
-  assert.equal(calls.some(call=>call.method==='thread/realtime/start'),false);
-  // This provider emits no durable task result: lifecycle success is the
-  // supported claim, independently of the later synthetic task outcome.
-  const exit=JSON.parse(await readFile(join(retried.runDir,'exit.json'),'utf8'));
-  assert.equal(exit.stopConfirmed,true);
-  await f.stop(); // Also waits for the detached runner PID to disappear.
+  const refused=await waitTask(task=>task.lifecycleRequests?.some(item=>item.id===action.actionId&&item.status==='failed'),'Obsolete retry did not explain the agent command path');
+  assert.match(refused.lifecycleRequests.find(item=>item.id===action.actionId).error,/agent-initiated.*get_project_environment.*native tools/);
+  assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,turnsBefore);
+  const {requestWorkerFollowup}=await import('../orchestration-store.mjs');
+  await requestWorkerFollowup(f.stateDir,{taskId,requestId:'http-new-agent-direction',brief:'Continue in the same working context with the latest configured commands.'});
+  const next=await waitTask(async task=>task.runId!==first.runId&&await nativeEnded(task),'Retained native continuation did not finish');
+  assert.equal(next.worktree,first.worktree);assert.equal(next.threadId,first.threadId);assert.equal(next.environment?.hooks?.length||0,0);
+  assert.deepEqual((await environmentContext(next)).configuredEnvironment,correctedEnvironment);
+  assert.deepEqual(JSON.parse(await readFile(join(first.worktree,phaseFile),'utf8')),{seeds:1,partial:true});
+  assert.deepEqual(JSON.parse(await readFile(join(first.runDir,'config.json'),'utf8')),firstConfig,'Earlier native command context remains historical evidence');
+  const calls=await f.calls();assert.ok(calls.some(call=>call.method==='thread/resume'&&call.params.threadId===first.threadId));assert.equal(calls.some(call=>call.method==='thread/realtime/start'),false);
+  await f.stop();
 });

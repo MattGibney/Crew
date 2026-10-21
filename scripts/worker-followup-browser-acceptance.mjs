@@ -1,4 +1,4 @@
-// GitHub #42: repeatable real-renderer acceptance with synthetic backend/media only.
+// GitHub #50: repeatable real-renderer acceptance with synthetic backend/media only.
 // Build first. Set CREW_PLAYWRIGHT_MODULE if playwright-core is outside node_modules.
 // Optional CREW_BROWSER_EXECUTABLE selects an installed Chromium-family browser.
 import assert from 'node:assert/strict';
@@ -38,6 +38,8 @@ try {
   retained.currentAssignmentId = 'implementation';
   retained.status = 'running';
   retained.progress = 'Implementing the approved follow-up';
+  retained.workflowState = { value: 'Awaiting client feedback', requestId: 'workflow-feedback', actor: 'worker', runId: retained.runId, assignmentId: 'implementation', at: new Date().toISOString() };
+  retained.workflowHistory = [retained.workflowState];
   retained.assignments = [
     { id: 'initial', ticket: retained.ticket, brief: 'Research the fixture', status: 'completed', result: { message: 'Original research result retained' }, runIds: ['research-run'] },
     { id: 'implementation', ticket: retained.ticket, brief: 'Implement the approved fixture change', status: 'active', runIds: [retained.runId] },
@@ -51,32 +53,49 @@ try {
   await page.getByRole('button', { name: 'Connect voice', exact: true }).click();
   await page.waitForFunction(() => window.__crewMedia.tracks.some(t => t.readyState === 'live'));
   const connected = await media();
+  await post({ work: { activeTurnId: 'busy-manager-turn', status: 'working' } });
+  await page.getByRole('tab', { name: 'Text', exact: true }).click();
+  await page.getByRole('textbox', { name: 'Message your manager', exact: true }).fill('Send this new direction while you are working');
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
+  const typedProof = (await (await context.request.get(`${origin}/__proof`)).json()).calls;
+  assert.ok(typedProof.some(call => call.name === 'work' && call.body.text === 'Send this new direction while you are working'), 'Typed direction stays available during manager activity');
+  await post({ work: { activeTurnId: null, status: 'idle' } });
   await page.locator('[data-worker-id="fixture-task-7"]').click();
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('heading', { name: 'Queued follow-ups (1)', exact: true }).waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Workflow: Awaiting client feedback', { exact: true }).first().waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Execution: Working', { exact: true }).first().waitFor();
   const history = page.getByRole('region', { name: 'Assignment history' });
   await history.locator('summary').click();
   await history.getByText('Original research result retained', { exact: true }).waitFor();
   await page.getByRole('tabpanel', { name: 'Overview' }).getByText('Implementing the approved follow-up', { exact: true }).waitFor();
-  await page.screenshot({ path: path.join(output, 'retained-followup-overview.png'), fullPage: true });
-  await page.getByRole('button', { name: 'Discuss follow-up', exact: true }).click();
-  const requests = (await (await context.request.get(`${origin}/__proof`)).json()).calls;
-  const discussion = requests.find(call => call.name === 'work' && call.body.text.startsWith('CREW_WORKER_FOLLOWUP_REVIEW'));
-  assert.match(discussion.body.text, /"expectedAssignmentId":"implementation"/);
-  assert.match(discussion.body.text, /does not authorize execution/);
-  assert.deepEqual(await media(), connected, 'Discuss follow-up preserves the same synthetic call');
   retained.status = 'completed';
-  retained.assignments[1].status = 'completed';
-  retained.assignments[1].result = { message: 'Implementation finished; retained result' };
-  retained.followupWait = 'Waiting for explicit resume after reopening';
+  retained.result = { message: 'Native turn ended; this is not workflow completion' };
   await post({ orchestration: state });
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Execution: Turn ended', { exact: true }).first().waitFor();
+  assert.equal(retained.workflowState.value, 'Awaiting client feedback');
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Workflow: Awaiting client feedback', { exact: true }).first().waitFor();
+  retained.workflowState = { ...retained.workflowState, value: 'Ready for product review', actor: 'manager', requestId: 'workflow-ready', at: new Date().toISOString() };
+  retained.workflowHistory.push(retained.workflowState);
+  await post({ orchestration: state });
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Workflow: Ready for product review', { exact: true }).first().waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Execution: Turn ended', { exact: true }).first().waitFor();
+  await page.screenshot({ path: path.join(output, 'retained-followup-overview.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Send direction', exact: true }).click();
+  const requests = (await (await context.request.get(`${origin}/__proof`)).json()).calls;
+  const discussion = requests.find(call => call.name === 'work' && call.body.text.startsWith('CREW_WORKER_DIRECTION'));
+  assert.ok(discussion, 'Send direction creates a manager direction');
+  assert.match(discussion.body.text, /"taskId":"fixture-task-7"/);
+  assert.doesNotMatch(discussion.body.text, /review_worker_followup|approve_worker_followup|does not authorize execution|explicit scope authorization/i);
+  assert.deepEqual(await media(), connected, 'Send direction preserves the same synthetic call');
   await page.locator('[data-worker-id="fixture-task-7"]').click();
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
-  await page.getByRole('region', { name: 'Queued assignments' }).getByText(retained.followupWait, { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Resume', exact: true }).click();
-  const heldProof = (await (await context.request.get(`${origin}/__proof`)).json()).calls;
-  assert.ok(heldProof.some(call => call.name === 'work' && call.body.text.includes('CREW_WORKER_ACTION') && call.body.text.includes('"action":"resume"')), 'Held follow-up resume goes through the manager');
-  assert.deepEqual(await media(), connected, 'Explicit resume request preserves the synthetic call');
+  retained.workflowState = { ...retained.workflowState, value: 'Awaiting product and accessibility review of the retained implementation before confirming business readiness' };
+  await post({ orchestration: state });
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel(`Workflow: ${retained.workflowState.value}`, { exact: true }).first().waitFor();
+  await page.setViewportSize({ width: 740, height: 900 });
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Workflow and execution states fit narrow detail');
+  await page.screenshot({ path: path.join(output, 'workflow-direction-narrow.png'), fullPage: true });
   assert.equal(errors.length, 0, errors.join('\n'));
-  console.log(JSON.stringify({ pass: true, output, syntheticMediaOnly: true, currentAssignmentVisible: true, queuedFollowupVisible: true, assignmentHistoryVisible: true, managerOnlyDiscussion: true, heldFollowupRecovery: true }));
+  console.log(JSON.stringify({ pass: true, output, syntheticMediaOnly: true, currentAssignmentVisible: true, queuedFollowupVisible: true, assignmentHistoryVisible: true, managerDirectionWithoutReview: true, typedBusyManagerInput: true, explicitWorkflowSeparateFromExecution: true }));
 } finally { await cleanup(); }

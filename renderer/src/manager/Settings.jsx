@@ -235,7 +235,7 @@ function PromptEditor({ role, data, manager, onNotify }) {
       const saved = await manager.savePrompt(role, submitted, baseVersion);
       if (draftRef.current === submitted) { setDraft(null); setBaseVersion(null); setEditing(false); }
       else setBaseVersion(saved[role].saved.version);
-      onNotify(draftRef.current !== submitted ? 'Instructions saved. Your newer edits are still unsaved.' : managerRole ? 'Instructions saved.' : 'Worker instructions saved for new workers.');
+      onNotify(draftRef.current !== submitted ? 'Instructions saved. Your newer edits are still unsaved.' : managerRole ? 'Instructions saved.' : 'Worker instructions saved for the next direction or launch.');
     } catch (error) { setError(error.message); }
     finally { setSaving(false); }
   };
@@ -261,7 +261,7 @@ function PromptEditor({ role, data, manager, onNotify }) {
           'When to raise a question or blocker with the manager.',
         ]).map(item => <li key={item}>{item}</li>)}</ul><p className="mt-2">Keep these instructions reusable. Put individual tasks and changing requirements in the manager conversation.</p></div>
         <div><h3 className="font-medium text-foreground">Example</h3><blockquote className="mt-2 border-l-2 border-primary/30 pl-3 text-foreground">{managerRole ? 'Keep updates concise and use plain language. Explain the options before recommending a direction. Ask me about unclear priorities, and distinguish verified results from assumptions.' : 'Follow the project’s existing conventions. Check the agreed behaviour, record what was verified and describe any remaining limitations. Raise unclear requirements with the manager before changing scope.'}</blockquote></div>
-        <div><h3 className="font-medium text-foreground">How it’s used</h3><p className="mt-1">{managerRole ? 'This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately.' : 'This text replaces Crew’s default worker instructions for this project. Saved changes apply to newly launched workers; existing workers keep the instructions they started with.'}</p><p className="mt-2">Crew still supplies project and task context. These instructions don’t change Codex permissions or approval requirements.</p></div>
+        <div><h3 className="font-medium text-foreground">How it’s used</h3><p className="mt-1">{managerRole ? 'This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately.' : 'This text replaces Crew’s default worker instructions for this project. Saved changes apply on the next worker direction or launch. Earlier run instructions remain in history.'}</p><p className="mt-2">Crew still supplies project and task context. These instructions don’t change Codex permissions or approval requirements.</p></div>
       </div>
     </details>
     {stale && <Alert className="mt-3" role="alert"><AlertDescription>The saved version changed while you were editing. Your draft is preserved. Copy it before cancelling to load the latest saved instructions.</AlertDescription></Alert>}
@@ -289,7 +289,7 @@ export function Settings({ manager }) {
     { id: 'sessions', label: 'Sessions', icon: Radio, description: 'Manage the live manager session for this project.' },
     { id: 'manager', label: 'Manager profile', icon: UserRound, description: 'Customize your AI manager’s name, picture, personality, voice and instructions.' },
     { id: 'environment', label: 'Worker environment', icon: SlidersHorizontal, description: 'Manage lifecycle commands used in worker worktrees.' },
-    { id: 'worker', label: 'Worker profile', icon: Users, description: 'Set the instructions for newly launched workers.' },
+    { id: 'worker', label: 'Worker profile', icon: Users, description: 'Set the instructions used for worker directions and launches.' },
   ];
   const current = pages.find(item => item.id === page);
   return <section ref={content} aria-label="Settings" className="min-h-0 flex-1 overflow-y-auto px-5 py-10 sm:px-10">
