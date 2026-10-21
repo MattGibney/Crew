@@ -21,9 +21,10 @@ export async function reconcileEnvironment({stateDir,taskId,stop=false}){
  if(pending){environment.pending=true;await save(file,environment);return environment;}
  environment.pending=false;await save(file,environment);return environment;
 }
-export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},phases,existing=null,signal,onEvidence=async()=>{}}){
+export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},phases,existing=null,toolchain=null,env=process.env,signal,onEvidence=async()=>{}}){
  const file=environmentFile(stateDir,taskId),prior=await reconcileEnvironment({stateDir,taskId});if(prior?.pending)throw new Error('An earlier environment command has not confirmed it stopped. Wait for its bounded supervisor, then retry. No environment was removed or restarted.');
  const environment=prior||existing||{id:`crew-${taskId}-${randomUUID().slice(0,8)}`,taskId,worktree,createdAt:now(),status:'not-configured',hooks:[]};
+ if(toolchain)environment.toolchain=toolchain;
  if(environment.taskId!==taskId||environment.worktree!==worktree)throw new Error('Environment ownership does not match this worker.');
  for(const phase of phases){
   const hook=hooks[phase];if(!hook)continue;if(signal?.aborted)throw new Error('Worker environment preparation canceled.');
@@ -32,7 +33,7 @@ export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},pha
   const evidence={id,phase,runDir,status:'running',startedAt:now(),command:hook.command,args:hook.args,timeoutMs:hook.timeoutMs};environment.status=phase==='cleanup'?'cleaning':'preparing';environment.hooks.push(evidence);await save(file,environment);await onEvidence(environment);
   const config={...hook,id,taskId,worktree,environmentId:environment.id};await save(path.join(runDir,'config.json'),config);
   let spawnError=null,closed=false;
-  const child=spawn(process.execPath,[fileURLToPath(new URL('./environment-runner.mjs',import.meta.url)),path.join(runDir,'config.json')],{detached:true,stdio:'ignore',env:process.env});
+  const child=spawn(process.execPath,[fileURLToPath(new URL('./environment-runner.mjs',import.meta.url)),path.join(runDir,'config.json')],{detached:true,stdio:'ignore',env});
   child.once('error',error=>{spawnError=error.code||'spawn failed';closed=true;});child.once('exit',()=>{closed=true;});child.unref();evidence.supervisorPid=child.pid||null;
   const abort=()=>{void save(path.join(runDir,'control.json'),{id,action:'stop',at:now()}).catch(()=>{});};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   try{

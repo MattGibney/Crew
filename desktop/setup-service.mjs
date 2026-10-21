@@ -1,3 +1,5 @@
+import {discoverProjectExecutionPlan} from '../project-execution-plan.mjs';
+import {resolveManagedToolchain} from '../managed-toolchain.mjs';
 // Bounded local runtime/account checks. Linear reads live separately in project-options.mjs.
 import { readFile, writeFile, rename, unlink, mkdir, access, stat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -42,7 +44,18 @@ export async function checkLocalRuntime({ root, configPath, env }) {
   catch (error) { checks.codex = { status:'unavailable', detail:safeError(error) }; }
   try { const r = await run('git', ['--version'], { env, timeout:10000, maxBuffer:65536 }); checks.git = { status:'verified', detail:r.stdout.trim() }; }
   catch { checks.git = { status:'unavailable', detail:'Install Git or the macOS Command Line Tools, then retry. Git must be on PATH.' }; }
-  try { const loaded = await loadAppConfig({ root, configPath, env, checkRuntime:false }); checks.project = { status:loaded.project.readiness.ready ? 'configured' : 'incomplete', detail:loaded.project.readiness.issues.join(' ') || 'Local project paths, refs and prompt files are configured. External ticket access has not been proven.', mode:loaded.project.mode }; }
+  try { const loaded = await loadAppConfig({ root, configPath, env, checkRuntime:false }); checks.project = { status:loaded.project.readiness.ready ? 'configured' : 'incomplete', detail:loaded.project.readiness.issues.join(' ') || 'Local project paths, refs and prompt files are configured. External ticket access has not been proven.', mode:loaded.project.mode };
+    if(loaded.project.mode==='repository') {
+      for(const repo of loaded.project.repositories) {
+        try {
+          const found=await discoverProjectExecutionPlan({path:repo.path,ref:repo.baseRef,env});
+          if(found.toolchainError)throw new Error(found.toolchainError);
+          const tools=await resolveManagedToolchain({requirements:found.toolchain,env,install:false});
+          checks[`toolchain_${repo.id}`]={status:'verified',detail:tools.nodeVersion?`Managed Node ${tools.nodeVersion}, npm ${tools.npmVersion}. Project commands have not run.`:'No Node/npm requirement declared; system utilities only.'};
+        } catch(error){checks[`toolchain_${repo.id}`]={status:'unavailable',detail:safeError(error)+' Required managed tools install on first authorized worker launch, before project setup.'};}
+      }
+    }
+  }
   catch (error) { checks.project = { status:'invalid', detail:safeError(error) }; }
   return { checks, executable, revision:raw.revision };
 }

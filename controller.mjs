@@ -1,3 +1,5 @@
+import {discoverProjectExecutionPlan} from './project-execution-plan.mjs';
+import {resolveProjectToolchain,applyProjectToolchain} from './project-toolchain.mjs';
 // Deterministic local controller. Polls files; never polls a model or starts voice.
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -99,16 +101,19 @@ export async function createController({ stateDir, sourceDir, executable, projec
       await updateTask(stateDir,task.id,next=>{next.worktree=worktree;next.repositoryPath=meta.repo;next.baseCommit=task.worktree?task.baseCommit:meta.commit;next.runDir=runDir;next.harnessStarted=false;next.fixtureRepo=repositoryMode?null:meta.repo;next.fixtureCommit=repositoryMode?null:meta.commit;});
       const existingEnvironment=await json(environmentFile(stateDir,task.id));
       if(existingEnvironment?.preset)throw new Error('An obsolete project-specific environment is retained. No project protocol was executed; preserve its state and recover it with its original project tooling.');
+      const plainDiscovery=repositoryMode&&!project?.worker?.environment?.executionPlan?await discoverProjectExecutionPlan({path:meta.repo,ref:task.worktree?task.baseCommit:meta.commit}):null;
+      const plainToolchain=repositoryMode&&!project?.worker?.environment?.executionPlan
+        ?await resolveProjectToolchain({worktree,baseCommit:task.worktree?task.baseCommit:meta.commit,plan:{sources:plainDiscovery?.sources||[]},retained:existingEnvironment?.toolchain}):null;
       const environment=project?.worker?.environment?.executionPlan
         ?await prepareProjectEnvironment({plan:project.worker.environment.executionPlan,stateDir,taskId:task.id,worktree,repositoryPath:meta.repo,baseCommit:task.worktree?task.baseCommit:meta.commit,resume,signal:abort.signal,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})})
-        :await runEnvironmentHooks({stateDir,taskId:task.id,worktree,hooks:project?.worker?.environment||{},phases:resume?['resume','ready']:['bootstrap','start','ready'],existing:existingEnvironment,signal:abort.signal,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})});
+        :await runEnvironmentHooks({stateDir,taskId:task.id,worktree,hooks:project?.worker?.environment||{},phases:resume?['resume','ready']:['bootstrap','start','ready'],existing:existingEnvironment|| (plainToolchain?{id:`crew-${randomUUID().replace(/-/g,'')}`,taskId:task.id,worktree,hooks:[],toolchain:plainToolchain}:null),toolchain:plainToolchain,env:plainToolchain?applyProjectToolchain(plainToolchain):process.env,signal:abort.signal,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})});
       if(abort.signal.aborted)throw new Error('Worker environment preparation canceled.');
 
       const config = { project, workerPrompt, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
       if (resume && !config.threadId) throw new Error('Cannot resume: no recorded worker Codex session.');
       await atomic(path.join(runDir, 'config.json'), config);
       await updateTask(stateDir, task.id, next => { next.worktree = worktree; next.fixtureRepo = repositoryMode ? null : meta.repo; next.fixtureCommit = repositoryMode ? null : meta.commit; next.repositoryPath = meta.repo; next.baseCommit = task.worktree ? task.baseCommit : meta.commit; next.workerSandbox = config.sandbox; next.runDir = runDir; next.runId = runId; next.status = 'running'; next.harnessStarted='pending'; next.spawnIntentAt=now(); next.startedAt=null; next.endedAt=null; next.execution=null; next.handledReports = next.handledReports || []; });
-      const runner = spawn(process.execPath, [path.join(sourceDir, 'worker-runner.mjs'), path.join(runDir, 'config.json')], { cwd: sourceDir, detached: true, stdio: 'ignore' });
+      const runner = spawn(process.execPath, [path.join(sourceDir, 'worker-runner.mjs'), path.join(runDir, 'config.json')], { cwd: sourceDir, detached: true, stdio: 'ignore', env:applyProjectToolchain(environment.toolchain) });
       await new Promise((resolve, reject) => { runner.once('spawn', resolve); runner.once('error', reject); }); runner.unref();
       await updateTask(stateDir, task.id, next => { next.runnerPid = runner.pid; next.harnessStarted=true; });
     } catch (error) { const latest=await readTask(stateDir,task.id);if(['stopping','pausing'].includes(latest.status)){if(latest.environment?.kind==='project-execution'){try{await stopProjectEnvironment({stateDir,taskId:task.id,onEvidence:environment=>updateTask(stateDir,task.id,n=>{n.environment=environment;})});}catch(stopError){await fail(task.id,`Project environment shutdown was not confirmed: ${stopError.message}`);for(const r of latest.lifecycleRequests||[])if(r.status==='processing')await finishRequest(task.id,r.id,stopError.message);return;}}await updateTask(stateDir,task.id,n=>{n.status=n.status==='pausing'?'paused':'stopped';n.endedAt=now();for(const r of n.lifecycleRequests||[])if(r.status==='processing'){r.status='completed';r.handledAt=now();}});}else await fail(task.id, `Worker launch failed: ${error.message}`); } finally {launchAbort.delete(task.id);}
@@ -162,7 +167,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       const {stdout:changes}=await exec('git',['-C',actual,'status','--porcelain']);if(changes.trim())throw new Error('This worktree contains changes. Review and preserve them before removing it.');
       const existing=await json(environmentFile(stateDir,task.id));if(existing?.preset)throw new Error('Obsolete project-specific state was retained; no cleanup protocol was executed.');
       if(existing?.kind==='project-execution')await disposeProjectEnvironment({stateDir,taskId:task.id,worktree:task.worktree,repositoryPath:task.repositoryPath,baseCommit:task.baseCommit,onEvidence:e=>updateTask(stateDir,task.id,n=>{n.environment=e;})});
-      else await runEnvironmentHooks({stateDir,taskId:task.id,worktree:task.worktree,hooks:project?.worker?.environment||{},phases:['cleanup'],existing,onEvidence:e=>updateTask(stateDir,task.id,n=>{n.environment=e;})});
+      else await runEnvironmentHooks({stateDir,taskId:task.id,worktree:task.worktree,hooks:project?.worker?.environment||{},phases:['cleanup'],existing,env:applyProjectToolchain(existing?.toolchain),onEvidence:e=>updateTask(stateDir,task.id,n=>{n.environment=e;})});
       await exec('git',['-C',repo,'worktree','remove',actual]);
     }
     await updateTask(stateDir,task.id,n=>{n.status='disposed';n.disposedAt=now();n.endedAt=n.endedAt||now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};});
