@@ -1,3 +1,4 @@
+import {existsSync} from 'node:fs';
 // GH-50: two packaged versions, explicit disposable profile, manual replacement.
 // This deliberately does not invoke Squirrel or claim automatic updater recovery.
 // Usage: node scripts/worker-upgrade-native-acceptance.mjs <old Crew.app> <new Crew.app>
@@ -14,8 +15,10 @@ assert.ok(oldBundle&&newBundle,'Supply both packaged Crew.app paths; no installe
 for(const bundle of [oldBundle,newBundle])assert.ok(path.isAbsolute(bundle)&&bundle.endsWith('.app'));
 const dir=await realpath(await mkdtemp(path.join(tmpdir(),'crew-worker-upgrade-'))),installed=path.join(dir,'Crew.app'),binary=path.join(dir,'synthetic-codex'),protocol=path.join(dir,'protocol.jsonl');
 console.log('Disposable manual upgrade evidence:',dir);
-const source=()=>path.join(installed,'Contents/Resources/app');
-const {createTask,readTask}=await import(pathToFileURL(path.join(root,'orchestration/store.mjs')));
+const packagedRoot=()=>path.join(installed,'Contents/Resources/app');
+const source=()=>existsSync(path.join(packagedRoot(),'runtime/package.json'))?path.join(packagedRoot(),'runtime'):packagedRoot();
+const packagedStore=()=>path.join(source(),source()===packagedRoot()?'orchestration-store.mjs':'orchestration/store.mjs');
+const {createTask,readTask}=await import(pathToFileURL(path.join(root,'runtime/orchestration/store.mjs')));
 const projects=[];let electron,nativeProcess,page,stage='old';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(fn,label){const end=Date.now()+30000;while(Date.now()<end){const value=await fn();if(value)return value;await sleep(100);}throw Error('Timed out '+label);}
@@ -23,7 +26,7 @@ async function calls(){return (await readFile(protocol,'utf8').catch(()=>'' )).t
 async function quit(){if(nativeProcess?.exitCode!==null)return;await electron.evaluate(({BrowserWindow})=>{for(const w of BrowserWindow.getAllWindows())w.close();});await electron.evaluate(({dialog,Menu})=>{dialog.showMessageBox=async()=>({response:1});Menu.getApplicationMenu().items[0].submenu.items.find(x=>x.label==='Quit Crew…').click();});await until(()=>nativeProcess.exitCode!==null,'owned native Quit');await electron.close().catch(()=>{});}
 async function request(url,body,method='POST'){const value=await page.evaluate(async({url,body,method})=>{const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:r.status,body:await r.json()};},{url,body,method});assert.equal(value.status,200,JSON.stringify(value.body));return value.body;}
 async function settings(){return request('/api/settings',undefined,'GET');}
-async function launch(p){const env={...process.env,CREW_APP_DATA:path.join(dir,'app-data'),AI_MANAGER_CONFIG:p.config,AI_MANAGER_CODEX_BINARY:binary,CREW_ACCEPTANCE_STAGE:stage,CREW_ACCEPTANCE_STORE:path.join(source(),'orchestration/store.mjs')};for(const key of ['ELECTRON_RUN_AS_NODE','AI_MANAGER_PORT','VOICE_PORT'])delete env[key];electron=await _electron.launch({executablePath:path.join(installed,'Contents/MacOS/Crew'),args:['--config',p.config],env,timeout:30000});nativeProcess=electron.process();page=await electron.firstWindow();await page.waitForURL(`http://127.0.0.1:${p.port}/**`);await until(async()=>{const s=await settings();return s.projectId===p.id;},'explicit profile selected');}
+async function launch(p){const env={...process.env,CREW_APP_DATA:path.join(dir,'app-data'),AI_MANAGER_CONFIG:p.config,AI_MANAGER_CODEX_BINARY:binary,CREW_ACCEPTANCE_STAGE:stage,CREW_ACCEPTANCE_STORE:packagedStore()};for(const key of ['ELECTRON_RUN_AS_NODE','AI_MANAGER_PORT','VOICE_PORT'])delete env[key];electron=await _electron.launch({executablePath:path.join(installed,'Contents/MacOS/Crew'),args:['--config',p.config],env,timeout:30000});nativeProcess=electron.process();page=await electron.firstWindow();await page.waitForURL(`http://127.0.0.1:${p.port}/**`);await until(async()=>{const s=await settings();return s.projectId===p.id;},'explicit profile selected');}
 async function mcp(p,name,args){const child=spawn(process.execPath,[path.join(source(),'orchestration-mcp.mjs'),p.state,'manager',p.runtime],{stdio:['pipe','pipe','pipe']});let output='',error='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>error+=d);child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})+'\n');assert.equal(await new Promise(resolve=>child.on('close',resolve)),0,error);const result=JSON.parse(output.trim()).result;assert.ok(!result.isError,result.content?.[0]?.text);return result;}
 await writeFile(binary,`#!${process.execPath}
 import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';import{pathToFileURL}from'node:url';import{execFileSync}from'node:child_process';

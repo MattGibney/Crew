@@ -9,7 +9,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 const {_electron}=await import(process.env.CREW_PLAYWRIGHT_MODULE||'playwright-core');
 const exec=promisify(execFile),root=process.cwd(),dir=await mkdtemp(path.join(tmpdir(),'crew-archive-native-'));
-const {createTask,readTask,requestWorkerAction}=await import(pathToFileURL(path.join(root,'orchestration/store.mjs')));
+const {createTask,readTask,requestWorkerAction}=await import(pathToFileURL(path.join(root,'runtime/orchestration/store.mjs')));
 const configPath=path.join(dir,'project','project.json'),binary=path.join(dir,'fake-codex');
 const executable=process.env.CREW_ACCEPTANCE_EXECUTABLE||path.join(root,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 console.log('Disposable native archive acceptance:',dir);
@@ -21,7 +21,7 @@ async function quit(){if(nativeProcess?.exitCode===null){await electron.evaluate
 try{
  await writeFile(binary,`#!${process.execPath}
 import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';import{execFileSync}from'node:child_process';
-import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'orchestration/store.mjs')).href)};
+import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'runtime/orchestration/store.mjs')).href)};
 if(process.argv.includes('--version')){console.log('codex synthetic acceptance');process.exit(0);}
 const binding=process.argv.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));const[,state,role,taskId,runId]=binding?JSON.parse(binding.slice(binding.indexOf('=')+1)):[];
 let threadId='synthetic-'+process.pid;const turnId='archive-turn-'+process.pid;const send=m=>console.log(JSON.stringify(m));
