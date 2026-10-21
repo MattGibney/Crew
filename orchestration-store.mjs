@@ -53,11 +53,38 @@ async function ownIdentity(){
   return processIdentity;
 }
 async function lockOwner(lockPath){try{return JSON.parse(await fs.readFile(path.join(lockPath,'owner.json'),'utf8'));}catch(error){if(['ENOENT','ENOTDIR'].includes(error.code))return null;throw error;}}
-async function ownerActive(owner){
+async function ownerActive(owner,{inspect=true}={}){
   if(!owner||!Number.isSafeInteger(owner.pid)||typeof owner.start!=='string'||typeof owner.token!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner.token))return true; // unknown is never permission to steal
   if(owner.pid===process.pid)return owner.start===(await ownIdentity()).start;
   try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')return false;return true;}
-  try{const actual=(await snapshotProcesses()).get(owner.pid);return Boolean(actual&&actual.start===owner.start&&!actual.state?.includes('Z'));}catch{return true;}
+  if(!inspect)return true; // Fresh observer: retain conservatively without a process-table scan.
+  try{const actual=(await snapshotProcesses()).get(owner.pid);return !actual||actual.start===owner.start&&!actual.state?.includes('Z');}catch{return true;}
+}
+async function candidateObservers(dir,name,ownToken){
+  let unknown=false;
+  for(const entry of await fs.readdir(dir)){
+    if(!entry.startsWith(`${name}.candidate-`)||entry===`${name}.candidate-${ownToken}`)continue;
+    const candidate=path.join(dir,entry);let owner;
+    try{owner=await lockOwner(candidate);}catch(error){if(!(error instanceof SyntaxError))throw error;}
+    if(!owner||entry!==`${name}.candidate-${owner.token}`||!Number.isSafeInteger(owner.pid)||owner.pid<=1||typeof owner.start!=='string'||!owner.start.trim()||typeof owner.token!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner.token)){
+      // Publication may still be in flight. Never delete incomplete evidence or
+      // keep admitting writes that would accumulate unreclaimable barriers.
+      if(await fs.stat(candidate).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))unknown=true;
+      continue;
+    }
+    // Candidate paths are unique to this exact acquisition token. They cannot
+    // be reused by a successor, so verified-dead candidates can be removed.
+    const published=Date.parse(owner.at),elapsed=Date.now()-published;
+    const withinWindow=Number.isFinite(published)&&elapsed>=0&&elapsed<5000;
+    if(!await ownerActive(owner,{inspect:!withinWindow}))await fs.rm(candidate,{recursive:true,force:true});
+    else {
+      // This is an admission barrier, never permission to delete a live or
+      // unknown observer. Suspended observers must not accumulate retirements
+      // beyond their original bounded acquisition window.
+      if(!withinWindow)unknown=true;
+    }
+  }
+  return unknown;
 }
 export async function withStateLock(dir,name,fn){
   await fs.mkdir(dir,{recursive:true,mode:0o700});
@@ -68,6 +95,10 @@ export async function withStateLock(dir,name,fn){
   const deadline=Date.now()+5000;let acquired=false;
   try{
     while(!acquired){
+      if(await candidateObservers(dir,name,token)){
+        if(Date.now()>=deadline)throw new Error(`State lock observer ownership unknown or acquisition overdue: ${name}; inspect retained candidate evidence before retrying`);
+        await pause(25);continue;
+      }
       try{await fs.rename(candidate,lockPath);acquired=true;}
       catch(error){
         if(!['EEXIST','ENOTEMPTY','ENOTDIR'].includes(error.code))throw error;
@@ -94,7 +125,8 @@ export async function withStateLock(dir,name,fn){
       // it until acquisition/failure. Capture retired barriers BEFORE checking
       // candidates: when none remain, nobody can still act on those old owners.
       // New candidates cannot observe an owner already retired before this scan.
-      // Crash candidates conservatively retain barriers; never expire by age.
+      // Unknown candidates conservatively retain barriers and block future admission;
+      // verified-dead candidates are reclaimed before acquisition, never by age.
       const retired=(await fs.readdir(dir)).filter(entry=>entry.startsWith(`${name}.stale-`));
       const observing=(await fs.readdir(dir)).some(entry=>entry.startsWith(`${name}.candidate-`));
       if(!observing)for(const entry of retired)await fs.rm(path.join(dir,entry),{recursive:true,force:true});

@@ -78,12 +78,78 @@ test('ordinary uncontended acquisitions do not accumulate release barriers', asy
 });
 
 
-test('an abandoned candidate retains release barriers until observer absence is verified', async t => {
+test('incomplete observer evidence is retained and blocks further barrier growth', { timeout: 9000 }, async t => {
   const dir = await fixture(t), candidate = path.join(dir, '.proof.lock.candidate-abandoned');
-  await fs.mkdir(candidate);
+  await withStateLock(dir, '.proof.lock', async () => { await fs.mkdir(candidate); });
+  const before = await fs.readdir(dir);
+  assert.equal(before.filter(name => name.startsWith('.proof.lock.stale-')).length, 1);
+  await assert.rejects(withStateLock(dir, '.proof.lock', async () => assert.fail('unknown observer must block admission')), /observer ownership unknown/);
+  assert.deepEqual(await fs.readdir(dir), before, 'unknown evidence and existing barriers remain unchanged');
+});
+
+async function waitFor(fn) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) { const value = await fn(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 10)); }
+  throw new Error('Timed out waiting for observer candidate');
+}
+
+test('verified-dead real contender candidates are reclaimed without growing future barriers', { timeout: 12000 }, async t => {
+  const dir = await fixture(t), first = await holder(t, dir);
+  const script = `import {withStateLock} from ${JSON.stringify(moduleUrl)}; await withStateLock(${JSON.stringify(dir)}, '.proof.lock', async () => {});`;
+  const observer = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: 'ignore' });
+  const exited = new Promise(resolve => observer.once('exit', resolve));
+  t.after(async () => { if (observer.exitCode === null && observer.signalCode === null) observer.kill('SIGKILL'); await exited; });
+  const candidate = await waitFor(async () => {
+    for (const name of await fs.readdir(dir)) if (name.startsWith('.proof.lock.candidate-')) {
+      const owner = await fs.readFile(path.join(dir, name, 'owner.json'), 'utf8').then(JSON.parse).catch(() => null);
+      if (owner?.pid === observer.pid) return name;
+    }
+  });
+  observer.kill('SIGKILL'); await exited;
+  assert.ok((await fs.readdir(dir)).includes(candidate));
+  await first.release();
+  for (let i = 0; i < 12; i++) await withStateLock(dir, '.proof.lock', async () => {});
+  assert.deepEqual(await fs.readdir(dir), [], 'verified-dead observer and all retired barriers are reclaimed');
+});
+
+test('a live owner omitted by a successful ps snapshot remains protected', { timeout: 10000 }, async t => {
+  const dir = await fixture(t), first = await holder(t, dir);
+  const ownerBefore = await fs.readFile(path.join(dir, '.proof.lock', 'owner.json'), 'utf8');
+  const script = `import cp from 'node:child_process'; import {promisify} from 'node:util'; import {syncBuiltinESMExports} from 'node:module';
+    const original=cp.execFile, run=promisify(original); let omit=false;
+    function wrapped(...args){ return original(...args); }
+    wrapped[promisify.custom]=(...args)=>omit&&args[0]==='ps'?Promise.resolve({stdout:'',stderr:''}):run(...args);
+    cp.execFile=wrapped; syncBuiltinESMExports();
+    const {withStateLock}=await import(${JSON.stringify(moduleUrl)});
+    await withStateLock(${JSON.stringify(dir)}, '.warmup.lock', async()=>{}); omit=true;
+    try { await withStateLock(${JSON.stringify(dir)}, '.proof.lock', async()=>{console.log('ENTERED');}); process.exitCode=2; }
+    catch(error){ if(!/State lock busy/.test(error.message))throw error; console.log('PROTECTED'); }`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => stdout += chunk); child.stderr.on('data', chunk => stderr += chunk);
+  const exited = new Promise(resolve => child.once('exit', resolve));
+  t.after(async () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); await exited; });
+  assert.equal(await exited, 0, stderr);
+  assert.equal(stdout.trim(), 'PROTECTED');
+  assert.equal(await fs.readFile(path.join(dir, '.proof.lock', 'owner.json'), 'utf8'), ownerBefore);
+  await first.release();
+});
+
+
+test('an overdue live observer blocks new admission without deleting its evidence', { timeout: 12000 }, async t => {
+  const dir = await fixture(t), liveDir = path.join(dir, 'live-owner'), live = await holder(t, liveDir);
+  const owner = JSON.parse(await fs.readFile(path.join(liveDir, '.proof.lock', 'owner.json'), 'utf8'));
+  owner.at = new Date(Date.now() - 6000).toISOString();
+  const candidate = path.join(dir, `.proof.lock.candidate-${owner.token}`);
+  await withStateLock(dir, '.proof.lock', async () => {
+    await fs.mkdir(candidate); await fs.writeFile(path.join(candidate, 'owner.json'), JSON.stringify(owner));
+  });
+  const before = await fs.readdir(dir), evidence = await fs.readFile(path.join(candidate, 'owner.json'), 'utf8');
+  await assert.rejects(withStateLock(dir, '.proof.lock', async () => assert.fail('overdue live observer must block')), /observer ownership unknown/);
+  assert.deepEqual(await fs.readdir(dir), before);
+  assert.equal(await fs.readFile(path.join(candidate, 'owner.json'), 'utf8'), evidence);
+  assert.doesNotThrow(() => process.kill(live.child.pid, 0));
+  await live.release();
   await withStateLock(dir, '.proof.lock', async () => {});
-  assert.equal((await fs.readdir(dir)).filter(name => name.startsWith('.proof.lock.stale-')).length, 1);
-  await fs.rm(candidate, { recursive: true });
-  await withStateLock(dir, '.proof.lock', async () => {});
-  assert.deepEqual(await fs.readdir(dir), []);
+  assert.deepEqual(await fs.readdir(dir), ['live-owner'], 'only verified process exit permits observer cleanup');
 });
