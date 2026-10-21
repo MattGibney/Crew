@@ -7,6 +7,7 @@ export function conversationMessage(item, turnId) {
   if (!text) return null;
   let presentation = text.startsWith('The user explicitly chose to review this queued controller attention item.')
     ? 'Review the selected worker update with me.'
+    : text.startsWith('CREW_WORKER_RECOVERY_REVIEW\n') ? 'Review recovery options for this worker with me.'
     : text.startsWith('CREW_WORKER_ACTION\n') ? 'Apply the selected worker action.' : text;
   if (text.startsWith('CREW_WORKER_ACTION\n')) {
     try {
@@ -14,6 +15,5 @@ export function conversationMessage(item, turnId) {
       if (['pause', 'stop', 'resume', 'dispose', 'start'].includes(selected.action) && /^[\w-]{1,120}$/.test(selected.taskId)) presentation = `${selected.action === 'dispose' ? 'Remove the worktree for' : selected.action[0].toUpperCase() + selected.action.slice(1)} worker ${selected.taskId}.`;
     } catch { /* Keep bounded generic intent if native history has an older format. */ }
   }
-  if(text.startsWith('CREW_WORKER_RECOVERY_REVIEW\n'))presentation='Review recovery options for this worker with me.';
   return { id: item.id, turnId, role: 'user', text: presentation };
 }
