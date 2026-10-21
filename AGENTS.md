@@ -250,3 +250,9 @@
 - Quit issue #39 remains unresolved. Its post-voice profile-harness Quit/inspector timeout reproduced in both combined source and exact unintegrated PR #40 candidate 006284e0. This supports preservation relative to PR #40, not a claim that it predates #35/main or establishes root cause. Preserve that excluded-gate evidence and do not claim all native shutdown acceptance passed.
 - Preserve the documented custom portable-profile automatic-updater relaunch boundary. Do not repeat installation that can enter the user's default profile. Signed payload/feed checks and isolated explicit-profile launch/manual replacement cannot prove automatic installation/profile recovery.
 - Avoid negative issue-closing phrases followed by issue references in PR descriptions: GitHub can interpret them as closing directives. Verify actual issue states after merge and keep unresolved #39 open.
+
+## Public repository presentation (#53)
+
+- Reuse the approved four-shape mark in `build/crew-mark.png`; repository banners are separate assets and must not alter app branding or runtime behavior.
+- Keep README claims version-independent and grounded in shipped capabilities. Link detailed operational and release acceptance limits rather than presenting old test evidence as current user acceptance.
+- Keep branding/docs work separate from active releases. Social-preview files in Git are not proof of a GitHub metadata upload; verify that action separately. Public visibility is not a license grant; do not invent licensing terms or badges.

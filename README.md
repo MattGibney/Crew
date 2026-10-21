@@ -1,88 +1,88 @@
+<p align="center">
+  <img src="docs/brand/social-preview.png" alt="Crew — one conversation, a whole crew behind it. A local Codex workspace for voice and text." width="960">
+</p>
+
 # Crew
 
-A local macOS application for discussing project work by voice and coordinating independent Codex workers. One installed app manages multiple isolated project workspaces. The switcher beside the project name selects the visible workspace; Add project opens onboarding. Each project retains its own controller, manager chat, configuration, instructions, state, port and worktrees. Worker capacity is shared across projects. See [multiple workspaces](docs/multi-project-workspaces.md). There is no hosted deployment or cloud sync.
+**A local macOS workspace for coordinating Codex agents through voice and text.**
 
-The Electron desktop window uses the existing web voice interface. Its separate local controller watches durable files, so closing the window or disconnecting voice does not stop background work. A menu-bar icon lets you reopen the window and shows pending attention. Codex and Linear still require their external services; local does not mean offline.
+Talk to your manager, delegate work to independent workers, and follow what they are doing without juggling separate chats. Crew brings your projects, conversations and worker activity into one desktop app, using your existing ChatGPT/Codex subscription.
 
-## Install on your Mac
+[**Download for Mac**](https://github.com/MattGibney/Crew/releases/latest) · [Getting started](#get-started) · [Documentation](#documentation) · [Report a bug](https://github.com/MattGibney/Crew/issues/new) · [Contributing](CONTRIBUTING.md)
 
-The desktop build is **Apple Silicon, macOS 13 or later**. Open the versioned DMG from `dist/desktop`, drag **Crew.app** into Applications, and launch it. Public GitHub releases are Developer ID signed and notarized. Local candidate builds are unsigned and are kept separate from production update feeds.
+## One conversation. A whole crew behind it.
 
-Electron includes Chromium and the Node runtime. The Mac still needs **Git**, a compatible **Codex CLI**, ChatGPT sign-in and the intended Linear MCP connection. The realtime baseline tested in the earlier local application was Codex CLI `0.163.0-alpha.10.2`; experimental methods may change. Do not copy credentials from another machine or configure API-key fallback.
+| | What you can do |
+| --- | --- |
+| **Talk or type** | Keep one manager conversation across text and live voice. Connect explicitly when you want to start a call. |
+| **Delegate in parallel** | Work with independent Codex workers, each with its own conversation and Git worktree. Inspect their activity, shared notes and related links. |
+| **Switch projects** | Give each project its own configuration, manager conversation and workers, with a shared worker-capacity setting across the app. |
+| **Make it yours** | Edit manager and worker instructions, customize the manager profile and voice, and inspect the manager's saved scratchpad. |
+| **Keep work in view** | See worker cards and attention in the app and menu bar. Closing the window ends voice while background work can continue. |
 
-First launch creates editable files under:
+Crew runs on your Mac. Codex and connected services still need their own network access and authentication. There is no Crew-hosted account, project service or cloud sync.
 
-```text
-~/Library/Application Support/Crew/instances/default/
-  project.json
-  prompts/manager.md
-  prompts/worker.md
-  .data/
-```
+## Get started
 
-First-run setup guides local tools, ChatGPT sign-in, automatic project-folder setup, permissions and readiness. Use **Project setup…** in the app or menu-bar menu to return. Existing configured chats continue normally. **Edit project configuration…** and **Open configuration folder** retain direct file access. Choose your project folder and select Set up this project. Crew saves the actual folder, an available starting branch and source-grounded context, then offers real Linear team/project names. Technical settings stay optional under Advanced. New projects receive separate ports; existing configured ports are retained. Guided saves restart only an idle controller; external file edits need Quit and reopen. Active tasks and connecting/active voice block guided apply. See [Mac installation and operations](docs/MACOS.md) and [configuration](docs/CONFIGURATION.md).
+### What you need
 
-Type to your manager or choose **Connect voice**. Open microphone is the default: Connect starts the call and microphone once connected and permission allows. Input stays active when switching apps until you mute or end the call. Explicit mute is preserved on reconnect. The compact composer defaults to Voice; switch to Text to type without ending an established call or losing your draft. Configure the next call’s voice in Settings → Project settings → Manager profile; there is no separate push-to-talk mode. End call releases the complete voice session. End other calls first. Closing the window also ends voice while leaving the controller running. **Quit Crew…** is separate: its confirmation accounts for every registered project, stops owned controllers, and leaves already dispatched worker supervisors alone. Reopen Crew to collect their reports. Switching projects ends the departing voice call and opens the destination with voice off. The app neither launches at login nor keeps a sleeping Mac awake.
+- **Apple Silicon Mac with macOS 13 or later.** Current desktop releases do not include Intel, Windows or Linux builds.
+- **Git** and a compatible **Codex CLI**, signed in with your ChatGPT/Codex subscription.
+- A local project repository. Connect the project's intended MCP tools in Codex; Linear-backed workflows need the appropriate Linear connection.
 
-Typed messages and spoken transcripts share one conversation. Live transcripts update in place; unfinished speech is labelled partial. Reconnecting retains recent conversation history, and Connect never clears it.
+Crew includes the desktop Node runtime. A separate Node installation is only needed to develop or run Crew from source. Realtime support uses experimental Codex methods, so check [macOS requirements](docs/MACOS.md#requirements) if your CLI version is incompatible. There is no API-key fallback.
 
-Open **Settings** in the header for Global settings (shared worker capacity) and Project settings (project name, manager session, manager profile and worker instructions). Use Update to edit a value; successful saves show a toast. Saved manager changes apply only after explicit **Restart manager**; worker changes apply to newly launched workers. **Stop manager** releases voice and holds manager interaction while independent workers continue. **Start manager** resumes the saved conversation without starting a task or microphone. See [Settings and manager controls](docs/SETTINGS.md).
+### Install and have your first conversation
 
-## First work session
+1. Open the [latest release](https://github.com/MattGibney/Crew/releases/latest) and download the Apple Silicon **`.dmg`**. Public release builds are Developer ID signed and notarized.
+2. Open the disk image, drag **Crew** to **Applications**, and launch it.
+3. Follow the guided setup to check Codex sign-in and select your project folder. Review the discovered project settings and connected-tool choices.
+4. Type to your manager, or choose **Connect voice**. Connecting starts the microphone once permission allows; mute or end the call when you want to stop. Switching apps does not mute an open call.
+5. Agree a small first task and check its result before moving on to important work.
 
-Open **Scratchpad** to inspect the manager’s saved commitments, notes, decisions and open questions without a call. Request corrections through the conversation. The default manager instructions track explicit requests and promises, distinguish brainstorming, and keep delegated work open for evidence review. Local ten-minute reviews consider changed saved work or due follow-ups only while the manager is enabled, idle and voice is disconnected. An explicitly stopped manager stays stopped. Existing saved/custom instructions remain full replacements and require an explicit guidance update and Restart to adopt the new default behavior. See [Manager scratchpad and follow-up](docs/MANAGER-SCRATCHPAD.md).
+Use the project switcher to add another workspace. Settings lets you adjust instructions, profile, environment commands and capacity later. See [Mac installation and operations](docs/MACOS.md), [Settings](docs/SETTINGS.md) and [project discovery](docs/ONBOARDING.md) for details.
 
-Agree a bounded task with the manager, naming an existing ticket in the configured Linear scope and the relevant project folder. The manager verifies the ticket through connected tools before dispatch. Missing ticket or connector evidence must be explained, never invented. Linear remains ticket truth; local JSON and readable notes record execution.
+## Your work stays outside the app
 
-Multiple explicitly assigned workers can run concurrently (default capacity two); additional assignments queue. The manager can stop, pause, resume or dispose a specific worker while retaining work/evidence. Disposal refuses dirty worktrees. Each worker uses its own Codex session and a genuine worktree from the configured committed base ref. It reports meaningful progress and yields questions to the manager. The window and menu bar raise attention; they never activate voice or force spoken interruptions. You answer only through the manager, which resumes the same worker session and worktree. Startup never selects backlog or launches an immediate model task. Periodic reviews may later follow up previously saved explicit commitments within their existing authorization.
+The default configuration lives under `~/Library/Application Support/Crew/instances/default/`. Other workspaces retain separate configuration and state. Editable prompts, saved conversations and worker records are stored outside the application bundle.
 
-Repository workers default to **read-only**. Set `project.worker.sandbox` to `workspace-write` only for explicitly requested local worktree edits and tests. This version does not automate commits, pushes, pull requests, merges, ticket changes or deployment. Worktrees and results remain available for review.
+Updates can be checked and downloaded from the app; installation requires an explicit restart when Crew can safely do so. Quitting and closing a window are separate actions. See [updates and recovery](docs/UPDATES.md) and [storage](docs/STORAGE.md) before moving installations or managing a custom configuration root.
 
-Completed repository tasks mean the controller checked harness success, durable evidence, isolation, baseline and changed-file state. They do not establish code correctness or production behavior independently. Review test evidence and acceptance criteria with the manager.
+**Crew is early software under active development.** Review agent output and test changes before relying on them. A worker finishing is not proof that its code is correct or production-ready. Platform, native-update and device-audio acceptance limits are recorded in the [release documentation](docs/RELEASES.md); consult the notes for the version you install.
 
-Crew reads existing project execution instructions and can run their setup and Start action unchanged in each worker’s worktree. It retains command provenance and runtime ownership across questions, resume and controller restarts. See [Project execution](docs/PROJECT-ENVIRONMENTS.md).
+## Documentation
 
-## Editable behavior
+| I want to… | Read |
+| --- | --- |
+| Install, configure or troubleshoot Crew | [Mac operations](docs/MACOS.md) · [Configuration](docs/CONFIGURATION.md) · [Onboarding](docs/ONBOARDING.md) |
+| Manage projects, instructions and profiles | [Workspaces](docs/multi-project-workspaces.md) · [Settings](docs/SETTINGS.md) |
+| Understand workers and their environments | [Workers](docs/WORKERS.md) · [Project environments](docs/PROJECT-ENVIRONMENTS.md) |
+| Understand the manager and voice interface | [Manager workspace](docs/MANAGER-WORKSPACE.md) · [Scratchpad](docs/MANAGER-SCRATCHPAD.md) |
+| Build, extend or maintain Crew | [Architecture](docs/ARCHITECTURE.md) · [UI and themes](docs/UI-FOUNDATION.md) · [Contributing](CONTRIBUTING.md) |
+| Publish a release or maintain branding | [Release process](docs/RELEASES.md) · [Brand assets](docs/brand/README.md) |
 
-- JSON defines the single project's context, components, repositories, Linear scope, permissions, port and state directory.
-- Manager Markdown defines personality, role and communication.
-- Worker Markdown defines behavior and responsibilities.
+## Develop locally
 
-The subscription-only, explicit-task, manager-only, worktree isolation and no-backlog rules remain enforced regardless of prompt text. Each instance retains its own state and conversation. The guided setup edits these same authoritative files; it does not introduce a separate configuration store. See [onboarding and project discovery](docs/ONBOARDING.md).
-
-## Develop and package
+Use **Node.js 22+** and Git. On an Apple Silicon Mac:
 
 ```sh
+git clone https://github.com/MattGibney/Crew.git
+cd Crew
 npm ci
 npm test
 npm run desktop:dev
+```
+
+`npm test` builds the renderer and runs the automated suite. `npm run desktop:dev` opens the Electron app. Development sessions still need a compatible Codex CLI and subscription sign-in. Keep development configuration separate from the project state you use for real work.
+
+```sh
 npm run desktop:build:mac
 ```
 
-Build on an Apple Silicon Mac. Output is a versioned `.app`, DMG, ZIP and `SHA256SUMS.txt` under `dist/desktop`. The deliberate GitHub workflow builds signed/notarized public releases with a complete native update feed. Local builds default to unsigned candidates. See [release setup](docs/RELEASES.md) and [updates](docs/UPDATES.md); existing unsigned installations need one manual installation of a signed release.
+Local packaging produces **unsigned candidate builds** under `dist/desktop/candidate/`. They are separate from signed public releases and do not provide a stable automatic-update feed. See the [release guide](docs/RELEASES.md) for artifact formats and signing requirements, or [Mac operations](docs/MACOS.md#local-diagnostics-and-cli-alternative) for the source-only CLI workflow.
 
-The source-only command-line workflow remains available with Node.js 22+:
+## Help improve Crew
 
-```sh
-node cli.mjs init --template set1
-node cli.mjs doctor
-node cli.mjs validate
-node cli.mjs start
-node cli.mjs status
-node cli.mjs stop
-node cli.mjs package
-```
+Found a problem? [Open an issue](https://github.com/MattGibney/Crew/issues/new) with what you expected, what happened, your Crew/macOS/Codex versions and a minimal reproduction. Remove credentials, private conversations and project data from anything you share.
 
-Use `--config path` consistently for independent instances. Foreground start is the default; `start --background` detaches the local controller without installing a daemon. Desktop startup never takes over an existing CLI-owned controller: stop that instance with its original CLI command first. Packages exclude local configuration, account credentials, conversations, worker state/worktrees and Git metadata.
-
-[Mac operations](docs/MACOS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Onboarding](docs/ONBOARDING.md) · [Storage migration](docs/STORAGE.md) · [Worker lifecycle](docs/WORKERS.md) · [Project execution](docs/PROJECT-ENVIRONMENTS.md) · [AI-012](tickets/AI-012.md) · [AI-010](tickets/AI-010.md) · [AI-011](tickets/AI-011.md) · [Historical validation](docs/VALIDATION-HISTORY.md)
-
-The installed Electron lifecycle/fixture loop passed automated acceptance; live Electron microphone and agent conversation passed by user report. Fresh onboarding permission/denied recovery and sign-in need human confirmation when those states are present; consult the current ticket for measured results. The destination Mac's repository mapping, connector access and first business task still require validation.
-
-## Renderer development
-
-Crew 0.8 uses React JavaScript with official shadcn/ui and Lucide. Run `npm ci` then `npm run renderer:build` before a source controller launch. Desktop dev/release commands build automatically. See [UI foundation and one-file theme workflow](docs/UI-FOUNDATION.md) and [manager workspace and voice controls](docs/MANAGER-WORKSPACE.md).
-
-## Releases and updates
-
-See [release setup](docs/RELEASES.md) for deliberate GitHub builds, required Apple signing credentials and the complete update asset set. [Updating Crew](docs/UPDATES.md) explains explicit download/restart, active-work deferral and retained local configuration. Unsigned candidates do not enable automatic installation.
+Have an idea? Start with the user problem and the workflow it would improve. Check [existing issues](https://github.com/MattGibney/Crew/issues) first. Changes are developed in separate branches and reviewed through pull requests; releases are deliberately grouped. See [contribution guidance](CONTRIBUTING.md).
