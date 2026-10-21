@@ -8,13 +8,14 @@ import {createBridge} from '../codex-bridge.mjs';
 import {updateActivity} from '../update-activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
-async function fixture(t,{history=[],saved=false,threadDelay=0}={}){
+async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-turn-state-')),statePath=join(directory,'manager.json'),control=join(directory,'notifications.jsonl'),calls=join(directory,'calls.jsonl'),executable=join(directory,'fake-codex.mjs');
  await writeFile(control,'');await writeFile(calls,'');if(saved)await writeFile(statePath,JSON.stringify({threadId:'manager-thread'}));
  const program=`#!${process.execPath}
 import {createInterface} from 'node:readline';
 import {readFileSync,appendFileSync} from 'node:fs';
 const control=${JSON.stringify(control)},calls=${JSON.stringify(calls)},history=${JSON.stringify(history)};let sequence=0,seen=0;
+process.stdin.on('end',()=>{if(${exitOnEOF})process.exit(0)});process.on('SIGTERM',()=>{appendFileSync(calls,JSON.stringify({signal:'SIGTERM'})+'\\n');process.exit(0)});
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 const reply=(id,result)=>send({id,result});
 const notify=(method,params)=>send({method,params:{threadId:'manager-thread',...params}});
@@ -28,6 +29,9 @@ createInterface({input:process.stdin}).on('line',line=>{
  if(method==='thread/name/set')return reply(id,{});
  if(method==='thread/turns/list')return reply(id,{data:history});
  if(method==='mcpServerStatus/list')return reply(id,{data:[]});
+ if(method==='thread/realtime/listVoices')return reply(id,{voices:{v3:['cove'],defaultV1:'cove'}});
+ if(method==='thread/realtime/start'){notify('thread/realtime/started',{});notify('thread/realtime/sdp',{sdp:'v=0 fixture'});return reply(id,{});}
+ if(method==='thread/realtime/stop'&&${voiceStopFails})return send({id,error:{message:'fixture stop unavailable'}});
  if(method==='turn/start'){
   const turn={id:'turn-'+(++sequence),status:'inProgress',items:[]},text=params.input[0].text;
   if(text==='rpc-first')return reply(id,{turn});
@@ -86,4 +90,17 @@ test('interrupted native terminal state becomes idle only after matching complet
  const {bridge}=await fixture(t);await bridge.startWork('remain','request-interrupt');assert.equal(canUpdate(bridge),false);
  await bridge.interrupt();await until(()=>bridge.state().status==='interrupted');
  assert.equal(bridge.state().activeTurnId,null);assert.equal(bridge.state().workStarting,false);assert.equal(canUpdate(bridge),true);
+});
+
+test('update interruption cannot target a newer manager turn',async t=>{
+ const {bridge,calls}=await fixture(t);await bridge.startWork('remain','correlated-manager');await assert.rejects(bridge.interrupt({expectedTurnId:'old-turn'}),/turn changed/);assert.equal((await calls()).filter(call=>call.method==='turn/interrupt').length,0);assert.equal(bridge.state().activeTurnId,'turn-1');await bridge.interrupt({expectedTurnId:'turn-1'});await until(()=>bridge.state().status==='interrupted');assert.equal((await calls()).filter(call=>call.method==='turn/interrupt').length,1);
+});
+
+test('cooperative update voice stop failure preserves the manager process and stays visibly active',async t=>{
+ const {bridge,calls}=await fixture(t,{voiceStopFails:true});await bridge.startWork('remain','voice-stop-manager');await bridge.startVoice('v=0 synthetic','cove');assert.equal(bridge.state().voiceActive,true);await assert.rejects(bridge.stopVoice({cooperative:true}),/shutdown could not be confirmed/);assert.equal(bridge.state().voiceActive,true);assert.equal(bridge.state().activeTurnId,'turn-1');await bridge.interrupt({expectedTurnId:'turn-1'});await until(()=>bridge.state().status==='interrupted');assert.equal((await calls()).filter(c=>c.method==='turn/interrupt').length,1);
+});
+
+test('update manager runtime shutdown waits for natural EOF exit and never escalates if it remains live',async t=>{
+ const natural=await fixture(t,{exitOnEOF:true});await natural.bridge.startWork('complete','natural-shutdown');await until(()=>natural.bridge.state().status==='completed');await natural.bridge.shutdown({cooperative:true});assert.equal((await natural.calls()).filter(c=>c.signal).length,0);
+ const refuses=await fixture(t);await refuses.bridge.startWork('complete','pending-shutdown');await until(()=>refuses.bridge.state().status==='completed');await assert.rejects(refuses.bridge.shutdown({cooperative:true}),/still pending.*No force signal/);assert.equal((await refuses.calls()).filter(c=>c.signal).length,0);assert.equal(refuses.bridge.state().status,'completed');
 });

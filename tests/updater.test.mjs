@@ -169,3 +169,63 @@ test('restart handoff belongs to its canonical installed executable, never anoth
  assert.equal(await old.consume('0.9.1'),null);
  const {readFile}=await import('node:fs/promises');assert.deepEqual(JSON.parse(await readFile(join(directory,'restart.json'),'utf8')),legacy);
 });
+
+function pauseFixture(overrides={}){
+ const calls=[];let plan=null,failMark=false;
+ const original=fixture(overrides.native||{});
+ const engine={
+  native:original.coordinator,
+  begin:async input=>{calls.push('begin');plan={id:'approved-plan-1',kind:'pause-update',consent:true,phase:'draining',targetVersion:input.targetVersion};return {plan};},
+  status:async()=>({plan:plan?structuredClone(plan):null}),
+  cancel:async({planId})=>{calls.push('cancel-plan');assert.equal(planId,plan.id);if(plan.phase==='installing')throw Error('Installation already committed.');plan.phase='canceled';return {plan};},
+  markInstalling:async({planId,targetVersion})=>{calls.push('mark-installing');if(failMark||plan.phase!=='ready'||planId!==plan.id||targetVersion!==plan.targetVersion)return {marked:false};plan.phase='installing';return {marked:true};},
+  markBlocked:async()=>{calls.push('mark-blocked');if(plan.phase!=='canceled')plan.phase='blocked';return {plan};},
+  ...overrides.engine,
+ };
+ return {original,calls,engine,get plan(){return plan;},set plan(value){plan=value;},set failMark(value){failMark=value;}};
+}
+async function pauseReady(f){await downloaded(f.original);await f.helper.request('pause-update');f.plan.phase='ready';}
+
+test('approved pause plan drains without install, then only correlated ready target commits before backend stops',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');let f;f=pauseFixture({native:{stopBackend:async()=>{assert.equal(f.plan.phase,'installing');f.original.calls.push('stop');}}});f.helper=createPauseUpdateCoordinator(f.engine);
+ await downloaded(f.original);await f.helper.request('pause-update');await f.helper.advancePlan();assert.deepEqual(f.original.calls,[]);
+ f.plan.phase='ready';await f.helper.advancePlan();assert.deepEqual(f.calls,['begin','mark-installing']);assert.equal(f.plan.phase,'installing');assert.deepEqual(f.original.calls,['lock','reserve','stop','install']);
+});
+test('durable explicit consent can be recovered, but absent consent, wrong kind, wrong target and canceled plans never install',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');
+ for(const change of [{consent:false},{kind:'something-else'},{targetVersion:'0.10.0'},{phase:'canceled'},{phase:'draining'}]){
+  const f=pauseFixture();f.helper=createPauseUpdateCoordinator(f.engine);await pauseReady(f);Object.assign(f.plan,change);await f.helper.advancePlan();assert.deepEqual(f.original.calls,[]);
+ }
+ const recovered=pauseFixture();recovered.helper=createPauseUpdateCoordinator(recovered.engine);await pauseReady(recovered);
+ recovered.helper=createPauseUpdateCoordinator(recovered.engine);await recovered.helper.advancePlan();assert.equal(recovered.original.calls.includes('install'),true);
+});
+test('cancel wins against an already observed ready plan while native gate check is pending',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');const gate=deferredForUpdate();
+ const f=pauseFixture({native:{activity:()=>gate.promise}});f.helper=createPauseUpdateCoordinator(f.engine);await pauseReady(f);
+ const advance=f.helper.advancePlan();await new Promise(resolve=>setImmediate(resolve));await f.helper.request('cancel-pause-update');gate.resolve({safe:true,reasons:[]});
+ await assert.rejects(advance,/changed or was canceled/);assert.equal(f.plan.phase,'canceled');assert.equal(f.original.calls.includes('stop'),false);assert.equal(f.original.calls.includes('install'),false);assert.equal(f.original.calls.includes('unlock'),true);
+});
+function deferredForUpdate(){let resolve;const promise=new Promise(done=>resolve=done);return {promise,resolve};}
+test('unknown or changed install confirmation rolls back reservation and cannot install',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');const f=pauseFixture();f.helper=createPauseUpdateCoordinator(f.engine);await pauseReady(f);f.failMark=true;
+ await assert.rejects(f.helper.advancePlan(),/changed or was canceled/);assert.deepEqual(f.original.calls,['lock','reserve','cancel','unlock']);assert.equal(f.plan.phase,'blocked');
+});
+test('native installer failure restores backend before durable blocked callback and never polling retries same plan',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');const f=pauseFixture({native:{install:async()=>{throw Error('Synthetic install failure.');}}});f.helper=createPauseUpdateCoordinator(f.engine);await pauseReady(f);
+ await assert.rejects(f.helper.advancePlan(),/Synthetic install failure/);assert.deepEqual(f.original.calls,['lock','reserve','stop','cancel','unlock']);assert.equal(f.plan.phase,'blocked');
+ f.plan.phase='ready';await f.helper.advancePlan();assert.equal(f.calls.filter(value=>value==='mark-installing').length,1);
+});
+test('ordinary restart honors ready plan marking and refuses nonready durable plans',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');const f=pauseFixture();f.helper=createPauseUpdateCoordinator(f.engine);await pauseReady(f);await f.helper.restart();assert.equal(f.calls.includes('mark-installing'),true);
+ for(const phase of ['draining','blocked','resuming','installing','canceled']){const blocked=pauseFixture();blocked.helper=createPauseUpdateCoordinator(blocked.engine);await pauseReady(blocked);blocked.plan.phase=phase;await assert.rejects(blocked.helper.restart(),/Resume paused work or Return to work/);assert.deepEqual(blocked.original.calls,[]);}
+});
+test('pause requires downloaded newer signed update and does not begin from update availability alone',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');const f=pauseFixture();f.helper=createPauseUpdateCoordinator(f.engine);
+ await f.original.coordinator.request('check');await assert.rejects(f.helper.request('pause-update'),/Download a newer signed/);assert.deepEqual(f.calls,[]);
+});
+
+test('only completed plan releases native ordinary restart; canceled retains hold until explicit return',async()=>{
+ const {createPauseUpdateCoordinator}=await import('../desktop/updater.mjs');const f=pauseFixture();f.helper=createPauseUpdateCoordinator(f.engine);await pauseReady(f);
+ await f.helper.request('cancel-pause-update');await assert.rejects(f.helper.restart(),/Resume paused work or Return to work/);assert.equal(f.original.calls.length,0);
+ f.plan.phase='complete';await f.helper.restart();assert.equal(f.original.calls.includes('install'),true);assert.equal(f.calls.includes('mark-installing'),false);
+});

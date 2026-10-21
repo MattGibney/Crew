@@ -72,10 +72,11 @@ export function useVoiceSession(onError) {
   }, [dispose, patch]);
   const handleEvent = useCallback(message => {
     const state = resource.current;
+    if(message.type==='update-plan-state'&&message.plan&&message.plan.phase!=='complete'){dispose();patch({status:'Voice disconnected for the update. Microphone off.'});return;}
     if (state.disconnecting || (!state.pc && !state.busy)) return;
     if (message.type === 'error') { reportError(message.message); void disconnect('Voice error. Microphone off.'); }
     if (message.type === 'closed') void disconnect('Voice session ended. Microphone off.');
-  }, [disconnect, reportError]);
+  }, [disconnect, reportError, dispose, patch]);
   const connect = useCallback(async selectedVoice => {
     const state = resource.current;
     if (state.busy || state.disconnecting || state.pc || !selectedVoice) return;

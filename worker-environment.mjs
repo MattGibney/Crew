@@ -21,23 +21,24 @@ export async function reconcileEnvironment({stateDir,taskId,stop=false}){
  if(pending){environment.pending=true;await save(file,environment);return environment;}
  environment.pending=false;await save(file,environment);return environment;
 }
-export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},phases,existing=null,signal,onEvidence=async()=>{}}){
+export async function runEnvironmentHooks({stateDir,taskId,worktree,hooks={},phases,existing=null,signal,pauseBoundary,cooperative=false,onEvidence=async()=>{}}){
  const file=environmentFile(stateDir,taskId),prior=await reconcileEnvironment({stateDir,taskId});if(prior?.pending)throw new Error('An earlier environment command has not confirmed it stopped. Wait for its bounded supervisor, then retry. No environment was removed or restarted.');
  const environment=prior||existing||{id:`crew-${taskId}-${randomUUID().slice(0,8)}`,taskId,worktree,createdAt:now(),status:'not-configured',hooks:[]};
  if(environment.taskId!==taskId||environment.worktree!==worktree)throw new Error('Environment ownership does not match this worker.');
  for(const phase of phases){
+  await pauseBoundary?.();
   const hook=hooks[phase];if(!hook)continue;if(signal?.aborted)throw new Error('Worker environment preparation canceled.');
   if(typeof hook.command!=='string'||!hook.command||hook.command.includes('\0')||!Array.isArray(hook.args)||hook.args.some(a=>typeof a!=='string'||a.includes('\0'))||!Number.isInteger(hook.timeoutMs)||hook.timeoutMs<1000||hook.timeoutMs>600000)throw new Error(`Invalid ${phase} environment hook.`);
   const id=randomUUID(),runDir=path.join(stateDir,'runs',taskId,'environment',id);await mkdir(runDir,{recursive:true,mode:0o700});
   const evidence={id,phase,runDir,status:'running',startedAt:now(),command:hook.command,args:hook.args,timeoutMs:hook.timeoutMs};environment.status=phase==='cleanup'?'cleaning':'preparing';environment.hooks.push(evidence);await save(file,environment);await onEvidence(environment);
-  const config={...hook,id,taskId,worktree,environmentId:environment.id};await save(path.join(runDir,'config.json'),config);
+  const config={...hook,id,taskId,worktree,environmentId:environment.id,cooperative:cooperative===true};await save(path.join(runDir,'config.json'),config);
   let spawnError=null,closed=false;
   const child=spawn(process.execPath,[fileURLToPath(new URL('./environment-runner.mjs',import.meta.url)),path.join(runDir,'config.json')],{detached:true,stdio:'ignore',env:process.env});
   child.once('error',error=>{spawnError=error.code||'spawn failed';closed=true;});child.once('exit',()=>{closed=true;});child.unref();evidence.supervisorPid=child.pid||null;
   const abort=()=>{void save(path.join(runDir,'control.json'),{id,action:'stop',at:now()}).catch(()=>{});};signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   try{
    await save(file,environment);await onEvidence(environment);
-   let exit;for(;;){exit=await json(path.join(runDir,'exit.json'));if(exit?.id===id)break;if(spawnError)throw new Error(`Could not start ${phase} supervisor (${spawnError}).`);if(closed)throw new Error(`${phase} supervisor exited without a stop confirmation. Preserve this environment and inspect its state.`);await sleep(75);}
+   let exit;for(;;){if(cooperative){const blocked=await json(path.join(runDir,'cooperative-stop.json'));if(blocked?.id===id&&blocked.confirmed===false)throw new Error('Declared stop action remains unconfirmed. No force signal was sent; its owned supervisor remains available for recovery.');}exit=await json(path.join(runDir,'exit.json'));if(exit?.id===id)break;if(spawnError)throw new Error(`Could not start ${phase} supervisor (${spawnError}).`);if(closed)throw new Error(`${phase} supervisor exited without a stop confirmation. Preserve this environment and inspect its state.`);await sleep(75);}
    if(!exit.confirmed)throw new Error(`${phase} command descendants have not confirmed they stopped. Preserve this environment and inspect its state.`);
    Object.assign(evidence,{status:exit.status,exitCode:exit.exitCode,timedOut:exit.timedOut,canceled:exit.canceled,endedAt:exit.at,diagnostics:exit.diagnostics||null});
    if(exit.status!=='succeeded')throw new Error(`${phase} environment hook ${exit.timedOut?'timed out':exit.canceled?'was canceled':`failed (exit ${exit.exitCode}${exit.error?`, ${exit.error}`:''})`}. Check the configured command before retrying.`);

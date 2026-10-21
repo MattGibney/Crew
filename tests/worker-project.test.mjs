@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createTask, readTask, updateTask } from '../orchestration-store.mjs';
+import { createTask, readTask, updateTask, requestWorkerAction } from '../orchestration-store.mjs';
 import { createController } from '../controller.mjs';
 const exec = promisify(execFile);
 const sourceDir = fileURLToPath(new URL('../', import.meta.url));
@@ -38,8 +38,8 @@ console.log(JSON.stringify({type:'turn.completed'}));
 }
 // tick schedules launches independently so unrelated workers are never held behind one startup.
 // Wait for the observed durable outcome, preserving the original failure/safety assertions.
-async function waitFor(controller, observe, predicate, description='controller outcome') {
-  const deadline=Date.now()+5000;
+async function waitFor(controller, observe, predicate, description='controller outcome', timeoutMs=5000) {
+  const deadline=Date.now()+timeoutMs;
   while(Date.now()<deadline){
     await controller.tick();const value=await observe();
     if(predicate(value))return value;
@@ -144,4 +144,19 @@ test('durable MCP result completes without assistant text, while assistant text 
   try{const task=await terminal(controller,state,id),exit=JSON.parse(await readFile(path.join(task.runDir,'exit.json'),'utf8'));assert.equal(exit.exitCode,0);assert.equal(exit.completedTurn,true);assert.equal(exit.stopConfirmed,true);if(resultOnly){assert.equal(task.status,'completed',task.failure);assert.equal(task.result.message,'Audit complete');assert.equal(task.result.finalMessage,'');assert.equal(exit.finalMessage,'');assert.equal(task.result.verification.semanticCorrectnessVerified,false);assert.equal(task.result.verification.clean,true);}else{assert.equal(task.status,'failed');assert.match(task.failure,/without a durable question or result/);assert.equal(task.result,undefined);}}
   finally{await controller.stop();}
  }
+});
+
+
+test('cooperative update pause verifies an already-finished durable result instead of preparing a duplicate run',async t=>{
+ const base=await mkdtemp(path.join(os.tmpdir(),'crew-finished-pause-')),repo=await repository(base),state=path.join(base,'state'),id='worker-finished-before-pause',project=profile(repo),executable=await mockedCodex(base);
+ await createTask(state,{requestId:id,ticket:'EX-12',brief:'Inspect only',projectId:project.id,repositoryId:'app'});let controller=await createController({stateDir:state,sourceDir,executable,project});
+ t.after(async()=>{await controller.stop();});
+ const first=await waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),'finished result before cooperative pause',30000);assert.equal(first.status,'completed');await controller.stop();
+ // Recreate the deterministic window after durable result/terminal publication,
+ // before the next controller verification tick. The actual command/exit data is retained.
+ await updateTask(state,id,n=>{n.status='verifying';delete n.result;n.handledReports=[];});
+ await requestWorkerAction(state,{taskId:id,actionId:'update-pause-finished',action:'pause',cooperative:true,expectedRunId:first.runId});
+ controller=await createController({stateDir:state,sourceDir,executable,project,admissionHeld:async()=>true});
+ try{const done=await readTask(state,id);assert.equal(done.status,'completed');assert.equal(done.result.message,'Audit complete');assert.equal(done.runId,first.runId);assert.equal(done.threadId,first.threadId);assert.equal(done.lifecycleRequests.at(-1).status,'completed');assert.equal(done.result.verification.clean,true);}
+ finally{await controller.stop();}
 });

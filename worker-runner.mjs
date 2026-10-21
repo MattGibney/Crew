@@ -5,6 +5,7 @@ import { readFile, writeFile, rename, open, appendFile } from 'node:fs/promises'
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {OwnedProcessTree,snapshotProcesses} from './process-ownership.mjs';
+import {waitOwnedNatural} from './cooperative-process.mjs';
 const configPath = process.argv[2];
 const config = JSON.parse(await readFile(configPath, 'utf8'));
 const runDir = path.dirname(configPath);
@@ -57,15 +58,20 @@ lines.on('line',line=>{
 async function capture(){if(tree){const records=await tree.capture();await atomic('ownership.json',{runId:config.runId,records,at:new Date().toISOString()});}}
 await capture();
 await atomic('owner.json',{runId:config.runId,supervisorPid:process.pid,supervisorIdentity:(await snapshotProcesses()).get(process.pid)||null,workerPid:worker.pid||null,at:new Date().toISOString()});
+let cooperative=false;
 const stopOwnedWorker=()=>{if(!stopPromise)stopPromise=tree?tree.stop({graceMs:2000}):Promise.resolve({confirmed:Boolean(spawnError),remaining:[]});return stopPromise;};
 const timeoutMs=Number.isSafeInteger(config.timeoutMs)&&config.timeoutMs>=1000&&config.timeoutMs<=86400000?config.timeoutMs:300000;
-const timeout=setTimeout(()=>{errorMessage=`Bounded worker run exceeded ${timeoutMs} milliseconds.`;void stopOwnedWorker();},timeoutMs);
+const timeout=setTimeout(()=>{void(async()=>{await acceptControl().catch(()=>{});if(cooperative)return;errorMessage=`Bounded worker run exceeded ${timeoutMs} milliseconds.`;void stopOwnedWorker();})();},timeoutMs);
 let checking=false;
-const controlTimer=setInterval(async()=>{if(checking)return;checking=true;try{await capture();if(!stopRequest){const request=JSON.parse(await readFile(path.join(runDir,'control.json'),'utf8'));if(request.runId===config.runId&&typeof request.requestId==='string'&&['stop','pause'].includes(request.action)){stopRequest=request;await atomic('control-accepted.json',{...request,at:new Date().toISOString(),supervisorPid:process.pid,workerPid:worker.pid});void stopOwnedWorker();}}}catch{}finally{checking=false;}},100);
-process.on('SIGTERM',()=>{errorMessage='Worker supervisor was stopped.';void stopOwnedWorker();});
+async function acceptControl(){const request=JSON.parse(await readFile(path.join(runDir,'control.json'),'utf8'));if(request.runId!==config.runId||typeof request.requestId!=='string'||!['stop','pause'].includes(request.action)||stopRequest?.requestId===request.requestId)return;stopRequest=request;await atomic('control-accepted.json',{...request,at:new Date().toISOString(),supervisorPid:process.pid,workerPid:worker.pid});if(request.cooperative===true){cooperative=true;clearTimeout(timeout);stopPromise=waitOwnedNatural(tree,{interrupt:true,onBlocked:state=>atomic('cooperative-stop.json',{runId:config.runId,requestId:request.requestId,...state,at:new Date().toISOString()}),isSuperseded:()=>!cooperative});}else{if(cooperative){cooperative=false;stopPromise=null;}void stopOwnedWorker();}}
+const controlTimer=setInterval(async()=>{if(checking)return;checking=true;try{await capture();await acceptControl();}catch{}finally{checking=false;}},100);
+process.on('SIGTERM',()=>{errorMessage='Worker supervisor was stopped.';if(cooperative){cooperative=false;stopPromise=null;}void stopOwnedWorker();});
 const exitCode=await closed;
 clearTimeout(timeout);clearInterval(controlTimer);
 // A natural CLI exit must also leave no captured command/MCP descendant behind.
-const ownership=await(stopPromise||tree?.stop({graceMs:1000})||Promise.resolve({confirmed:Boolean(spawnError),remaining:[]}));
+await acceptControl().catch(()=>{});
+let observedStop=stopPromise;
+let ownership=await(observedStop||(cooperative?waitOwnedNatural(tree):null)||tree?.stop({graceMs:1000})||Promise.resolve({confirmed:Boolean(spawnError),remaining:[]}));
+if(stopPromise&&stopPromise!==observedStop)ownership=await stopPromise;
 await writes;
 await atomic('exit.json',{runId:config.runId,threadId,exitCode,completedTurn,commands,finalMessage,error:errorMessage,stopped:Boolean(stopRequest)&&ownership.confirmed,stopConfirmed:ownership.confirmed,ownership:{confirmed:ownership.confirmed,remaining:ownership.remaining||[],tracked:ownership.tracked||[]},stopAction:stopRequest?.action||null,stopRequestId:stopRequest?.requestId||null,supervisorPid:process.pid,workerPid:worker.pid||null,at:new Date().toISOString()});

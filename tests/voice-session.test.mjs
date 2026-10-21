@@ -115,3 +115,8 @@ test('device-ended input cannot be recaptured by transport events, and an error 
  h.voice.handleEvent({type:'error',message:'synthetic transport failure'});await h.flush();await connected(h);
  assert.equal(h.captures.length,2);assert.equal(h.voice.openMicMuted,true);assert.equal(h.voice.transmitting,false);
 });
+
+test('update plan immediately releases existing media and invalidates pending permission without reconnecting',async t=>{
+ const h=harness();t.after(()=>h.destroy());const peer=await connected(h),mic=peer.sender.track;h.voice.handleEvent({type:'update-plan-state',plan:{phase:'draining'}});await h.flush();assert.equal(peer.closed,true);assert.equal(mic.readyState,'ended');assert.equal(h.voice.allocated,false);assert.equal(h.voice.transmitting,false);assert.match(h.voice.status,/update/);assert.equal(h.captures.length,1);
+ const permission=deferred(),late=stream(),pending=harness({acquire:()=>permission.promise});t.after(()=>pending.destroy());const old=await connected(pending);pending.voice.handleEvent({type:'update-plan-state',plan:{phase:'draining'}});await pending.flush();permission.resolve(late);await pending.flush();assert.equal(late.audio.readyState,'ended');assert.equal(old.closed,true);assert.equal(pending.voice.allocated,false);assert.equal(pending.captures.length,1);
+});

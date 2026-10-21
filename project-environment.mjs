@@ -42,7 +42,7 @@ async function verifyPermissionsSource(repositoryPath,plan){
 function assertOwned(args,environment){if(environment?.kind!=='project-execution'||environment.taskId!==args.taskId||!/^crew-[a-f0-9]{32}$/.test(environment.id))throw new Error('Project runtime identity does not match this task.');if(environment.runtime&&(typeof environment.runtime.id!=='string'||environment.runtime.runDir!==path.join(args.stateDir,'runs',args.taskId,'project-runtime',environment.runtime.id)))throw new Error('Runtime directory does not belong to this task.');}
 async function persist(args,environment){await save(environmentFile(args.stateDir,args.taskId),environment);await args.onEvidence?.(environment);return environment;}
 function scriptArgs(plan,action){return plan.env?.PATH?['-lc','export PATH="$1"; exec /bin/zsh -c "$2"','crew-project-action',plan.env.PATH,action.command]:['-lc',action.command];}
-async function bounded(args,environment,phase,action,signal=args.signal){if(!action)return;await runEnvironmentHooks({stateDir:args.stateDir,taskId:args.taskId,worktree:environment.worktree,hooks:{[phase]:{command:'/bin/zsh',args:scriptArgs(environment.plan,action),timeoutMs:action.timeoutMs}},phases:[phase],existing:environment,signal,onEvidence:async value=>{Object.assign(environment,value);await args.onEvidence?.(value);}});}
+async function bounded(args,environment,phase,action,signal=args.signal){if(!action)return;await runEnvironmentHooks({stateDir:args.stateDir,taskId:args.taskId,worktree:environment.worktree,hooks:{[phase]:{command:'/bin/zsh',args:scriptArgs(environment.plan,action),timeoutMs:action.timeoutMs}},phases:[phase],existing:environment,signal,pauseBoundary:args.pauseBoundary,cooperative:args.cooperative===true,onEvidence:async value=>{Object.assign(environment,value);await args.onEvidence?.(value);}});}
 async function runtimeState(environment,processes=null){
  const runtime=environment.runtime;if(!runtime)return{kind:'absent'};const exit=await json(path.join(runtime.runDir,'exit.json'));if(exit?.id===runtime.id&&exit.environmentId===environment.id)return{kind:exit.stopConfirmed===true?'stopped':'unknown',exit};
  const started=await json(path.join(runtime.runDir,'started.json'));if(started?.id!==runtime.id||started.environmentId!==environment.id)return{kind:'unknown'};const actual=(processes||await snapshotProcesses()).get(started.pid),expected=started.identity;
@@ -65,17 +65,28 @@ export async function prepareProjectEnvironment(args){
  await verifySources(worktree,args.baseCommit,args.plan,[...(!environment.prepared?['setup']:[]),environment.runtime&&args.plan.resume?'resume':'start','ready']);
  // Upgrade legacy order-sensitive hashes only after the retained sources are verified.
  environment.planHash=executionPlanHash(args.plan);await persist(args,environment);
+ await args.pauseBoundary?.();
  if(!environment.prepared){const completed=environment.hooks.some(h=>h.phase==='setup'&&h.status==='succeeded');if(environment.setupAttempted&&!completed)throw new Error('Earlier setup did not complete. Its retained data will not be reseeded; review it before starting a fresh worker.');if(!completed&&environment.plan.setup){environment.setupAttempted=true;await persist(args,environment);await bounded(args,environment,'setup',environment.plan.setup);}environment.prepared=true;await persist(args,environment);}
+ await args.pauseBoundary?.();
  if(environment.plan.start)await startRuntime(args,environment);if(args.signal?.aborted){await stopProjectEnvironment(args);throw new Error('Project startup canceled.');}
+ await args.pauseBoundary?.();
  if(environment.plan.ready){await bounded(args,environment,'ready',environment.plan.ready);if(environment.plan.start&&(await runtimeState(environment)).kind!=='live')throw new Error('Project Start action stopped before its declared readiness check completed.');environment.readinessKind='app-verified';environment.status='ready';}else{environment.readinessKind='setup-complete';environment.status=environment.plan.start?'running':'ready';}
  environment.readyAt=now();return persist(args,environment);
 }
 export async function stopProjectEnvironment(args){
  const environment=await json(environmentFile(args.stateDir,args.taskId));if(environment?.kind!=='project-execution')return environment;assertOwned(args,environment);
- const pending=await reconcileEnvironment({stateDir:args.stateDir,taskId:args.taskId,stop:true});if(pending?.pending)throw new Error('Project setup/check command is still stopping; no stop completion was claimed.');
+ const cooperative=args.cooperative===true;
+ const pending=await reconcileEnvironment({stateDir:args.stateDir,taskId:args.taskId,stop:!cooperative});if(pending?.pending)throw new Error('Project setup/check command is still finishing; no stop completion was claimed.');
  Object.assign(environment,pending||{});const state=await runtimeState(environment);if(state.kind==='unknown')throw new Error('Project runtime ownership is unresolved; no stop completion was claimed.');
- if(['live','starting'].includes(state.kind)){await save(path.join(environment.runtime.runDir,'control.json'),{id:environment.runtime.id,environmentId:environment.id,action:'stop',at:now()});const until=Date.now()+15000;for(;;){if((await runtimeState(environment)).kind==='stopped')break;if(Date.now()>until)throw new Error('Project foreground shutdown has not been confirmed.');await sleep(100);}}
- if(environment.status!=='stopped'&&environment.plan.stop){await verifySources(environment.worktree,environment.baseCommit,environment.plan,['stop']);await bounded(args,environment,'stop',environment.plan.stop,undefined);}
+ if(cooperative){
+  if(['live','starting'].includes(state.kind)&&!environment.plan.stop)throw new Error('This project has no declared graceful stop action. No force signal was sent; resolve its runtime before updating.');
+  if(environment.runtime)await save(path.join(environment.runtime.runDir,'control.json'),{id:environment.runtime.id,environmentId:environment.id,action:'stop',cooperative:true,at:now()});
+  if(environment.status!=='stopped'&&environment.plan.stop){await verifySources(environment.worktree,environment.baseCommit,environment.plan,['stop']);await bounded({...args,pauseBoundary:null,cooperative:true},environment,'stop',environment.plan.stop,undefined);}
+  if(environment.runtime){const until=Date.now()+15000;for(;;){if((await runtimeState(environment)).kind==='stopped')break;if(Date.now()>until)throw new Error('Graceful project shutdown remains unconfirmed. No force signal was sent.');await sleep(100);}}
+ }else{
+  if(['live','starting'].includes(state.kind)){await save(path.join(environment.runtime.runDir,'control.json'),{id:environment.runtime.id,environmentId:environment.id,action:'stop',at:now()});const until=Date.now()+15000;for(;;){if((await runtimeState(environment)).kind==='stopped')break;if(Date.now()>until)throw new Error('Project foreground shutdown has not been confirmed.');await sleep(100);}}
+  if(environment.status!=='stopped'&&environment.plan.stop){await verifySources(environment.worktree,environment.baseCommit,environment.plan,['stop']);await bounded(args,environment,'stop',environment.plan.stop,undefined);}
+ }
  environment.status='stopped';if(environment.runtime)environment.runtime.status='stopped';return persist(args,environment);
 }
 export async function disposeProjectEnvironment(args){

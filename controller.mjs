@@ -17,7 +17,7 @@ async function json(file) { try { return JSON.parse(await readFile(file, 'utf8')
 async function atomic(file, value) { const temp = `${file}.${process.pid}.tmp`; await writeFile(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 }); await rename(temp, file); }
 const confirmedExit=(task,exit)=>Boolean(exit&&exit.runId===task.runId&&exit.stopConfirmed===true);
 const attention = (task, id, kind, message) => { if (!task.attention.some(a => a.id === id)) task.attention.push({ id, kind, message, at: now() }); };
-export async function createController({ stateDir, sourceDir, executable, project = null, workerPrompt = '', onChange = () => {} }) {
+export async function createController({ stateDir, sourceDir, executable, project = null, workerPrompt = '', onChange = () => {}, admissionHeld = async () => false }) {
   await mkdir(stateDir, { recursive: true, mode: 0o700 });
   const lockPath = path.join(stateDir, 'controller.lock');
   let lock;
@@ -55,6 +55,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
     await updateTask(stateDir, id, task => { task.status = 'failed'; task.endedAt=now(); task.failure = message; attention(task, `${task.runId || task.id}:failure`, 'failure', message); });
   }
   async function launch(task, resume) {
+    if(stopped||await admissionHeld({taskId:task.id,resume}))return;
     if(task.harnessStarted&&!confirmedExit(task,task.runDir?await json(path.join(task.runDir,'exit.json')):null)){await fail(task.id,'The previous worker run has no matching confirmed terminal record. Preserve its environment until ownership is reconciled.');return;}
     if (resume && project?.mode === 'repository' && task.workerSandbox !== project.worker?.sandbox) {
       await fail(task.id, 'Worker sandbox configuration changed since this task started; refusing resume or permission escalation.');
@@ -67,7 +68,10 @@ export async function createController({ stateDir, sourceDir, executable, projec
       next.status = 'launching'; next.failure=null; next.startedAt=null; next.endedAt=null; next.execution=null; next.spawnIntentAt=null; next.previousRunId = next.runId || null; next.runId = runId; next.launchAt = now();
       if (resume) for (const item of next.attention) if (item.kind === 'question' && !item.ackedAt) item.ackedAt = now();
     });
+    let workerDispatched=false;
+    const pauseBoundary=async()=>{for(;;){if(stopped){const error=new Error('Controller stopped at a safe preparation boundary. Existing environment evidence was retained.');error.controllerShutdown=true;throw error;}const latest=await readTask(stateDir,task.id);const request=latest.lifecycleRequests?.find(r=>['pending','processing'].includes(r.status)&&r.action==='pause'&&r.cooperative===true);if(request){await updateTask(stateDir,task.id,n=>{n.status='pausing';const r=n.lifecycleRequests.find(r=>r.id===request.id);r.status='processing';});const error=new Error('Cooperative update pause reached a safe preparation boundary.');error.cooperative=true;throw error;}if(!await admissionHeld({taskId:task.id,resume}))return;await new Promise(r=>setTimeout(r,50));}};
     try {
+      await pauseBoundary();
       if (project && task.projectId !== project.id && !(project.mode === 'fixture' && !task.projectId)) throw new Error('Task project does not match this controller');
       const repositoryMode = project?.mode === 'repository';
       if (project && !project.readiness?.ready) throw new Error('Project configuration is incomplete; no worktree was created');
@@ -100,18 +104,20 @@ export async function createController({ stateDir, sourceDir, executable, projec
       const existingEnvironment=await json(environmentFile(stateDir,task.id));
       if(existingEnvironment?.preset)throw new Error('An obsolete project-specific environment is retained. No project protocol was executed; preserve its state and recover it with its original project tooling.');
       const environment=project?.worker?.environment?.executionPlan
-        ?await prepareProjectEnvironment({plan:project.worker.environment.executionPlan,stateDir,taskId:task.id,worktree,repositoryPath:meta.repo,baseCommit:task.worktree?task.baseCommit:meta.commit,resume,signal:abort.signal,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})})
-        :await runEnvironmentHooks({stateDir,taskId:task.id,worktree,hooks:project?.worker?.environment||{},phases:resume?['resume','ready']:['bootstrap','start','ready'],existing:existingEnvironment,signal:abort.signal,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})});
+        ?await prepareProjectEnvironment({plan:project.worker.environment.executionPlan,stateDir,taskId:task.id,worktree,repositoryPath:meta.repo,baseCommit:task.worktree?task.baseCommit:meta.commit,resume,signal:abort.signal,pauseBoundary,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})})
+        :await runEnvironmentHooks({stateDir,taskId:task.id,worktree,hooks:project?.worker?.environment||{},phases:resume?['resume','ready']:['bootstrap','start','ready'],existing:existingEnvironment,signal:abort.signal,pauseBoundary,onEvidence:environment=>updateTask(stateDir,task.id,next=>{next.environment=environment;})});
       if(abort.signal.aborted)throw new Error('Worker environment preparation canceled.');
 
+      await pauseBoundary();
       const config = { project, workerPrompt, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
       if (resume && !config.threadId) throw new Error('Cannot resume: no recorded worker Codex session.');
       await atomic(path.join(runDir, 'config.json'), config);
       await updateTask(stateDir, task.id, next => { next.worktree = worktree; next.fixtureRepo = repositoryMode ? null : meta.repo; next.fixtureCommit = repositoryMode ? null : meta.commit; next.repositoryPath = meta.repo; next.baseCommit = task.worktree ? task.baseCommit : meta.commit; next.workerSandbox = config.sandbox; next.runDir = runDir; next.runId = runId; next.status = 'running'; next.harnessStarted='pending'; next.spawnIntentAt=now(); next.startedAt=null; next.endedAt=null; next.execution=null; next.handledReports = next.handledReports || []; });
-      const runner = spawn(process.execPath, [path.join(sourceDir, 'worker-runner.mjs'), path.join(runDir, 'config.json')], { cwd: sourceDir, detached: true, stdio: 'ignore' });
+      await pauseBoundary();
+      const runner = spawn(process.execPath, [path.join(sourceDir, 'worker-runner.mjs'), path.join(runDir, 'config.json')], { cwd: sourceDir, detached: true, stdio: 'ignore' });workerDispatched=true;
       await new Promise((resolve, reject) => { runner.once('spawn', resolve); runner.once('error', reject); }); runner.unref();
       await updateTask(stateDir, task.id, next => { next.runnerPid = runner.pid; next.harnessStarted=true; });
-    } catch (error) { const latest=await readTask(stateDir,task.id);if(['stopping','pausing'].includes(latest.status)){if(latest.environment?.kind==='project-execution'){try{await stopProjectEnvironment({stateDir,taskId:task.id,onEvidence:environment=>updateTask(stateDir,task.id,n=>{n.environment=environment;})});}catch(stopError){await fail(task.id,`Project environment shutdown was not confirmed: ${stopError.message}`);for(const r of latest.lifecycleRequests||[])if(r.status==='processing')await finishRequest(task.id,r.id,stopError.message);return;}}await updateTask(stateDir,task.id,n=>{n.status=n.status==='pausing'?'paused':'stopped';n.endedAt=now();for(const r of n.lifecycleRequests||[])if(r.status==='processing'){r.status='completed';r.handledAt=now();}});}else await fail(task.id, `Worker launch failed: ${error.message}`); } finally {launchAbort.delete(task.id);}
+    } catch (error) { if(!workerDispatched)await updateTask(stateDir,task.id,n=>{n.harnessStarted=false;n.spawnIntentAt=null;});if(error.controllerShutdown===true){await updateTask(stateDir,task.id,n=>{n.status='paused';n.endedAt=now();n.preparationPause={reason:'controller-shutdown',at:n.endedAt};});return;}const latest=await readTask(stateDir,task.id);if(['stopping','pausing'].includes(latest.status)){if(latest.environment?.kind==='project-execution'){try{await stopProjectEnvironment({stateDir,taskId:task.id,cooperative:error.cooperative===true||latest.lifecycleRequests?.some(r=>r.status==='processing'&&r.cooperative===true),onEvidence:environment=>updateTask(stateDir,task.id,n=>{n.environment=environment;})});}catch(stopError){await fail(task.id,`Project environment shutdown was not confirmed: ${stopError.message}`);for(const r of latest.lifecycleRequests||[])if(r.status==='processing')await finishRequest(task.id,r.id,stopError.message);return;}}await updateTask(stateDir,task.id,n=>{n.status=n.status==='pausing'?'paused':'stopped';n.endedAt=now();for(const r of n.lifecycleRequests||[])if(r.status==='processing'){r.status='completed';r.handledAt=now();}});}else await fail(task.id, `Worker launch failed: ${error.message}`); } finally {launchAbort.delete(task.id);}
   }
   async function verify(task, exit, report) {
     if (exit.exitCode !== 0 || !exit.completedTurn || !exit.threadId) throw new Error('Worker did not produce a successful completed Codex turn and session.');
@@ -170,11 +176,11 @@ export async function createController({ stateDir, sourceDir, executable, projec
   async function completeStop(task,request){
     if(task.environment?.kind!=='project-execution')return false;
     if(!operations.has(task.id)){
-      const action=request?.action|| (task.status==='pausing'?'pause':'stop');
-      await updateTask(stateDir,task.id,n=>{n.status=action==='pause'?'pausing':'stopping';});
-      const operation=stopProjectEnvironment({stateDir,taskId:task.id,onEvidence:environment=>updateTask(stateDir,task.id,n=>{n.environment=environment;})})
-        .then(()=>updateTask(stateDir,task.id,n=>{n.status=action==='pause'?'paused':'stopped';n.endedAt=now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};const current=n.lifecycleRequests?.find(r=>r.id===request?.id);if(current){current.status='completed';current.handledAt=now();}}))
-        .catch(async error=>{if(request)await finishRequest(task.id,request.id,error.message);await fail(task.id,`Project environment stop failed: ${error.message}`);})
+      const action=request?.action|| (task.status==='pausing'?'pause':'stop'),preserveCompleted=request?.cooperative===true&&task.status==='completed';
+      if(!preserveCompleted)await updateTask(stateDir,task.id,n=>{n.status=action==='pause'?'pausing':'stopping';});
+      const operation=stopProjectEnvironment({stateDir,taskId:task.id,cooperative:request?.cooperative===true,onEvidence:environment=>updateTask(stateDir,task.id,n=>{n.environment=environment;})})
+        .then(()=>updateTask(stateDir,task.id,n=>{n.status=preserveCompleted?'completed':action==='pause'?'paused':'stopped';n.endedAt=now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};const current=n.lifecycleRequests?.find(r=>r.id===request?.id);if(current){current.status='completed';current.handledAt=now();}}))
+        .catch(async error=>{if(request)await finishRequest(task.id,request.id,error.message);if(preserveCompleted)await updateTask(stateDir,task.id,n=>{n.environmentStopFailure=error.message;attention(n,`${n.runId}:environment-stop-failure`,'blocked',`Completed work was retained, but project environment stop failed: ${error.message}`);});else await fail(task.id,`Project environment stop failed: ${error.message}`);})
         .finally(()=>operations.delete(task.id));operations.set(task.id,operation);
     }return true;
   }
@@ -186,6 +192,16 @@ export async function createController({ stateDir, sourceDir, executable, projec
       if(request.status==='pending')task=await updateTask(stateDir,task.id,n=>{n.lifecycleRequests.find(r=>r.id===request.id).status='processing';});
       if(['pause','stop'].includes(request.action)){
         const exit=task.runDir?await json(path.join(task.runDir,'exit.json')):null;
+        if(request.cooperative===true&&confirmedExit(task,exit)&&!launches.has(task.id)){
+          const result=task.reports.find(r=>r.runId===task.runId&&r.kind==='result');
+          if(task.status!=='completed'&&exit.exitCode===0&&exit.completedTurn&&exit.threadId&&result){
+            try{await verify(task,exit,result);task=await readTask(stateDir,task.id);}catch(error){await fail(task.id,`Completion verification failed: ${error.message}`);throw error;}
+          }
+          if(task.status==='completed'){
+            if(await completeStop(task,request))return await readTask(stateDir,task.id);
+            await finishRequest(task.id,request.id);return await readTask(stateDir,task.id);
+          }
+        }
         if(launches.has(task.id)){
           task=await updateTask(stateDir,task.id,n=>{
             const current=n.lifecycleRequests?.find(r=>r.id===request.id);
@@ -195,10 +211,10 @@ export async function createController({ stateDir, sourceDir, executable, projec
             if(['paused','stopped'].includes(n.status)){current.status='completed';current.handledAt=now();return;}
             n.status=request.action==='pause'?'pausing':'stopping';
           });
-          if(task.lifecycleRequests?.find(r=>r.id===request.id)?.status==='processing')launchAbort.get(task.id)?.abort();
+          if(request.cooperative!==true&&task.lifecycleRequests?.find(r=>r.id===request.id)?.status==='processing')launchAbort.get(task.id)?.abort();
           return task;
         }
-        const priorEnvironment=await reconcileEnvironment({stateDir,taskId:task.id,stop:true});
+        const priorEnvironment=await reconcileEnvironment({stateDir,taskId:task.id,stop:request.cooperative!==true});
         if(priorEnvironment?.pending){await updateTask(stateDir,task.id,n=>{n.status=request.action==='pause'?'pausing':'stopping';n.environment=priorEnvironment;});return await readTask(stateDir,task.id);}
         if(exit&&task.harnessStarted&&!confirmedExit(task,exit))throw new Error('Worker commands have no matching confirmed terminal record. No stop completion was claimed.');
         if(!task.harnessStarted||confirmedExit(task,exit)){
@@ -206,11 +222,11 @@ export async function createController({ stateDir, sourceDir, executable, projec
           await updateTask(stateDir,task.id,n=>{n.status=request.action==='pause'?'paused':'stopped';n.endedAt=exit?.at||now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};const current=n.lifecycleRequests?.find(r=>r.id===request.id);if(current){current.status='completed';current.handledAt=now();}});await finishRequest(task.id,request.id);return await readTask(stateDir,task.id);
         }
         if(!task.runDir)throw new Error('Worker ownership is unknown; no process was stopped.');
-        await atomic(path.join(task.runDir,'control.json'),{runId:task.runId,requestId:request.id,action:request.action,at:now()});
+        await atomic(path.join(task.runDir,'control.json'),{runId:task.runId,requestId:request.id,action:request.action,cooperative:request.cooperative===true,at:now()});
         task=await updateTask(stateDir,task.id,n=>{n.status=request.action==='pause'?'pausing':'stopping';});
       }else if(['resume','start'].includes(request.action)){
         if(!['queued','paused','stopped','failed','blocked','awaiting_answer'].includes(task.status))throw new Error('This worker is already active or finished.');
-        if(task.question?.runId===task.runId&&task.answer?.questionId!==task.question.id)throw new Error('Answer this worker’s question before resuming it.');
+        if(task.question&&task.question.runId===task.runId&&task.answer?.questionId!==task.question.id)throw new Error('Answer this worker’s question before resuming it.');
         const environment=await reconcileEnvironment({stateDir,taskId:task.id});if(environment?.pending)throw new Error('An earlier environment command is still running or lacks a stop confirmation. Wait for its bounded supervisor and retry.');
         if(task.harnessStarted&&!confirmedExit(task,task.runDir?await json(path.join(task.runDir,'exit.json')):null))throw new Error('The previous worker run has no matching confirmed terminal record. Wait for verified shutdown before resuming.');
         if(task.worktree&&!task.threadId&&task.harnessStarted)throw new Error('This worker has no saved conversation to resume. Preserve its worktree and start another worker.');
@@ -293,6 +309,8 @@ export async function createController({ stateDir, sourceDir, executable, projec
       let occupied=launches.size;
       for(const task of tasks){if(foreign(task)||launches.has(task.id))continue;if(task.runDir&&task.harnessStarted&&!confirmedExit(task,await json(path.join(task.runDir,'exit.json'))))occupied++;else if(task.status==='launching'&&Date.now()-Date.parse(task.launchAt)<15000)occupied++;else if(task.status==='launching')await fail(task.id,'Launch interrupted; inspect its environment before restarting.');}
       for(const task of tasks){
+        if(stopped)break;
+        if(await admissionHeld({taskId:task.id,resume:task.status==='resume_queued'}))continue;
         if(occupied>=maxConcurrent)break;
         if(foreign(task)||!['queued','resume_queued'].includes(task.status)||launches.has(task.id))continue;
         if(task.harnessStarted&&!confirmedExit(task,task.runDir?await json(path.join(task.runDir,'exit.json')):null))continue;

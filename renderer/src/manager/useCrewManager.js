@@ -51,6 +51,7 @@ export function useCrewManager() {
       try {
         const message = JSON.parse(event.data);
         if (message.type === 'update-state') setUpdates(message.status);
+        if(message.type==='update-plan-state')setUpdates(previous=>({...previous,plan:message.plan}));
         if (message.type === 'work-state') setWork(message.state);
         if (message.type === 'orchestration-state') setOrchestration(message.state);
         if (message.type === 'notice') setWorkNotice(message.message);
