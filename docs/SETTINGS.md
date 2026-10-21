@@ -2,13 +2,13 @@
 
 Tracked by [GitHub issue #3](https://github.com/MattGibney/crew/issues/3).
 
-Open **Settings** in the Crew header. The two editors contain the complete Crew-authored behavior for this project's manager and workers. A custom save replaces that role's defaults; it is not an extra layer. These editors do not expose or override Codex/provider system instructions, sandbox enforcement or tool schemas. Do not put credentials in instructions.
+Open **Settings** in the Crew header. Global → General controls shared worker capacity on this Mac. Project → General renames the selected project; Sessions provides Start/Stop/Restart; Manager profile contains voice and manager instructions; Worker profile contains worker instructions. The floating navigation sits beside the content. Choose Update to edit, Save to persist, or Cancel to discard that editor’s unsaved changes. Save confirmations appear as dismissible toasts; guidance stays below the instruction editor. The two editors contain the complete Crew-authored behavior for this project's manager and workers. A custom save replaces that role's defaults; it is not an extra layer. These editors do not expose or override Codex/provider system instructions, sandbox enforcement or tool schemas. Do not put credentials in instructions.
 
 The default behavior includes communication, delegation, scope, reporting and the voice startup greeting. Crew adds separately identified runtime context: project/task/run identity, sandbox permissions, controller/report bindings, task briefs and relayed answers. Realtime receives the active manager behavior plus the selected voice and a factual connection event. Connection acknowledgement does not append another hidden greeting instruction or start a user turn.
 
 **Save instructions** persists the current editor. **Cancel changes** discards only the unsaved draft. **Reset to default** loads the complete shipped default into that editor; save it to persist the reset. Resetting one role does not affect the other. Drafts survive switching between Settings and Conversation, and failed/stale saves preserve text. A concurrent saved change requires reviewing the latest version rather than overwriting it silently.
 
-Manager saves remain pending until **Restart manager**. Saving never hot-applies a prompt or starts a turn. Settings shows saved and active content-hash versions, or the retained version while stopped. Restart resumes the saved native chat with the saved instructions; it retains conversation history, project tasks and workers. Stop followed by an explicit Start also applies saved instructions. Reloading the window or controller preserves the retained manager instructions and stopped intent; it does not silently activate a newer saved manager prompt.
+Manager saves remain pending until **Restart manager**. Saving never hot-applies a prompt or starts a turn. Settings shows a plain Start/Restart notice when saved instructions are not active; internal version checks remain in place without exposing hash labels. Restart resumes the saved native chat with the saved instructions; it retains conversation history, project tasks and workers. Stop followed by an explicit Start also applies saved instructions. Reloading the window or controller preserves the retained manager instructions and stopped intent; it does not silently activate a newer saved manager prompt.
 
 Worker changes affect the next actual first launch. An already launched worker retains its original text and version on answers, pause/resume and controller recovery. Its retained task detail exposes that snapshot for review. Legacy workers recover their original prompt from the recorded run configuration; if that source is unavailable, resume refuses rather than changing behavior.
 
@@ -29,7 +29,8 @@ Settings are stored privately under this project's state directory at `prompt-se
 
 The instance-scoped HTTP contract is:
 
-- `GET /api/settings`: project identity/name, saved/default prompts, manager active/retained versions and pending changes, plus lifecycle state/error.
+- `GET /api/settings`: project identity/name, manager voice profile, saved/default prompts, manager active/retained versions and pending changes, plus lifecycle state/error.
+- `PUT /api/settings/manager-profile`: `{voice,expectedVersion}`. Saves the project voice for its next call; existing calls are unchanged. Prior project-partition preferences migrate once when no explicit profile exists.
 - `PUT /api/settings/prompts`: `{role,text,expectedVersion}`. Same-origin JSON only; invalid, oversized or stale edits leave saved settings unchanged.
 - `POST /api/manager/lifecycle`: `{action:"start"|"stop"|"restart"}`. Same-origin JSON only. Update admission prevents new lifecycle work during an installation reservation.
 - SSE `manager-lifecycle`: `{state:{state,error,activeVersion,retainedVersion}}` on the existing single event stream.

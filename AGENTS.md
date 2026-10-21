@@ -196,3 +196,4 @@
 ## Authorized UI release 0.13.0 (GitHub #30)
 
 - The user explicitly authorized merging the reviewed UI work and deploying a new version. Integrate current main, preserve 0.12.0 transcript/recovery/model continuity, validate the combined source, merge through a reviewable PR, and publish one signed/notarized 0.13.0 release through the existing workflow. This does not authorize unrelated issue #26, rewriting published history/assets, changing installed profiles or bypassing the known portable-profile updater boundary.
+- Native acceptance providers must implement the currently used canonical-history and app-server worker-turn contracts. Log manager/worker role separately: authorized synthetic worker turns are expected, while navigation must never start a manager turn. An obsolete exec-only fixture cannot establish current native-worker acceptance.

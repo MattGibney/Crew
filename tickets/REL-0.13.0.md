@@ -1,0 +1,19 @@
+# REL-0.13.0 — Reviewed UI release (GitHub #30)
+
+The user explicitly authorized merging and deploying the reviewed UI update as a new version. [GitHub #30](https://github.com/MattGibney/crew/issues/30) tracks this release. Version 0.13.0 follows public 0.12.0; no existing release/tag/assets are replaced.
+
+Scope: resizable consistently sized worker surfaces; compact Voice/Text input with Voice default; project-owned manager voice with migration; global/project settings and project rename; instruction guidance, save toasts and clear restart activation; worker Overview and shared message rendering; shadcn Message Scroller and Trace; copyable code and inline images; bounded native clipboard writes; integrated macOS controls and top-right Updates/status.
+
+Integration includes the complete current-main 0.12.0 history. Preserve current-input-only realtime projection, immutable worker instructions, explicit model continuation, retained-environment recovery and manager-mediated actions. The old header's model/recovery information belongs in the new worker Overview. No unrelated commitment/follow-up automation (issue #26) is included.
+
+Before integration, the UI branch passed 475 tests and native candidate checks using the real Electron main/preload/controller/registry with two private synthetic-provider projects. Those checks found and fixed native clipboard permission rejection, always-visible playback recovery and legacy voice-preference loss. They verified settings persistence, explicit restart activation, project separation, restored history/drafts, rich output, copy, worker navigation and update-popout dismissal. Final native header placement was inspected separately. Screenshots and raw operational evidence remain outside Git.
+
+Release gates: full combined suite and build on integrated source; privacy audit of staged/current source and newly reachable history; reviewable PR targeting main; merge preserving both histories; immutable v0.13.0; the existing deliberate signed/notarized workflow; public asset hashes, update ZIP SHA512, Developer ID/hardened runtime, stapled ticket, Gatekeeper and source parity verification.
+
+The known portable CREW_APP_DATA automatic-updater relaunch limitation remains unchanged. Do not repeat a native installation test that may fall through into the default profile, alter the installed app or manufacture profile isolation. Signed artifact verification and safe explicit-profile launch are distinct from automatic-update installation. Physical microphone and human acoustic acceptance remain separate.
+
+Publication evidence and measured combined test results will be recorded on the linked issue and release. This document records the authorized scope and gates, not a claim that publication has already succeeded.
+
+Integrated-source validation: 498 tests passed with the renderer rebuilt first. The updated worker-overview browser acceptance passed with ten synthetic workers, live conversation/notes refresh, narrow-window controls, exact task/run action correlation, same-call navigation, muted Settings persistence and compact Text/Voice switching. The privacy scan inspected 253 tracked files and the newly reachable release history; new-history findings were empty. Existing matches were intentional redaction-test key delimiters and a fictional user-path updater fixture, not credentials or private operational evidence.
+
+The refreshed native acceptance also passed on integrated source: two independent project controllers, shared admission limit/race, two real synthetic-provider worker processes, project switching while workers remained live, project-specific attention, explicit confirmed worker stops, restored drafts/registry after relaunch and verified controller exit on Quit. The fixture now implements canonical history and native app-server worker turns, and separately asserts navigation starts no manager turn. No subscription model or physical microphone was used.
