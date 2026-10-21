@@ -44,6 +44,15 @@ export function createConversationTimeline() {
       };
     }
     const promoted = promotions.get(message.id);
+    const turnId = message.turnId;
+    const delegated = message.source !== "voice" && message.turnId &&
+      (message.presentation === "realtime-input-v1" || message.origin === "realtime-delegation" ||
+        [...messages.values()].some(entry => entry.turnId === turnId && entry.origin === "realtime-delegation"));
+    if (delegated) {
+      message = { ...message, origin: "realtime-delegation" };
+      for (const [id, entry] of messages) if (entry.turnId === message.turnId && entry.source !== "voice") messages.set(id, { ...entry, origin: "realtime-delegation" });
+    }
+
     messages.set(message.id, {
       ...old,
       ...message,
@@ -190,6 +199,14 @@ export function createConversationTimeline() {
         });
       }
   }
+  function restoreProvenance(entries: ConversationMessage[]) {
+    for (const saved of entries || []) {
+      if (!saved || typeof saved.id !== "string") continue;
+      const current = messages.get(saved.id);
+      if (saved.origin !== "realtime-delegation" || !saved.turnId || current?.turnId !== saved.turnId || current.role !== saved.role || current.source === "voice" || saved.source === "voice") continue;
+      put({ ...current, origin: saved.origin }, { status: current.status, position: current.position });
+    }
+  }
   return {
     record,
     realtime,
@@ -199,6 +216,7 @@ export function createConversationTimeline() {
     snapshot,
     restore,
     resumeTurn,
+    restoreProvenance,
   };
 }
 
@@ -224,6 +242,7 @@ export function parseSavedMessages(value: unknown): ConversationMessage[] {
         ? { phase: entry.phase }
         : {}),
       ...(entry.source === "voice" ? { source: "voice" } : {}),
+      ...(entry.origin === "realtime-delegation" ? { origin: entry.origin } : {}),
       ...(typeof entry.presentation === "string"
         ? { presentation: entry.presentation }
         : {}),

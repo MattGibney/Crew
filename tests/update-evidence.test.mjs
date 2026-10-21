@@ -130,3 +130,37 @@ test('legacy hook IDs still require the exact owning task ID',async t=>{
  const f=await fixture(t);await confirmed(f);delete f.environment.kind;delete f.environment.runtime;f.environment.id=`crew-${f.id}-deadbeef`;await f.save(f.envFile,f.environment);assert.equal((await inspect(f)).tasks[0].updateEvidence.runtime,'absent');assert.equal((await inspect(f)).tasks[0].updateEvidence.hooks[0].state,'stopped');
  f.environment.id='crew-another-task-deadbeef';await f.save(f.envFile,f.environment);assert.equal((await inspect(f)).tasks[0].updateEvidence.runtime,'unknown');
 });
+
+test('closed native connections retain earlier live service evidence without signaling or rewriting history',async t=>{
+ const f=await fixture(t);await confirmed(f);
+ const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});await once(child,'spawn');
+ t.after(async()=>{if(child.exitCode===null&&child.signalCode===null){const done=once(child,'exit');child.kill('SIGTERM');await done;}});
+ const actual=(await snapshotProcesses()).get(child.pid);assert.ok(actual);
+ const retainedRun=randomUUID(),retainedDir=path.join(f.stateDir,'runs',f.id,retainedRun);
+ await f.save(path.join(retainedDir,'ownership.json'),{runId:retainedRun,records:[actual]});
+ await f.save(path.join(retainedDir,'exit.json'),{runId:retainedRun,connectionClosed:true,stopConfirmed:false,ownership:{tracked:[actual],remaining:[{...actual,identityVerified:true}]}});
+ f.task.retainedResourceRuns=[{runId:retainedRun}];
+ const before=await treeHash(f.stateDir),original=structuredClone(f.task);
+ const evidence=await inspectUpdateEvidence({stateDir:f.stateDir,view:{tasks:[f.task]}});
+ assert.equal(evidence.tasks[0].updateEvidence.worker,'live');assert.deepEqual(f.task,original);assert.deepEqual(await treeHash(f.stateDir),before);assert.equal(child.exitCode,null);assert.doesNotThrow(()=>process.kill(child.pid,0));
+});
+
+test('new connection-closed remaining records are historical; fresh exact identity observations decide stopped or unknown',async t=>{
+ const f=await fixture(t);await confirmed(f);const resource=processIdentity();
+ await f.save(path.join(f.runDir,'exit.json'),{runId:f.runId,connectionClosed:true,stopConfirmed:false,ownership:{tracked:[resource],remaining:[resource]}});
+ assert.equal((await inspect(f)).tasks[0].updateEvidence.worker,'stopped');
+ assert.equal((await inspect(f,new Map([[resource.pid,{...row(resource),start:'different-process-start'}]]))).tasks[0].updateEvidence.worker,'stopped');
+ assert.equal((await inspect(f,new Map([[resource.pid,{...row(resource),commandHash:'f'.repeat(64)}]]))).tasks[0].updateEvidence.worker,'unknown');
+ // Old records keep their stronger terminal semantics; nonempty remaining is
+ // still a contradiction without the new native-connection terminal marker.
+ await f.save(path.join(f.runDir,'exit.json'),{runId:f.runId,stopConfirmed:false,ownership:{tracked:[resource],remaining:[resource]}});
+ assert.equal((await inspect(f)).tasks[0].updateEvidence.worker,'unknown');
+});
+
+test('missing or malformed retained run evidence stays unknown and current absence cannot hide it',async t=>{
+ const f=await fixture(t);await confirmed(f);f.task.retainedResourceRuns=[{runId:randomUUID()}];
+ assert.equal((await inspect(f)).tasks[0].updateEvidence.worker,'unknown');
+ f.task.retainedResourceRuns=[{runId:'../../outside'}];assert.equal((await inspect(f)).tasks[0].updateEvidence.worker,'unknown');
+ f.task.retainedResourceRuns=[{runId:f.runId}];await f.save(path.join(f.runDir,'exit.json'),{runId:f.runId,connectionClosed:true,stopConfirmed:false,ownership:{tracked:[],remaining:[]}});
+ assert.equal((await inspect(f)).tasks[0].updateEvidence.worker,'unknown');
+});

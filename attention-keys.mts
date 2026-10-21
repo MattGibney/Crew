@@ -1,3 +1,4 @@
+import { isArchivedTask } from "./worker-archive.mjs";
 import { record } from "./shared/errors.mjs";
 // Shared by the browser and native owner. Labels, failures and prose do not
 // establish that a human response is required.
@@ -39,6 +40,7 @@ export function attentionKeys(
         );
   }
   for (const task of list(orchestration?.tasks)) {
+    if (isArchivedTask(task)) continue;
     const question = record(task.question) ? task.question : {};
     const answer = record(task.answer) ? task.answer : {};
     if (
@@ -73,6 +75,8 @@ export function attentionKeys(
       !list(orchestration.tasks).some(
         (task) =>
           task.id === request.taskId &&
+          !isArchivedTask(task) &&
+          !(record(task.archiveRestoration) && task.archiveRestoration.requiresRecovery) &&
           task.runId === request.runId &&
           !["completed", "stopped", "paused", "disposed", "failed"].includes(
             String(task.status),

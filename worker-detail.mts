@@ -73,20 +73,58 @@ export async function readWorkerDetail(
     !(project.mode === "fixture" && !task.projectId)
   )
     throw new Error("Task belongs to another project");
-  const conversation = [...(task.history || [])],
-    notices = [];
+  const assignments = task.assignments?.length
+    ? task.assignments
+    : [
+        {
+          id: "initial",
+          ticket: task.ticket,
+          brief: task.brief,
+          status: task.status,
+          createdAt: task.createdAt,
+          runIds: [],
+          result: task.result,
+        },
+      ];
+  const assignmentForRun = (runId: string | null | undefined) =>
+    assignments.find((item) => runId && item.runIds?.includes(runId))?.id ||
+    null;
+  const conversation: TaskHistory[] = (task.history || []).map((item) => ({
+      ...item,
+      assignmentId:
+        item.assignmentId ||
+        assignmentForRun(item.runId) ||
+        (item.id === "assignment" ? "initial" : null),
+    })),
+    notices: string[] = [];
   const add = (event: TaskHistory) => {
     if (!conversation.some((item) => item.id === event.id))
       conversation.push(event);
   };
-  add({
-    id: "assignment",
-    actor: "manager",
-    kind: "instruction",
-    message: task.brief,
-    at: task.createdAt,
-    runId: null,
-  });
+  for (const assignment of assignments) {
+    const recorded = conversation.some(
+      (item) =>
+        item.actor === "manager" &&
+        ["instruction", "assignment", "followup_assignment"].includes(
+          item.kind,
+        ) &&
+        item.assignmentId === assignment.id &&
+        item.message === assignment.brief,
+    );
+    if (!recorded)
+      add({
+        id:
+          assignment.id === "initial"
+            ? "assignment"
+            : `assignment:${assignment.id}`,
+        actor: "manager",
+        kind: "instruction",
+        message: assignment.brief,
+        at: assignment.createdAt,
+        runId: null,
+        assignmentId: assignment.id,
+      });
+  }
   for (const report of task.reports)
     add({
       id: `report:${report.runId}:${report.reportId}`,
@@ -95,6 +133,7 @@ export async function readWorkerDetail(
       message: report.message,
       at: report.at,
       runId: report.runId,
+      assignmentId: report.assignmentId || assignmentForRun(report.runId),
       evidence: report.evidence || [],
     });
   if (task.answer)
@@ -105,6 +144,7 @@ export async function readWorkerDetail(
       message: task.answer.text,
       at: task.answer.at || null,
       runId: task.question?.runId || null,
+      assignmentId: assignmentForRun(task.question?.runId),
       questionId: task.answer.questionId,
     });
   if (!task.historyVersion)
@@ -168,6 +208,10 @@ export async function readWorkerDetail(
           id: `execution:${run.name}:${index}`,
           actor: "worker",
           runId: run.name,
+          assignmentId:
+            typeof config.assignmentId === "string"
+              ? config.assignmentId
+              : assignmentForRun(run.name),
           at: typeof event.at === "string" ? event.at : null,
         };
         if (
@@ -211,6 +255,10 @@ export async function readWorkerDetail(
                   exitCode: command.exitCode ?? null,
                   at: null,
                   runId: run.name,
+                  assignmentId:
+                    typeof config.assignmentId === "string"
+                      ? config.assignmentId
+                      : assignmentForRun(run.name),
                 });
         }
       }
@@ -270,6 +318,7 @@ export async function readWorkerDetail(
   };
   // Only supplied URLs; never manufacture a ticket URL from a key or a PR from a branch.
   for (const value of [
+    ...assignments.map((item) => item.ticket),
     task.ticket,
     task.ticketUrl,
     task.pullRequestUrl,
@@ -297,6 +346,8 @@ export async function readWorkerDetail(
   return {
     taskId: task.id,
     revision: task.revision,
+    assignments,
+    currentAssignmentId: task.currentAssignmentId || "initial",
     conversation,
     notes: {
       exists: markdown !== null,

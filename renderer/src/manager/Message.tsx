@@ -1,4 +1,5 @@
-import type { MessageRecord } from "../contracts/manager.js";
+import type { ReactNode } from "react";
+import type { MessageRecord, ManagerProfile } from "../contracts/manager.js";
 import { copyText } from "./clipboard.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy } from "lucide-react";
@@ -6,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CodeBlock, MessageImage } from "./MessageContent.js";
-import crewMark from "../../../build/crew-mark.png";
+import { ManagerAvatar } from "./ManagerAvatar.js";
+import { managerDisplayName } from "./profile.js";
 
 export function Message({
   message,
@@ -14,12 +16,14 @@ export function Message({
   ariaLabel,
   children,
   copyable = false,
+  profile,
 }: {
   message: MessageRecord;
   label?: string;
   ariaLabel?: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
   copyable?: boolean;
+  profile?: ManagerProfile | null;
 }) {
   const [copyState, setCopyState] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -34,6 +38,7 @@ export function Message({
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setCopyState(""), 2000);
   };
+  const managerName = managerDisplayName(profile);
   const user = message.role === "user";
   return (
     <article
@@ -41,17 +46,17 @@ export function Message({
       aria-label={ariaLabel || (user ? "Your message" : "Manager message")}
       className={`group/message flex gap-3 ${user ? "justify-end" : ""}`}
     >
-      {!user && <img src={crewMark} alt="" className="mt-1 size-6 shrink-0" />}
+      {!user && <ManagerAvatar profile={profile} className="mt-1 size-6" />}
       <div
         className={`relative min-w-0 max-w-full ${user ? "rounded-2xl bg-muted px-4 py-3 sm:max-w-[85%]" : "flex-1 pt-0.5"}`}
       >
-        <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+        <p className="mb-1.5 break-words text-xs font-medium text-muted-foreground">
           {label ||
             (user
               ? "You"
               : message.phase === "commentary"
-                ? "Manager · progress"
-                : "Manager")}
+                ? `${managerName} · progress`
+                : managerName)}
           {message.status === "streaming" && (
             <span className="ml-2 font-normal">· Live</span>
           )}

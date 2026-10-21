@@ -1,3 +1,4 @@
+import { createWorkspaceRequests } from "./workspace-requests.mjs";
 import {
   createApplicationUpdates,
   type DesktopUpdater,
@@ -12,7 +13,6 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { prepareCrewStorage } from "./storage.mjs";
 import { instanceKey, childEnvironment } from "./lifecycle.mjs";
-import { clipboardText } from "./clipboard.mjs";
 import { createProjectHost } from "./project-host.mjs";
 import type { createWorkspaceUpdateReservation } from "./workspace-update.mjs";
 import { assertWorkspaceIsolation } from "./workspace-isolation.mjs";
@@ -25,7 +25,7 @@ import {
   createInstallLease,
   createRestartHandoff,
 } from "./updater.mjs";
-import { errorCode, errorMessage, record, string } from "./validation.mjs";
+import { errorCode, errorMessage, record } from "./validation.mjs";
 import { parseConfig } from "../config/shape.mjs";
 import type { WorkspaceProject } from "./workspace-registry.mjs";
 import type {
@@ -438,47 +438,21 @@ async function initializeUpdates() {
   workspacePause = controls.workspacePause;
   updateReservation = controls.updateReservation;
 }
-ipcMain.handle("crew:setup", (event, action: unknown, input: unknown) => {
-  if (typeof action !== "string") throw Error("Invalid setup request.");
-  const host = selected();
-  if (!host?.acceptsSetup(event.sender)) throw Error("Setup request rejected.");
-  return host.handleSetup(event, action, input);
+const requests = createWorkspaceRequests({
+  selected,
+  snapshot,
+  assertSetupAllowed: () => gate.assertSetupAllowed(),
+  select: selectProject,
+  add: addProject,
+  rename: (id, name) => registry.rename(id, name),
+  configureCapacity,
+  setWorkerLimit: (limit) => registry.setWorkerLimit(limit),
+  changed,
+  writeClipboard: (text) => clipboard.writeText(text),
 });
-ipcMain.handle("crew:clipboard-write", (event, text: unknown) => {
-  if (!selected()?.acceptsWorkspace(event))
-    throw Error("Clipboard request rejected.");
-  clipboard.writeText(clipboardText(text));
-});
-ipcMain.handle(
-  "crew:workspaces",
-  async (event, action: unknown, input: unknown) => {
-    if (!selected()?.acceptsWorkspace(event))
-      throw Error("Workspace request rejected.");
-    if (action === "snapshot") return snapshot();
-    if (action === "select") {
-      await selectProject(string(input, "Project identity"));
-      return snapshot();
-    }
-    gate.assertSetupAllowed();
-    if (action === "add") return addProject();
-    if (action === "rename") {
-      const value = record(input);
-      await registry.rename(
-        string(value.id, "Project identity"),
-        string(value.name, "Project name"),
-      );
-      changed();
-      return snapshot();
-    }
-    if (action === "capacity") {
-      await configureCapacity(typeof input === "number" ? input : NaN);
-      await registry.setWorkerLimit(typeof input === "number" ? input : NaN);
-      changed();
-      return snapshot();
-    }
-    throw Error("Unknown workspace action.");
-  },
-);
+ipcMain.handle("crew:setup", requests.setup);
+ipcMain.handle("crew:clipboard-write", requests.clipboard);
+ipcMain.handle("crew:workspaces", requests.workspaces);
 if (!locked) app.quit();
 else {
   app.on("second-instance", (_event, _argv, _cwd, data) =>

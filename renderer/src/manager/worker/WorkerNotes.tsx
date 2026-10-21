@@ -3,7 +3,6 @@ import { FileText } from "lucide-react";
 
 import { Markdown } from "./WorkerExchange.js";
 
-import type { useWorkerActions } from "./useWorkerActions.js";
 export function WorkerNotes({ detail }: { detail: WorkerDetailState }) {
   return (
     <div>

@@ -10,6 +10,8 @@ export type JsonObject = { [key: string]: Json | undefined };
 export type RequestId = string | number;
 export interface MessageRecord {
   id?: string;
+  kind?: undefined;
+  origin?: string;
   role: string;
   text?: string;
   phase?: string;
@@ -86,6 +88,8 @@ export interface WorkState {
   status: string;
   activeTurnId?: string | null;
   managerLifecycle?: ManagerLifecycle;
+  managerScratchpad?: ManagerScratchpadState | null;
+  managerScratchpadError?: string | null;
 }
 export interface Attention {
   id: string;
@@ -94,6 +98,22 @@ export interface Attention {
   ackedAt?: string | null;
 }
 export interface WorkerTask {
+  threadId?: string | null;
+  revision?: number;
+  archivedAt?: string;
+  disposedAt?: string;
+  removedAt?: string;
+  archiveRestoration?: { requiresRecovery?: boolean };
+  currentAssignmentId?: string;
+  assignments?: WorkerAssignment[];
+  followupWait?: string;
+  workflowState?: { value?: string };
+  workflowHistory?: {
+    requestId?: string;
+    value: string;
+    actor?: string;
+    at?: string;
+  }[];
   modelSelection?: {
     model?: string;
     status?: string;
@@ -140,6 +160,9 @@ export interface VoiceCatalog {
   defaultVoice: string;
 }
 export interface ManagerProfile {
+  name?: string;
+  picture?: string | null;
+  personality?: string;
   voice: string | null;
   version: string;
   configured?: boolean;
@@ -155,12 +178,14 @@ export interface SettingsState {
   managerLifecycle: ManagerLifecycle;
   manager: {
     defaultText: string;
+    savedBehaviorVersion?: string;
     saved: PromptSnapshot;
     activeVersion?: string | null;
     retainedVersion?: string | null;
     pendingRestart?: boolean;
   };
   worker: { defaultText: string; saved: PromptSnapshot };
+  workerEnvironment?: WorkerEnvironmentSettings;
 }
 export interface ProjectInfo {
   id?: string;
@@ -194,6 +219,7 @@ export interface UpdateStatus {
   workspacePlan?: UpdatePlan | null;
 }
 export interface WorkerExchangeRecord {
+  assignmentId?: string;
   id?: string;
   type?: string;
   role?: string;
@@ -244,6 +270,8 @@ export interface ApiResults {
   settings: SettingsState;
   "settings/manager-profile": SettingsState;
   "settings/prompts": SettingsState;
+  "settings/worker-environment": SettingsState;
+  "archived-worker-action": JsonObject;
   config: { nativeAttentionSound?: boolean; project: ProjectInfo };
   state: WorkState;
   prepare: PrepareResult;
@@ -272,4 +300,65 @@ export interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
+}
+
+export interface WorkerAssignment {
+  id: string;
+  ticket?: string;
+  brief?: string;
+  status?: string;
+  result?: { message?: string };
+  runIds?: string[];
+}
+export interface ManagerScratchpadState {
+  updatedAt?: string | null;
+  commitments?: {
+    id: string;
+    title: string;
+    status?: string;
+    outcome?: string;
+    nextAction?: string;
+    references?: { taskId?: string; runId?: string; ticketUrl?: string };
+  }[];
+  notes?: string[];
+  decisions?: string[];
+  questions?: string[];
+}
+export type EnvironmentPhase =
+  | "setup"
+  | "bootstrap"
+  | "start"
+  | "resume"
+  | "ready"
+  | "stop"
+  | "teardown"
+  | "cleanup";
+export interface EnvironmentSource {
+  path: string;
+  sha256: string;
+}
+export interface EnvironmentHook {
+  command: string;
+  timeoutMs: number;
+  args?: string[];
+  source?: EnvironmentSource;
+}
+export type EnvironmentHooks = Partial<
+  Record<EnvironmentPhase, EnvironmentHook>
+>;
+export interface WorkerEnvironmentPlan extends EnvironmentHooks {
+  sources: EnvironmentSource[];
+  env?: { PATH?: string };
+  networkAccess?: boolean;
+  permissionsSource?: EnvironmentSource;
+}
+export interface WorkerEnvironmentConfig extends EnvironmentHooks {
+  executionPlan?: WorkerEnvironmentPlan;
+}
+export interface WorkerEnvironmentSettings {
+  available?: boolean;
+  detail?: string;
+  configPath?: string | null;
+  revision: string | null;
+  environment: WorkerEnvironmentConfig;
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { projectEnvironmentContext } from "./backend/environment-context.mjs";
 import type { TaskRecord } from "./execution/contracts.mjs";
 import type { LoadedProject } from "./config/contracts.mjs";
 import {
@@ -14,6 +15,10 @@ import {
 } from "./backend/approval-input.mjs";
 import { parseRecord, record } from "./shared/errors.mjs";
 import { errorCode, errorMessage } from "./shared/errors.mjs";
+import { activeTasks, isArchivedTask } from './worker-archive.mjs';
+import { ManagerScratchpad } from './manager-scratchpad.mjs';
+import { createEnvironmentSettings } from './environment-settings.mjs';
+import { requestWorkerFollowup, setWorkflowState } from './orchestration-store.mjs';
 import readline from "node:readline";
 import path from "node:path";
 import { readFile } from "node:fs/promises";
@@ -81,6 +86,16 @@ async function callTool(name: unknown, input: unknown) {
       runId: role === "worker" ? runId : null,
     });
   }
+  if (name === "set_workflow_state") {
+    const args = argsFor<{taskId?:string; requestId:string; state:string}>();
+    const id = role === 'worker' ? taskId! : args.taskId!;
+    scoped(await readTask(stateDir,id));
+    return setWorkflowState(stateDir,{taskId:id,requestId:args.requestId,state:args.state,actor:role,runId:role==='worker'?runId:null});
+  }
+  if (name === "get_project_environment") {
+    const args = argsFor<{taskId?:string}>();
+    return projectEnvironmentContext({stateDir, role, taskId:role === 'worker' ? taskId : args.taskId, runId, project, runtime, scoped});
+  }
   if (role === "worker")
     return reportTask(
       stateDir,
@@ -89,6 +104,12 @@ async function callTool(name: unknown, input: unknown) {
       argsFor<Parameters<typeof reportTask>[3]>(),
     );
   switch (name) {
+    case "read_manager_scratchpad": return new ManagerScratchpad({stateDir}).snapshot();
+    case "update_manager_scratchpad": return new ManagerScratchpad({stateDir}).update(JSON.parse(argsFor<{patchJson:string}>().patchJson));
+    case "assign_worker_followup": {
+      const args = argsFor<Parameters<typeof requestWorkerFollowup>[1]>();
+      scoped(await readTask(stateDir,args.taskId)); return requestWorkerFollowup(stateDir,args);
+    }
     case "request_attention": {
       const args = argsFor<{ requestId: string; message: string }>();
       return {
@@ -98,35 +119,18 @@ async function callTool(name: unknown, input: unknown) {
     }
     case "submit_task": {
       const args = argsFor<Parameters<typeof createTask>[1]>();
-      if (project && !project.readiness?.ready)
-        throw new Error(
-          `Project configuration is not ready: ${(project.readiness?.issues || ["configuration incomplete"]).join("; ")}`,
-        );
       if (repositoryMode) {
-        if (
-          !project.repositories?.some((repo) => repo.id === args.repositoryId)
-        )
-          throw new Error("Unknown configured repositoryId");
-        const key = project.linear?.teamKey;
-        if (
-          !key ||
-          !/^[A-Z][A-Z0-9]*$/.test(key) ||
-          !args.ticket.startsWith(`${key}-`) ||
-          !/^[1-9][0-9]*$/.test(args.ticket.slice(key.length + 1))
-        )
-          throw new Error(
-            "Ticket must match the configured Linear team key; manager must verify the actual ticket",
-          );
+        if (!project?.repositories?.some(repo => repo.id === args.repositoryId)) throw new Error('Unknown configured repositoryId');
       } else if (args.repositoryId)
         throw new Error("Fixture tasks do not accept repositoryId");
-      return createTask(stateDir, { ...args, projectId: project?.id || null });
+      return createTask(stateDir, { ...args, ticket: args.ticket || "Project work", projectId: project?.id || null });
     }
     case "get_status": {
       const args = argsFor<{ taskId?: string }>();
       const requests = await listWorkerRequests({ stateDir });
       const withApprovals = (task: TaskRecord) => ({
         ...scoped(task),
-        approvals: requests.filter(
+        approvals: isArchivedTask(task) || task.archiveRestoration?.requiresRecovery ? [] : requests.filter(
           (request) =>
             request.taskId === task.id &&
             request.runId === task.runId &&
@@ -137,7 +141,7 @@ async function callTool(name: unknown, input: unknown) {
       });
       return args.taskId
         ? withApprovals(await readTask(stateDir, args.taskId))
-        : (await loadTasks(stateDir)).map(withApprovals);
+        : activeTasks(await loadTasks(stateDir)).map(withApprovals);
     }
     case "answer_worker_approval": {
       const args = argsFor<{
@@ -171,10 +175,12 @@ async function callTool(name: unknown, input: unknown) {
     }
     case "review_worker_recovery": {
       const args = argsFor<{ taskId: string; action: string }>();
+      const latest = typeof runtime?.environmentConfigPath === 'string' ? await (await createEnvironmentSettings({configuration:{configPath:runtime.environmentConfigPath,project}})).read() : null;
+      const executionProject = project ? requireExecutionProject(project) : null;
       return reviewProjectRecovery({
         stateDir,
         task: scoped(await readTask(stateDir, args.taskId)),
-        project: project ? requireExecutionProject(project) : null,
+        project: latest && executionProject ? {...executionProject,worker:{...executionProject.worker,environment:latest.environment}} : executionProject,
         mode: args.action,
       });
     }

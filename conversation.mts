@@ -76,12 +76,12 @@ export function conversationMessage(
       if (
         typeof selected.action === "string" &&
         typeof selected.taskId === "string" &&
-        ["pause", "stop", "resume", "dispose", "start"].includes(
+        ["pause", "stop", "resume", "dispose", "start", "retry_setup"].includes(
           selected.action,
         ) &&
         /^[\w-]{1,120}$/.test(selected.taskId)
       )
-        presentation = `${selected.action === "dispose" ? "Remove the worktree for" : selected.action[0].toUpperCase() + selected.action.slice(1)} worker ${selected.taskId}.`;
+        presentation = `${selected.action === "dispose" ? "Remove the worktree for" : selected.action === "retry_setup" ? "Retry failed setup for" : selected.action[0].toUpperCase() + selected.action.slice(1)} worker ${selected.taskId}.`;
     } catch {
       /* Keep bounded generic intent if native history has an older format. */
     }

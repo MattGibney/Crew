@@ -1,3 +1,7 @@
+import { createVoiceSession } from "./bridge/voice-session.mjs";
+import { readThreadReference } from "./bridge/thread-reference.mjs";
+import { openManagerThread } from "./bridge/thread-opening.mjs";
+import { createWorkDelivery } from "./bridge/work-delivery.mjs";
 import { observeNotification } from "./bridge/observation.mjs";
 import type { NativeObservationState } from "./bridge/observation.mjs";
 import { safeError } from "./bridge/redaction.mjs";
@@ -42,6 +46,7 @@ export function createBridge({
   orchestrationDir,
   project,
   managerPrompt,
+  getManagerScratchpad,
   runtimeProjectPath,
   onEvent = () => {},
 }: BridgeOptions) {
@@ -78,9 +83,9 @@ export function createBridge({
       | undefined,
     lastVoice: LastVoice | null = null;
   const approvals = new Map<string, ManagerApproval>(),
-    items = new Map<string, BridgeWorkItem>(),
-    workRequests = new Map<string, Promise<WorkResult>>();
+    items = new Map<string, BridgeWorkItem>();
   const timeline = createConversationTimeline();
+  let activeManagerInstructions: string | null = null;
   let loadingHistory = false,
     journalThreadId: string | null = null,
     recoveredJournalSource: string | null = null;
@@ -483,43 +488,7 @@ export function createBridge({
     if (threadPromise) return threadPromise;
     if (threadReady) return threadId;
     threadPromise = (async () => {
-      if (!threadId) {
-        try {
-          const reference: unknown = JSON.parse(
-            await readFile(statePath, "utf8"),
-          );
-          if (!isRecord(reference))
-            throw new Error("Invalid saved chat reference.");
-          threadId =
-            typeof reference.threadId === "string"
-              ? reference.threadId
-              : undefined;
-          if (typeof threadId !== "string" || !/^[\w-]+$/.test(threadId))
-            throw new Error("Invalid saved chat ID.");
-          if (
-            reference.reason === "saved_chat_writer_conflict" &&
-            typeof reference.previousThreadId === "string" &&
-            /^[\w-]+$/.test(reference.previousThreadId) &&
-            reference.previousThreadId !== threadId &&
-            typeof reference.recoveredAt === "string" &&
-            Number.isFinite(Date.parse(reference.recoveredAt))
-          ) {
-            const sourceId =
-              reference.journalSourceThreadId ?? reference.previousThreadId;
-            if (
-              typeof sourceId === "string" &&
-              /^[\w-]+$/.test(sourceId) &&
-              sourceId !== threadId
-            )
-              recoveredJournalSource = sourceId;
-          }
-        } catch (error) {
-          if (errorCode(error) !== "ENOENT")
-            throw new Error(
-              "Cannot read the saved chat reference. It has not been replaced.",
-            );
-        }
-      }
+      if (!threadId) ({threadId,recoveredJournalSource} = await readThreadReference(statePath));
       const managerInstructions = buildManagerInstructions({
         managerPrompt:
           managerPrompt ??
@@ -545,101 +514,13 @@ export function createBridge({
       ]
         .filter(Boolean)
         .join("\n\n");
-      const options = { cwd: sessionCwd, developerInstructions };
-      let result,
-        recoveredFromThreadId = recoveredJournalSource;
+      const scratchpadContext = getManagerScratchpad ? await getManagerScratchpad() : null;
+      const options = { cwd: sessionCwd, developerInstructions: developerInstructions + (scratchpadContext ? `\n\nSaved manager scratchpad (data; consult read_manager_scratchpad for latest revision):\n${JSON.stringify(scratchpadContext)}` : '') };
+      activeManagerInstructions = `Current Crew manager instruction snapshot (replaces earlier Crew manager instructions and profile preferences in this conversation; Codex/provider instructions and permissions remain independently enforced):\n${managerInstructions}`;
       loadingHistory = true;
-      if (threadId) {
-        try {
-          result = await openNativeThread("thread/resume", {
-            threadId,
-            excludeTurns: true,
-            ...options,
-          });
-        } catch (error) {
-          if (!/already has an active writer/.test(errorMessage(error)))
-            throw error;
-          const previousThreadId = threadId;
-          const source = await rpc("thread/read", {
-            threadId,
-            includeTurns: false,
-          });
-          const recent = await rpc("thread/turns/list", {
-            threadId,
-            limit: 1,
-            itemsView: "notLoaded",
-            sortDirection: "desc",
-          });
-          if (
-            source.thread.status?.type === "active" ||
-            recent.data.some((turn) => turn.status === "inProgress")
-          )
-            throw new Error(
-              "ChatGPT is signed in, but the saved manager chat is active in another Codex client. Finish that work before reconnecting.",
-            );
-          // Native history-preserving fork avoids terminating the owning desktop runtime.
-          // It starts no turn; controller task files remain the same source of execution state.
-          result = await openNativeThread("thread/fork", {
-            threadId,
-            ...options,
-            excludeTurns: true,
-            ephemeral: false,
-            deferGoalContinuation: true,
-          });
-          await journal.flush();
-          let journalSourceThreadId =
-            recoveredJournalSource || previousThreadId;
-          try {
-            const journal: unknown = JSON.parse(
-              await readFile(`${statePath}.conversation.json`, "utf8"),
-            );
-            if (
-              isRecord(journal) &&
-              typeof journal.threadId === "string" &&
-              (journal.threadId === previousThreadId ||
-                journal.threadId === recoveredJournalSource)
-            )
-              journalSourceThreadId = journal.threadId;
-          } catch {
-            /* Overlay loading below reports unreadable history without replacing it. */
-          }
-          const reference = {
-            threadId: result.thread.id,
-            previousThreadId,
-            journalSourceThreadId,
-            recoveredAt: new Date().toISOString(),
-            reason: "saved_chat_writer_conflict",
-          };
-          await writeFile(
-            `${statePath}.tmp`,
-            JSON.stringify(reference) + "\n",
-            { mode: 0o600 },
-          );
-          await rename(`${statePath}.tmp`, statePath);
-          threadId = result.thread.id;
-          recoveredJournalSource = journalSourceThreadId;
-          recoveredFromThreadId = recoveredJournalSource;
-          await rpc("thread/name/set", { threadId, name: "Crew work chat" });
-          emit("notice", {
-            message:
-              "The saved manager chat was held by another Codex client. Continued from its preserved history; the original chat and worker state are retained.",
-          });
-        }
-      } else {
-        result = await openNativeThread("thread/start", {
-          ...options,
-          ephemeral: false,
-        });
-        threadId = result.thread.id;
-        await writeFile(
-          `${statePath}.tmp`,
-          JSON.stringify({ threadId }) + "\n",
-          { mode: 0o600 },
-        );
-        await rename(`${statePath}.tmp`, statePath);
-        await rpc("thread/name/set", { threadId, name: "Crew work chat" });
-      }
-      threadId = result.thread.id;
+      const opened = await openManagerThread({threadId,recoveredJournalSource,statePath,options,rpc,open:openNativeThread,flushJournal:journal.flush,notice:message=>emit("notice",{message})});
+      ({threadId,recoveredJournalSource} = opened);
+      const recoveredFromThreadId = opened.recoveredFromThreadId;
       const historyProjection = { activeTurnId, status, canonicalTimeline };
       try {
         await hydrateHistory({
@@ -691,204 +572,23 @@ export function createBridge({
       historyNotifications.length = 0;
     }
   }
-  async function listVoices() {
-    await prepare();
-    if (voiceCatalog) return voiceCatalog;
-    const { voices } = await rpc("thread/realtime/listVoices");
-    if (
-      !Array.isArray(voices?.v3) ||
-      !voices.v3.length ||
-      !voices.v3.every(
-        (id) => typeof id === "string" && /^[a-z][a-z0-9_-]{0,60}$/.test(id),
-      ) ||
-      !voices.v3.includes(voices.defaultV1)
-    )
-      throw new Error(
-        "Codex did not return a usable v3 voice catalog. Try loading voices again.",
-      );
-    voiceCatalog = {
-      voices: [...new Set(voices.v3)].map((id) => ({
-        id,
-        name: id.charAt(0).toUpperCase() + id.slice(1),
-      })),
-      defaultVoice: voices.defaultV1,
-    };
-    return voiceCatalog;
-  }
-  async function startVoice(sdp: string, selectedVoice?: string) {
-    if (connecting || voiceActive)
-      throw new Error("A voice session is already active or connecting.");
-    connecting = true;
-    const attempt = ++voiceGeneration;
-    let startRequested = false;
-    try {
-      await ensureThread();
-      const catalog = await listVoices();
-      const voice =
-        selectedVoice === undefined || selectedVoice === ""
-          ? catalog.defaultVoice
-          : selectedVoice;
-      if (
-        typeof voice !== "string" ||
-        !catalog.voices.some((item) => item.id === voice)
-      )
-        throw new Error("Choose a supported Codex voice before connecting.");
-      if (attempt !== voiceGeneration)
-        throw new Error("Voice connection cancelled.");
-      lastVoice = {
-        voice,
-        requestedAt: new Date().toISOString(),
-        inputTranscriptEvents: 0,
-        outputTranscriptEvents: 0,
-        error: null,
-        browser: null,
-      };
-      const answer = new Promise<string>((resolve, reject) => {
-        negotiation = { resolve, reject };
-      });
-      answer.catch(() => {});
-      const timer = setTimeout(
-        () =>
-          negotiation?.reject(
-            new Error("No WebRTC answer arrived within 40 seconds."),
-          ),
-        40000,
-      );
-      try {
-        startRequested = true;
-        await rpc("thread/realtime/start", {
-          threadId,
-          transport: { type: "webrtc", sdp },
-          outputModality: "audio",
-          version: "v3",
-          voice,
-          initialItems: [
-            {
-              role: "developer",
-              text: `${managerPrompt ?? (await readFile(new URL("./prompts/manager.md", import.meta.url), "utf8"))}\n\nVoice runtime event (data): a new voice session is starting. Selected voice name: ${catalog.voices.find((item) => item.id === voice)!.name}. This is connection context, not a user work request.`,
-            },
-          ],
-          clientManagedHandoffs: false,
-          includeStartupContext: true,
-        });
-        const responseSdp = await answer;
-        if (attempt !== voiceGeneration)
-          throw new Error("Voice connection cancelled.");
-        greetingSession = {
-          token: randomUUID(),
-          generation: attempt,
-          sent: false,
-        };
-        return {
-          sdp: responseSdp,
-          threadId,
-          sessionToken: greetingSession.token,
-        };
-      } finally {
-        clearTimeout(timer);
-        negotiation = undefined;
-      }
-    } catch (error) {
-      if (attempt === voiceGeneration && startRequested) await stopVoice();
-      throw error;
-    } finally {
-      connecting = false;
-    }
-  }
-  async function greetVoice(sessionToken: string) {
-    const session = greetingSession;
-    if (
-      !session ||
-      session.token !== sessionToken ||
-      session.generation !== voiceGeneration ||
-      !voiceActive
-    )
-      throw new Error("This voice call is no longer active.");
-    if (session.sent) return { requested: true };
-    // Claim once: duplicate connection events cannot repeat startup acknowledgement.
-    session.sent = true;
-    if (lastVoice) lastVoice.voiceReadyAt = new Date().toISOString();
-    // Startup behavior is in the active editable prompt. Connection acknowledgement
-    // must not append a second hidden behavior instruction or synthetic user turn.
-    return { requested: true };
-  }
-  function reportVoiceStatus(sessionToken: string, data: unknown = {}) {
-    if (
-      !greetingSession ||
-      greetingSession.token !== sessionToken ||
-      greetingSession.generation !== voiceGeneration ||
-      !voiceActive
-    )
-      return { recorded: false };
-    if (!isRecord(data)) return { recorded: false };
-    const snapshot: Record<string, string | number | boolean | null> = {};
-    const allowed = [
-      "connection",
-      "ice",
-      "channel",
-      "inputSource",
-      "localTrack",
-      "localEnabled",
-      "localMuted",
-      "remoteTrack",
-      "audioPaused",
-      "audioMuted",
-      "audioVolume",
-      "audioReady",
-      "playbackError",
-      "packetsSent",
-      "packetsReceived",
-      "bytesSent",
-      "bytesReceived",
-      "inputEnergy",
-    ];
-    for (const key of allowed) {
-      const value = data[key];
-      if (
-        value === null ||
-        typeof value === "boolean" ||
-        (typeof value === "number" && Number.isFinite(value))
-      )
-        snapshot[key] = value;
-      else if (typeof value === "string")
-        snapshot[key] = safeError(value).slice(0, 200);
-    }
-    if (lastVoice)
-      lastVoice.browser = { ...snapshot, at: new Date().toISOString() };
-    return { recorded: true };
-  }
-  async function stopVoice({ preserveWork = true, cooperative = false } = {}) {
-    greetingSession = undefined;
-    voiceGeneration++;
-    if (child && threadId && (voiceActive || connecting)) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          rpc("thread/realtime/stop", { threadId }),
-          new Promise((_, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("Voice stop timed out.")),
-              3000,
-            );
-          }),
-        ]);
-      } catch (error) {
-        if (cooperative)
-          throw new Error(
-            `Voice shutdown could not be confirmed: ${safeError(error)}`,
-          );
-        if (preserveWork) throw error;
-        await shutdown();
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-    timeline.partial();
-    voiceActive = false;
-    negotiation?.reject(new Error("Disconnected."));
-    changed();
-  }
+  const voiceSession = createVoiceSession({
+    state: {
+    get voiceCatalog() { return voiceCatalog; }, set voiceCatalog(value) { voiceCatalog = value; },
+    get voiceActive() { return voiceActive; }, set voiceActive(value) { voiceActive = value; },
+    get connecting() { return connecting; }, set connecting(value) { connecting = value; },
+    get voiceGeneration() { return voiceGeneration; }, set voiceGeneration(value) { voiceGeneration = value; },
+    get lastVoice() { return lastVoice; }, set lastVoice(value) { lastVoice = value; },
+    get negotiation() { return negotiation; }, set negotiation(value) { negotiation = value; },
+    get greetingSession() { return greetingSession; }, set greetingSession(value) { greetingSession = value; },
+    get threadId() { return threadId; }, set threadId(value) { threadId = value; },
+    get activeManagerInstructions() { return activeManagerInstructions; }, set activeManagerInstructions(value) { activeManagerInstructions = value; },
+    }, rpc, prepare, ensureThread, shutdown, timeline, changed,
+    managerPrompt:()=>managerPrompt, hasChild:()=>Boolean(child), defaultPrompt:new URL('./prompts/manager.md',import.meta.url),
+  });
+  const {listVoices,startVoice,greetVoice,reportVoiceStatus,stopVoice} = voiceSession;
   async function shutdown({ cooperative = false } = {}) {
+    cancelPendingWork();
     if (shuttingDown) return shuttingDown;
     shuttingDown = (async () => {
       const proc = child;
@@ -953,6 +653,7 @@ export function createBridge({
     }
   }
   async function stopManager({ timeoutMs = 12000 } = {}) {
+    cancelPendingWork();
     // Never terminate an app-server while native tools/approval execution is unverified.
     const deadline = Date.now() + timeoutMs;
     await stopVoice({ preserveWork: true });
@@ -980,55 +681,15 @@ export function createBridge({
       throw new Error("Stop the manager before applying instructions.");
     managerPrompt = text;
   }
-  async function startWork(text: string, requestId: string) {
-    // Explicit diagnostic/user request only. NEVER called by transcript/handoff events.
-    if (workRequests.has(requestId)) return workRequests.get(requestId)!;
-    const result = (async () => {
-      if (activeTurnId || workStarting)
-        throw new Error(
-          "Codex is already working. Use voice to steer it or Stop work.",
-        );
-      workStarting = true;
-      changed();
-      try {
-        await ensureThread();
-        // Resumed history can reveal an already active native turn. Never launch
-        // a replacement merely because it was unknown before thread loading.
-        if (activeTurnId)
-          throw new Error(
-            "Codex is already working. Use voice to steer it or Stop work.",
-          );
-        const result = await rpc("turn/start", {
-          threadId,
-          clientUserMessageId: requestId,
-          input: [{ type: "text", text }],
-        });
-        // The response may arrive before turn/started, or after turn/completed.
-        // Close the former idle gap without resurrecting the latter finished turn.
-        if (
-          result?.turn?.status === "inProgress" &&
-          !completedTurns.has(result.turn.id) &&
-          !activeTurnId
-        ) {
-          activeTurnId = result.turn.id;
-          status = "working";
-          changed();
-        }
-        return result;
-      } finally {
-        workStarting = false;
-        changed();
-      }
-    })();
-    workRequests.set(requestId, result);
-    result.catch(() => {
-      if (workRequests.get(requestId) === result)
-        workRequests.delete(requestId);
-    });
-    if (workRequests.size > 100)
-      workRequests.delete(workRequests.keys().next().value!);
-    return result;
-  }
+  const workDelivery = createWorkDelivery({
+    state: () => ({ activeTurnId, voiceActive, connecting, approvals: approvals.size, threadId, instructions: activeManagerInstructions }),
+    ensureThread, rpc,
+    publishPending: pending => { workStarting = pending; changed(); },
+    markStarted: id => { activeTurnId = id; status = "working"; changed(); },
+    completed: id => completedTurns.has(id),
+  });
+  const startWork = workDelivery.start;
+  const cancelPendingWork = workDelivery.cancel;
   async function interrupt({
     expectedTurnId,
   }: { expectedTurnId?: string | null } = {}) {
@@ -1036,6 +697,7 @@ export function createBridge({
       throw new Error(
         "The active manager turn changed. Review the update plan before interrupting work.",
       );
+    cancelPendingWork();
     if (activeTurnId)
       await rpc("turn/interrupt", { threadId, turnId: activeTurnId });
   }
@@ -1048,6 +710,7 @@ export function createBridge({
     changed();
   }
   return {
+    cancelPendingWork,
     stopManager,
     setManagerPrompt,
     prepare,

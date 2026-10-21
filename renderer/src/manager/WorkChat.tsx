@@ -1,3 +1,7 @@
+import { useManagerComposer } from "./conversation/useManagerComposer.js";
+import { ManagerComposer } from "./conversation/ManagerComposer.js";
+import { WorkDetails } from "./conversation/WorkDetails.js";
+
 import type { ManagerProps } from "../contracts/manager.js";
 
 import {
@@ -30,21 +34,16 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ApprovalForm } from "./ApprovalForm.js";
 import { Message } from "./Message.js";
-import { VoiceControls } from "./VoiceControls.js";
-import { ManagerCallBar } from "./ManagerCallBar.js";
-import { orderedMessages } from "./conversation.js";
 
-import { ManagerComposer } from "./conversation/ManagerComposer.js";
-
-import { useManagerComposer } from "./conversation/useManagerComposer.js";
+import { conversationRows } from "./conversation.js";
 
 export function WorkChat({ manager }: ManagerProps) {
   const { work, workNotice: notice, prepared, eventReady, sending } = manager;
   const approvals = work.approvals || [],
     items = work.items || [];
-  const messages = orderedMessages(work.messages);
+  const messages = conversationRows(work.messages);
   const composer = useManagerComposer(manager);
-  const { busy, sendError } = composer;
+  const { busy, sendError, setDraft, selectInput, inputRef } = composer;
   return (
     <MessageScrollerProvider
       autoScroll
@@ -143,7 +142,11 @@ export function WorkChat({ manager }: ManagerProps) {
                             variant="outline"
                             className="h-auto whitespace-normal py-2 text-xs"
                             onClick={() => {
-                              composer.selectDraft(text);
+                              setDraft(text);
+                              selectInput("text");
+                              requestAnimationFrame(() =>
+                                inputRef.current?.focus(),
+                              );
                             }}
                           >
                             {text}
@@ -155,7 +158,18 @@ export function WorkChat({ manager }: ManagerProps) {
               </MessageScrollerItem>
               {messages.map((message) => (
                 <MessageScrollerItem key={message.id} messageId={message.id}>
-                  <Message message={message} copyable />
+                  {message.kind === "work-details" ? (
+                    <WorkDetails
+                      row={message}
+                      profile={manager.settings?.managerProfile}
+                    />
+                  ) : (
+                    <Message
+                      message={message}
+                      profile={manager.settings?.managerProfile}
+                      copyable
+                    />
+                  )}
                 </MessageScrollerItem>
               ))}
               {busy && (

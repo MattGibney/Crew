@@ -27,3 +27,39 @@ export const confirmedExit = (
   exit: RunnerRecord | null,
 ): exit is RunnerRecord & { stopConfirmed: true } =>
   Boolean(exit && exit.runId === task.runId && exit.stopConfirmed === true);
+export const connectionEnded = (
+  task: TaskRecord,
+  exit: RunnerRecord | null,
+): exit is RunnerRecord =>
+  Boolean(
+    exit &&
+    exit.runId === task.runId &&
+    (exit.connectionClosed === true || exit.stopConfirmed === true),
+  );
+export const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+export function requireRunDir(task: TaskRecord): string {
+  if (!task.runDir)
+    throw new Error("Worker run evidence directory is unavailable");
+  return task.runDir;
+}
+export function requireRepository(task: TaskRecord): string {
+  const value = task.repositoryPath || task.fixtureRepo;
+  if (!value) throw new Error("Retained repository identity is unavailable");
+  return value;
+}
+export function attention(
+  task: TaskRecord,
+  id: string,
+  kind: string,
+  message: string,
+) {
+  if (!task.attention.some((item) => item.id === id))
+    task.attention.push({ id, kind, message, at: new Date().toISOString() });
+}

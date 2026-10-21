@@ -91,7 +91,8 @@ export function useManagerConnection({
                       activeVersion: message.state.activeVersion,
                       retainedVersion: message.state.retainedVersion,
                       pendingRestart:
-                        previous.manager.saved.version !==
+                        (previous.manager.savedBehaviorVersion ||
+                          previous.manager.saved.version) !==
                         (message.state.activeVersion ||
                           message.state.retainedVersion),
                     },

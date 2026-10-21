@@ -135,14 +135,15 @@ test('busy stop waits for matching native interruption before reporting stopped 
 test('delayed native start cannot race stop into false idle or an untracked live manager', async t => {
   const f = await fixture(t, { threadDelay: 90 });
   const starting = f.lifecycle.run(() => f.bridge.startWork('delayed start', 'delayed'));
+  const canceled = assert.rejects(starting, /stopped before.*delivered/);
   await until(() => f.bridge.state().workStarting);
   const stopping = f.lifecycle.request('stop');
   assert.equal(f.lifecycle.view().state, 'stopping');
   await assert.rejects(f.lifecycle.run(() => f.bridge.startWork('second start', 'second')), /unavailable/);
-  await Promise.all([starting, stopping]);
+  await Promise.all([canceled, stopping]);
   assert.equal(f.lifecycle.view().state, 'stopped'); assert.equal(f.bridge.state().activeTurnId, null);
-  assert.equal((await f.calls()).filter(c => c.method === 'turn/start').length, 1);
-  assert.equal((await f.calls()).filter(c => c.method === 'turn/interrupt').length, 1);
+  assert.equal((await f.calls()).filter(c => c.method === 'turn/start').length, 0);
+  assert.equal((await f.calls()).filter(c => c.method === 'turn/interrupt').length, 0);
   await f.workerUnchanged();
 });
 
@@ -210,4 +211,18 @@ test('another project cannot load or overwrite the retained lifecycle identity',
   assert.equal(await readFile(file, 'utf8'), before);
   assert.equal((await f.calls()).length, 0);
   await f.workerUnchanged();
+});
+
+for (const action of ['stop', 'restart']) test(`explicit manager ${action} cancels queued human deliveries before waiting for in-flight startup`, async t => {
+ const f=await fixture(t,{threadDelay:80});
+ const first=f.lifecycle.run(()=>f.bridge.startWork('First pending message','lifecycle-queued-first'));
+ const queued=f.lifecycle.run(()=>f.bridge.startWork('Second pending direction','lifecycle-queued-second'));
+ const rejectedFirst=assert.rejects(first,/stopped before.*delivered/),rejectedQueued=assert.rejects(queued,/stopped before.*delivered/);
+ await until(async()=> (await f.calls()).some(call=>call.method==='thread/start'));
+ await f.lifecycle.request(action);
+ await Promise.all([rejectedFirst,rejectedQueued]);
+ assert.equal((await f.calls()).filter(call=>call.method==='turn/start'||call.method==='turn/steer').length,0,'Stop/restart never drains accepted messages into native turns');
+ assert.equal(f.lifecycle.view().state,action==='stop'?'stopped':'running');
+ assert.equal(f.bridge.state().workStarting,false);
+ await f.workerUnchanged();
 });

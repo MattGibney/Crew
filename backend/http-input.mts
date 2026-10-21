@@ -53,3 +53,8 @@ export function parseApiInput(value: unknown): ApiInput {
     status: value.status,
   };
 }
+
+export function parseArchiveAction(value:unknown) {
+  if(!record(value) || typeof value.taskId !== 'string' || typeof value.action !== 'string' || typeof value.operationId !== 'string' || typeof value.expectedRevision !== 'number') throw new Error('Invalid archived worker action.');
+  return {taskId:value.taskId,action:value.action,operationId:value.operationId,expectedRevision:value.expectedRevision};
+}

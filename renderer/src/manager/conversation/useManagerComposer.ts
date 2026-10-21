@@ -33,7 +33,7 @@ export function useManagerComposer(manager: Manager) {
     input.style.height = `${Math.min(160, Math.max(56, input.scrollHeight))}px`;
   }, [draft, inputMode]);
   const busy = Boolean(work.activeTurnId) || sending;
-  const ready = manager.managerEnabled && prepared && eventReady && !busy;
+  const ready = manager.managerEnabled && prepared && eventReady && !sending;
   const submit = async (event: { preventDefault(): void }) => {
     event.preventDefault();
     const submittedDraft = draft,

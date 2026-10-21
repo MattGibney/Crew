@@ -2,16 +2,11 @@ import type { ManagerProps } from "../../contracts/manager.js";
 
 import { ArrowUp, Keyboard, Mic, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
 import { Textarea } from "@/components/ui/textarea";
-
-import { ApprovalForm } from "../ApprovalForm.js";
-import { Message } from "../Message.js";
 import { VoiceControls } from "../VoiceControls.js";
 import { ManagerCallBar } from "../ManagerCallBar.js";
-
+import { Message } from "../Message.js";
 import type { useManagerComposer } from "./useManagerComposer.js";
-
 export function ManagerComposer({
   manager,
   composer,
@@ -152,10 +147,10 @@ export function ManagerComposer({
                     : !eventReady
                       ? "Waiting for connection…"
                       : busy
-                        ? "You can draft your next message while work continues."
+                        ? "Send another message to guide the current work."
                         : "Enter to send · Shift Enter for a new line"}
               </p>
-              {busy ? (
+              {work.activeTurnId && (
                 <Button
                   id="stop-work"
                   type="button"
@@ -167,17 +162,16 @@ export function ManagerComposer({
                   <Square className="size-3" />
                   Stop current turn
                 </Button>
-              ) : (
-                <Button
-                  id="send-message"
-                  type="submit"
-                  size="icon"
-                  aria-label="Send message"
-                  disabled={!ready || !draft.trim()}
-                >
-                  <ArrowUp />
-                </Button>
               )}
+              <Button
+                id="send-message"
+                type="submit"
+                size="icon"
+                aria-label="Send message"
+                disabled={!ready || !draft.trim()}
+              >
+                <ArrowUp />
+              </Button>
             </div>
           </div>
           {inputMode === "text" &&

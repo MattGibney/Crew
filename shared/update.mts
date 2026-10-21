@@ -39,6 +39,7 @@ export interface TaskActivity {
     hooks?: { status: string }[];
     runtime?: { status: string } | null;
   } | null;
+  retainedResourceRuns?: Array<{ runId: string }>;
   updateEvidence?: UpdateEvidence;
   lifecycleRequests?: {
     id: string;

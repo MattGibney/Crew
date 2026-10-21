@@ -7,6 +7,8 @@ import {
   Play,
   TriangleAlert,
 } from "lucide-react";
+import { ManagerAvatar } from "./ManagerAvatar.js";
+import { managerDisplayName } from "./profile.js";
 import { Button } from "@/components/ui/button";
 
 // Presentation only: the call and playback live above project/global view navigation.
@@ -28,6 +30,10 @@ export function ManagerCallBar({
       className="flex min-h-12 shrink-0 items-center justify-between gap-2 border-t bg-background px-3 py-1.5 sm:px-6"
     >
       <div className="flex min-w-0 items-center gap-2 text-xs">
+        <ManagerAvatar
+          profile={manager.settings?.managerProfile}
+          className="size-6"
+        />
         <span
           className={`size-1.5 shrink-0 rounded-full ${voice.active ? "bg-primary" : "bg-muted-foreground"}`}
           aria-hidden="true"
@@ -39,7 +45,9 @@ export function ManagerCallBar({
           className="h-7 px-0 text-xs"
           onClick={onManager}
         >
-          Manager
+          <span className="max-w-32 truncate">
+            {managerDisplayName(manager.settings?.managerProfile)}
+          </span>
         </Button>
         <span
           role="status"

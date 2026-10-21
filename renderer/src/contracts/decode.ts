@@ -30,6 +30,8 @@ const message = object(
     role: string,
     text: string,
     source: string,
+    origin: string,
+    turnId: string,
     position: { type: "number" },
   },
   ["id", "role"],
@@ -45,6 +47,73 @@ const approval = object(
 const lifecycleSchema = object({ state: string, error: nullable(string) }, [
   "state",
 ]);
+const scratchpad = object({
+  updatedAt: nullable(string),
+  commitments: array(
+    object(
+      {
+        id: string,
+        title: string,
+        status: string,
+        outcome: string,
+        nextAction: string,
+        references: object({
+          taskId: string,
+          runId: string,
+          ticketUrl: string,
+        }),
+      },
+      ["id", "title"],
+    ),
+  ),
+  notes: array(string),
+  decisions: array(string),
+  questions: array(string),
+});
+const environmentSource = object({ path: string, sha256: string }, [
+  "path",
+  "sha256",
+]);
+const directHook = object(
+  { command: string, args: array(string), timeoutMs: { type: "number" } },
+  ["command", "args", "timeoutMs"],
+);
+const projectHook = object(
+  { command: string, source: environmentSource, timeoutMs: { type: "number" } },
+  ["command", "source", "timeoutMs"],
+);
+const workerEnvironment = object({
+  bootstrap: directHook,
+  start: directHook,
+  ready: directHook,
+  resume: directHook,
+  cleanup: directHook,
+  executionPlan: object(
+    {
+      sources: array(environmentSource),
+      setup: projectHook,
+      start: projectHook,
+      ready: projectHook,
+      resume: projectHook,
+      stop: projectHook,
+      teardown: projectHook,
+      env: object({ PATH: string }),
+      networkAccess: { type: "boolean" },
+      permissionsSource: environmentSource,
+    },
+    ["sources"],
+  ),
+});
+const workerEnvironmentSettings = object(
+  {
+    available: { type: "boolean" },
+    revision: nullable(string),
+    configPath: nullable(string),
+    detail: string,
+    environment: workerEnvironment,
+  },
+  ["environment", "revision"],
+);
 const workSchema = object(
   {
     approvals: array(approval),
@@ -53,6 +122,8 @@ const workSchema = object(
     messages: array(message),
     status: string,
     managerLifecycle: lifecycleSchema,
+    managerScratchpad: nullable(scratchpad),
+    managerScratchpadError: nullable(string),
   },
   ["approvals", "items", "messages", "status"],
 );
@@ -69,6 +140,28 @@ const taskSchema = object(
       ]),
     ),
     lifecycleRequests: array(object({ status: string }, ["status"])),
+    currentAssignmentId: string,
+    assignments: array(
+      object(
+        {
+          id: string,
+          ticket: string,
+          brief: string,
+          status: string,
+          result: object({ message: string }),
+          runIds: array(string),
+        },
+        ["id"],
+      ),
+    ),
+    workflowState: object({ value: string }),
+    workflowHistory: array(
+      object({ requestId: string, value: string, actor: string, at: string }, [
+        "value",
+      ]),
+    ),
+    archiveRestoration: object({ requiresRecovery: { type: "boolean" } }),
+    followupWait: string,
   },
   ["id", "status"],
 );
@@ -78,6 +171,9 @@ const profileSchema = object(
     voice: { type: ["string", "null"] },
     version: string,
     configured: { type: "boolean" },
+    name: string,
+    picture: nullable(string),
+    personality: string,
   },
   ["voice", "version"],
 );
@@ -88,6 +184,7 @@ const settingsSchema = object(
     managerLifecycle: lifecycleSchema,
     manager: object({ saved: prompt }, ["saved"]),
     worker: object({ saved: prompt }, ["saved"]),
+    workerEnvironment: workerEnvironmentSettings,
   },
   ["managerProfile", "managerLifecycle", "manager", "worker"],
 );
@@ -108,6 +205,8 @@ const schemas: Record<keyof ApiResults, Schema> = {
   settings: settingsSchema,
   "settings/manager-profile": settingsSchema,
   "settings/prompts": settingsSchema,
+  "settings/worker-environment": settingsSchema,
+  "archived-worker-action": object({}),
   config: object(
     {
       project: object(

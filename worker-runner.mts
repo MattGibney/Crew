@@ -1,3 +1,4 @@
+import { createWorkerPeer } from "./execution/worker-peer.mjs";
 import {
   parseWorkerConfiguration,
   parseWorkerMessage,
@@ -17,7 +18,6 @@ import {
   errorMessage as describeError,
 } from "./execution/errors.mjs";
 import { requireWorkerModel } from "./worker-model-selection.mjs";
-import { applyProjectToolchain } from "./project-toolchain.mjs";
 // Detached per-run supervisor: survives controller/browser/voice closure.
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -58,60 +58,13 @@ await atomic("started.json", {
   pid: process.pid,
   at: new Date().toISOString(),
 });
-const env: NodeJS.ProcessEnv = {
-  ...applyProjectToolchain(config.environment?.toolchain),
-  GIT_OPTIONAL_LOCKS: "0",
-};
-for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"])
-  delete env[key];
-if (!["read-only", "workspace-write"].includes(config.sandbox || "read-only"))
-  throw new Error("Invalid worker sandbox");
 const finalFile = path.join(runDir, "final.txt");
-const mcpArgs = [
-  config.mcpScript,
-  config.stateDir,
-  "worker",
-  config.taskId,
-  config.runId,
-];
-const projectRuntime = config.environment?.kind === "project-execution";
-if (config.environment?.preset)
-  throw new Error("Obsolete project-specific runtime state is not supported.");
-if (
-  projectRuntime &&
-  !["ready", "running"].includes(config.environment?.status || "")
-)
-  throw new Error(
-    "Project execution plan has no completed setup and running foreground action.",
-  );
-// Codex resolves user, trusted project and managed policy itself. Only the
-// subscription identity and this run's orchestration endpoint are Crew-owned.
-const args = [
-  "app-server",
-  "--stdio",
-  "-c",
-  'forced_login_method="chatgpt"',
-  "-c",
-  'model_provider="openai"',
-  "-c",
-  `mcp_servers.local_orchestration.command=${JSON.stringify(process.execPath)}`,
-  "-c",
-  `mcp_servers.local_orchestration.args=${JSON.stringify(mcpArgs)}`,
-  "-c",
-  "mcp_servers.local_orchestration.required=true",
-  "-c",
-  'mcp_servers.local_orchestration.default_tools_approval_mode="approve"',
-];
-if (process.env.ELECTRON_RUN_AS_NODE === "1")
-  args.push(
-    "-c",
-    'mcp_servers.local_orchestration.env.ELECTRON_RUN_AS_NODE="1"',
-  );
-const fixturePrompt = `${buildWorkerInstructions({ ...config, project: config.project || undefined, modelSelection: config.modelSelection || undefined })}
+const fixturePrompt = `${buildWorkerInstructions({ ...config, project: config.project || undefined, environment: config.environment || undefined, modelSelection: config.modelSelection || undefined })}
 Disposable fixture acceptance procedure (task data): Inspect only this fixture worktree. Run node importing ./src/totals.mjs and print JSON {emptyActual:sum([]),sumActual:sum([1,2,3])}. Verify the Git root and tracked files with real commands. In the result report's evidence array include one JSON string {"emptyActual":NUMBER,"sumActual":NUMBER,"emptyExpected":NUMBER,"sumExpected":NUMBER,"finding":"initial_value_one"}. Expected additive totals are 0 and 6 unless the relayed answer explicitly selects a base fee of 1 (then 1 and 7). Explain the observed difference in the result. The controller independently checks these fixture values.`;
 const repositoryPrompt = buildWorkerInstructions({
   ...config,
   project: config.project || undefined,
+  environment: config.environment || undefined,
   modelSelection: config.modelSelection || undefined,
 });
 const selectedModel = config.modelSelection?.model || null;
@@ -155,8 +108,7 @@ let threadId: string | null = config.threadId || null,
   finalMessage = "",
   commands: { command: string; exitCode?: number | null; output: string }[] =
     [],
-  errorMessage: string | null = null,
-  spawnError: string | null = null;
+  errorMessage: string | null = null;
 const control: {
   request: WorkerStopRequest | null;
   stopPromise: Promise<StopEvidence> | null;
@@ -164,126 +116,30 @@ const control: {
 function currentStopRequest(): WorkerStopRequest | null {
   return control.request;
 }
-// npm-distributed Codex is a Node entry point. Its harness uses Crew's bundled
-// runtime; project commands still use the selected managed Node through PATH.
-let nodeEntry = false,
-  executableHandle;
-try {
-  executableHandle = await open(config.executable, "r");
-  const header = Buffer.alloc(256);
-  const { bytesRead } = await executableHandle.read(
-    header,
-    0,
-    header.length,
-    0,
-  );
-  nodeEntry = /^#![^\n]*(?:\/env\s+node|\/node)(?:\s|$)/.test(
-    header.subarray(0, bytesRead).toString(),
-  );
-} catch {
-} finally {
-  await executableHandle?.close();
-}
-const worker = spawn(
-  nodeEntry ? process.execPath : config.executable,
-  nodeEntry ? [config.executable, ...args] : args,
-  {
-    cwd: config.worktree,
-    env,
-    detached: true,
-    stdio: ["pipe", "pipe", "pipe"],
+const peer = await createWorkerPeer(config, {
+  onSpawnError: (code) => {
+    errorMessage = `Could not start worker (${code}).`;
   },
-);
-// Attach before any filesystem await: missing executables must become durable per-run failures.
-const closed = new Promise<number | null>((resolve) => {
-  worker.once("close", (code) => resolve(code));
-  worker.once("error", (error) => {
-    spawnError = String(errorCode(error) || "spawn failed");
-    errorMessage = `Could not start worker (${spawnError}).`;
-    resolve(null);
-  });
+  onChannelError: (code) => {
+    errorMessage = errorMessage || `Worker protocol channel closed (${code}).`;
+  },
 });
+const { worker, closed, rpc, send, sendResponse } = peer;
 const tree = worker.pid ? new OwnedProcessTree(worker.pid) : null;
 let writes = Promise.resolve(),
-  nextId = 0,
   turnId: string | null = null,
   ending = false,
   turnStartPending = false,
   finishPending = false,
   threadStartPending = false,
-  interruptRequested = false,
-  handling = Promise.resolve();
-const pending = new Map<
-    string | number,
-    {
-      method: string;
-      resolve: (value: NativeResult) => void;
-      reject: (error: Error) => void;
-      timer: NodeJS.Timeout;
-    }
-  >(),
-  nativeRequests = new Map<string, ApprovalRecord>(),
+  interruptRequested = false;
+const nativeRequests = new Map<string, ApprovalRecord>(),
   attemptedResponses = new Set<string>();
 const requestContext = () => ({
   stateDir: config.stateDir,
   taskId: config.taskId,
   runId: config.runId,
 });
-const send = (message: unknown) => {
-  if (!worker.stdin.destroyed)
-    worker.stdin.write(JSON.stringify(message) + "\n");
-};
-const sendResponse = (message: unknown) =>
-  new Promise<void>((resolve, reject) => {
-    if (worker.stdin.destroyed || worker.stdin.writableEnded)
-      return reject(
-        Object.assign(new Error("Native worker response channel is closed."), {
-          code: "NATIVE_CHANNEL_CLOSED",
-        }),
-      );
-    const timer = setTimeout(
-      () =>
-        reject(
-          Object.assign(
-            new Error("Native response write timed out; delivery is unknown."),
-            { code: "NATIVE_WRITE_TIMEOUT" },
-          ),
-        ),
-      5000,
-    );
-    worker.stdin.write(JSON.stringify(message) + "\n", (error) => {
-      clearTimeout(timer);
-      error ? reject(error) : resolve();
-    });
-  });
-worker.stdin.on("error", (error) => {
-  errorMessage =
-    errorMessage ||
-    `Worker protocol channel closed (${errorCode(error) || "error"}).`;
-});
-function rpc(
-  method: "thread/start" | "thread/resume",
-  params?: Record<string, unknown>,
-): Promise<ThreadResult>;
-function rpc(
-  method: "turn/start",
-  params?: Record<string, unknown>,
-): Promise<TurnResult>;
-function rpc(
-  method: string,
-  params?: Record<string, unknown>,
-): Promise<NativeResult>;
-function rpc(method: string, params: Record<string, unknown> = {}) {
-  return new Promise<NativeResult>((resolve, reject) => {
-    const id = ++nextId,
-      timer = setTimeout(() => {
-        pending.delete(id);
-        reject(new Error(`${method} timed out.`));
-      }, 90000);
-    pending.set(id, { method, resolve, reject, timer });
-    send({ id, method, params });
-  });
-}
 function interruptTurn() {
   if (
     interruptRequested ||
@@ -331,7 +187,7 @@ async function applyModelReroute(params: WorkerNativeParams) {
   );
 }
 async function completeTurn(params: WorkerNativeParams) {
-  if (selectedModel && (!modelTurnAcknowledged || ending)) return;
+  if (!modelTurnAcknowledged || ending) return;
   if (!params.turn) throw new Error("Native completion has no turn identity.");
   if (turnId && params.turn.id !== turnId) return;
   nativeTurnStatus = params.turn.status || null;
@@ -369,21 +225,7 @@ const approvalMethods = new Set([
   "mcpServer/elicitation/request",
 ]);
 async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
-  if (message.id !== undefined && pending.has(message.id) && !message.method) {
-    const entry = pending.get(message.id);
-    pending.delete(message.id);
-    if (!entry) return;
-    clearTimeout(entry.timer);
-    if (message.error) entry.reject(new Error(message.error.message));
-    else {
-      try {
-        entry.resolve(parseWorkerResult(entry.method, message.result));
-      } catch (error) {
-        entry.reject(new Error(describeError(error)));
-      }
-    }
-    return;
-  }
+  if (peer.consumeResponse(message)) return;
   const { method, params = {} } = message;
   if (!method) return;
   if (message.id !== undefined && method) {
@@ -395,6 +237,27 @@ async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
       return;
     }
     if (approvalMethods.has(method)) {
+      // Turn-bound requests are observations until the new turn is acknowledged.
+      if (params.turnId) {
+        if (ending || nativeTurnStatus) return;
+        if (!modelTurnAcknowledged || (turnStartPending && !replayModelEvent)) {
+          if (turnStartPending) {
+            const size = Buffer.byteLength(JSON.stringify(message));
+            if (
+              pendingModelEvents.length >= 100 ||
+              modelEventBytes + size > 262144
+            )
+              throw new Error(
+                "Early native requests exceeded their bounded journal; no response was sent.",
+              );
+            pendingModelEvents.push(message);
+            modelEventBytes += size;
+          }
+          return;
+        }
+        if (params.turnId !== turnId) return;
+      }
+
       if (
         !threadId &&
         threadStartPending &&
@@ -424,13 +287,12 @@ async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
     return;
   }
   if (params.threadId && params.threadId !== threadId) return;
-  // In a resumed model turn, native notifications are observations until the
+  // In every turn, native notifications are observations until the
   // start response positively binds their turn. Keep one bounded ordered queue;
   // stale items must never become current-run command or terminal evidence.
   if (
-    selectedModel &&
-    (modelTurnEvents.has(method) ||
-      (method === "error" && typeof params.turnId === "string"))
+    modelTurnEvents.has(method) ||
+    (method === "error" && typeof params.turnId === "string")
   ) {
     if (ending || nativeTurnStatus || params.threadId !== threadId) return;
     const eventTurnId =
@@ -443,7 +305,7 @@ async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
         const size = Buffer.byteLength(JSON.stringify(message));
         if (pendingModelEvents.length >= 100 || modelEventBytes + size > 262144)
           throw new Error(
-            "Early native model-turn events exceeded their bounded journal; selection is unverified.",
+            "Early native turn events exceeded their bounded journal; execution is unverified.",
           );
         pendingModelEvents.push(message);
         modelEventBytes += size;
@@ -478,6 +340,7 @@ async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
         path.join(runDir, "events.jsonl"),
         JSON.stringify({
           taskId: config.taskId,
+          assignmentId: config.assignmentId || "initial",
           runId: config.runId,
           at: new Date().toISOString(),
           type: "item.completed",
@@ -525,31 +388,13 @@ async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
     );
   }
 }
-const lines = createInterface({ input: worker.stdout });
-lines.on("line", (line) => {
-  let message;
-  try {
-    message = parseWorkerMessage(JSON.parse(line));
-  } catch {
-    return;
-  }
-  // RPC responses cannot wait behind an event handler which itself awaits RPC.
-  if (message.id !== undefined && !message.method && pending.has(message.id)) {
-    void handle(message);
-    return;
-  }
-  handling = handling
-    .then(() => handle(message))
-    .catch(async (error) => {
-      errorMessage = describeError(error);
-      await finish();
-    });
-});
-let diagnosticBytes = 0;
-worker.stderr.on("data", (chunk) => {
-  if (diagnosticBytes >= 8192) return;
-  diagnosticBytes += chunk.length;
-}); // Never persist potentially sensitive native diagnostics.
+peer.listen(
+  (message) => handle(message),
+  async (error) => {
+    errorMessage = describeError(error);
+    await finish();
+  },
+);
 const bootstrap = (async () => {
   try {
     await rpc("initialize", {
@@ -600,9 +445,9 @@ const bootstrap = (async () => {
         : options,
     );
     threadStartPending = false;
-    if (selectedModel && started.thread.id !== config.threadId)
+    if (config.threadId && started.thread.id !== config.threadId)
       throw new Error(
-        "Native model continuation returned another thread; no new turn was started.",
+        "Native continuation returned another thread; no new turn was started.",
       );
     threadId = started.thread.id;
     await saveRuntime();
@@ -640,19 +485,16 @@ const bootstrap = (async () => {
       ...(selectedModel ? { model: selectedModel } : {}),
       input: [{ type: "text", text: prompt }],
     });
-    if (
-      selectedModel &&
-      (typeof result.turn?.id !== "string" || !result.turn.id)
-    )
+    if (typeof result.turn?.id !== "string" || !result.turn.id)
       throw new Error(
         "Native model continuation did not acknowledge a turn identity; selection was not confirmed.",
       );
-    if (selectedModel && turnId && turnId !== result.turn.id)
+    if (turnId && turnId !== result.turn.id)
       throw new Error(
         "Native model continuation returned a different turn identity; selection was not confirmed.",
       );
     if (!turnId) turnId = result.turn.id;
-    if (selectedModel) {
+    {
       if (errorMessage) throw new Error(errorMessage);
       modelTurnAcknowledged = true;
       if (!ending)
@@ -718,12 +560,13 @@ const stopOwnedWorker = () => {
     control.stopPromise = tree
       ? tree.stop({ graceMs: 2000 })
       : Promise.resolve<StopEvidence>({
-          confirmed: Boolean(spawnError),
+          confirmed: Boolean(peer.spawnError()),
           remaining: [],
         });
   return control.stopPromise;
 };
 const timeoutMs =
+  typeof config.timeoutMs === "number" &&
   Number.isSafeInteger(config.timeoutMs) &&
   config.timeoutMs >= 1000 &&
   config.timeoutMs <= 86400000
@@ -744,7 +587,7 @@ const checkTimeout = () => {
     })();
   }, timeoutMs);
 };
-checkTimeout();
+if (config.project?.mode !== "repository") checkTimeout();
 let checking = false,
   protocolFailure: {
     runId: string;
@@ -863,31 +706,43 @@ process.on("SIGTERM", () => {
 const exitCode = await closed;
 clearTimeout(timeout);
 clearInterval(controlTimer);
-// A natural CLI exit must also leave no captured command/MCP descendant behind.
+// Natural native closure retains agent-started resources for explicit cleanup.
 await acceptControl().catch(() => {});
 let observedStop = control.stopPromise;
-let ownership = await (observedStop ||
-  (cooperative ? waitOwnedNatural(tree) : null) ||
-  tree?.stop({ graceMs: 1000 }) ||
-  Promise.resolve<StopEvidence>({
-    confirmed: Boolean(spawnError),
+let ownership: StopEvidence;
+if (observedStop || cooperative)
+  ownership = await (observedStop || waitOwnedNatural(tree));
+else if (tree) {
+  await tree.capture();
+  let remaining = await tree.remaining();
+  const deadline = Date.now() + 1000;
+  while (remaining.length && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    remaining = await tree.remaining();
+  }
+  ownership = {
+    confirmed: Boolean(tree.rootIdentity) && remaining.length === 0,
+    remaining,
+    tracked: [...tree.records.values()],
+  };
+} else
+  ownership = {
+    confirmed: Boolean(peer.spawnError()),
     remaining: [],
-  }));
+    tracked: [],
+  };
 if (control.stopPromise && control.stopPromise !== observedStop)
   ownership = await control.stopPromise;
-for (const entry of pending.values()) {
-  clearTimeout(entry.timer);
-  entry.reject(new Error("Codex worker exited."));
-}
-pending.clear();
+peer.rejectPending();
 await bootstrap;
-await handling;
+await peer.drain();
 await writes;
 await invalidateWorkerRequests({
   ...requestContext(),
   reason: "Worker process exited.",
 });
 await atomic("exit.json", {
+  connectionClosed: true,
   runId: config.runId,
   threadId,
   nativeTurnStatus,

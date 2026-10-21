@@ -1,3 +1,9 @@
+import { parseArchiveAction } from "./backend/http-input.mjs";
+import { createScratchpadFeed } from './backend/scratchpad-feed.mjs';
+import { createManagerReviews } from './backend/manager-reviews.mjs';
+import { createSettingsSave } from './backend/settings-save.mjs';
+import { createEnvironmentSettings } from './environment-settings.mjs';
+import { isArchivedTask } from './worker-archive.mjs';
 import { projectApi } from "./backend/project-api.mjs";
 import { createSettingsView } from "./backend/settings-view.mjs";
 import { record as isRecord, parseRecord } from "./shared/errors.mjs";
@@ -10,12 +16,12 @@ import path from "node:path";
 import { loadAppConfig, configurationRoot } from "./config.mjs";
 import { fileURLToPath } from "node:url";
 import { createPromptSettings } from "./prompt-settings.mjs";
-import { createManagerProfile } from "./manager-profile.mjs";
+import { createManagerProfile, managerProfileSnapshot } from "./manager-profile.mjs";
 import { createManagerLifecycle } from "./manager-lifecycle.mjs";
 import { createBridge, safeError } from "./codex-bridge.mjs";
 import { createController } from "./controller.mjs";
 import { readWorkerDetail } from "./worker-detail.mjs";
-import { readTask, requestWorkerAction } from "./orchestration-store.mjs";
+import { readTask, loadTasks, requestWorkerAction, manageArchivedTask } from "./orchestration-store.mjs";
 import {
   listWorkerRequests,
   decideWorkerRequest,
@@ -108,7 +114,9 @@ try {
 }
 const runtimeProjectPath = path.join(orchestrationDir, "project-runtime.json");
 const shutdownToken = randomUUID();
+let scratchpadFeed: Awaited<ReturnType<typeof createScratchpadFeed>> | undefined;
 const broadcast = (event: { type: string; [key: string]: unknown }) => {
+  if(event.type === 'work-state' && isRecord(event.state) && scratchpadFeed) event = {...event,state:scratchpadFeed.enrich(event.state)};
   if (
     typeof process.send === "function" &&
     process.env.ELECTRON_RUN_AS_NODE === "1" &&
@@ -132,10 +140,11 @@ const broadcast = (event: { type: string; [key: string]: unknown }) => {
 };
 let workerApprovalSnapshot = "";
 const publishWorkerApprovals = async () => {
-  const requests = await listWorkerRequests({
+  const tasks = await loadTasks(orchestrationDir);
+  const requests = (await listWorkerRequests({
     stateDir: orchestrationDir,
     pendingOnly: true,
-  });
+  })).filter(request=>tasks.some(task=>task.id === request.taskId && task.runId === request.runId && !isArchivedTask(task) && !task.archiveRestoration?.requiresRecovery));
   const serialized = JSON.stringify(requests);
   if (serialized !== workerApprovalSnapshot) {
     workerApprovalSnapshot = serialized;
@@ -153,6 +162,8 @@ const workerApprovalTimer = setInterval(
 let drainHeld = false;
 let updatePlan: ReturnType<typeof createUpdatePlan>;
 let updatePlanTimer: NodeJS.Timeout;
+scratchpadFeed = await createScratchpadFeed(orchestrationDir,()=>broadcast({type:"work-state",state:bridge.state()}));
+const environmentSettings = await createEnvironmentSettings({configuration});
 const prompts = await createPromptSettings({
   stateDir: orchestrationDir,
   sourceDir: root,
@@ -182,7 +193,7 @@ const controller = await createController({
 });
 await writeFile(
   `${runtimeProjectPath}.tmp`,
-  JSON.stringify({ project, workerPrompt }) + "\n",
+  JSON.stringify({ project, workerPrompt, environmentConfigPath:configuration.configPath }) + "\n",
   { mode: 0o600 },
 );
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
@@ -194,13 +205,14 @@ const bridge = createBridge({
   project,
   managerPrompt,
   runtimeProjectPath,
+  getManagerScratchpad:()=>scratchpadFeed!.scratchpad.snapshot(),
   onEvent: broadcast,
 });
 const manager = await createManagerLifecycle({
   stateDir: orchestrationDir,
   projectId: project.id,
   bridge,
-  prompts,
+  prompts:{snapshot:async()=>managerProfileSnapshot((await prompts.snapshot("manager")).text,await managerProfile.read())},
   onChange: (state) => broadcast({ type: "manager-lifecycle", state }),
 });
 const settingsView = createSettingsView({
@@ -208,7 +220,9 @@ const settingsView = createSettingsView({
   manager,
   managerProfile,
   project,
+  environmentSettings,
 });
+const settingsSave = createSettingsSave(prompts,managerProfile);
 const metadata = parseRecord(
   await readFile(new URL("./package.json", import.meta.url), "utf8"),
 );
@@ -282,15 +296,18 @@ updatePlanTimer = setInterval(
       ),
   500,
 );
+const scratchpadTimer = setInterval(()=>void scratchpadFeed!.refresh(),1000);
+const managerReview = createManagerReviews({stateDir:orchestrationDir,bridge,manager,controller,updateAdmission,scratchpad:scratchpadFeed.scratchpad,held:()=>drainHeld,notice:message=>broadcast({type:'notice',message})});
 const server = http.createServer(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' https:; media-src 'self' blob:; frame-ancestors 'none'",
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; media-src 'self' blob:; frame-ancestors 'none'",
   );
   res.setHeader("Permissions-Policy", "microphone=(self), camera=()");
   const send = (code: number, value: unknown) => {
+    if(isRecord(value) && isRecord(value.state)) value = {...value,state:scratchpadFeed!.enrich(value.state)};
     res.writeHead(code, { "Content-Type": "application/json" });
     res.end(JSON.stringify(value));
   };
@@ -332,6 +349,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && req.url === "/api/settings")
       return send(200, await settingsView());
     if (req.method === "GET" && req.url === "/events") {
+      await scratchpadFeed!.refresh();
       if (clients.size)
         return send(409, {
           error: "Only one browser tab can control this chat.",
@@ -341,7 +359,7 @@ const server = http.createServer(async (req, res) => {
         Connection: "keep-alive",
       });
       res.write(
-        `data: ${JSON.stringify({ type: "work-state", state: bridge.state() })}\n\n`,
+        `data: ${JSON.stringify({ type: "work-state", state: scratchpadFeed!.enrich(bridge.state()) })}\n\n`,
       );
       clients.add(res);
       res.write(
@@ -383,12 +401,13 @@ const server = http.createServer(async (req, res) => {
       !req.headers["content-type"]?.startsWith("application/json")
     )
       return send(403, { error: "Same-origin JSON requests only." });
+    req.setEncoding("utf8");
     let body = "";
     for await (const chunk of req) {
       body += chunk;
       if (
         Buffer.byteLength(body) >
-        (req.url === "/api/settings/prompts" ? 400000 : 70000)
+        (req.url === "/api/settings/worker-environment" ? 16000000 : req.url === "/api/settings/manager-profile" ? 750000 : req.url === "/api/settings/prompts" ? 400000 : 70000)
       )
         return send(413, { error: "Request too large." });
     }
@@ -404,6 +423,8 @@ const server = http.createServer(async (req, res) => {
         "/api/manager/lifecycle",
         "/api/settings/prompts",
         "/api/settings/manager-profile",
+        "/api/settings/worker-environment",
+        "/api/archived-worker-action",
       ].includes(req.url) &&
       (await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR))
     )
@@ -412,15 +433,22 @@ const server = http.createServer(async (req, res) => {
           "Crew is preparing an update across projects. Work admission is paused until you resume or return to work.",
       });
     if (req.method === "PUT") {
+      if(req.url === '/api/settings/worker-environment') {
+        const saved = await environmentSettings.save(rawInput); project.worker.environment = structuredClone(saved.environment); return send(200,await settingsView());
+      }
       if (req.url === "/api/settings/manager-profile") {
-        await managerProfile.save(rawInput);
+        await settingsSave.profile(rawInput);
         return send(200, await settingsView());
       }
       if (req.url !== "/api/settings/prompts")
         return send(404, { error: "Not found." });
-      await prompts.save(rawInput);
+      await settingsSave.prompts(rawInput);
       return send(200, await settingsView());
     }
+    if(req.url === '/api/archived-worker-action') return send(200,await updateAdmission.run(async()=>{
+      const result = await manageArchivedTask(orchestrationDir,parseArchiveAction(rawInput),project); broadcast({type:'orchestration-state',state:await controller.view()}); return result;
+    }));
+    if(req.url === '/api/state') { await scratchpadFeed!.refresh(); return send(200,scratchpadFeed!.enrich(bridge.state())); }
     const reply = await projectApi(req.url, rawInput, {
       configuration,
       bridge,
@@ -453,6 +481,8 @@ const server = http.createServer(async (req, res) => {
 });
 let shuttingDown: Promise<void> | undefined;
 async function shutdown() {
+  managerReview.stop();
+  clearInterval(scratchpadTimer);
   clearInterval(updatePlanTimer);
   clearInterval(workerApprovalTimer);
   if (shuttingDown) return shuttingDown;

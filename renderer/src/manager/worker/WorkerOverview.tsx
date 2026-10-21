@@ -1,16 +1,19 @@
+import { WorkerWorkHistory } from "./WorkerWorkHistory.js";
 import type { ManagerProps, WorkerTask } from "../../contracts/manager.js";
 import { Clock3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { WorkerStatus } from "../WorkerAttention.js";
-
 import { errorText } from "../api.js";
 import {
-  formatElapsed,
+  currentAssignment,
+  canDiscussFollowup,
+  workerFollowupRequest,
   workerProgress,
   workerActions,
   workerRecoveryReviewRequest,
   workerTiming,
+  formatElapsed,
 } from "../worker-model.js";
 import type { useWorkerActions } from "./useWorkerActions.js";
 export function WorkerOverview({
@@ -33,6 +36,12 @@ export function WorkerOverview({
     setConfirmRemove,
     act,
   } = actions;
+  const assignment = currentAssignment(task);
+  const managerBusy =
+    actionBusy ||
+    !manager.managerEnabled ||
+    !manager.prepared ||
+    !manager.eventReady;
   return (
     <div className="space-y-6">
       <div className="rounded-xl border bg-card p-5 sm:p-6">
@@ -40,15 +49,15 @@ export function WorkerOverview({
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <span className="text-xs font-medium text-muted-foreground">
-                {task.ticket || task.id}
+                {assignment.ticket || task.id}
               </span>
               <WorkerStatus task={task} />
               <Badge variant="outline" className="text-[10px]">
-                Read only
+                Read-only history
               </Badge>
             </div>
             <h2 className="break-words text-xl font-semibold tracking-tight">
-              {task.brief?.trim().split("\n")[0] || "Worker task"}
+              {assignment.brief?.trim().split("\n")[0] || "Worker task"}
             </h2>
             <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">
               {workerProgress(task)}
@@ -73,6 +82,13 @@ export function WorkerOverview({
             Task {task.id}
           </span>
         </div>
+        {task.archiveRestoration?.requiresRecovery && (
+          <p className="mt-3 rounded-lg border p-3 text-xs leading-5 text-muted-foreground">
+            History restored only. Restore has not recreated this worker’s
+            worktree or environment. Discuss any recreation with your manager
+            before assigning more work.
+          </p>
+        )}
         {task.modelSelection && (
           <div
             aria-label="Worker model"
@@ -117,6 +133,28 @@ export function WorkerOverview({
           >
             Discuss with manager
           </Button>
+          {canDiscussFollowup(task) && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              disabled={managerBusy}
+              onClick={async () => {
+                setActionBusy(true);
+                setActionError("");
+                try {
+                  await manager.sendMessage(workerFollowupRequest(task));
+                  onManager();
+                } catch (failure) {
+                  setActionError(errorText(failure));
+                } finally {
+                  setActionBusy(false);
+                }
+              }}
+            >
+              Send direction
+            </Button>
+          )}
           {workerActions(task).map((action) => (
             <Button
               key={action}
@@ -140,16 +178,15 @@ export function WorkerOverview({
                   pause: "Pause",
                   stop: "Stop",
                   resume: "Resume",
-                  dispose: "Remove worktree",
+                  dispose: "Archive",
                 }[action]
               }
             </Button>
           ))}
         </div>
-        {task.worktree &&
-          ["failed", "blocked", "paused", "stopped", "completed"].includes(
-            task.status,
-          ) &&
+        {!task.archiveRestoration?.requiresRecovery &&
+          task.worktree &&
+          ["failed", "blocked"].includes(task.status) &&
           !task.lifecycleRequests?.some((request) =>
             ["pending", "processing"].includes(request.status),
           ) && (
@@ -184,14 +221,15 @@ export function WorkerOverview({
                 Review recovery
               </Button>
               <span className="text-xs text-muted-foreground">
-                Review options with your manager before changing retained work.
+                Inspect worker or environment recovery with your manager.
               </span>
             </div>
           )}
         {confirmRemove && (
           <div className="mt-3 rounded-lg border p-3 text-xs">
             <p>
-              Ask your manager to remove this worktree safely? Dirty or
+              Ask your manager to archive this worker? Its environment will be
+              torn down safely before it moves to Archived workers. Dirty or
               unresolved work is protected; history is kept.
             </p>
             <div className="mt-2 flex gap-2">
@@ -201,7 +239,7 @@ export function WorkerOverview({
                 disabled={actionBusy}
                 onClick={() => void act("dispose")}
               >
-                Remove safely
+                Archive safely
               </Button>
               <Button
                 size="sm"
@@ -214,12 +252,13 @@ export function WorkerOverview({
           </div>
         )}
       </div>
+      <WorkerWorkHistory task={task} />
       <dl className="space-y-4 rounded-xl border p-5 text-xs">
         {[
           ["Project", task.projectId],
           ["Repository", task.repositoryId],
           ["Worktree", task.worktree],
-          ["Linear reference", task.ticket],
+          ["Ticket reference", assignment.ticket],
           ["Run", task.runId],
         ].map(([label, value]) => (
           <div key={label}>
@@ -232,7 +271,7 @@ export function WorkerOverview({
         <div>
           <dt className="font-medium">Agreed assignment</dt>
           <dd className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">
-            {task.brief}
+            {assignment.brief}
           </dd>
         </div>
         {task.workerPromptSnapshot?.text && (

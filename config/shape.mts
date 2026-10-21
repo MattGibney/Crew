@@ -201,3 +201,9 @@ export function requireExecutionProject(value: unknown): Project {
     throw new Error("Execution project configuration is incomplete.");
   return value;
 }
+
+const environmentValidator = new Ajv({strict:false}).compile<import('./contracts.mjs').RawEnvironment>(environment);
+export function parseEnvironmentShape(value:unknown) {
+  if(!environmentValidator(value)) throw new Error('Configuration: invalid worker environment.');
+  return value;
+}

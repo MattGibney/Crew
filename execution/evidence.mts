@@ -81,6 +81,15 @@ export async function readCommandExit(
   }
 }
 export interface RunnerRecord {
+  assignmentId?: string;
+  fingerprint?: string;
+  records?: import("../process-ownership.mjs").OwnedProcess[];
+  ownership?: {
+    remaining?: import("../process-ownership.mjs").RemainingProcess[];
+    tracked?: import("../process-ownership.mjs").OwnedProcess[];
+    confirmed?: boolean;
+  };
+  connectionClosed?: boolean;
   id?: string;
   environmentId?: string;
   runId?: string;
@@ -125,6 +134,18 @@ const identityShape = {
 const runnerShape = ajv.compile<RunnerRecord>({
   type: "object",
   properties: {
+    connectionClosed: { type: "boolean" },
+    assignmentId: { type: "string" },
+    fingerprint: { type: "string" },
+    records: { type: "array", items: identityShape },
+    ownership: {
+      type: "object",
+      properties: {
+        confirmed: { type: "boolean" },
+        remaining: { type: "array", items: identityShape },
+        tracked: { type: "array", items: identityShape },
+      },
+    },
     id: { type: "string" },
     environmentId: { type: "string" },
     runId: { type: "string" },

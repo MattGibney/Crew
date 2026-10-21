@@ -1,13 +1,14 @@
-import { useWorkerActions } from "./worker/useWorkerActions.js";
-import { WorkerOverview } from "./worker/WorkerOverview.js";
 import { WorkerNotes } from "./worker/WorkerNotes.js";
 import { WorkerLinks } from "./worker/WorkerLinks.js";
+import { WorkerOverview } from "./worker/WorkerOverview.js";
+import { WorkerExchange } from "./worker/WorkerExchange.js";
+import { useWorkerActions } from "./worker/useWorkerActions.js";
+import type { LucideIcon } from "lucide-react";
 import type {
   ManagerProps,
   WorkerTask,
   WorkerDetailState,
 } from "../contracts/manager.js";
-import { errorText } from "./api.js";
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
@@ -18,16 +19,17 @@ import {
   LoaderCircle,
   MessageSquare,
 } from "lucide-react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+
 import { Button } from "@/components/ui/button";
 
-import { api } from "./api.js";
+import { api, errorText } from "./api.js";
 import { WorkerStatus } from "./WorkerAttention.js";
-import { Message } from "./Message.js";
-import { pendingAttention, workerTiming } from "./worker-model.js";
 
-import { WorkerExchange } from "./worker/WorkerExchange.js";
+import {
+  currentAssignment,
+  pendingAttention,
+  workerTiming,
+} from "./worker-model.js";
 
 export function WorkerDetail({
   task,
@@ -90,7 +92,8 @@ export function WorkerDetail({
   const actions = useWorkerActions(task, manager, onManager);
   const { actionError, actionBusy, setActionBusy, setActionError } = actions;
   const timing = workerTiming(task, now),
-    attention = pendingAttention(task);
+    attention = pendingAttention(task),
+    assignment = currentAssignment(task);
   return (
     <section
       aria-label="Worker detail"
@@ -109,13 +112,13 @@ export function WorkerDetail({
           </Button>
           <span className="hidden h-4 border-l sm:block" aria-hidden="true" />
           <span className="shrink-0 text-xs text-muted-foreground">
-            {task.ticket || task.id}
+            {assignment.ticket || task.id}
           </span>
           <h1
             className="min-w-0 flex-1 truncate text-sm font-semibold"
-            title={task.brief?.trim().split("\n")[0]}
+            title={assignment.brief?.trim().split("\n")[0]}
           >
-            {task.brief?.trim().split("\n")[0] || "Worker task"}
+            {assignment.brief?.trim().split("\n")[0] || "Worker task"}
           </h1>
           <WorkerStatus task={task} />
         </div>
@@ -130,7 +133,7 @@ export function WorkerDetail({
               ["conversation", "Conversation", MessageSquare],
               ["notes", "Work notes", FileText],
               ["links", "Links", Link2],
-            ] as const
+            ] as [string, string, LucideIcon][]
           ).map(([value, label, Icon]) => (
             <button
               key={value}
@@ -172,9 +175,9 @@ export function WorkerDetail({
         ref={scroll}
         onScroll={() => {
           const node = scroll.current;
-          follow.current = node
-            ? node.scrollHeight - node.scrollTop - node.clientHeight < 100
-            : true;
+          if (!node) return;
+          follow.current =
+            node.scrollHeight - node.scrollTop - node.clientHeight < 100;
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8"
         role="tabpanel"

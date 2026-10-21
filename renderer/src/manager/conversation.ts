@@ -20,3 +20,39 @@ export function orderedMessages(messages: MessageRecord[] = []) {
     ...group.filter((item) => item.role !== "user"),
   ]);
 }
+
+// A delegated native exchange is backing work, not another utterance. Keep all
+// its content inspectable, without guessing which spoken response summarizes it.
+// Only adjacent records are grouped so interruptions retain their native order.
+export function conversationRows(messages: MessageRecord[] = []) {
+  const rows: ConversationRow[] = [];
+  for (const message of orderedMessages(messages)) {
+    if (
+      message.origin !== "realtime-delegation" ||
+      !message.turnId ||
+      message.source === "voice"
+    ) {
+      rows.push(message);
+      continue;
+    }
+    const previous = rows.at(-1);
+    if (previous?.kind === "work-details" && previous.turnId === message.turnId)
+      previous.messages.push(message);
+    else
+      rows.push({
+        id: message.id,
+        turnId: message.turnId,
+        kind: "work-details",
+        messages: [message],
+      });
+  }
+  return rows;
+}
+
+export interface WorkDetailsRow {
+  id?: string;
+  turnId: string;
+  kind: "work-details";
+  messages: MessageRecord[];
+}
+export type ConversationRow = MessageRecord | WorkDetailsRow;

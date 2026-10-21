@@ -1,3 +1,4 @@
+import { isArchivedTask } from "../worker-archive.mjs";
 import { createHash } from "node:crypto";
 import { parseApiInput } from "./http-input.mjs";
 import { parseWorkerApproval } from "./approval-input.mjs";
@@ -127,6 +128,7 @@ export async function projectApi(
       await updateAdmission.run(() =>
         manager.run(async () => {
           const task = await readTask(orchestrationDir, input.taskId);
+      if(isArchivedTask(task)) throw new Error("This worker is archived; restore it from Project settings before reviewing.");
           const item = task.attention.find(
             (a) => a.id === input.attentionId && !a.ackedAt,
           );

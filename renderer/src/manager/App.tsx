@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import {
   AudioLines,
@@ -5,6 +6,7 @@ import {
   GitBranch,
   MessageSquare,
   Layers,
+  NotebookPen,
   Settings2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -14,9 +16,11 @@ import { WorkerAttention } from "./WorkerAttention.js";
 import { UpdateControls } from "./UpdateControls.js";
 import { Settings } from "./Settings.js";
 import { WorkChat } from "./WorkChat.js";
+import { workspaceWorkers, workerSelectionRemoved } from "./worker-model.js";
 import { WorkerDetail } from "./WorkerDetail.js";
 import { ManagerCallBar } from "./ManagerCallBar.js";
 import { ProjectSwitcher } from "./ProjectSwitcher.js";
+import { ManagerScratchpad } from "./ManagerScratchpad.js";
 import crewMark from "../../../build/crew-mark.png";
 
 export function App() {
@@ -50,14 +54,38 @@ export function App() {
     setSelectedWorker(id);
     openPane("detail");
   };
-  const tasks = (manager.orchestration.tasks || []).map((task) => ({
+  const recordedTasks = manager.orchestration.tasks || [];
+  const tasks = workspaceWorkers(recordedTasks).map((task) => ({
     ...task,
-    pendingApprovalCount: (manager.workerApprovals || []).filter(
-      (request) => request.taskId === task.id && request.runId === task.runId,
-    ).length,
+    pendingApprovalCount: task.archiveRestoration?.requiresRecovery
+      ? 0
+      : (manager.workerApprovals || []).filter(
+          (request) =>
+            request.taskId === task.id && request.runId === task.runId,
+        ).length,
   }));
+  useEffect(() => {
+    if (workerSelectionRemoved(recordedTasks, selectedWorker)) {
+      setSelectedWorker(null);
+      setPane((current) => (current === "detail" ? "conversation" : current));
+      setSettingsReturn((current) =>
+        current === "detail" ? "conversation" : current,
+      );
+    }
+  }, [recordedTasks, selectedWorker]);
   const selectedTask = tasks.find((task) => task.id === selectedWorker);
-  const approvalCount = (manager.workerApprovals || []).length;
+  const workspaceManager = {
+    ...manager,
+    workerApprovals: (manager.workerApprovals || []).filter((request) =>
+      tasks.some(
+        (task) =>
+          task.id === request.taskId &&
+          task.runId === request.runId &&
+          !task.archiveRestoration?.requiresRecovery,
+      ),
+    ),
+  };
+  const approvalCount = workspaceManager.workerApprovals.length;
   const workerView = { ...manager.orchestration, tasks };
   const pending = tasks.reduce(
     (count, task) =>
@@ -68,11 +96,17 @@ export function App() {
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <a
         href={
-          pane === "conversation" ? "#manager-composer" : "#workspace-content"
+          pane === "conversation"
+            ? "#manager-composer"
+            : pane === "scratchpad"
+              ? "#scratchpad-content"
+              : "#workspace-content"
         }
         className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-md focus:bg-background focus:p-3"
       >
-        Skip to message
+        {pane === "conversation"
+          ? "Skip to message"
+          : "Skip to project content"}
       </a>
       <header
         className={`flex min-h-18 shrink-0 items-center justify-between gap-4 border-b px-5 sm:px-7 ${window.crewWindow?.integratedTitlebar ? "crew-window-header" : ""}`}
@@ -132,7 +166,7 @@ export function App() {
       </header>
       <nav
         aria-label="Workspace views"
-        className={`${pane === "conversation" || pane === "workers" ? "flex" : "hidden"} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}
+        className={`${["conversation", "workers", "scratchpad"].includes(pane) ? "flex" : "hidden"} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}
       >
         <Button
           variant={pane === "conversation" ? "secondary" : "ghost"}
@@ -157,6 +191,15 @@ export function App() {
           <Layers />
           Workers {pending > 0 && <Badge>{pending}</Badge>}
         </Button>
+        <Button
+          variant={pane === "scratchpad" ? "secondary" : "ghost"}
+          aria-pressed={pane === "scratchpad"}
+          className="h-8 text-xs"
+          onClick={() => openPane("scratchpad")}
+        >
+          <NotebookPen />
+          Scratchpad
+        </Button>
       </nav>
       <main
         ref={workspace}
@@ -164,9 +207,7 @@ export function App() {
         style={
           workerWidth === null
             ? undefined
-            : ({
-                "--crew-worker-width": `${workerWidth}px`,
-              } as React.CSSProperties)
+            : ({ "--crew-worker-width": `${workerWidth}px` } as CSSProperties)
         }
         className={`${pane === "conversation" || pane === "workers" ? "grid" : "hidden"} min-h-0 flex-1 ${pane === "conversation" ? "manager-split" : ""}`}
       >
@@ -174,7 +215,7 @@ export function App() {
           aria-label="Manager workspace"
           className={`min-h-0 min-w-0 overflow-y-auto flex-col ${pane === "conversation" ? "flex" : "hidden"}`}
         >
-          <WorkChat manager={manager} />
+          <WorkChat manager={workspaceManager} />
         </section>
         <div
           role="separator"
@@ -195,16 +236,16 @@ export function App() {
             if (resizing.current) {
               event.preventDefault();
               resizeWorkers(
-                workspace.current!.getBoundingClientRect().right -
-                  event.clientX,
+                (workspace.current?.getBoundingClientRect().right ||
+                  event.clientX) - event.clientX,
               );
             }
           }}
           onPointerUp={(event) => {
             if (resizing.current)
               resizeWorkers(
-                workspace.current!.getBoundingClientRect().right -
-                  event.clientX,
+                (workspace.current?.getBoundingClientRect().right ||
+                  event.clientX) - event.clientX,
               );
             resizing.current = false;
             if (event.currentTarget.hasPointerCapture(event.pointerId))
@@ -253,7 +294,7 @@ export function App() {
           <WorkerDetail
             key={selectedTask.id}
             task={selectedTask}
-            manager={manager}
+            manager={workspaceManager}
             onBack={() => openPane("conversation")}
             onManager={() => openPane("conversation")}
           />
@@ -265,6 +306,17 @@ export function App() {
             </Button>
           </section>
         )}
+      </div>
+      <div
+        className={`${pane === "scratchpad" ? "flex" : "hidden"} min-h-0 flex-1 flex-col`}
+      >
+        <ManagerScratchpad
+          scratchpad={manager.work.managerScratchpad}
+          scratchpadReadError={manager.work.managerScratchpadError}
+          eventReady={manager.eventReady}
+          tasks={tasks}
+          onSelectWorker={showWorker}
+        />
       </div>
       {pane !== "conversation" && pane !== "settings" && (
         <ManagerCallBar

@@ -1,9 +1,9 @@
+import { createProjectSetupWindow } from "./project-setup-window.mjs";
 import { analyzeAndApplyProject } from "./project-discovery-apply.mjs";
-import { app, BrowserWindow, dialog, shell, systemPreferences } from "electron";
+import { app, dialog, shell, systemPreferences } from "electron";
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFile, writeFile, access } from "node:fs/promises";
 import { resolve, dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   readSetupConfig,
   saveSetupConfig,
@@ -70,7 +70,6 @@ export function createProjectSetup(context: SetupHostContext) {
   } = context;
   const { configPath, key, desktopData, id } = storage;
   const flag = 0;
-  const setupURL = pathToFileURL(join(root, "renderer-dist/setup.html")).href;
   let discoveryController: AbortController | undefined,
     discoveryRoot: string | undefined,
     discoveryProposal: unknown,
@@ -78,11 +77,16 @@ export function createProjectSetup(context: SetupHostContext) {
     linearOptions: LinearCatalog | undefined,
     discoveryPhase: string | undefined;
   const repositoryOptions = new Map<string, RepositoryOption>();
-  let setupWindow: BrowserWindow | undefined,
-    setupChecks: SetupChecks = {},
+  let setupChecks: SetupChecks = {},
     setupRevision: string | undefined,
     setupInputs: string | undefined,
     setupOperation = false;
+  const surface = createProjectSetupWindow({
+    root,
+    key,
+    isSelected: () => host.isSelected(id),
+    onClosed: () => discoveryController?.abort(),
+  });
   // Setup and workspace surfaces expose separate bounded native bridges.
   function projectDraftStatus(issues: string[] = []) {
     const detail = issues.map((issue) =>
@@ -198,51 +202,7 @@ export function createProjectSetup(context: SetupHostContext) {
       error: context.lastError,
     };
   }
-  async function openSetup() {
-    if (!host.isSelected(id)) return;
-    if (setupWindow && !setupWindow.isDestroyed()) {
-      setupWindow.show();
-      setupWindow.focus();
-      return;
-    }
-    const next = new BrowserWindow({
-      width: 1000,
-      height: 850,
-      minWidth: 560,
-      minHeight: 550,
-      title: "Set up Crew",
-      show: false,
-      webPreferences: {
-        preload: join(root, "desktop/setup-preload.cjs"),
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        webSecurity: true,
-        partition: `setup-${key}`,
-      },
-    });
-    setupWindow = next;
-    next.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-    next.webContents.on("will-navigate", (event, url) => {
-      if (url !== setupURL) event.preventDefault();
-    });
-    next.webContents.on("will-attach-webview", (event) =>
-      event.preventDefault(),
-    );
-    next.webContents.session.setPermissionRequestHandler((_c, _p, callback) =>
-      callback(false),
-    );
-    next.webContents.session.setPermissionCheckHandler(() => false);
-    next.webContents.session.on("will-download", (event) =>
-      event.preventDefault(),
-    );
-    next.on("closed", () => {
-      discoveryController?.abort();
-      if (setupWindow === next) setupWindow = undefined;
-    });
-    await next.loadURL(setupURL);
-    next.show();
-  }
+  const openSetup = surface.open;
   async function assertSetupInputs(inputs: string) {
     if ((await setupInputsKey(configPath)) !== inputs) {
       setupChecks = {};
@@ -348,12 +308,8 @@ export function createProjectSetup(context: SetupHostContext) {
     action: string,
     input: unknown,
   ) => {
-    if (
-      !setupWindow ||
-      event.sender !== setupWindow.webContents ||
-      event.senderFrame !== setupWindow.webContents.mainFrame ||
-      (event.senderFrame?.url || "") !== setupURL
-    )
+    const setupWindow = surface.current();
+    if (!setupWindow || !surface.accepts(event))
       throw new Error("Setup request rejected.");
     if (typeof action !== "string") throw new Error("Invalid setup request.");
     // Serialize native checks/mutations. Snapshot is read-only and may run during a check.
@@ -707,12 +663,9 @@ export function createProjectSetup(context: SetupHostContext) {
     bootstrap,
     openSetup,
     handleSetup,
-    acceptsSetup: (sender: Electron.WebContents) =>
-      Boolean(setupWindow && sender === setupWindow.webContents),
+    acceptsSetup: surface.acceptsSender,
     busy: () => Boolean(discoveryController || setupOperation),
     abort: () => discoveryController?.abort(),
-    hide() {
-      if (setupWindow && !setupWindow.isDestroyed()) setupWindow.destroy();
-    },
+    hide: surface.destroy,
   };
 }

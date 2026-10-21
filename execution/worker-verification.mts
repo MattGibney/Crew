@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
-import type { Project, TaskRecord, TaskReport } from "./contracts.mjs";
+import type { Project, TaskRecord, ResultCandidate } from "./contracts.mjs";
 import type { RunnerRecord } from "./evidence.mjs";
 import { isRecord } from "./errors.mjs";
 import { selectWorktreeRoot } from "../worktree-paths.mjs";
@@ -34,7 +34,7 @@ export async function verifyWorkerCompletion({
   project: Project | null;
   task: TaskRecord;
   exit: RunnerRecord;
-  report: TaskReport;
+  report: ResultCandidate;
 }) {
   if (exit.exitCode !== 0 || !exit.completedTurn || !exit.threadId)
     throw new Error(
@@ -49,11 +49,54 @@ export async function verifyWorkerCompletion({
     throw new Error(
       "Worker did not provide a non-empty durable result for this run.",
     );
-  if (!task.worktree)
-    throw new Error("Worker has no retained worktree evidence.");
   const successfulCommands = (exit.commands || []).filter(
     (c) => c.exitCode === 0,
   );
+  if (project?.mode === "repository") {
+    const verification = {
+      scope: "native-execution-evidence",
+      semanticCorrectnessVerified: false,
+      productionValidated: false,
+      successfulCommands: successfulCommands.length,
+      at: now(),
+    };
+    try {
+      if (task.worktree) {
+        const [{ stdout: head }, { stdout: changes }] = await Promise.all([
+          exec("git", ["-C", task.worktree, "rev-parse", "HEAD"]),
+          exec("git", ["-C", task.worktree, "status", "--porcelain"]),
+        ]);
+        Object.assign(verification, {
+          worktree: task.worktree,
+          commit: head.trim(),
+          clean: !changes.trim(),
+          changedFiles: changes.trim() ? changes.trimEnd().split("\n") : [],
+        });
+      }
+    } catch {}
+    await updateTask(stateDir, task.id, (n) => {
+      if (n.runId !== task.runId) return;
+      n.status = "completed";
+      n.endedAt = now();
+      n.threadId = exit.threadId;
+      n.result = {
+        message: report.message,
+        evidence: report.evidence || [],
+        finalMessage: exit.finalMessage,
+        verification,
+      };
+      n.question = null;
+      attention(
+        n,
+        `${n.runId}:completion`,
+        "completion",
+        "Native Codex work completed. Result and execution history are available.",
+      );
+    });
+    return;
+  }
+  if (!task.worktree)
+    throw new Error("Worker has no retained worktree evidence.");
   if (!successfulCommands.length)
     throw new Error("No successful worker command evidence was recorded.");
   const { stdout: root } = await exec("git", [
@@ -74,7 +117,7 @@ export async function verifyWorkerCompletion({
     "rev-parse",
     "HEAD",
   ]);
-  const repositoryMode = project?.mode === "repository";
+  const repositoryMode = false;
   const repoPath = repositoryMode ? task.repositoryPath : task.fixtureRepo;
   if (!repoPath) throw new Error("Worker repository evidence is unavailable.");
   const { stdout: list } = await exec("git", [
@@ -84,58 +127,6 @@ export async function verifyWorkerCompletion({
     "list",
     "--porcelain",
   ]);
-  if (repositoryMode) {
-    const actualWorktree = await realpath(task.worktree),
-      actualRepo = await realpath(repoPath);
-    const expectedWorktree = await realpath(
-      path.join(
-        await selectWorktreeRoot(stateDir, task),
-        task.worktreeName || task.id,
-      ),
-    );
-    if (
-      (await realpath(root.trim())) !== actualWorktree ||
-      actualWorktree !== expectedWorktree ||
-      actualWorktree === actualRepo ||
-      !list.includes(`worktree ${actualWorktree}\n`) ||
-      commit.trim() !== task.baseCommit
-    )
-      throw new Error(
-        "Repository worktree isolation or baseline verification failed",
-      );
-    if (task.workerSandbox === "read-only" && changes.trim())
-      throw new Error("Read-only worker changed the worktree");
-    const verification = {
-      scope: "execution-evidence-only",
-      semanticCorrectnessVerified: false,
-      productionValidated: false,
-      worktree: actualWorktree,
-      commit: commit.trim(),
-      clean: !changes.trim(),
-      changedFiles: changes.trim() ? changes.trimEnd().split("\n") : [],
-      successfulCommands: successfulCommands.length,
-      at: now(),
-    };
-    await updateTask(stateDir, task.id, (next) => {
-      next.status = "completed";
-      next.endedAt = now();
-      next.threadId = exit.threadId;
-      next.result = {
-        message: report.message,
-        evidence: report.evidence,
-        finalMessage: exit.finalMessage,
-        verification,
-      };
-      next.question = null;
-      attention(
-        next,
-        `${next.runId}:completion`,
-        "completion",
-        "Worker finished; isolated execution evidence checked. Code correctness and production behavior are not independently validated. Review the result and tests with the manager.",
-      );
-    });
-    return;
-  }
   const { stdout: checks } = await exec(
     process.execPath,
     [

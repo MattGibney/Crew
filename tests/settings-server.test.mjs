@@ -4,13 +4,14 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
+import { request as httpRequest } from 'node:http';
 import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, updateTask, readTask } from '../runtime/orchestration-store.mjs';
-import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../runtime/worker-approvals.mjs';
-const root = fileURLToPath(new URL('../runtime/', import.meta.url));
+import { createTask, updateTask, readTask, loadTasks, requestWorkerAction } from '../orchestration-store.mjs';
+import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../worker-approvals.mjs';
+const root = fileURLToPath(new URL('../', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() { const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port; }
 async function fixture(t, { nativeAttention = false } = {}) {
@@ -55,6 +56,18 @@ createInterface({ input: process.stdin }).on('line', line => {
     for (const abort of streams) abort.abort(); streams.clear();
     if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited; }
     child = null;
+    // A server shutdown leaves workers independent. This fixture owns only
+    // synthetic workers; wait for natural supervisor exit before deleting files.
+    for (const task of await loadTasks(stateDir).catch(error => {if(error.code==='ENOENT') return []; throw error;})) {
+      if (!task.runnerPid) continue;
+      const until = Date.now() + 15000;
+      for (;;) {
+        try { process.kill(task.runnerPid, 0); }
+        catch (error) { if (error.code === 'ESRCH') break; throw error; }
+        if (Date.now() >= until) throw new Error(`Synthetic worker ${task.id} has not exited; fixture files preserved.`);
+        await delay(30);
+      }
+    }
   }
   async function start() {
     diagnostics = '';
@@ -71,8 +84,20 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   async function events() { const abort = new AbortController(); streams.add(abort); const response = await fetch(origin + '/events', { headers: { Origin: origin }, signal: abort.signal }); assert.equal(response.status, 200); const reader = response.body.getReader(); await reader.read(); return abort; }
   const calls = async () => (await readFile(callsFile, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
-  t.after(async () => { await stop(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, dataDir, stateDir, request, start, stop, calls, events, nativeEvents };
+  t.after(async () => {
+    await stop();
+    let disposable;
+    try { disposable = JSON.parse(await readFile(join(stateDir, 'fixture.json'), 'utf8')); }
+    catch (error) { if(error.code!=='ENOENT') throw error; }
+    // The controller creates this separate disposable Git root, outside dataDir.
+    if (disposable) {
+      assert.match(disposable.base, /[/\\]crew-fixture-[^/\\]+$/);
+      assert.equal(disposable.repo, join(disposable.base,'repo'));
+      await rm(disposable.base, {recursive:true,force:true});
+    }
+    await rm(directory, { recursive: true, force: true });
+  });
+  return { directory, dataDir, stateDir, configPath, origin, request, start, stop, calls, events, nativeEvents };
 }
 const instructions = calls => calls.filter(c => ['thread/start', 'thread/resume', 'thread/fork'].includes(c.method));
 
@@ -208,4 +233,221 @@ test('worker detail HTTP is read-only, same-origin and project scoped', async t 
   const other = await f.request('/api/workers/http-other-project', { method: 'GET' });
   assert.equal(other.status, 400); assert.match(other.value.error, /another project/);
   assert.equal((await f.calls()).some(call => call.method === 'turn/start'), false);
+});
+
+test('profile behavior waits for explicit restart on the same chat and survives controller reload without changing custom prompts', async t => {
+  const f = await fixture(t); await f.start();
+  await f.request('/api/prepare');
+  const original = (await f.request('/api/settings', { method: 'GET' })).value;
+  const save = await f.request('/api/settings/manager-profile', { method: 'PUT', body: { name: 'Ada', personality: 'Use PROFILE_STYLE concise replies.', expectedVersion: original.managerProfile.version } });
+  assert.equal(save.status, 200); assert.equal(save.value.manager.pendingRestart, true);
+  assert.deepEqual(save.value.manager.saved, original.manager.saved);
+  assert.deepEqual(save.value.worker, original.worker);
+  assert.equal(save.value.managerProfile.voice, original.managerProfile.voice);
+  assert.equal((await f.calls()).filter(c => ['thread/start', 'thread/resume'].includes(c.method)).length, 1);
+  await f.stop(); await f.start(); await f.request('/api/prepare');
+  let threads = (await f.calls()).filter(c => ['thread/start', 'thread/resume'].includes(c.method));
+  assert.doesNotMatch(threads.at(-1).params.developerInstructions, /PROFILE_STYLE/);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.pendingRestart, true);
+  assert.equal((await f.request('/api/manager/lifecycle', { body: { action: 'restart' } })).status, 200);
+  threads = (await f.calls()).filter(c => ['thread/start', 'thread/resume'].includes(c.method));
+  assert.equal(threads.at(-1).params.threadId, 'http-retained-chat');
+  assert.match(threads.at(-1).params.developerInstructions, /HTTP MANAGER ORIGINAL/);
+  assert.match(threads.at(-1).params.developerInstructions, /PROFILE_STYLE/);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.pendingRestart, false);
+  assert.equal((await f.calls()).some(c => ['turn/start','thread/realtime/start'].includes(c.method)), false);
+  await f.request('/api/work', { body: { text: 'Explicit synthetic conversational check', requestId: 'profile-context-proof' } });
+  const turn = (await f.calls()).find(c => c.method === 'turn/start');
+  assert.match(turn.params.additionalContext.crewManagerInstructions.value, /PROFILE_STYLE/);
+  assert.match(turn.params.additionalContext.crewManagerInstructions.value, /replaces earlier Crew/);
+  assert.equal(turn.params.additionalContext.crewManagerInstructions.kind, 'application');
+  assert.equal(turn.params.input[0].text, 'Explicit synthetic conversational check');
+});
+
+test('combined instruction limit rejects either editor before persisting an unusable manager profile', async t => {
+  const f = await fixture(t); await f.start();
+  let saved = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'x'.repeat(63999), expectedVersion: saved.manager.saved.version } })).status, 200);
+  saved = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.equal((await f.request('/api/settings/manager-profile', { method: 'PUT', body: { name: 'Ada', expectedVersion: saved.managerProfile.version } })).status, 400);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.managerProfile.name, '');
+  assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'Short instructions', expectedVersion: saved.manager.saved.version } })).status, 200);
+  assert.equal((await f.request('/api/settings/manager-profile', { method: 'PUT', body: { name: 'Ada', expectedVersion: saved.managerProfile.version } })).status, 200);
+  saved = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'x'.repeat(63999), expectedVersion: saved.manager.saved.version } })).status, 400);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.saved.text, 'Short instructions');
+});
+
+test('permanent archive deletion is scoped, stale guarded, idempotent and removes local records only', async t => {
+ const {mkdir,access}=await import('node:fs/promises');const f=await fixture(t);await f.start();
+ const taskId='http-archive-delete';
+ await createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Local archived fixture',projectId:'http-settings-fixture'});
+ await updateTask(f.stateDir,taskId,n=>{n.status='running';n.runId='archive-delete-run';});
+ const native=await recordWorkerRequest({stateDir:f.stateDir,taskId,runId:'archive-delete-run',threadId:'archive-thread',turnId:'archive-turn',requestId:99,method:'item/commandExecution/requestApproval',params:{threadId:'archive-thread',turnId:'archive-turn',command:'fixture',availableDecisions:['accept','decline']}});
+ const task=await updateTask(f.stateDir,taskId,n=>{n.status='disposed';n.archivedAt='2026-10-21T12:00:00Z';});
+ const run=join(f.stateDir,'runs',taskId,'archive-run');await mkdir(run,{recursive:true});await writeFile(join(run,'evidence.json'),'local evidence');await writeFile(join(f.stateDir,'tasks',`${taskId}.notes.md`),'local notes');
+ const outside=join(f.directory,'native-history');await mkdir(outside);await writeFile(join(outside,'keep.txt'),'provider history');
+ const body={taskId,action:'delete',operationId:'delete-archive-operation',expectedRevision:task.revision};
+ assert.equal((await f.request('/api/archived-worker-action',{body,requestOrigin:'https://untrusted.invalid'})).status,403);
+ assert.equal((await f.request('/api/archived-worker-action',{body:{...body,expectedRevision:1}})).status,400);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ const result=await f.request('/api/archived-worker-action',{body});assert.equal(result.status,200,JSON.stringify(result.value));
+ await f.stop();await f.start();
+ assert.equal((await f.request('/api/archived-worker-action',{body})).status,200);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ await assert.rejects(access(join(f.stateDir,'worker-approvals',`${native.approvalId}.json`)),{code:'ENOENT'});
+ // A retained orphan from an older version must never resurrect native attention.
+ await writeFile(join(f.stateDir,'worker-approvals',`${native.approvalId}.json`),JSON.stringify(native));
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ await assert.rejects(access(join(f.stateDir,'tasks',`${taskId}.json`)),{code:'ENOENT'});await assert.rejects(access(join(f.stateDir,'runs',taskId)),{code:'ENOENT'});assert.equal(await readFile(join(outside,'keep.txt'),'utf8'),'provider history');
+ await assert.rejects(createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Reused deleted identity',projectId:'http-settings-fixture'}),/choose a new task ID/);
+ await createTask(f.stateDir,{requestId:'foreign-archive-delete',ticket:'GH-43',brief:'Foreign archived fixture',projectId:'foreign-project'});const foreign=await updateTask(f.stateDir,'foreign-archive-delete',n=>{n.status='disposed';});
+ const denied=await f.request('/api/archived-worker-action',{body:{...body,taskId:foreign.id,expectedRevision:foreign.revision,operationId:'foreign-delete-operation'}});assert.equal(denied.status,400);assert.match(denied.value.error,/another project/);
+ assert.equal((await f.calls()).some(call=>call.method==='turn/start'),false);
+});
+
+test('history-only restore HTTP preserves records across restart and never revives old questions or approvals', async t => {
+ const f=await fixture(t),taskId='http-history-restore',projectId='http-settings-fixture';
+ await createTask(f.stateDir,{requestId:taskId,ticket:'GH-43',brief:'Restore recorded history only',projectId});
+ await updateTask(f.stateDir,taskId,n=>{n.status='running';n.runId='historical-restore-run';n.threadId='historical-restore-thread';});
+ const native=await recordWorkerRequest({stateDir:f.stateDir,taskId,runId:'historical-restore-run',threadId:'historical-restore-thread',turnId:'old-restore-turn',requestId:101,method:'item/commandExecution/requestApproval',params:{threadId:'historical-restore-thread',turnId:'old-restore-turn',command:'historical fixture',availableDecisions:['accept','decline','cancel']}});
+ const archived=await updateTask(f.stateDir,taskId,n=>{n.status='disposed';n.archivedAt='2026-10-21T12:00:00Z';n.result={message:'Retained result'};n.question={id:'historical-question',runId:n.runId,message:'Old question'};n.attention=[{id:'historical-attention',kind:'question',message:'Old question'}];});
+ await f.start();const body={taskId,action:'restore',operationId:'http-restore-operation',expectedRevision:archived.revision};
+ const response=await f.request('/api/archived-worker-action',{body});assert.equal(response.status,200,JSON.stringify(response.value));
+ let restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.match(restored.failure,/reconstruction is not currently supported/);assert.equal(restored.question,null);assert.ok(restored.attention[0].ackedAt);assert.deepEqual(restored.result,archived.result);assert.equal(restored.archivedAt,archived.archivedAt);
+ assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].approvalId,native.approvalId,'native historical approval is retained without answering');
+ for(const decision of ['accept','decline','cancel']){const denied=await f.request('/api/worker-approval',{body:{taskId,runId:native.runId,threadId:native.threadId,turnId:native.turnId,approvalId:native.approvalId,requestId:native.requestId,response:{decision}}});assert.equal(denied.status,400);assert.match(denied.value.error,/historical approvals/);}
+ assert.equal((await listWorkerRequests({stateDir:f.stateDir,taskId}))[0].status,'pending');
+ await f.stop();await f.start();assert.equal((await f.request('/api/archived-worker-action',{body})).status,200);restored=await readTask(f.stateDir,taskId);assert.equal(restored.status,'blocked');assert.equal(restored.runId,archived.runId);assert.equal(restored.history.filter(event=>event.id==='archive-restore:http-restore-operation').length,1);assert.deepEqual((await f.request('/api/worker-approvals')).value.requests,[]);
+ assert.equal((await f.calls()).some(call=>['turn/start','thread/start'].includes(call.method)),false);
+});
+
+
+test('worker environment HTTP saves every supported direct hook without execution, preserves retained work, and survives restart', async t => {
+  const f = await fixture(t);
+  const historical = await createTask(f.stateDir, { requestId: 'http-environment-retained', ticket: 'GH-45', brief: 'Retained environment evidence; never execute.', projectId: 'http-settings-fixture' });
+  await updateTask(f.stateDir, historical.id, task => { task.status = 'completed'; task.result = { message: 'Original attempt retained.' }; task.environment = { status: 'failed', planHash: 'original-plan', setupCompleted: false }; });
+  const marker = join(f.directory, 'must-not-execute');
+  const hook = { command: process.execPath, args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'executed')`, 'literal space', '$(never execute)', '', ...Array.from({length:12}, () => 'x'.repeat(8192))], timeoutMs: 1234 };
+  const environment = Object.fromEntries(['bootstrap', 'start', 'ready', 'resume', 'cleanup'].map(phase => [phase, hook]));
+  await f.start();
+  const before = (await f.request('/api/settings', { method: 'GET' })).value;
+  const retainedBefore = await readTask(f.stateDir, historical.id);
+  assert.equal(before.workerEnvironment.available, true);
+  assert.deepEqual(before.workerEnvironment.environment, {});
+  const body = { expectedRevision: before.workerEnvironment.revision, environment };
+  const denied = await f.request('/api/settings/worker-environment', { method: 'PUT', body, requestOrigin: 'https://untrusted.invalid' });
+  assert.equal(denied.status, 403);
+  const saved = await f.request('/api/settings/worker-environment', { method: 'PUT', body });
+  assert.equal(saved.status, 200, JSON.stringify(saved.value));
+  assert.deepEqual(saved.value.workerEnvironment.environment, environment);
+  assert.equal(saved.value.workerEnvironment.configPath, f.configPath);
+  assert.match(saved.value.workerEnvironment.provenance.description, /Crew overrides/);
+  assert.deepEqual(await readTask(f.stateDir, historical.id), retainedBefore);
+  const diskAfter = await readFile(f.configPath, 'utf8');
+  const stale = await f.request('/api/settings/worker-environment', { method: 'PUT', body: { ...body, environment: {} } });
+  assert.equal(stale.status, 400); assert.match(stale.value.error, /changed elsewhere/);
+  const invalid = await f.request('/api/settings/worker-environment', { method: 'PUT', body: { expectedRevision: saved.value.workerEnvironment.revision, environment: { start: { ...hook, args: '--shell-shaped-string' } } } });
+  assert.equal(invalid.status, 400);
+  assert.equal(await readFile(f.configPath, 'utf8'), diskAfter);
+  assert.deepEqual((await f.request('/api/settings', { method: 'GET' })).value.workerEnvironment.environment, environment, 'leaving the editor without another PUT preserves the saved hooks');
+  await assert.rejects(readFile(marker), {code:'ENOENT'});
+  assert.deepEqual(await f.calls(), [], 'settings never starts a manager, worker or realtime session');
+  await f.stop(); await f.start();
+  const restarted = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.deepEqual(restarted.workerEnvironment.environment, environment);
+  assert.equal(restarted.workerEnvironment.revision, saved.value.workerEnvironment.revision);
+  assert.deepEqual((await readTask(f.stateDir, historical.id)).environment, retainedBefore.environment);
+  assert.deepEqual((await readTask(f.stateDir, historical.id)).result, retainedBefore.result);
+  await assert.rejects(readFile(marker), {code:'ENOENT'});
+  assert.deepEqual(await f.calls(), []);
+});
+
+
+test('chunked worker environment HTTP preserves UTF-8 commands and arguments split inside code points', async t => {
+  const f = await fixture(t); await f.start();
+  const before = (await f.request('/api/settings', {method:'GET'})).value;
+  const environment = {start:{command:'/tmp/工具-🌍',args:['naïve 🧪 café', '', 'line\n二'],timeoutMs:1000}};
+  const bytes = Buffer.from(JSON.stringify({expectedRevision:before.workerEnvironment.revision,environment}), 'utf8');
+  const firstSplit = bytes.indexOf(Buffer.from('工')) + 1;
+  const secondSplit = bytes.indexOf(Buffer.from('🧪')) + 2;
+  assert.ok(firstSplit > 0 && secondSplit > firstSplit);
+  const result = await new Promise((resolve, reject) => {
+    const req = httpRequest(f.origin + '/api/settings/worker-environment', {method:'PUT',headers:{Origin:f.origin,'Content-Type':'application/json','Transfer-Encoding':'chunked'}}, response => {
+      const chunks=[]; response.on('data',chunk=>chunks.push(chunk)); response.on('error',reject);
+      response.on('end',()=> {try {resolve({status:response.statusCode,value:JSON.parse(Buffer.concat(chunks).toString('utf8'))});} catch(error) {reject(error);}});
+    });
+    t.after(() => req.destroy());
+    req.on('error',reject); req.setTimeout(10000,()=>req.destroy(new Error('Chunked environment request timed out.')));
+    // Separate actual HTTP chunks deliberately end inside 3- and 4-byte UTF-8
+    // sequences. Yield between writes so the server consumes partial input.
+    void (async () => {
+      req.write(bytes.subarray(0,firstSplit)); await delay(30);
+      req.write(bytes.subarray(firstSplit,secondSplit)); await delay(30);
+      req.end(bytes.subarray(secondSplit));
+    })().catch(error=>req.destroy(error));
+  });
+  assert.equal(result.status,200,JSON.stringify(result.value));
+  assert.deepEqual(result.value.workerEnvironment.environment,environment);
+  assert.deepEqual((await f.request('/api/settings',{method:'GET'})).value.workerEnvironment.environment,environment);
+  assert.deepEqual(JSON.parse(await readFile(f.configPath,'utf8')).project.worker.environment,environment);
+  assert.deepEqual(await f.calls(),[], 'Unicode configuration editing never starts commands, workers or voice');
+});
+
+
+test('HTTP command edits survive restart as agent context without automatic bootstrap or retry', async t => {
+  const f=await fixture(t);await f.start();
+  const phaseFile='.crew-http-partial.json';
+  const initialScript=`require('node:fs').writeFileSync(${JSON.stringify(phaseFile)},JSON.stringify({seeds:1,partial:true}));process.exit(17)`;
+  const initialEnvironment={bootstrap:{command:process.execPath,args:['-e',initialScript],timeoutMs:5000}};
+  const before=(await f.request('/api/settings',{method:'GET'})).value;
+  const saved=await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:before.workerEnvironment.revision,environment:initialEnvironment}});
+  assert.equal(saved.status,200,JSON.stringify(saved.value));
+  const taskId='http-agent-environment';
+  await createTask(f.stateDir,{requestId:taskId,ticket:'GH-50',brief:'Inspect agent-owned command context in this disposable fixture.',projectId:'http-settings-fixture'});
+  async function waitTask(predicate,description){
+    const until=Date.now()+15000;let task;
+    while(Date.now()<until){task=await readTask(f.stateDir,taskId);if(await predicate(task))return task;await delay(40);}
+    throw new Error(description+': '+JSON.stringify({status:task?.status,failure:task?.failure,harnessStarted:task?.harnessStarted,lifecycleRequests:task?.lifecycleRequests}));
+  }
+  const nativeEnded=async task=>{if(!task.threadId||!task.runDir)return false;try{const exit=JSON.parse(await readFile(join(task.runDir,'exit.json'),'utf8'));return exit.runId===task.runId&&(exit.connectionClosed===true||exit.stopConfirmed===true);}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+  async function environmentContext(task){
+    const child=spawn(process.execPath,[join(root,'orchestration-mcp.mjs'),f.stateDir,'worker',taskId,task.runId],{stdio:['pipe','pipe','pipe']});let output='',errors='';
+    child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>errors+=chunk);
+    child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'get_project_environment',arguments:{}}})+'\n');
+    assert.equal(await new Promise(resolve=>child.on('close',resolve)),0,errors);
+    const result=JSON.parse(output).result;assert.ok(!result.isError,JSON.stringify(result));return JSON.parse(result.content[0].text);
+  }
+  const first=await waitTask(nativeEnded,'Initial native connection did not finish');
+  assert.equal(first.harnessStarted,true,'Native execution is not conditional on bootstrap success');
+  assert.equal(first.environment?.hooks?.length||0,0,'Crew creates no automatic bootstrap attempt');
+  await assert.rejects(readFile(join(first.worktree,phaseFile),'utf8'),{code:'ENOENT'});
+  assert.deepEqual((await environmentContext(first)).configuredEnvironment,initialEnvironment);
+  const firstConfig=JSON.parse(await readFile(join(first.runDir,'config.json'),'utf8'));
+  assert.deepEqual(firstConfig.project.worker.environment,initialEnvironment);
+  // Fixture-owned partial state proves subsequent command edits do not replay
+  // commands or reset retained work. The configured repair would modify it.
+  await writeFile(join(first.worktree,phaseFile),JSON.stringify({seeds:1,partial:true}));
+  const correctedScript=`const fs=require('node:fs');const state=JSON.parse(fs.readFileSync(${JSON.stringify(phaseFile)},'utf8'));state.repaired=true;fs.writeFileSync(${JSON.stringify(phaseFile)},JSON.stringify(state))`;
+  const correctedEnvironment={bootstrap:{command:process.execPath,args:['-e',correctedScript],timeoutMs:5000}};
+  const fixed=await f.request('/api/settings/worker-environment',{method:'PUT',body:{expectedRevision:saved.value.workerEnvironment.revision,environment:correctedEnvironment}});
+  assert.equal(fixed.status,200,JSON.stringify(fixed.value));
+  await f.stop();await f.start();
+  assert.deepEqual((await f.request('/api/settings',{method:'GET'})).value.workerEnvironment.environment,correctedEnvironment);
+  const retained=await readTask(f.stateDir,taskId);assert.equal(retained.runId,first.runId);assert.equal(retained.worktree,first.worktree);assert.equal(retained.threadId,first.threadId);
+  const turnsBefore=(await f.calls()).filter(call=>call.method==='turn/start').length;
+  const action={taskId,actionId:'http-obsolete-setup-retry',action:'retry_setup',expectedRunId:first.runId};
+  await requestWorkerAction(f.stateDir,action);
+  const refused=await waitTask(task=>task.lifecycleRequests?.some(item=>item.id===action.actionId&&item.status==='failed'),'Obsolete retry did not explain the agent command path');
+  assert.match(refused.lifecycleRequests.find(item=>item.id===action.actionId).error,/agent-initiated.*get_project_environment.*native tools/);
+  assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,turnsBefore);
+  const {requestWorkerFollowup}=await import('../orchestration-store.mjs');
+  await requestWorkerFollowup(f.stateDir,{taskId,requestId:'http-new-agent-direction',brief:'Continue in the same working context with the latest configured commands.'});
+  const next=await waitTask(async task=>task.runId!==first.runId&&await nativeEnded(task),'Retained native continuation did not finish');
+  assert.equal(next.worktree,first.worktree);assert.equal(next.threadId,first.threadId);assert.equal(next.environment?.hooks?.length||0,0);
+  assert.deepEqual((await environmentContext(next)).configuredEnvironment,correctedEnvironment);
+  assert.deepEqual(JSON.parse(await readFile(join(first.worktree,phaseFile),'utf8')),{seeds:1,partial:true});
+  assert.deepEqual(JSON.parse(await readFile(join(first.runDir,'config.json'),'utf8')),firstConfig,'Earlier native command context remains historical evidence');
+  const calls=await f.calls();assert.ok(calls.some(call=>call.method==='thread/resume'&&call.params.threadId===first.threadId));assert.equal(calls.some(call=>call.method==='thread/realtime/start'),false);
+  await f.stop();
 });

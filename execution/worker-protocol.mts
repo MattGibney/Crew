@@ -7,6 +7,7 @@ import type {
 import type { ApprovalParams } from "./approvals.mjs";
 import { isRecord } from "./errors.mjs";
 export interface WorkerConfiguration {
+  assignmentId?: string;
   taskId: string;
   runId: string;
   stateDir: string;
@@ -15,12 +16,12 @@ export interface WorkerConfiguration {
   mcpScript: string;
   workerPrompt: string;
   workerPromptVersion?: string;
-  sandbox: string;
-  timeoutMs: number;
+  sandbox?: string;
+  timeoutMs?: number;
   ticket: string;
   brief: string;
   project: Project | null;
-  environment?: EnvironmentEvidence;
+  environment?: EnvironmentEvidence | null;
   modelSelection?: ModelSelection | null;
   threadId?: string | null;
   answer?: { text: string } | null;
@@ -36,8 +37,6 @@ const configShape = ajv.compile<WorkerConfiguration>({
     "executable",
     "mcpScript",
     "workerPrompt",
-    "sandbox",
-    "timeoutMs",
     "ticket",
     "brief",
   ],
@@ -54,7 +53,7 @@ const configShape = ajv.compile<WorkerConfiguration>({
     ticket: { type: "string" },
     brief: { type: "string" },
     project: { type: ["object", "null"] },
-    environment: { type: "object" },
+    environment: { type: ["object", "null"] },
     modelSelection: { type: ["object", "null"] },
     threadId: { type: ["string", "null"] },
   },

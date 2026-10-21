@@ -9,6 +9,7 @@ test('tray shows real unacknowledged attention and active work, including paused
   assert.deepEqual(summarizeTasks({ tasks:[{ status:'awaiting_answer', attention:[{ id:'question' }] }, { status:'completed', attention:[{ id:'old', ackedAt:'now' }, { id:'result' }] }, { status:'running' }, { status:'failed' }] }), { active:2, pending:2 });
   assert.deepEqual(summarizeTasks(null), { active:null, pending:null });
   assert.deepEqual(summarizeTasks({ tasks:[], error:'Controller state unavailable' }), { active:null, pending:null });
+  assert.deepEqual(summarizeTasks({tasks:[{status:'disposed',attention:[{id:'retained-result'}]},{status:'removed',attention:[{id:'legacy-result'}]},{status:'stopped',attention:[{id:'failed-cleanup'}]}]}),{active:0,pending:1});
 });
 test('desktop navigation and mic permission are exact-origin and audio-only', () => {
   const origin = 'http://127.0.0.1:4320';

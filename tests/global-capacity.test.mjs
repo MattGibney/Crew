@@ -51,3 +51,61 @@ test('read-only global admission guard blocks unknown/configured state and obser
  const valid=JSON.parse(await readFile(file,'utf8'));for(const data of [{...valid,admissionPaused:undefined},{...valid,admissionPaused:'false'},{...valid,version:9}]){const bytes=JSON.stringify(data);await writeFile(file,bytes);assert.equal(await globalAdmissionPaused(f.capacity),true);assert.equal(await readFile(file,'utf8'),bytes);}
  await writeFile(file,'{broken');assert.equal(await globalAdmissionPaused(f.capacity),true);assert.equal(await readFile(file,'utf8'),'{broken');
 });
+
+test('native connection closure releases capacity while retained service ownership remains factual',async t=>{
+ const f=await fixture(t);await configureGlobalCapacity({dir:f.capacity,limit:1,stateDirs:[f.stateA,f.stateB]});
+ await createTask(f.stateA,{requestId:'resource-worker',ticket:'CREW-50',brief:'A native worker may start a retained service'});
+ const runDir=path.join(f.stateA,'runs','resource-worker','closed-native-run');await mkdir(runDir,{recursive:true});
+ const own=await createGlobalCapacity({dir:f.capacity,stateDir:f.stateA});await own.acquire({taskId:'resource-worker',runId:'closed-native-run'});
+ await updateTask(f.stateA,'resource-worker',task=>{task.runId='closed-native-run';task.runDir=runDir;task.status='completed';task.harnessStarted=true;});
+ const exit={runId:'closed-native-run',connectionClosed:true,stopConfirmed:false,ownership:{tracked:[{pid:999999,start:'old-start',commandHash:'a'.repeat(64)}],remaining:[{pid:999999,start:'old-start',commandHash:'a'.repeat(64)}]}};
+ await writeFile(path.join(runDir,'exit.json'),JSON.stringify(exit));
+ const other=await createGlobalCapacity({dir:f.capacity,stateDir:f.stateB});assert.equal((await other.view()).occupied,0);assert.equal((await other.acquire({taskId:'another-worker',runId:'another-native-run'})).admitted,true);
+ assert.deepEqual(JSON.parse(await readFile(path.join(runDir,'exit.json'),'utf8')),exit);
+});
+
+test('a closed older native run releases its exact stale claim after worker advancement',async t=>{
+ const f=await fixture(t),own=await createGlobalCapacity({dir:f.capacity,stateDir:f.stateA,limit:1});
+ await createTask(f.stateA,{requestId:'advanced-worker',ticket:'CREW-50',brief:'Retain context across native connections'});
+ assert.equal((await own.acquire({taskId:'advanced-worker',runId:'native-run-one'})).admitted,true);
+ const old=path.join(f.stateA,'runs','advanced-worker','native-run-one');await mkdir(old,{recursive:true});await writeFile(path.join(old,'exit.json'),JSON.stringify({runId:'native-run-one',connectionClosed:true,stopConfirmed:false,ownership:{remaining:[{pid:999999}]}}));
+ await updateTask(f.stateA,'advanced-worker',task=>{task.runId='native-run-two';task.runDir=path.join(f.stateA,'runs','advanced-worker','native-run-two');task.retainedResourceRuns=[{runId:'native-run-one'}];task.harnessStarted=false;task.status='resume_queued';});
+ assert.equal((await own.view()).occupied,0);assert.equal((await own.acquire({taskId:'advanced-worker',runId:'native-run-two'})).admitted,true);
+ // Old-format contradictory terminal records do not gain the new release rule.
+ const ledger=JSON.parse(await readFile(path.join(f.capacity,'capacity.json'),'utf8'));ledger.claims[0].runId='native-run-one';await writeFile(path.join(f.capacity,'capacity.json'),JSON.stringify(ledger));
+ await writeFile(path.join(old,'exit.json'),JSON.stringify({runId:'native-run-one',stopConfirmed:true}));assert.equal((await own.view()).occupied,1);
+});
+
+test('retained connection replaces only its own slot without legacy flag rewrites and honors an update pause',async t=>{
+ const f=await fixture(t),own=await createGlobalCapacity({dir:f.capacity,stateDir:f.stateA,limit:1});
+ await createTask(f.stateA,{requestId:'retained-slot-worker',ticket:'GH-50',brief:'Keep one native connection slot through continuation'});
+ const oldDir=path.join(f.stateA,'runs','retained-slot-worker','legacy-native-run');await mkdir(oldDir,{recursive:true});
+ const legacy={runId:'legacy-native-run',stopConfirmed:false,ownership:{remaining:[{pid:999999,start:'retained-service',commandHash:'a'.repeat(64)}]}};
+ await writeFile(path.join(oldDir,'exit.json'),JSON.stringify(legacy));
+ await updateTask(f.stateA,'retained-slot-worker',task=>{task.runId='legacy-native-run';task.runDir=oldDir;task.harnessStarted=true;task.status='running';});
+ assert.equal((await own.acquire({taskId:'retained-slot-worker',runId:'legacy-native-run'})).admitted,true);
+ assert.equal((await own.acquire({taskId:'retained-slot-worker',runId:'next-native-run'})).admitted,false,'Ordinary acquisition never steals an existing connection claim');
+ await configureGlobalCapacity({dir:f.capacity,admissionPaused:true});
+ assert.equal((await own.acquire({taskId:'retained-slot-worker',runId:'next-native-run',replaceConnection:true})).admitted,false);
+ assert.deepEqual(JSON.parse(await readFile(path.join(f.capacity,'capacity.json'),'utf8')).claims.map(claim=>claim.runId),['legacy-native-run']);
+ await configureGlobalCapacity({dir:f.capacity,admissionPaused:false});
+ assert.equal((await own.acquire({taskId:'retained-slot-worker',runId:'next-native-run',replaceConnection:true})).admitted,true);
+ assert.equal((await own.view()).occupied,1,'Reconciliation before task publication must not resurrect the replaced old connection');
+ assert.deepEqual(JSON.parse(await readFile(path.join(oldDir,'exit.json'),'utf8')),legacy,'Connection replacement does not fabricate legacy descendant-stop evidence');
+ await updateTask(f.stateA,'retained-slot-worker',task=>{task.runId='next-native-run';task.runDir=path.join(f.stateA,'runs','retained-slot-worker','next-native-run');task.harnessStarted='pending';task.status='launching';});
+ assert.equal((await own.view()).occupied,1);
+ const other=await createGlobalCapacity({dir:f.capacity,stateDir:f.stateB});assert.equal((await other.acquire({taskId:'other-slot-worker',runId:'other-native-run'})).admitted,false);
+});
+
+test('connection replacement preserves unrelated earlier claims for the same retained worker',async t=>{
+ const f=await fixture(t),own=await createGlobalCapacity({dir:f.capacity,stateDir:f.stateA,limit:2});
+ await createTask(f.stateA,{requestId:'exact-replace-worker',ticket:'GH-50',brief:'Replace one observed native connection identity'});
+ await updateTask(f.stateA,'exact-replace-worker',task=>{task.runId='current-old-native';task.harnessStarted=true;task.status='running';});
+ await own.acquire({taskId:'exact-replace-worker',runId:'current-old-native'});
+ const file=path.join(f.capacity,'capacity.json'),ledger=JSON.parse(await readFile(file,'utf8'));
+ ledger.claims.unshift({stateDir:f.stateA,taskId:'exact-replace-worker',runId:'unrelated-earlier-native',at:new Date().toISOString()});await writeFile(file,JSON.stringify(ledger));
+ assert.equal((await own.acquire({taskId:'exact-replace-worker',runId:'replacement-native',replaceConnection:true,previousRunId:'current-old-native'})).admitted,true);
+ const claims=JSON.parse(await readFile(file,'utf8')).claims;
+ assert.deepEqual(claims.map(claim=>claim.runId),['unrelated-earlier-native','replacement-native']);assert.equal(claims[1].replacesRunId,'current-old-native');
+ assert.equal((await own.view()).occupied,2,'Only the replaced publication is suppressed; unrelated uncertainty remains visible');
+});

@@ -1,4 +1,9 @@
 import type { WorkerTask, WorkerAction } from "../contracts/manager.js";
+import {
+  isArchivedTask,
+  activeTasks,
+  archivedTasks,
+} from "../../../worker-archive.mjs";
 const HISTORY = new Set([
   "completed",
   "failed",
@@ -19,26 +24,75 @@ const LABELS: Record<string, string> = {
   stopping: "Stopping",
   paused: "Paused",
   stopped: "Stopped",
-  completed: "Completed",
+  completed: "Turn ended",
   failed: "Needs attention",
-  disposed: "Removed",
+  disposed: "Archived",
+  removed: "Archived",
   canceled: "Canceled",
   cancelled: "Canceled",
 };
+export const currentAssignment = (task: WorkerTask) =>
+  (task.assignments || []).find(
+    (item) => item.id === task.currentAssignmentId,
+  ) || {
+    id: "initial",
+    ticket: task.ticket,
+    brief: task.brief,
+    status: task.status,
+    result: task.result,
+  };
+export const queuedAssignments = (task: WorkerTask) =>
+  (task.assignments || []).filter(
+    (item) => item.status === "queued" && item.id !== task.currentAssignmentId,
+  );
+export const canDiscussFollowup = (task: WorkerTask) =>
+  Boolean(task.worktree || task.threadId || task.execution?.live) &&
+  !isArchivedTask(task) &&
+  !task.archiveRestoration?.requiresRecovery &&
+  task.status !== "disposed" &&
+  !task.retirement;
+export function workerFollowupRequest(task: WorkerTask) {
+  if (!canDiscussFollowup(task))
+    throw new Error(
+      "This worker has no retained worktree available for follow-up.",
+    );
+  return `CREW_WORKER_DIRECTION\nContinue with this same retained worker: ${JSON.stringify({ taskId: task.id })}. Ask me what direction to send if I have not supplied it, then use assign_worker_followup with a stable requestId and my direction. Preserve this worker's Codex conversation, worktree and prior results. Queue while busy. Do not require worktree review, fingerprint adoption, a new ticket or an extra authorization statement. Pass through native Codex approvals normally.`;
+}
 export const pendingAttention = (task: WorkerTask) =>
   (task.attention || []).filter((item) => !item.ackedAt);
 export const pendingLifecycle = (task: WorkerTask) =>
   (task.lifecycleRequests || []).find((item) =>
     ["pending", "processing"].includes(item.status),
   );
+export const workspaceWorkers = activeTasks;
+export const archivedWorkers = (
+  tasks: WorkerTask[],
+  projectId?: string,
+  projectMode?: string,
+) =>
+  projectId
+    ? archivedTasks(
+        tasks.filter(
+          (task) =>
+            task.projectId === projectId ||
+            (projectMode === "fixture" && !task.projectId),
+        ),
+      )
+    : [];
+export const workerSelectionRemoved = (
+  tasks: WorkerTask[],
+  id: string | null,
+) =>
+  Boolean(id) && tasks.some((task) => task.id === id && isArchivedTask(task));
 export function groupWorkers(tasks: WorkerTask[]) {
   const active: WorkerTask[] = [],
     history: WorkerTask[] = [];
-  for (const task of tasks) {
+  for (const task of workspaceWorkers(tasks)) {
     // Pending reviews, retained paused workers and observed live processes must never disappear into history.
     (HISTORY.has(task.status) &&
     !pendingAttention(task).length &&
     !pendingLifecycle(task) &&
+    !queuedAssignments(task).length &&
     task.execution?.live !== true
       ? history
       : active
@@ -51,19 +105,34 @@ export function groupWorkers(tasks: WorkerTask[]) {
         (Date.parse(b.updatedAt || "") || 0) -
         (Date.parse(a.updatedAt || "") || 0),
     ),
-    retained: tasks.filter(
-      (task: WorkerTask) => task.worktree && task.status !== "disposed",
-    ).length,
+    retained: workspaceWorkers(tasks).filter((task) => task.worktree).length,
   };
 }
+export const workerWorkflow = (task: WorkerTask) =>
+  typeof task.workflowState?.value === "string" &&
+  task.workflowState.value.trim()
+    ? task.workflowState.value
+    : null;
 export function workerStatus(task: WorkerTask) {
+  if (task.archiveRestoration?.requiresRecovery) return "History restored";
   return task.retirement?.reason === "worktree-already-missing"
     ? "Retired"
     : LABELS[task.status] || "Status unavailable";
 }
 export function workerProgress(task: WorkerTask) {
+  if (task.archiveRestoration?.requiresRecovery)
+    return (
+      task.failure ||
+      "History restored. The worker environment is unavailable and requires recovery."
+    );
   if (task.retirement?.reason === "worktree-already-missing")
     return "Worktree already missing. History retained; resource cleanup unverified.";
+  if (
+    queuedAssignments(task).length &&
+    typeof task.followupWait === "string" &&
+    task.followupWait.trim()
+  )
+    return task.followupWait;
   if (["queued", "resume_queued"].includes(task.status)) {
     // Only the controller knows whether capacity, an update or explicit manager start is blocking admission.
     if (typeof task.capacityWait === "string" && task.capacityWait.trim())
@@ -72,12 +141,13 @@ export function workerProgress(task: WorkerTask) {
       ? "Waiting to resume."
       : "Waiting to start.";
   }
+  const assignment = currentAssignment(task);
   return (
     task.failure ||
-    task.result?.message ||
+    assignment.result?.message ||
     task.progress ||
     (task.status === "launching"
-      ? "Preparing the project environment."
+      ? "Opening worker session."
       : "Waiting for the next progress report.")
   );
 }
@@ -124,29 +194,29 @@ export function formatElapsed(ms: number | null) {
 }
 export function workerActions(task: WorkerTask): WorkerAction[] {
   if (
+    isArchivedTask(task) ||
     pendingLifecycle(task) ||
     ["disposed", "stopping", "pausing"].includes(task.status)
   )
     return [];
   if (task.execution?.live === true) return ["pause", "stop"];
+  if (task.archiveRestoration?.requiresRecovery) return ["dispose"];
   if (
-    [
-      "running",
-      "queued",
-      "launching",
-      "resume_queued",
-      "verifying",
-      "awaiting_answer",
-    ].includes(task.status)
+    ["running", "queued", "launching", "resume_queued", "verifying"].includes(
+      task.status,
+    )
   )
     return ["pause", "stop"];
-  if (["paused", "stopped", "failed", "blocked"].includes(task.status))
-    return task.question &&
-      task.question.runId === task.runId &&
-      task.answer?.questionId !== task.question.id
-      ? ["dispose"]
-      : ["resume", "dispose"];
-  return task.status === "completed" ? ["dispose"] : [];
+  return [
+    "awaiting_answer",
+    "paused",
+    "stopped",
+    "failed",
+    "blocked",
+    "completed",
+  ].includes(task.status)
+    ? ["resume", "dispose"]
+    : [];
 }
 export function workerActionRequest(
   task: WorkerTask,
@@ -165,12 +235,13 @@ export function workerActionRequest(
   };
   return {
     requestId: id,
-    text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Dispose is authorized only through the existing safe teardown, which must refuse dirty or unresolved work and retain task records. Report queued intent separately from confirmed completion.`,
+    text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Archive (the compatible dispose action) is authorized only through the existing safe teardown, which must refuse dirty or unresolved work and retain task records. Report queued intent separately from confirmed completion.`,
   };
 }
 
 export function workerRecoveryReviewRequest(task: WorkerTask) {
   if (
+    task.archiveRestoration?.requiresRecovery ||
     !task.worktree ||
     !["failed", "blocked", "paused", "stopped", "completed"].includes(
       task.status,

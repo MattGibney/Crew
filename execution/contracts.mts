@@ -30,6 +30,9 @@ export interface ExecutionPlan {
   [key: string]: unknown;
 }
 export interface EnvironmentHook {
+  configurationSource?: string;
+  planHash?: string;
+  source?: SourceEvidence | null;
   command: string;
   args: string[];
   timeoutMs: number;
@@ -75,6 +78,7 @@ export interface PromptSnapshot {
   version: string;
 }
 export interface TaskReport {
+  assignmentId?: string | null;
   reportId: string;
   runId: string;
   kind: string;
@@ -91,6 +95,11 @@ export interface TaskAttention {
   resolution?: string;
 }
 export interface TaskHistory {
+  instructionVersion?: string;
+  ticket?: string;
+  userDecision?: string | null;
+  worktreeFingerprint?: string;
+  assignmentId?: string | null;
   id: string;
   actor: string;
   kind: string;
@@ -127,6 +136,25 @@ export interface ModelSelection extends ModelRequest {
   runtime?: unknown;
 }
 export interface TaskRecord {
+  assignments?: WorkerAssignment[];
+  currentAssignmentId?: string;
+  completedAt?: string | null;
+  archivedAt?: string;
+  removedAt?: string;
+  archivedQuestions?: NonNullable<TaskRecord["question"]>[];
+  archiveRestoration?: ArchiveRestoration;
+  archiveRestorations?: ArchiveRestoration[];
+  workflowState?: WorkflowEvent;
+  workflowHistory?: WorkflowEvent[];
+  followupWait?: string;
+  retainedDirection?: boolean;
+  retainedResourceRuns?: { runId: string; runDir?: string; at?: string }[];
+  retainedWorktreeEvidence?: {
+    runId?: string;
+    assignmentId?: string;
+    fingerprint?: string;
+    at?: string;
+  };
   id: string;
   ticket: string;
   brief: string;
@@ -164,14 +192,14 @@ export interface TaskRecord {
   spawnIntentAt?: string | null;
   previousRunId?: string | null;
   capacityWait?: string;
-  progress?: string;
+  progress?: string | null;
   handledReports?: string[];
-  candidateReportId?: string;
+  candidateReportId?: string | null;
   activeMs?: number;
   accountedRuns?: string[];
   nativeTurnStatus?: string;
   disposedAt?: string;
-  result?: unknown;
+  result?: WorkerResult | null;
   environmentStopFailure?: string;
   modelRequests?: ModelRequest[];
   modelSelection?: ModelSelection;
@@ -189,6 +217,7 @@ export interface TaskRecord {
   retirement?: unknown;
 }
 export interface HookEvidence extends Partial<EnvironmentHook> {
+  configurationHash?: string;
   id: string;
   phase: string;
   runDir?: string;
@@ -203,12 +232,21 @@ export interface HookEvidence extends Partial<EnvironmentHook> {
   error?: string;
 }
 export interface RuntimeEvidence {
+  planHash?: string;
+  action?: ScriptAction | null;
+  configurationSource?: string;
   id: string;
   runDir: string;
   status: string;
   createdAt: string;
 }
 export interface EnvironmentEvidence {
+  bootstrapAttempted?: boolean;
+  setupRetryHistory?: SetupRetry[];
+  originalPlan?: ExecutionPlan;
+  configuredPlanHash?: string;
+  planHistory?: PlanHistory[];
+  runtimeHistory?: RuntimeEvidence[];
   id: string;
   taskId: string;
   worktree: string;
@@ -283,4 +321,89 @@ export interface PersistedToolchain {
     node?: string[] | string | { requirement: string };
     npm?: string[] | string | { requirement: string };
   };
+}
+
+export interface AssignmentAdoption {
+  id: string;
+  fingerprint: string;
+  at: string;
+  expectedRunId: string | null;
+  userDecision: string;
+}
+export interface WorkerAssignment {
+  stopReason?: string;
+  id: string;
+  ticket: string;
+  brief: string;
+  status: string;
+  createdAt: string;
+  runIds: string[];
+  userDecision?: string | null;
+  expectedRunId?: string | null;
+  expectedAssignmentId?: string | null;
+  reviewedWorktreeFingerprint?: string;
+  requestTicket?: string | null;
+  requestMetadata?: Record<string, unknown>;
+  enqueuedRunId?: string | null;
+  enqueuedAssignmentId?: string;
+  endedAt?: string | null;
+  result?: WorkerResult | null;
+  promptSnapshot?: PromptSnapshot;
+  archivedQuestions?: TaskRecord["question"][];
+  adoptions?: AssignmentAdoption[];
+}
+export interface WorkflowEvent {
+  value: string;
+  requestId: string;
+  actor: string;
+  runId: string | null;
+  assignmentId: string;
+  at: string;
+}
+export interface ArchiveRestoration {
+  rearchivedAt?: string;
+  operationId: string;
+  at: string;
+  requiresRecovery: boolean;
+  reason: string;
+  archiveRevision: number;
+  previousStatus: string;
+  previousFailure: string | null;
+}
+export interface SetupRetry {
+  planHash?: string;
+  requestId: string;
+  decision?: string;
+  at?: string;
+  configurationHash?: string;
+}
+export interface PlanHistory {
+  at: string;
+  plan: ExecutionPlan;
+  planHash: string;
+  nextPlanHash: string;
+  configuredPlanHash: string;
+  previousConfiguredPlanHash: string;
+  sourceBindings: {
+    phase: ExecutionPhase;
+    configured: SourceEvidence | null;
+    effective: SourceEvidence | null;
+  }[];
+  phases: ExecutionPhase[];
+  reason: string;
+}
+
+export interface WorkerResult {
+  message?: string;
+  evidence?: string[];
+  finalMessage?: string;
+  verification?: unknown;
+  [key: string]: unknown;
+}
+
+export interface ResultCandidate {
+  runId?: string | null;
+  kind: string;
+  message: string;
+  evidence?: string[];
 }

@@ -101,6 +101,11 @@ async function current(
   { allowLifecycle = false }: { allowLifecycle?: boolean } = {},
 ) {
   const task = await readTask(stateDir, value.taskId);
+  if (task.archiveRestoration?.requiresRecovery)
+    throw rejection(
+      "Restored history has no runnable worker turn; historical approvals cannot receive decisions",
+      "STALE_WORKER_REQUEST",
+    );
   if (task.runId !== value.runId || !ACTIVE.has(task.status))
     throw rejection(
       "Worker request belongs to an inactive or stale run",
@@ -376,6 +381,14 @@ export async function decideWorkerRequest({
       const record = await read(stateDir, input.approvalId);
       if (key(input) !== record.approvalId)
         throw new Error("Worker request correlation mismatch");
+      if (
+        (await readTask(stateDir, record.taskId)).archiveRestoration
+          ?.requiresRecovery
+      )
+        throw rejection(
+          "Restored history has no runnable worker turn; historical approvals cannot receive decisions",
+          "STALE_WORKER_REQUEST",
+        );
       const response = workerApprovalResponse(record, input.response);
       if (record.status === "delivery-unknown")
         throw new Error(

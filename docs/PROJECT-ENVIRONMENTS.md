@@ -1,3 +1,17 @@
+# Agent-initiated project environments (GitHub #50)
+
+Managers and workers decide when to set up, start, check or tear down a project environment. Crew exposes configured commands/instructions through `get_project_environment`; the agent uses existing project tooling through native Codex tools and normal approvals. Saving configuration, opening a worker and sending a direction run no environment command. Readiness is evidence for the agent, never a Crew dispatch prerequisite.
+
+Crew creates the registered isolated worktree and preserves the native conversation, files and history across directions. It does not automatically download managed tools or replay setup/resume hooks. Agents should follow the project's existing AGENTS/docs and developer commands. Local configuration and ordinary background integrations may be inherited; a worktree alone proves neither provider isolation nor service readiness.
+
+Legacy hook and execution-plan records remain readable. Their exact command hashes, setup attempts, supervised runtime ownership and cleanup results are historical evidence. Existing resources are not silently stopped, reset or migrated. Explicit destructive archive retains ownership, confirmed-exit and dirty-worktree safeguards, including legacy cleanup where configured. Commands successfully exiting do not prove every external resource was removed; preserve and disclose observed residuals.
+
+Workflow state is explicitly set by agents and remains separate from environment health, native process/session connectivity and pending approvals. Neither a successful readiness command nor a completed native turn establishes business acceptance.
+
+## Historical environment implementation and acceptance
+
+The following describes the earlier automatically prepared environment implementation and its historical evidence. It is retained for developers recovering existing records; it does not describe current worker-dispatch policy.
+
 # Existing project execution (AI-012)
 
 Crew reads the selected commit’s Codex environment configuration and bounded applicable AGENTS, Claude and linked development instructions. Setup discovers commands without executing them. The project remains authoritative: Crew requires no repository changes or new lifecycle API.
@@ -34,7 +48,11 @@ Two-worker acceptance exercised actual local application health and seeded login
 
 ## Recovering retained workers after configuration changes (GitHub #24)
 
-An old worker keeps its original execution plan. Editing project settings does not silently replace that plan. Resume now distinguishes a changed plan from missing worktree, repository, baseline and Git-registration errors.
+Lifecycle commands saved in Project Settings become available to existing workers on their next explicit retry/action (GitHub #45). Saving executes nothing, and an active command retains its snapshot. The worker keeps its original plan plus every replaced plan revision and attempt outcome. Updated commands use the retained worker’s verified baseline dependencies, prepared environment and permissions; configured and effective source bindings are recorded separately. A newer source hash does not claim the old worktree contains the newer file. Missing/changed worktree files, ownership, baseline and registration errors remain blockers.
+
+A failed partial setup can be rerun through the explicit **Retry failed setup** action after correcting its command. The same worktree/context and prior failure remain, with single-use durable retry identity. Ordinary Resume never authorizes that replay. Successful setup remains setup-once. No separate plan-adoption step is needed merely to retry a corrected lifecycle command.
+
+The older explicit recovery review below remains available for deliberate recovery decisions and missing-worktree retirement; it is not a prerequisite for applying ordinary command fixes.
 
 Choose **Review recovery** in an inactive worker's details, or ask the manager to review that worker. This opens a discussion without starting work or changing resources. The manager's `review_worker_recovery` tool shows retained/current phase commands, timeouts and source evidence, exact blockers and a review hash. After the human approves the specific command and resource scope, `request_worker_recovery` queues the matching task/run/hash decision. Read task status to distinguish a queued request from its completed application.
 
@@ -42,4 +60,4 @@ Choose **Review recovery** in an inactive worker's details, or ask the manager t
 
 **Retire a missing worktree record** requires the owned path to be absent and no longer registered with Git, plus confirmed process/lifecycle evidence. It executes no cleanup or Git-prune command. The record becomes Retired in history and explicitly says resource cleanup is unverified. Task/run/history and recovery decisions remain. Existing or dangling links, foreign paths, remaining registration and uncertain shutdown block retirement. Normal disposal still refuses dirty work.
 
-The environment recovery journal records the exact old plan, new hash, differences and decision before task completion. A controller restart can complete that same approved action idempotently. Changed decisions, stale runs or changed plan hashes require another review. A live project runtime lacking a graceful stop command remains blocked; this flow cannot manufacture ownership evidence or infer how to clean shared services. A successful declared teardown remains command evidence, not independent proof that every external resource disappeared.
+The environment recovery journal records the exact old plan, new hash, differences and decision before task completion. A controller restart can complete that same approved action idempotently. Changed decisions, stale runs or changed plan hashes require another review. A live project runtime lacking a graceful stop command remains blocked until a declared command is configured and explicitly requested; this flow cannot manufacture ownership evidence or infer how to clean shared services. A successful declared teardown remains command evidence, not independent proof that every external resource disappeared.

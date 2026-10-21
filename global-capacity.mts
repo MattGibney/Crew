@@ -1,3 +1,4 @@
+import { readRunnerRecord, type RunnerRecord } from "./execution/evidence.mjs";
 import type { TaskRecord } from "./execution/contracts.mjs";
 import { Ajv } from "ajv";
 import { errorCode, isRecord } from "./execution/errors.mjs";
@@ -7,6 +8,7 @@ interface CapacityClaim {
   runId: string | null;
   at: string;
   recovered?: boolean;
+  replacesRunId?: string | null;
 }
 interface CapacityState {
   version: number;
@@ -39,20 +41,22 @@ const capacityShape = new Ajv({ strict: false }).compile<CapacityState>({
   },
 });
 // Issue #2: one durable admission ledger for all local project controllers.
+// Issue #2: one durable admission ledger for all local project controllers.
 import { readFile, open, rename } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadTasks, withStateLock } from "./orchestration-store.mjs";
 const now = () => new Date().toISOString();
-async function json(file: string): Promise<Record<string, unknown> | null> {
-  try {
-    const value: unknown = JSON.parse(await readFile(file, "utf8"));
-    return isRecord(value) ? value : null;
-  } catch (error) {
-    if (errorCode(error) === "ENOENT") return null;
-    throw error;
-  }
-}
+const nativeEnded = (
+  exit: RunnerRecord | null,
+  runId: string | null | undefined,
+) =>
+  Boolean(
+    exit &&
+    exit.runId === runId &&
+    (exit.connectionClosed === true || exit.stopConfirmed === true),
+  );
+const json = readRunnerRecord;
 const limitValue = (value: number) => {
   if (!Number.isInteger(value) || value < 1 || value > 64)
     throw new Error("Global worker limit must be an integer between 1 and 64.");
@@ -92,7 +96,13 @@ async function transaction<T>(
     throw new Error("Global capacity directory must be absolute.");
   return withStateLock(dir, ".capacity.lock", async () => {
     const file = path.join(dir, "capacity.json");
-    const state: unknown = (await json(file)) || {
+    const value: unknown = JSON.parse(
+      await readFile(file, "utf8").catch((error) => {
+        if (errorCode(error) === "ENOENT") return "null";
+        throw error;
+      }),
+    );
+    const state: unknown = value || {
       version: 1,
       limit: 2,
       admissionPaused: false,
@@ -191,9 +201,7 @@ async function reconcile(state: CapacityState) {
       const exit = task.runDir
         ? await json(path.join(task.runDir, "exit.json"))
         : null;
-      const terminal = Boolean(
-        exit && exit.runId === task.runId && exit.stopConfirmed === true,
-      );
+      const terminal = nativeEnded(exit, task.runId);
       const active =
         (task.harnessStarted && !terminal) || task.status === "launching";
       if (
@@ -202,7 +210,7 @@ async function reconcile(state: CapacityState) {
           (claim) =>
             claim.stateDir === stateDir &&
             claim.taskId === task.id &&
-            claim.runId === task.runId,
+            (claim.runId === task.runId || claim.replacesRunId === task.runId),
         )
       )
         state.claims.push({
@@ -220,18 +228,37 @@ async function reconcile(state: CapacityState) {
       retained.push(claim);
       continue;
     }
-    if (task.runId !== claim.runId) {
-      retained.push(claim);
+    // A retained service from an older run does not occupy a native Codex
+    // connection slot. Read that claim's own terminal record after advancement.
+    const sameRun = task.runId === claim.runId;
+    const safeIdentity =
+      /^[a-zA-Z0-9_-]{8,80}$/.test(claim.taskId) &&
+      typeof claim.runId === "string" &&
+      /^[a-zA-Z0-9_-]{1,160}$/.test(claim.runId);
+    const file =
+      sameRun && task.runDir
+        ? path.join(task.runDir, "exit.json")
+        : !sameRun && safeIdentity
+          ? path.join(
+              claim.stateDir,
+              "runs",
+              claim.taskId,
+              claim.runId || "",
+              "exit.json",
+            )
+          : null;
+    const exit = file ? await json(file) : null;
+    if (
+      sameRun
+        ? nativeEnded(exit, claim.runId)
+        : exit?.runId === claim.runId && exit.connectionClosed === true
+    )
       continue;
-    }
-    const exit = task.runDir
-      ? await json(path.join(task.runDir, "exit.json"))
-      : null;
-    if (exit?.runId === claim.runId && exit.stopConfirmed === true) continue;
     // Explicit controller release handles preparation that never spawned a worker.
     retained.push(claim);
   }
   state.claims = retained;
+  return tasks;
 }
 export async function createGlobalCapacity({
   dir,
@@ -244,12 +271,68 @@ export async function createGlobalCapacity({
 }) {
   await configureGlobalCapacity({ dir, limit, stateDirs: [stateDir] });
   return {
-    acquire: ({ taskId, runId }: { taskId: string; runId: string }) =>
+    acquire: ({
+      taskId,
+      runId,
+      replaceConnection = false,
+      previousRunId,
+    }: {
+      taskId: string;
+      runId: string;
+      replaceConnection?: boolean;
+      previousRunId?: string | null;
+    }) =>
       transaction(dir, async (state) => {
-        await reconcile(state);
-        const existing = state.claims.find(
-          (claim) => claim.stateDir === stateDir && claim.taskId === taskId,
-        );
+        if (
+          previousRunId !== undefined &&
+          previousRunId !== null &&
+          (typeof previousRunId !== "string" ||
+            !/^[a-zA-Z0-9_-]{1,160}$/.test(previousRunId))
+        )
+          throw new Error("Invalid prior native connection identity");
+        const tasks = await reconcile(state);
+        const matches = (claim: CapacityClaim) =>
+          claim.stateDir === stateDir && claim.taskId === taskId;
+        const existing =
+          state.claims.find(
+            (claim) => matches(claim) && claim.runId === runId,
+          ) || state.claims.find(matches);
+        if (replaceConnection) {
+          if (state.admissionPaused === true)
+            return {
+              admitted: false,
+              limit: state.limit,
+              occupied: state.claims.length,
+              admissionPaused: true,
+            };
+          // Only the exact connection observed absent by the controller is
+          // replaced. Preserve any unrelated retained claims for investigation.
+          const prior =
+            previousRunId !== undefined
+              ? previousRunId
+              : (tasks.get(`${stateDir}\0${taskId}`)?.runId ?? null);
+          const index = state.claims.findIndex(
+            (claim) =>
+              matches(claim) && claim.runId === prior && claim.runId !== runId,
+          );
+          if (index !== -1) {
+            state.claims[index] = {
+              stateDir,
+              taskId,
+              runId,
+              replacesRunId: prior,
+              at: now(),
+            };
+            // The task's old run publication may outlive this transaction. The
+            // marker above prevents reconciliation from resurrecting that one
+            // replaced connection while the new native run is being published.
+            return {
+              admitted: true,
+              limit: state.limit,
+              occupied: state.claims.length,
+            };
+          }
+        }
         if (existing)
           return {
             admitted: existing.runId === runId,

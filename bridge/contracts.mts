@@ -12,6 +12,7 @@ export interface BridgeOptions {
   orchestrationDir?: string;
   project?: Project;
   managerPrompt?: string;
+  getManagerScratchpad?: () => Promise<unknown>;
   runtimeProjectPath?: string;
   onEvent?: (event: { type: string; [key: string]: unknown }) => void;
 }

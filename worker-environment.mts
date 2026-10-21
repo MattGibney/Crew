@@ -6,6 +6,7 @@ import type {
 import type { ProjectToolchain } from "./project-toolchain.mjs";
 import { errorCode, errorMessage, isRecord } from "./execution/errors.mjs";
 import {
+  readRunnerRecord,
   readEnvironmentEvidence,
   readCommandExit,
 } from "./execution/evidence.mjs";
@@ -17,6 +18,7 @@ interface ReconcileOptions {
 interface HookOptions extends ReconcileOptions {
   worktree: string;
   hooks?: Record<string, EnvironmentHook | undefined>;
+  setupRetry?: import("./execution/contracts.mjs").SetupRetry | null;
   phases: string[];
   existing?: EnvironmentEvidence | null;
   toolchain?: ProjectToolchain | null;
@@ -31,18 +33,9 @@ import { spawn } from "node:child_process";
 import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 const now = () => new Date().toISOString(),
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-async function json(file: string): Promise<Record<string, unknown> | null> {
-  try {
-    const value: unknown = JSON.parse(await readFile(file, "utf8"));
-    return isRecord(value) ? value : null;
-  } catch (e) {
-    if (errorCode(e) === "ENOENT") return null;
-    throw e;
-  }
-}
 async function save(file: string, value: unknown) {
   const tmp = `${file}.${randomUUID()}.tmp`;
   await writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
@@ -111,8 +104,10 @@ export async function runEnvironmentHooks({
   signal,
   pauseBoundary,
   cooperative = false,
+  setupRetry = null,
   onEvidence = async () => {},
 }: HookOptions) {
+  hooks = structuredClone(hooks);
   const file = environmentFile(stateDir, taskId),
     prior = await reconcileEnvironment({ stateDir, taskId });
   if (prior?.pending)
@@ -131,8 +126,37 @@ export async function runEnvironmentHooks({
   if (toolchain) environment.toolchain = toolchain;
   if (environment.taskId !== taskId || environment.worktree !== worktree)
     throw new Error("Environment ownership does not match this worker.");
+  const completedBootstrap = environment.hooks.some(
+    (h) => h.phase === "bootstrap" && h.status === "succeeded",
+  );
+  const incompleteBootstrap =
+    !completedBootstrap &&
+    (environment.bootstrapAttempted ||
+      environment.hooks.some((h) => h.phase === "bootstrap"));
+  const retryBootstrap =
+    Boolean(setupRetry?.requestId) &&
+    !environment.setupRetryHistory?.some(
+      (entry) => entry.requestId === setupRetry?.requestId,
+    );
+  if (
+    incompleteBootstrap &&
+    phases.some((phase) =>
+      ["bootstrap", "start", "resume", "ready"].includes(phase),
+    ) &&
+    !retryBootstrap
+  )
+    throw new Error(
+      "Earlier bootstrap did not complete. Its retained data will not be reseeded; explicitly Retry failed setup after reviewing the configured command.",
+    );
+  if (incompleteBootstrap && retryBootstrap && !hooks.bootstrap)
+    throw new Error(
+      "Retry failed setup requires a configured bootstrap command; retained partial data was preserved.",
+    );
+  if (incompleteBootstrap && retryBootstrap && !phases.includes("bootstrap"))
+    phases = ["bootstrap", ...phases];
   for (const phase of phases) {
     await pauseBoundary?.();
+    if (phase === "bootstrap" && completedBootstrap) continue;
     const hook = hooks[phase];
     if (!hook) continue;
     if (signal?.aborted)
@@ -157,11 +181,30 @@ export async function runEnvironmentHooks({
       runDir,
       status: "running",
       startedAt: now(),
+      configurationHash: createHash("sha256")
+        .update(JSON.stringify(hook))
+        .digest("hex"),
+      configurationSource: hook.configurationSource || "crew-config",
       command: hook.command,
-      args: hook.args,
+      args: structuredClone(hook.args),
       timeoutMs: hook.timeoutMs,
+      ...(hook.planHash ? { planHash: hook.planHash } : {}),
+      ...(hook.source ? { source: structuredClone(hook.source) } : {}),
     };
     environment.status = phase === "cleanup" ? "cleaning" : "preparing";
+    if (phase === "bootstrap") {
+      environment.bootstrapAttempted = true;
+      if (retryBootstrap)
+        environment.setupRetryHistory = [
+          ...(environment.setupRetryHistory || []),
+          {
+            ...setupRetry,
+            requestId: setupRetry?.requestId || "",
+            at: now(),
+            configurationHash: evidence.configurationHash,
+          },
+        ];
+    }
     environment.hooks.push(evidence);
     await save(file, environment);
     await onEvidence(environment);
@@ -208,7 +251,7 @@ export async function runEnvironmentHooks({
       let exit;
       for (;;) {
         if (cooperative) {
-          const blocked = await json(
+          const blocked = await readRunnerRecord(
             path.join(runDir, "cooperative-stop.json"),
           );
           if (blocked?.id === id && blocked.confirmed === false)

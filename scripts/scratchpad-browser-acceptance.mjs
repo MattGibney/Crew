@@ -1,0 +1,102 @@
+// GitHub #26: compiled read-only UI with disposable backend and synthetic media.
+// Build first; CREW_PLAYWRIGHT_MODULE/CREW_BROWSER_EXECUTABLE are optional.
+import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+const { chromium } = await import(process.env.CREW_PLAYWRIGHT_MODULE || 'playwright-core');
+const output = await mkdtemp(path.join(tmpdir(), 'crew-scratchpad-'));
+const port = Number(process.env.CREW_ACCEPTANCE_PORT || 4356), origin = `http://127.0.0.1:${port}`;
+const fixture = spawn(process.execPath, ['tests/browser-fixture.mjs', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
+let browser;
+const cleanup = async () => { await browser?.close(); if (fixture.exitCode === null) { fixture.kill('SIGTERM'); await once(fixture, 'exit'); } };
+try {
+  await new Promise((resolve, reject) => { fixture.stdout.once('data', resolve); fixture.once('error', reject); fixture.once('exit', code => reject(Error(`Fixture exited ${code}`))); });
+  browser = await chromium.launch({ headless: true, ...(process.env.CREW_BROWSER_EXECUTABLE ? { executablePath: process.env.CREW_BROWSER_EXECUTABLE } : {}) });
+  const context = await browser.newContext({ viewport: { width: 1400, height: 1000 } });
+  const page = await context.newPage();
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  const post = body => context.request.post(`${origin}/__control`, { data: body });
+  const proof = async () => (await (await context.request.get(`${origin}/__proof`)).json()).calls;
+  const media = () => page.evaluate(() => ({ calls: window.__crewMedia.calls, live: window.__crewMedia.tracks.filter(t => t.readyState === 'live').length, peers: window.__crewMedia.peers.length }));
+  const scratchpad = { revision: 4, updatedAt: '2026-10-21T12:30:00.000Z', commitments: [
+    { id: 'review', title: 'Review the actual worker evidence', status: 'delegated', outcome: '', nextAction: 'Read the result before calling this complete.', references: { taskId: 'fixture-task-1', runId: 'fixture-run-1', ticketUrl: 'https://github.com/example/fixture/issues/26' } },
+    { id: 'report', title: 'Prepare the release note', status: 'pending', nextAction: 'Wait for the review.' },
+    { id: 'ask', title: 'Confirm the audience', status: 'needs_input', references: { taskId: 'missing-task', runId: 'retained-run' } },
+    { id: 'audit', title: 'Check the recorded links', status: 'completed', outcome: 'The saved evidence was reviewed.', nextAction: 'None.', references: { ticketUrl: 'javascript:alert(1)' } },
+  ], notes: ['Keep the project launch instructions unchanged.'], decisions: ['Use one project scratchpad.'], questions: ['Who should receive the report?'] };
+  await post({ work: { managerScratchpad: scratchpad } });
+  await page.goto(origin);
+  const nav = page.getByRole('navigation', { name: 'Workspace views' });
+  await nav.getByRole('button', { name: 'Scratchpad', exact: true }).click();
+  const view = page.getByRole('region', { name: 'Manager scratchpad', exact: true });
+  await view.getByRole('heading', { name: 'Manager scratchpad' }).waitFor();
+  await view.getByText('Review the actual worker evidence', { exact: true }).waitFor();
+  assert.equal(await view.getByRole('listitem').count(), 7);
+  assert.equal(await view.getByRole('textbox').count(), 0, 'Scratchpad has no direct editor');
+  assert.equal(await view.locator('a').count(), 1, 'Unsafe saved URL cannot be opened');
+  await view.getByText('Task missing-task · worker unavailable', { exact: true }).waitFor();
+  assert.equal((await media()).calls, 0, 'Scratchpad is available without starting voice');
+  await page.screenshot({ path: path.join(output, 'scratchpad-desktop.png'), fullPage: true });
+  await view.evaluate(el => { el.scrollTop = el.scrollHeight; });
+  await view.getByRole('heading', { name: 'Open questions', exact: true }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(output, 'scratchpad-notes.png'), fullPage: true });
+  await view.evaluate(el => { el.scrollTop = 0; });
+  await view.getByRole('button', { name: 'Worker fixture-task-1', exact: true }).click();
+  await page.getByRole('region', { name: 'Worker detail' }).waitFor();
+  await page.getByRole('button', { name: 'Back to manager', exact: true }).click();
+  await nav.getByRole('button', { name: 'Scratchpad', exact: true }).click();
+  const revised = { ...scratchpad, revision: 5, updatedAt: '2026-10-21T12:40:00.000Z', notes: ['The correction is now saved.'] };
+  await post({ work: { managerScratchpad: revised } });
+  await view.getByText('The correction is now saved.', { exact: true }).waitFor();
+  assert.equal(await view.locator('time').getAttribute('datetime'), revised.updatedAt);
+  await post({ work: { managerScratchpadError: 'Saved file needs review.' } });
+  await view.getByRole('alert').waitFor();
+  await view.getByText('The correction is now saved.', { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(output, 'scratchpad-read-error.png'), fullPage: true });
+  await post({ work: { managerScratchpadError: null } });
+  await view.getByRole('alert').waitFor({ state: 'hidden' });
+  await page.reload();
+  await nav.getByRole('button', { name: 'Scratchpad', exact: true }).click();
+  await view.getByText('The correction is now saved.', { exact: true }).waitFor();
+  await page.setViewportSize({ width: 540, height: 800 });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: path.join(output, 'scratchpad-narrow.png'), fullPage: true });
+  assert.ok(await view.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'Narrow scratchpad has no horizontal overflow');
+  await page.setViewportSize({ width: 1400, height: 1000 });
+  await nav.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector('#connect')?.disabled);
+  await page.getByRole('button', { name: 'Connect voice', exact: true }).click();
+  await page.waitForFunction(() => window.__crewMedia.tracks.some(t => t.readyState === 'live'));
+  const connected = await media(), connectionCount = (await proof()).filter(c => c.name === 'connect').length;
+  const playback = await page.locator('#audio').elementHandle();
+  await nav.getByRole('button', { name: 'Scratchpad', exact: true }).click();
+  assert.deepEqual(await media(), connected, 'Scratchpad preserves the same synthetic call');
+  assert.ok(await playback.evaluate(el => el === document.getElementById('audio')), 'Playback element is retained');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  assert.equal(await page.getByRole('contentinfo', { name: 'Manager call' }).count(), 0, 'Global Settings hides call UI');
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await view.getByRole('heading', { name: 'Manager scratchpad' }).waitFor();
+  assert.deepEqual(await media(), connected);
+  assert.equal((await proof()).filter(c => c.name === 'connect').length, connectionCount);
+  await page.getByRole('button', { name: 'End manager call', exact: true }).click();
+  await page.waitForFunction(() => window.__crewMedia.tracks.every(t => t.readyState === 'ended'));
+  await context.request.post(`${origin}/api/manager/lifecycle`, { data: { action: 'stop' } });
+  const beforeStopReload = (await proof()).length;
+  await page.reload();
+  await nav.getByRole('button', { name: 'Scratchpad', exact: true }).click();
+  await view.getByText('The correction is now saved.', { exact: true }).waitFor();
+  assert.equal((await proof()).slice(beforeStopReload).filter(c => ['prepare', 'work', 'connect', 'manager/lifecycle'].includes(c.name)).length, 0, 'Stopped manager scratchpad needs no turn, restart or voice');
+  assert.equal((await media()).calls, 0);
+  await post({ work: { managerScratchpad: { revision: 0, updatedAt: null, commitments: [], notes: [], decisions: [], questions: [] } } });
+  await view.getByText('No changes saved yet', { exact: true }).waitFor();
+  await view.getByText('No open questions saved.', { exact: true }).waitFor();
+  await page.screenshot({ path: path.join(output, 'scratchpad-empty-stopped.png'), fullPage: true });
+  await post({ work: { managerScratchpad: null } });
+  await view.getByRole('heading', { name: 'Scratchpad unavailable', exact: true }).waitFor();
+  assert.deepEqual(errors, []);
+  assert.equal((await proof()).filter(c => c.name === 'work').length, 0, 'Read-only navigation never starts manager work');
+  console.log(JSON.stringify({ passed: true, screenshots: output, checks: ['saved content', 'four commitments', 'safe links', 'worker navigation', 'live correction', 'read-error cached content', 'reload', 'narrow viewport', 'call continuity', 'stopped manager', 'empty and unavailable'], media: 'synthetic only' }, null, 2));
+} finally { await cleanup(); }

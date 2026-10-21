@@ -41,6 +41,7 @@ export interface RpcResults {
   "thread/realtime/start": Record<string, unknown>;
   "thread/realtime/stop": Record<string, unknown>;
   "turn/start": { turn?: Pick<NativeTurn, "id"> & Partial<NativeTurn> };
+  "turn/steer": { turnId: string };
   "turn/interrupt": Record<string, unknown>;
 }
 export type RpcMethod = keyof RpcResults;
@@ -159,6 +160,7 @@ const resultSchemas: Record<RpcMethod, object> = {
   "turn/start": obj({
     turn: obj({ id: str, status: str, items: arr(itemSchema) }, ["id"]),
   }),
+  "turn/steer": obj({ turnId: str }, ["turnId"]),
   "turn/interrupt": obj({}),
 };
 export function decodeRpc<M extends RpcMethod>(

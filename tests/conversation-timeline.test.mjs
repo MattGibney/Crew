@@ -64,7 +64,7 @@ test('restoring old native handoff rows repairs presentation while preserving id
   ];
   const original = structuredClone(entries), timeline = createConversationTimeline();
   timeline.restore(entries);
-  assert.deepEqual(timeline.snapshot(), entries.map(entry => entry.id === 'native' ? {...entry,text:'Current request',presentation:'realtime-input-v1'} : entry));
+  assert.deepEqual(timeline.snapshot(), entries.map(entry => entry.id === 'native' ? {...entry,text:'Current request',presentation:'realtime-input-v1',origin:'realtime-delegation'} : entry));
   assert.deepEqual(entries,original,'Source records are not mutated');
   const restored = createConversationTimeline(); restored.restore(timeline.snapshot());
   assert.deepEqual(restored.snapshot(),timeline.snapshot());
@@ -79,4 +79,34 @@ test('a literal envelope in current user wording is projected once across repeat
     assert.equal(timeline.snapshot()[0].text,input);
     const restored = createConversationTimeline();restored.restore(JSON.parse(JSON.stringify(timeline.snapshot())));timeline=restored;
   }
+});
+
+test('delegated backing exchange keeps exact turn provenance through late input and journal restore', () => {
+  const timeline = createConversationTimeline();
+  const input = { id:'request',type:'userMessage',content:[{type:'text',text:'<realtime_delegation><input>Review this</input></realtime_delegation>'}] };
+  timeline.record({id:'reply',type:'agentMessage',text:'Detailed written result'},'delegated',{status:'streaming'});
+  timeline.realtime({id:'speech',type:'transcriptSegment',role:'user',text:'Review this',realtimeSessionId:'call'});
+  timeline.record(input,'delegated');
+  timeline.record({id:'typed',type:'userMessage',content:[{type:'text',text:'Review this'}]},'typed-turn');
+  timeline.record({id:'reply',type:'agentMessage',text:'Detailed written result completed'},'delegated');
+  const messages=timeline.snapshot();
+  assert.equal(messages.find(m=>m.id==='request').origin,'realtime-delegation');
+  assert.equal(messages.find(m=>m.id==='reply').origin,'realtime-delegation');
+  assert.equal(messages.find(m=>m.id==='reply').status,'complete');
+  assert.equal(messages.find(m=>m.id==='typed').origin,undefined);
+  assert.equal(messages.find(m=>m.id==='speech').origin,undefined);
+  const restored=createConversationTimeline();restored.restore(JSON.parse(JSON.stringify(messages)));
+  assert.deepEqual(restored.snapshot(),JSON.parse(JSON.stringify(messages)));
+  // A bounded journal can begin after the user item; retained provenance matters.
+  const bounded=createConversationTimeline();bounded.restore(messages.filter(m=>m.id!=='request'));
+  bounded.record({id:'later-reply',type:'agentMessage',text:'Additional detail'},'delegated');
+  assert.equal(bounded.snapshot().find(m=>m.id==='later-reply').origin,'realtime-delegation');
+});
+
+test('malformed saved overlay entries cannot break provenance hydration', () => {
+ const timeline=createConversationTimeline();
+ timeline.record({id:'typed',type:'agentMessage',text:'Retained response'},'typed-turn');
+ const before=timeline.snapshot();
+ timeline.restoreProvenance([null,false,{}, {id:5}, {id:'typed',turnId:'other',role:'assistant',origin:'realtime-delegation'}]);
+ assert.deepEqual(timeline.snapshot(),before);
 });

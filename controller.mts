@@ -1,19 +1,29 @@
-import {
-  evidencePath,
-  environmentHooks,
-  atomic,
-  confirmedExit,
-} from "./execution/controller-evidence.mjs";
+import { createWorkerDirections } from "./execution/worker-directions.mjs";
+import { createWorkerLauncher } from "./execution/worker-launch.mjs";
+import { createWorkerLifecycle } from "./execution/worker-lifecycle.mjs";
+import { createWorkerReconciler } from "./execution/worker-reconcile.mjs";
+import { environmentHooks } from "./execution/controller-evidence.mjs";
+function requireRepository(task: TaskRecord): string {
+  const value = task.repositoryPath || task.fixtureRepo;
+  if (!value) throw new Error("Retained repository identity is unavailable");
+  return value;
+}
+function requireRunDir(task: TaskRecord): string {
+  if (!task.runDir)
+    throw new Error("Worker run evidence directory is unavailable");
+  return task.runDir;
+}
 import type {
   Project,
   TaskRecord,
   TaskReport,
   LifecycleRequest,
+  WorkerResult,
 } from "./execution/contracts.mjs";
 import {
   readRunnerRecord,
-  readEnvironmentEvidence,
   type RunnerRecord,
+  readEnvironmentEvidence,
 } from "./execution/evidence.mjs";
 import type { ProcessSnapshot } from "./process-ownership.mjs";
 import { errorCode, errorMessage, isRecord } from "./execution/errors.mjs";
@@ -41,18 +51,14 @@ interface Fixture {
   commit: string;
   at: string;
 }
-import { createWorkerLifecycle } from "./execution/worker-lifecycle.mjs";
-import { createWorkerLauncher } from "./execution/worker-launch.mjs";
+import type { ResultCandidate } from "./execution/contracts.mjs";
 import { verifyWorkerCompletion } from "./execution/worker-verification.mjs";
-import { discoverProjectExecutionPlan } from "./project-execution-plan.mjs";
-import {
-  resolveProjectToolchain,
-  applyProjectToolchain,
-} from "./project-toolchain.mjs";
+import { applyProjectToolchain } from "./project-toolchain.mjs";
 // Deterministic local controller. Polls files; never polls a model or starts voice.
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
+  stat,
   mkdir,
   readFile,
   writeFile,
@@ -61,6 +67,7 @@ import {
   open,
   unlink,
   realpath,
+  lstat,
 } from "node:fs/promises";
 import {
   runEnvironmentHooks,
@@ -68,19 +75,27 @@ import {
   reconcileEnvironment,
 } from "./worker-environment.mjs";
 import {
-  prepareProjectEnvironment,
   stopProjectEnvironment,
   disposeProjectEnvironment,
-  inspectProjectEnvironment,
   applyProjectRecovery,
+  reviewProjectRecovery,
 } from "./project-environment.mjs";
 import { selectWorktreeRoot, ensureWorktreeRoot } from "./worktree-paths.mjs";
 import { snapshotProcesses } from "./process-ownership.mjs";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { promptSnapshot, promptVersion } from "./prompt-settings.mjs";
 import path from "node:path";
 import os from "node:os";
-import { loadTasks, readTask, updateTask } from "./orchestration-store.mjs";
+import {
+  loadTasks,
+  readTask,
+  updateTask,
+  currentAssignment,
+  ensureAssignments,
+  ensureArchiveExecutionStopped,
+  requestWorkerFollowup,
+} from "./orchestration-store.mjs";
+import { isArchivedTask } from "./worker-archive.mjs";
 import { createGlobalCapacity } from "./global-capacity.mjs";
 const exec = promisify(execFile);
 const now = () => new Date().toISOString();
@@ -93,6 +108,25 @@ const alive = (pid: number) => {
   }
 };
 const json = readRunnerRecord;
+async function atomic(file: string, value: unknown) {
+  const temp = `${file}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  await rename(temp, file);
+}
+const confirmedExit = (
+  task: TaskRecord,
+  exit: RunnerRecord | null,
+): exit is RunnerRecord =>
+  Boolean(exit && exit.runId === task.runId && exit.stopConfirmed === true);
+const connectionEnded = (
+  task: TaskRecord,
+  exit: RunnerRecord | null,
+): exit is RunnerRecord =>
+  Boolean(
+    exit &&
+    exit.runId === task.runId &&
+    (exit.connectionClosed === true || exit.stopConfirmed === true),
+  );
 const attention = (
   task: TaskRecord,
   id: string,
@@ -136,12 +170,11 @@ export async function createController({
     stopped = false,
     controllerError: string | null = null;
   const launches = new Map<string, Promise<void>>(),
-    launchAbort = new Map<string, AbortController>(),
     operations = new Map<string, Promise<unknown>>();
   let processSnapshot: ProcessSnapshot = new Map();
   async function ownedRunnerAlive(task: TaskRecord) {
     if (!task.runnerPid || !task.runDir) return false;
-    const owner = await json(evidencePath(task, "owner.json"));
+    const owner = await json(path.join(requireRunDir(task), "owner.json"));
     const actual = processSnapshot.get(task.runnerPid),
       expected = owner?.supervisorIdentity;
     return Boolean(
@@ -177,7 +210,7 @@ export async function createController({
       (task.lifecycleRequests || [])
         .filter(
           (request) =>
-            ["start", "resume"].includes(request.action) &&
+            ["start", "resume", "retry_setup"].includes(request.action) &&
             ["pending", "processing"].includes(request.status),
         )
         .map((request) => request.id),
@@ -213,12 +246,12 @@ export async function createController({
       });
     return fixturePromise;
   }
-  async function createFixture(): Promise<Fixture> {
+  async function createFixture() {
     const metaPath = path.join(stateDir, "fixture.json");
     const meta = await json(metaPath);
     if (meta) {
       if (!meta.repo || !meta.base || !meta.commit || !meta.at)
-        throw new Error("Malformed fixture repository metadata.");
+        throw new Error("Malformed fixture metadata");
       await exec("git", ["-C", meta.repo, "rev-parse", "--verify", "HEAD"]);
       return {
         repo: meta.repo,
@@ -275,22 +308,12 @@ export async function createController({
       attention(task, `${task.runId || task.id}:failure`, "failure", message);
     });
   }
-  const verify = (task: TaskRecord, exit: RunnerRecord, report: TaskReport) =>
-    verifyWorkerCompletion({ stateDir, project, task, exit, report });
-  const { lifecycle, completeStop, finishRequest } = createWorkerLifecycle({
-    stateDir,
-    project,
-    capacity,
-    launches,
-    launchAbort,
-    operations,
-    startupQueued,
-    admissionHeld,
-    fixture,
-    fail,
-    verify,
-  });
-  const launch = createWorkerLauncher({
+  const verify = (
+    task: TaskRecord,
+    exit: RunnerRecord,
+    report: ResultCandidate,
+  ) => verifyWorkerCompletion({ stateDir, project, task, exit, report });
+  const services = {
     stateDir,
     sourceDir,
     executable,
@@ -298,380 +321,35 @@ export async function createController({
     workerPrompt,
     getWorkerPrompt,
     capacity,
+    launches,
+    operations,
+    startupQueued,
     admissionHeld,
     isStopped: () => stopped,
     fixture,
     fail,
-    finishRequest,
-    launchAbort,
+    verify,
+    ownedTask,
+    ownedRunnerAlive,
+    getProcessSnapshot: () => processSnapshot,
+  };
+  const { nativeConnectionLive, activateFollowup } =
+    createWorkerDirections(services);
+  const { lifecycle, completeStop, finishRequest } = createWorkerLifecycle({
+    ...services,
+    nativeConnectionLive,
+    activateFollowup,
   });
-  async function reconcile(task: TaskRecord) {
-    if (
-      project &&
-      task.projectId !== project.id &&
-      !(project.mode === "fixture" && !task.projectId)
-    )
-      throw new Error(
-        "Stored task belongs to another project; refusing to process it",
-      );
-    if (
-      task.environment?.kind === "project-execution" &&
-      !launches.has(task.id) &&
-      !operations.has(task.id)
-    ) {
-      const environment = await inspectProjectEnvironment({
-        stateDir,
-        taskId: task.id,
-        processes: processSnapshot,
-        onEvidence: (environment) =>
-          updateTask(stateDir, task.id, (n) => {
-            n.environment = environment;
-          }),
-      });
-      if (environment) task.environment = environment;
-    }
-    // Durable supervisor evidence wins over a controller write interrupted at spawn.
-    // A pending spawn intent without an owner/terminal record remains uncertain and
-    // cannot be treated as a never-executed preparation or silently relaunched.
-    if (task.runDir) {
-      const started = await json(evidencePath(task, "started.json")),
-        owner = await json(evidencePath(task, "owner.json")),
-        runtime = await json(evidencePath(task, "runtime.json")),
-        exit = await json(evidencePath(task, "exit.json"));
-      const config = await json(evidencePath(task, "config.json"));
-      const claim =
-        config?.runId === task.runId &&
-        (await readFile(evidencePath(task, "runner.claim"))
-          .then(() => true)
-          .catch((error) => {
-            if (errorCode(error) === "ENOENT") return false;
-            throw error;
-          }));
-      const matching = [started, owner, runtime, exit].some(
-        (record) => record?.runId === task.runId,
-      );
-      if (matching || claim) {
-        const pid =
-          started && started.runId === task.runId
-            ? started.pid
-            : owner && owner.runId === task.runId
-              ? owner.supervisorPid
-              : null;
-        const threadId =
-          runtime && runtime.runId === task.runId
-            ? runtime.threadId
-            : exit && exit.runId === task.runId
-              ? exit.threadId
-              : null;
-        if (
-          task.harnessStarted !== true ||
-          (pid && task.runnerPid !== pid) ||
-          (threadId && task.threadId !== threadId)
-        )
-          task = await updateTask(stateDir, task.id, (n) => {
-            n.harnessStarted = true;
-            if (pid) n.runnerPid = pid;
-            if (threadId) n.threadId = threadId;
-          });
-      }
-    }
-    if (task.environment?.preset)
-      throw new Error(
-        "Obsolete project-specific state is retained; recover it with its original project tooling.",
-      );
-    task = await lifecycle(task);
-    if (!task.runDir) return;
-    const runtime = await json(evidencePath(task, "runtime.json")),
-      started = await json(evidencePath(task, "started.json")),
-      owner = await json(evidencePath(task, "owner.json")),
-      exit = await json(evidencePath(task, "exit.json"));
-    if (
-      started &&
-      started.runId === task.runId &&
-      task.runnerPid !== started.pid
-    )
-      task = await updateTask(stateDir, task.id, (n) => {
-        n.runnerPid = started.pid;
-      });
-    if (
-      runtime &&
-      runtime.runId === task.runId &&
-      runtime.threadId &&
-      task.threadId !== runtime.threadId
-    )
-      task = await updateTask(stateDir, task.id, (n) => {
-        n.threadId = runtime.threadId;
-      });
-    const modelEvidence = await json(
-      evidencePath(task, "model-selection.json"),
-    );
-    if (
-      modelEvidence &&
-      typeof modelEvidence.status === "string" &&
-      typeof modelEvidence.message === "string" &&
-      typeof modelEvidence.at === "string" &&
-      task.modelSelection &&
-      modelEvidence.runId === task.runId &&
-      modelEvidence.requestId === task.modelSelection?.id &&
-      JSON.stringify(task.modelSelection.runtime) !==
-        JSON.stringify(modelEvidence)
-    ) {
-      task = await updateTask(stateDir, task.id, (n) => {
-        if (
-          n.runId !== modelEvidence.runId ||
-          !n.modelSelection ||
-          n.modelSelection.id !== modelEvidence.requestId
-        )
-          return;
-        n.modelSelection = {
-          ...n.modelSelection,
-          status: modelEvidence.status || "unknown",
-          message: modelEvidence.message || "",
-          runtime: modelEvidence,
-        };
-        if (
-          ["selected", "failed", "rerouted"].includes(
-            modelEvidence.status || "",
-          )
-        ) {
-          const id = `model:${modelEvidence.requestId}:${modelEvidence.runId}:${modelEvidence.status}`;
-          if (!n.history.some((item) => item.id === id))
-            n.history.push({
-              id,
-              actor: "controller",
-              kind: "model_selection",
-              message: modelEvidence.message || "",
-              at: modelEvidence.at || null,
-              runId: n.runId || null,
-            });
-        }
-      });
-    }
-    const protocolError = await json(evidencePath(task, "protocol-error.json"));
-    if (
-      protocolError &&
-      protocolError.runId === task.runId &&
-      !task.attention.some(
-        (item) => item.id === `${task.runId}:native-protocol-error`,
-      )
-    ) {
-      task = await updateTask(stateDir, task.id, (n) => {
-        attention(
-          n,
-          `${n.runId}:native-protocol-error`,
-          "blocked",
-          "Worker approval or lifecycle transport needs review. Pending requests and owned process evidence were retained; no automatic response was sent.",
-        );
-      });
-    }
-    const currentExit = exit && exit.runId === task.runId ? exit : null;
-    const isLive = !currentExit && (await ownedRunnerAlive(task));
-    const spawnAgeMs =
-      Date.now() -
-      Date.parse(
-        task.spawnIntentAt ||
-          (started && started.runId === task.runId ? started.at : null) ||
-          task.startedAt ||
-          task.launchAt ||
-          "",
-      );
-    const workerStarted =
-      (owner &&
-        owner.runId === task.runId &&
-        Number.isInteger(owner.workerPid)) ||
-      (currentExit && Number.isInteger(currentExit.workerPid));
-    const startAt =
-      started && started.runId === task.runId
-        ? started.at
-        : owner && owner.runId === task.runId
-          ? owner.at
-          : currentExit?.at;
-    if (
-      workerStarted &&
-      startAt &&
-      task.runId &&
-      (task.execution?.live !== isLive ||
-        (currentExit && !(task.accountedRuns || []).includes(task.runId)) ||
-        (isLive &&
-          Date.now() - Date.parse(task.execution?.observedAt || "") >= 1000))
-    ) {
-      task = await updateTask(stateDir, task.id, (n) => {
-        n.startedAt = startAt;
-        n.accountedRuns = n.accountedRuns || [];
-        if (currentExit && !n.accountedRuns.includes(n.runId || "")) {
-          n.activeMs =
-            (n.activeMs || 0) +
-            Math.max(0, Date.parse(currentExit.at || "") - Date.parse(startAt));
-          n.accountedRuns.push(n.runId || "");
-        }
-        n.execution = {
-          ...n.execution,
-          runId: n.runId,
-          live: isLive,
-          stopConfirmed: currentExit?.stopConfirmed ?? null,
-          supervisorPid: n.runnerPid,
-          startedAt: startAt,
-          endedAt: currentExit?.at || null,
-          totalMs:
-            (n.activeMs || 0) +
-            (isLive ? Math.max(0, Date.now() - Date.parse(startAt)) : 0),
-          observedAt: now(),
-        };
-      });
-    }
-    if (["stopping", "pausing"].includes(task.status)) {
-      if (!task.harnessStarted) return;
-      if (confirmedExit(task, exit)) {
-        const request = (task.lifecycleRequests || []).find(
-          (r) => r.status === "processing",
-        );
-        if (await completeStop(task, request)) return;
-        await updateTask(stateDir, task.id, (n) => {
-          n.status = n.status === "pausing" ? "paused" : "stopped";
-          n.endedAt = exit.at;
-          const current = n.lifecycleRequests?.find(
-            (r) => r.id === request?.id,
-          );
-          if (current) {
-            current.status = "completed";
-            current.handledAt = now();
-          }
-        });
-        if (request) await finishRequest(task.id, request.id);
-      } else if (!isLive && spawnAgeMs > 15000) {
-        const request = (task.lifecycleRequests || []).find(
-          (r) => r.status === "processing",
-        );
-        if (request)
-          await finishRequest(
-            task.id,
-            request.id,
-            "Supervisor disappeared without a stop confirmation. No unrelated process was killed.",
-          );
-        await fail(
-          task.id,
-          "Supervisor disappeared without a stop confirmation.",
-        );
-      }
-      return;
-    }
-    if (
-      ![
-        "running",
-        "awaiting_answer",
-        "resume_queued",
-        "verifying",
-        "blocked",
-      ].includes(task.status)
-    )
-      return;
-    for (const report of task.reports.filter(
-      (r) =>
-        r.runId === task.runId &&
-        !(task.handledReports || []).includes(`${r.runId}:${r.reportId}`),
-    )) {
-      task = await updateTask(stateDir, task.id, (n) => {
-        n.handledReports = n.handledReports || [];
-        n.handledReports.push(`${report.runId}:${report.reportId}`);
-        if (report.kind === "progress") n.progress = report.message;
-        if (report.kind === "question") {
-          n.answer = null;
-          n.question = {
-            id: report.reportId,
-            message: report.message,
-            runId: report.runId,
-          };
-          n.status = "awaiting_answer";
-          attention(
-            n,
-            `${report.runId}:${report.reportId}`,
-            "question",
-            report.message,
-          );
-        }
-        if (report.kind === "blocked") {
-          n.status = "blocked";
-          attention(
-            n,
-            `${report.runId}:${report.reportId}`,
-            "blocked",
-            report.message,
-          );
-        }
-        if (report.kind === "result") {
-          n.status = "verifying";
-          n.candidateReportId = report.reportId;
-        }
-      });
-    }
-    if (exit && exit.runId === task.runId) {
-      if (exit.threadId && task.threadId !== exit.threadId)
-        task = await updateTask(stateDir, task.id, (n) => {
-          n.threadId = exit.threadId;
-        });
-      if (!confirmedExit(task, exit)) {
-        await fail(
-          task.id,
-          "Worker descendants have not confirmed they stopped; preserve its environment.",
-        );
-        return;
-      }
-      if (exit.stopped && task.status !== "resume_queued") {
-        await updateTask(stateDir, task.id, (n) => {
-          n.status = exit.stopAction === "pause" ? "paused" : "stopped";
-          n.endedAt = exit.at;
-        });
-        return;
-      }
-      if (task.status === "resume_queued") return;
-      if (exit.nativeTurnStatus === "interrupted" && !exit.error) {
-        await updateTask(stateDir, task.id, (n) => {
-          n.status = "stopped";
-          n.endedAt = exit.at;
-          n.nativeTurnStatus = "interrupted";
-          attention(
-            n,
-            `${n.runId}:native-interrupted`,
-            "blocked",
-            "Codex ended this worker turn after an interruption or canceled approval. Its worktree and history are retained; no successful result is claimed. Discuss explicit resume with the manager.",
-          );
-        });
-        return;
-      }
-      if (exit.exitCode !== 0 || !exit.completedTurn) {
-        await fail(
-          task.id,
-          `Worker exited without successful turn: ${exit.error || `exit ${exit.exitCode}`}.`,
-        );
-        return;
-      }
-      if (["resume_queued", "awaiting_answer", "blocked"].includes(task.status))
-        return;
-      if (task.status === "verifying") {
-        const report = task.reports.find(
-          (r) =>
-            r.runId === task.runId && r.reportId === task.candidateReportId,
-        );
-        if (!report) throw new Error("Missing candidate result report.");
-        try {
-          await verify(task, exit, report);
-        } catch (error) {
-          await fail(
-            task.id,
-            `Completion verification failed: ${errorMessage(error)}`,
-          );
-        }
-      } else
-        await fail(
-          task.id,
-          "Worker exited without a durable question or result.",
-        );
-    } else if (!isLive && spawnAgeMs > 15000)
-      await fail(
-        task.id,
-        "Worker supervisor disappeared without a terminal record. Not relaunched automatically.",
-      );
-  }
+  const { launch, launchContinuation } = createWorkerLauncher({
+    ...services,
+    nativeConnectionLive,
+  });
+  const reconcile = createWorkerReconciler({
+    ...services,
+    lifecycle,
+    completeStop,
+    finishRequest,
+  });
   async function tick() {
     if (busy || stopped) return;
     busy = true;
@@ -697,7 +375,67 @@ export async function createController({
           ).catch(() => {});
         }
       }
+      for (const retained of await loadTasks(stateDir)) {
+        if (foreign(retained)) continue;
+        try {
+          await activateFollowup(retained);
+        } catch (error) {
+          await updateTask(stateDir, retained.id, (n) => {
+            const pending = (n.assignments || []).find(
+              (a) => a.status === "queued" && a.id !== n.currentAssignmentId,
+            );
+            if (pending) n.followupWait = errorMessage(error);
+          });
+        }
+      }
       const tasks = await loadTasks(stateDir);
+      for (const task of tasks) {
+        if (stopped) break;
+        if (
+          foreign(task) ||
+          launches.has(task.id) ||
+          !["queued", "resume_queued"].includes(task.status) ||
+          !task.threadId ||
+          !task.worktree
+        )
+          continue;
+        if (await admissionHeld({ taskId: task.id, resume: true })) continue;
+        try {
+          if (await nativeConnectionLive(task)) continue;
+        } catch (error) {
+          await updateTask(stateDir, task.id, (n) => {
+            n.capacityWait = errorMessage(error);
+          });
+          continue;
+        }
+        const runId = randomUUID(),
+          admission = await capacity.acquire({
+            taskId: task.id,
+            runId,
+            replaceConnection: true,
+            previousRunId: task.runId,
+          });
+        if (!admission.admitted) {
+          await updateTask(stateDir, task.id, (n) => {
+            if (n.runId === task.runId)
+              n.capacityWait = admission.admissionPaused
+                ? "Native execution is held for an update."
+                : "Waiting for shared native execution capacity.";
+          });
+          continue;
+        }
+        const job = launchContinuation(task, runId);
+        launches.set(task.id, job);
+        // Publish the reserved native run before considering new-worker slots.
+        // Preparation here is local context I/O; no project command is run.
+        try {
+          await job;
+        } catch (error) {
+          controllerError = errorMessage(error);
+        } finally {
+          launches.delete(task.id);
+        }
+      }
       const shared = await capacity.view();
       maxConcurrent = shared.limit;
       for (const task of tasks) {
@@ -709,7 +447,12 @@ export async function createController({
           })
         )
           continue;
-        if (foreign(task) || launches.has(task.id)) continue;
+        if (
+          foreign(task) ||
+          launches.has(task.id) ||
+          (task.threadId && task.worktree)
+        )
+          continue;
         if (
           task.status === "launching" &&
           Date.now() - Date.parse(task.launchAt || "") >= 15000
@@ -719,6 +462,13 @@ export async function createController({
             "Launch interrupted; inspect its environment before restarting.",
           );
         if (!["queued", "resume_queued"].includes(task.status)) continue;
+        if (task.archiveRestoration?.requiresRecovery) {
+          await fail(
+            task.id,
+            "This restored worker is history only and requires explicit recovery before lifecycle execution.",
+          );
+          continue;
+        }
         // Restart reconciles running work but never dispatches a stored backlog.
         if (startupQueued.has(task.id)) {
           // Lifecycle start/resume explicitly removes this hold. Otherwise only
@@ -734,7 +484,9 @@ export async function createController({
           task.harnessStarted &&
           !confirmedExit(
             task,
-            task.runDir ? await json(evidencePath(task, "exit.json")) : null,
+            task.runDir
+              ? await json(path.join(requireRunDir(task), "exit.json"))
+              : null,
           )
         )
           continue;

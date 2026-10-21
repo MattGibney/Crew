@@ -32,7 +32,10 @@ test('default is one fixture project with no registry or business worker and iso
   assert.equal(value.managerStatePath, join(fixture.root, '.data', 'manager-chat.json'));
   assert.equal(value.serverStatePath, join(fixture.root, '.data', 'server.json'));
   assert.equal(value.configPath, null); assert.equal(value.legacyState, false);
-  assert.match(value.managerPrompt, /sole conversational contact/); assert.match(value.workerPrompt, /do not commit/i);
+  assert.match(value.managerPrompt, /sole conversational contact/);
+  assert.match(value.workerPrompt,/Native Codex configuration and its normal approvals govern execution/);
+  assert.match(value.workerPrompt,/requested development and delivery work/);
+  assert.doesNotMatch(value.workerPrompt,/do not commit|even if the brief requests|do not.*open PRs/i);
 });
 test('legacy state remains only for absent local configuration and fixture', async () => {
   const fixture = await setup();
@@ -102,6 +105,7 @@ test('source package contains only allowlisted code/templates; excludes live sta
   for(const file of ['worker-approvals.mts','tests/worker-app-server.test.mjs','tests/worker-approvals.test.mjs','tests/worker-app-server.test.mjs','tests/worker-bootstrap.test.mjs','tests/helpers/worker-app-server-fixture.mjs'])assert.ok(entries.includes(file),`Missing worker protocol source: ${file}`);
 
   assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mts')); assert.ok(entries.includes('conversation-timeline.mts')); assert.ok(entries.includes('renderer/src/manager/Message.tsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
+  for(const file of ['manager-profile.mts','worker-worktree-evidence.mts','renderer/src/manager/ManagerAvatar.tsx','renderer/src/manager/profile.ts','scripts/manager-profile-native-acceptance.mjs','tests/worker-followup.test.mjs']) assert.ok(entries.includes(file), `Missing integrated feature source: ${file}`);
   assert.equal(entries.some(path => /(^|\/)(\.orchestration|\.data|\.git|local.json|\.voice-chat.json|server.json)(\/|$)/.test(path)), false);
   assert.ok(entries.includes('docs/MACOS.md')); assert.ok(entries.includes('tests/config.test.mjs'));
 });

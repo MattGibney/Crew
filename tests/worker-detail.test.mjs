@@ -146,3 +146,28 @@ test('app-server normalized replies and commands stay visible across live refres
   assert.equal(detail.conversation.some(row => /Wrong run|Wrong task|reasoning/.test(row.message)), false);
   assert.equal(detail.historyNotice, null);
 });
+
+test('repeated assignments retain their briefs, results and run correlation in worker details', async t => {
+  const { dir, id } = await fixture(t), file = path.join(dir, 'tasks', `${id}.json`);
+  const task = JSON.parse(await readFile(file, 'utf8'));
+  const at = Date.parse(task.createdAt);
+  task.currentAssignmentId = 'followup-two';
+  task.assignments = [
+    { id: 'initial', ticket: task.ticket, brief: task.brief, status: 'completed', createdAt: task.createdAt, runIds: ['research-run-123'], result: { message: 'Research findings retained' } },
+    { id: 'followup-one', ticket: 'https://github.com/example/repo/issues/42', brief: 'Implement approved behavior', userDecision: 'I explicitly authorize this implementation', status: 'completed', createdAt: new Date(at + 1000).toISOString(), runIds: ['implementation-run-123'], result: { message: 'Implementation result retained' } },
+    { id: 'followup-two', ticket: 'GH-42', brief: 'Document approved behavior', userDecision: 'I explicitly authorize these documentation edits', status: 'active', createdAt: new Date(at + 2000).toISOString(), runIds: ['documentation-run-123'] },
+  ];
+  task.reports = [{ runId: 'implementation-run-123', reportId: 'implementation-result', kind: 'result', message: 'Implementation result retained', at: new Date(at + 1500).toISOString() }];
+  await writeFile(file, JSON.stringify(task));
+  const runDir = path.join(dir, 'runs', id, 'documentation-run-123');
+  await mkdir(runDir, { recursive: true });
+  await writeFile(path.join(runDir, 'config.json'), JSON.stringify({ taskId: id, runId: 'documentation-run-123', assignmentId: 'followup-two', project }));
+  await writeFile(path.join(runDir, 'events.jsonl'), JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Documenting the change' } }));
+  const detail = await readWorkerDetail(dir, id, project);
+  assert.equal(detail.currentAssignmentId, 'followup-two');
+  assert.deepEqual(detail.assignments.map(item => item.result?.message), ['Research findings retained', 'Implementation result retained', undefined]);
+  assert.deepEqual(detail.conversation.filter(item => item.kind === 'instruction').map(item => item.message), task.assignments.map(item => item.brief));
+  assert.equal(detail.conversation.find(item => item.reportId === 'implementation-result' || item.message === 'Implementation result retained').assignmentId, 'followup-one');
+  assert.equal(detail.conversation.find(item => item.message === 'Documenting the change').assignmentId, 'followup-two');
+  assert.ok(detail.links.some(item => item.url === 'https://github.com/example/repo/issues/42'));
+});

@@ -39,9 +39,9 @@ export function toolArguments<T>(tool: ToolDefinition, input: unknown): T {
     for (const [key, value] of Object.entries(input)) {
       const shape = tool.inputSchema.properties[key];
       if (
-        shape?.type === "string" &&
+        shape && (shape.type === "string" || Array.isArray(shape.type) && shape.type.includes("string")) &&
         typeof value === "string" &&
-        !value.trim()
+        (!value.trim() || value.length > (shape.maxLength || (Array.isArray(shape.type) ? 160 : 80)))
       )
         throw new Error(`Invalid ${key}`);
     }

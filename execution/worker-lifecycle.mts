@@ -1,97 +1,91 @@
-import { execFile } from "node:child_process";
+import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { realpath } from "node:fs/promises";
+import {
+  stat,
+  mkdir,
+  readFile,
+  writeFile,
+  realpath,
+  lstat,
+} from "node:fs/promises";
+import { randomUUID, createHash } from "node:crypto";
 import path from "node:path";
 import type {
-  Project,
   TaskRecord,
-  TaskReport,
   LifecycleRequest,
+  ResultCandidate,
 } from "./contracts.mjs";
 import type { RunnerRecord } from "./evidence.mjs";
-import type { createGlobalCapacity } from "../global-capacity.mjs";
-import {
-  atomic,
-  evidencePath,
-  environmentHooks,
-  confirmedExit,
-} from "./controller-evidence.mjs";
+import type {
+  ControllerServices,
+  NativeConnectionLive,
+  ActivateFollowup,
+} from "./controller-services.mjs";
 import {
   readRunnerRecord as json,
   readEnvironmentEvidence,
 } from "./evidence.mjs";
-import { errorMessage } from "./errors.mjs";
-import { readTask, updateTask } from "../orchestration-store.mjs";
+import {
+  environmentHooks,
+  atomic,
+  confirmedExit,
+  connectionEnded,
+  attention,
+  alive,
+  requireRepository,
+  requireRunDir,
+} from "./controller-evidence.mjs";
+import { errorCode, errorMessage } from "./errors.mjs";
+import {
+  readTask,
+  updateTask,
+  currentAssignment,
+  ensureAssignments,
+  ensureArchiveExecutionStopped,
+  requestWorkerFollowup,
+} from "../orchestration-store.mjs";
+import { isArchivedTask } from "../worker-archive.mjs";
 import {
   runEnvironmentHooks,
   environmentFile,
   reconcileEnvironment,
 } from "../worker-environment.mjs";
+import { applyProjectToolchain } from "../project-toolchain.mjs";
 import {
   stopProjectEnvironment,
   disposeProjectEnvironment,
   applyProjectRecovery,
+  reviewProjectRecovery,
 } from "../project-environment.mjs";
-import { applyProjectToolchain } from "../project-toolchain.mjs";
-import { selectWorktreeRoot } from "../worktree-paths.mjs";
-interface LifecycleOptions {
-  stateDir: string;
-  project: Project | null;
-  capacity: Awaited<ReturnType<typeof createGlobalCapacity>>;
-  launches: Map<string, Promise<void>>;
-  launchAbort: Map<string, AbortController>;
-  operations: Map<string, Promise<unknown>>;
-  startupQueued: Map<string, string>;
-  admissionHeld: (request: {
-    taskId: string;
-    resume: boolean;
-  }) => Promise<boolean>;
-  fixture: () => Promise<{
-    repo: string;
-    commit: string;
-    base: string;
-    at: string;
-  }>;
-  fail: (id: string, message: string) => Promise<void>;
-  verify: (
-    task: TaskRecord,
-    exit: RunnerRecord,
-    report: TaskReport,
-  ) => Promise<void>;
-}
+import { selectWorktreeRoot, ensureWorktreeRoot } from "../worktree-paths.mjs";
+import { promptSnapshot, promptVersion } from "../prompt-settings.mjs";
 const exec = promisify(execFile),
   now = () => new Date().toISOString();
-const alive = (pid: number) => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-};
-const attention = (
-  task: TaskRecord,
-  id: string,
-  kind: string,
-  message: string,
-) => {
-  if (!task.attention.some((item) => item.id === id))
-    task.attention.push({ id, kind, message, at: now() });
-};
-/** Apply durable user lifecycle intent while retaining native and environment evidence. */
 export function createWorkerLifecycle({
   stateDir,
+  sourceDir,
+  executable,
   project,
+  workerPrompt,
+  getWorkerPrompt,
   capacity,
   launches,
-  launchAbort,
   operations,
   startupQueued,
   admissionHeld,
+  isStopped,
   fixture,
   fail,
   verify,
-}: LifecycleOptions) {
+  ownedTask,
+  ownedRunnerAlive,
+  getProcessSnapshot,
+  nativeConnectionLive,
+  activateFollowup,
+}: ControllerServices & {
+  nativeConnectionLive: NativeConnectionLive;
+  activateFollowup: ActivateFollowup;
+}) {
   async function finishRequest(
     id: string,
     requestId: string,
@@ -106,7 +100,122 @@ export function createWorkerLifecycle({
       }
     });
   }
-  async function dispose(task: TaskRecord) {
+  async function dispose(task: TaskRecord, request: LifecycleRequest) {
+    if (task.archiveRestoration?.requiresRecovery) {
+      await ensureArchiveExecutionStopped(stateDir, task);
+      if (task.worktree) {
+        if (
+          project?.mode === "repository" &&
+          task.environment?.kind === "project-execution"
+        ) {
+          const review = await reviewProjectRecovery({
+            stateDir,
+            task,
+            project,
+            mode: "retire_missing",
+          });
+          if (!review.allowed)
+            throw new Error(
+              `Restored history cannot be archived while resource ownership is unresolved: ${review.blockers.join("; ")}`,
+            );
+        } else {
+          const repositoryMode = project?.mode === "repository";
+          const repository = repositoryMode
+            ? project.repositories?.find(
+                (item) => item.id === task.repositoryId,
+              )
+            : null;
+          const meta = repositoryMode
+            ? {
+                repo: repository?.path,
+                base: await selectWorktreeRoot(stateDir, task),
+              }
+            : await json(path.join(stateDir, "fixture.json"));
+          if (!meta?.base)
+            throw new Error(
+              "Restored worktree identity is unverified; history was retained.",
+            );
+          const expected = path.join(
+            meta.base,
+            task.worktreeName ||
+              (repositoryMode ? task.id : `worker-${task.id}`),
+          );
+          if (
+            !meta?.repo ||
+            task.worktree !== expected ||
+            (await realpath(requireRepository(task))) !==
+              (await realpath(meta.repo))
+          )
+            throw new Error(
+              "Restored worktree identity is unverified; history was retained.",
+            );
+          const exists = await lstat(task.worktree).then(
+            () => true,
+            (error) => {
+              if (errorCode(error) === "ENOENT") return false;
+              throw error;
+            },
+          );
+          if (exists)
+            throw new Error(
+              "Restored worker worktree path exists; preserve it for explicit review.",
+            );
+          const canonical = path.join(
+            await realpath(path.dirname(expected)),
+            path.basename(expected),
+          );
+          const { stdout } = await exec("git", [
+            "-C",
+            meta.repo,
+            "worktree",
+            "list",
+            "--porcelain",
+            "-z",
+          ]);
+          if (
+            stdout
+              .split("\0")
+              .some(
+                (field) =>
+                  field === `worktree ${expected}` ||
+                  field === `worktree ${canonical}`,
+              )
+          )
+            throw new Error(
+              "Restored worker worktree remains registered with Git; history was retained.",
+            );
+        }
+      }
+      await updateTask(stateDir, task.id, (n) => {
+        const at = now();
+        n.status = "disposed";
+        n.archivedAt = at;
+        for (const assignment of n.assignments || [])
+          if (assignment.status === "queued") {
+            assignment.status = "stopped";
+            assignment.endedAt = at;
+            assignment.stopReason = "worker-archived";
+          }
+        if (n.archiveRestoration)
+          n.archiveRestoration = { ...n.archiveRestoration, rearchivedAt: at };
+        (n.history ||= []).push({
+          id: `archive-restored:${request.id}`,
+          actor: "controller",
+          kind: "lifecycle",
+          at,
+          runId: n.runId || null,
+          message: task.worktree
+            ? "Re-archived restored history after verified absent worktree and terminal execution. No environment cleanup was run."
+            : "Re-archived restored history with no recorded worktree path. Resource cleanup remains unverified. No environment cleanup was run.",
+        });
+        const current = n.lifecycleRequests.find((r) => r.id === request.id);
+        if (current) {
+          current.status = "completed";
+          current.handledAt = at;
+        }
+      });
+      return;
+    }
     const environment = await reconcileEnvironment({
       stateDir,
       taskId: task.id,
@@ -116,31 +225,23 @@ export function createWorkerLifecycle({
         "An environment command has not confirmed it stopped. Wait for its bounded supervisor before removing this worktree.",
       );
     const previousExit = task.runDir
-      ? await json(evidencePath(task, "exit.json"))
+      ? await json(path.join(requireRunDir(task), "exit.json"))
       : null;
-    if (
-      task.harnessStarted &&
-      (!previousExit ||
-        previousExit.runId !== task.runId ||
-        previousExit.stopConfirmed !== true)
-    )
+    if (task.harnessStarted && !connectionEnded(task, previousExit))
       throw new Error(
         "This worker has no matching confirmed terminal record. Preserve this environment until its process ownership can be reconciled.",
       );
     if (
       task.runnerPid &&
       alive(task.runnerPid) &&
-      !(await json(evidencePath(task, "exit.json")))
+      !(await json(path.join(requireRunDir(task), "exit.json")))
     )
       throw new Error(
         "Wait until the worker has stopped before removing its environment.",
       );
     if (task.worktree) {
-      const repoPath = task.repositoryPath || task.fixtureRepo;
-      if (!repoPath)
-        throw new Error("Worker repository identity is unavailable.");
       const actual = await realpath(task.worktree),
-        repo = await realpath(repoPath);
+        repo = await realpath(requireRepository(task));
       const expected =
         project?.mode === "repository"
           ? path.join(
@@ -174,6 +275,7 @@ export function createWorkerLifecycle({
         );
       if (existing?.kind === "project-execution")
         await disposeProjectEnvironment({
+          plan: project?.worker?.environment?.executionPlan,
           stateDir,
           taskId: task.id,
           worktree: task.worktree,
@@ -198,14 +300,30 @@ export function createWorkerLifecycle({
               n.environment = e;
             }),
         });
+      await ensureArchiveExecutionStopped(
+        stateDir,
+        await readTask(stateDir, task.id),
+      );
       await exec("git", ["-C", repo, "worktree", "remove", actual]);
     }
     await updateTask(stateDir, task.id, (n) => {
       n.status = "disposed";
       n.disposedAt = now();
-      n.endedAt = n.endedAt || now();
+      n.archivedAt = n.disposedAt;
+      for (const assignment of n.assignments || [])
+        if (assignment.status === "queued") {
+          assignment.status = "stopped";
+          assignment.endedAt = n.disposedAt;
+          assignment.stopReason = "worker-archived";
+        }
+      n.endedAt = n.endedAt || n.disposedAt;
       if (n.execution)
         n.execution = { ...n.execution, live: false, endedAt: n.endedAt };
+      const current = n.lifecycleRequests?.find((r) => r.id === request.id);
+      if (current) {
+        current.status = "completed";
+        current.handledAt = n.disposedAt;
+      }
     });
   }
   async function completeStop(task: TaskRecord, request?: LifecycleRequest) {
@@ -220,6 +338,7 @@ export function createWorkerLifecycle({
           n.status = action === "pause" ? "pausing" : "stopping";
         });
       const operation = stopProjectEnvironment({
+        plan: project?.worker?.environment?.executionPlan,
         stateDir,
         taskId: task.id,
         cooperative: request?.cooperative === true,
@@ -287,12 +406,12 @@ export function createWorkerLifecycle({
         );
       if (request.status === "pending")
         task = await updateTask(stateDir, task.id, (n) => {
-          const found = n.lifecycleRequests.find((r) => r.id === request.id);
-          if (found) found.status = "processing";
+          const current = n.lifecycleRequests.find((r) => r.id === request.id);
+          if (current) current.status = "processing";
         });
       if (["pause", "stop"].includes(request.action)) {
         const exit = task.runDir
-          ? await json(evidencePath(task, "exit.json"))
+          ? await json(path.join(requireRunDir(task), "exit.json"))
           : null;
         if (
           request.cooperative === true &&
@@ -342,12 +461,6 @@ export function createWorkerLifecycle({
             }
             n.status = request.action === "pause" ? "pausing" : "stopping";
           });
-          if (
-            request.cooperative !== true &&
-            task.lifecycleRequests?.find((r) => r.id === request.id)?.status ===
-              "processing"
-          )
-            launchAbort.get(task.id)?.abort();
           return task;
         }
         const priorEnvironment = await reconcileEnvironment({
@@ -389,7 +502,7 @@ export function createWorkerLifecycle({
           throw new Error(
             "Worker ownership is unknown; no process was stopped.",
           );
-        await atomic(evidencePath(task, "control.json"), {
+        await atomic(path.join(requireRunDir(task), "control.json"), {
           runId: task.runId,
           requestId: request.id,
           action: request.action,
@@ -399,45 +512,67 @@ export function createWorkerLifecycle({
         task = await updateTask(stateDir, task.id, (n) => {
           n.status = request.action === "pause" ? "pausing" : "stopping";
         });
-      } else if (["resume", "start"].includes(request.action)) {
-        if (
-          ![
-            "queued",
-            "paused",
-            "stopped",
-            "failed",
-            "blocked",
-            "awaiting_answer",
-          ].includes(task.status)
-        )
-          throw new Error("This worker is already active or finished.");
-        if (
-          task.question &&
-          task.question.runId === task.runId &&
-          task.answer?.questionId !== task.question.id
-        )
-          throw new Error("Answer this worker’s question before resuming it.");
-        const environment = await reconcileEnvironment({
-          stateDir,
-          taskId: task.id,
-        });
-        if (environment?.pending)
+      } else if (
+        ["resume", "start"].includes(request.action) &&
+        task.threadId &&
+        task.worktree
+      ) {
+        if (task.archiveRestoration?.requiresRecovery)
           throw new Error(
-            "An earlier environment command is still running or lacks a stop confirmation. Wait for its bounded supervisor and retry.",
+            "This history-only record has no available worker environment.",
           );
+        if (await nativeConnectionLive(task)) return task;
+        // An explicit resume after an ended assignment repeats its direction;
+        // retain the previous result rather than rewriting its immutable record.
+        if (
+          currentAssignment(task).status === "completed" &&
+          !(task.assignments || []).some(
+            (item) =>
+              item.status === "queued" && item.id !== task.currentAssignmentId,
+          )
+        ) {
+          const requestId = `resume-${createHash("sha256").update(request.id).digest("hex").slice(0, 32)}`;
+          task = await requestWorkerFollowup(stateDir, {
+            taskId: task.id,
+            requestId,
+            brief: currentAssignment(task).brief,
+            ticket: currentAssignment(task).ticket,
+          });
+        }
+        task = await activateFollowup(task);
+        task = await updateTask(stateDir, task.id, (n) => {
+          n.status = "resume_queued";
+          n.retainedDirection = true;
+          n.failure = null;
+          delete n.capacityWait;
+          startupQueued.delete(n.id);
+        });
+        await finishRequest(task.id, request.id);
+      } else if (request.action === "retry_setup") {
+        throw new Error(
+          "Setup is agent-initiated. Read get_project_environment and execute the existing project command through native tools; Crew does not replay setup.",
+        );
+      } else if (["resume", "start"].includes(request.action)) {
+        if (task.archiveRestoration?.requiresRecovery)
+          throw new Error(
+            "This restored record has history only; its working directory is unavailable.",
+          );
+        if (await nativeConnectionLive(task)) return task;
         if (
           task.harnessStarted &&
           !confirmedExit(
             task,
-            task.runDir ? await json(evidencePath(task, "exit.json")) : null,
+            task.runDir
+              ? await json(path.join(requireRunDir(task), "exit.json"))
+              : null,
           )
         )
           throw new Error(
-            "The previous worker run has no matching confirmed terminal record. Wait for verified shutdown before resuming.",
+            "The previous native connection has no confirmed exit; preserve its context.",
           );
         if (task.worktree && !task.threadId && task.harnessStarted)
           throw new Error(
-            "This worker has no saved conversation to resume. Preserve its worktree and start another worker.",
+            "This worker has no saved native conversation to resume. Its working directory and evidence are retained.",
           );
         if (!task.harnessStarted && task.runId)
           await capacity.releasePreparation({
@@ -445,7 +580,7 @@ export function createWorkerLifecycle({
             runId: task.runId,
           });
         task = await updateTask(stateDir, task.id, (n) => {
-          n.status = n.threadId ? "resume_queued" : "queued";
+          n.status = "queued";
           n.failure = null;
           startupQueued.delete(n.id);
         });
@@ -477,10 +612,17 @@ export function createWorkerLifecycle({
               if (request.action === "reconcile_plan") {
                 if (value && "id" in value) n.environment = value;
                 else
-                  throw new Error("Recovery returned no environment evidence.");
+                  throw new Error("Recovery returned no environment evidence");
               } else {
                 n.status = "disposed";
                 n.disposedAt = now();
+                n.archivedAt = n.disposedAt;
+                for (const assignment of n.assignments || [])
+                  if (assignment.status === "queued") {
+                    assignment.status = "stopped";
+                    assignment.endedAt = n.disposedAt;
+                    assignment.stopReason = "worker-archived";
+                  }
                 n.endedAt = n.endedAt || n.disposedAt;
                 n.retirement = {
                   reason: "worktree-already-missing",
@@ -532,7 +674,7 @@ export function createWorkerLifecycle({
           .finally(() => operations.delete(task.id));
         operations.set(task.id, operation);
         return task;
-      } else if (request.action === "dispose") {
+      } else if (["dispose", "archive"].includes(request.action)) {
         if (
           !["paused", "stopped", "completed", "failed", "blocked"].includes(
             task.status,
@@ -540,8 +682,7 @@ export function createWorkerLifecycle({
         )
           throw new Error("Stop this worker before removing its environment.");
         if (!operations.has(task.id)) {
-          const operation = dispose(task)
-            .then(() => finishRequest(task.id, request.id))
+          const operation = dispose(task, request)
             .catch((error) =>
               finishRequest(task.id, request.id, errorMessage(error)),
             )
@@ -555,5 +696,6 @@ export function createWorkerLifecycle({
     }
     return await readTask(stateDir, task.id);
   }
+
   return { lifecycle, completeStop, finishRequest };
 }

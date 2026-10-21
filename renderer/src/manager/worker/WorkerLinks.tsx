@@ -1,7 +1,6 @@
 import type { WorkerDetailState } from "../../contracts/manager.js";
 import { ArrowUpRight } from "lucide-react";
 
-import type { useWorkerActions } from "./useWorkerActions.js";
 export function WorkerLinks({ detail }: { detail: WorkerDetailState }) {
   return (
     <div className="space-y-5">

@@ -81,7 +81,7 @@ export function PromptEditor({
           ? "Instructions saved. Your newer edits are still unsaved."
           : managerRole
             ? "Instructions saved."
-            : "Worker instructions saved for new workers.",
+            : "Worker instructions saved for the next direction or launch.",
       );
     } catch (error) {
       setError(errorText(error));
@@ -123,7 +123,8 @@ export function PromptEditor({
         <Alert role="status" className="mt-4">
           <AlertDescription>
             {manager.managerLifecycle.state === "stopped" ? "Start" : "Restart"}{" "}
-            your manager in Sessions to apply these saved instructions.
+            your manager in Sessions to apply the saved manager instructions and
+            profile.
           </AlertDescription>
         </Alert>
       )}
@@ -205,8 +206,8 @@ export function PromptEditor({
             <h3 className="font-medium text-foreground">How it’s used</h3>
             <p className="mt-1">
               {managerRole
-                ? "This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately."
-                : "This text replaces Crew’s default worker instructions for this project. Saved changes apply to newly launched workers; existing workers keep the instructions they started with."}
+                ? "This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately."
+                : "This text replaces Crew’s default worker instructions for this project. Saved changes apply on the next worker direction or launch. Earlier run instructions remain in history."}
             </p>
             <p className="mt-2">
               Crew still supplies project and task context. These instructions

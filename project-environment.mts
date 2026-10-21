@@ -1,4 +1,11 @@
 import type {
+  ExecutionPlan,
+  ExecutionPhase,
+  ScriptAction,
+  EnvironmentEvidence,
+  ProjectEnvironmentEvidence,
+} from "./execution/contracts.mjs";
+import type {
   EnvironmentContext,
   PrepareContext,
 } from "./execution/project-context.mjs";
@@ -9,27 +16,21 @@ import {
   executionPlanHash,
   save,
 } from "./execution/project-state.mjs";
+import { readEnvironmentEvidence as json } from "./execution/evidence.mjs";
+import {
+  verifyProjectWorktree,
+  assertPlan,
+  verifySources,
+  verifyPermissionsSource,
+} from "./execution/project-integrity.mjs";
+import { applyLifecyclePlan } from "./execution/project-plan.mjs";
+export { verifyProjectWorktree } from "./execution/project-integrity.mjs";
 export { executionPlanHash } from "./execution/project-state.mjs";
 export {
   reviewProjectRecovery,
   applyProjectRecovery,
 } from "./execution/project-recovery.mjs";
-import type {
-  Project,
-  TaskRecord,
-  LifecycleRequest,
-  ExecutionPlan,
-  ExecutionPhase,
-  ScriptAction,
-  EnvironmentEvidence,
-  ProjectEnvironmentEvidence,
-} from "./execution/contracts.mjs";
-import type { ProcessSnapshot } from "./process-ownership.mjs";
-import {
-  readEnvironmentEvidence,
-  readRunnerRecord,
-} from "./execution/evidence.mjs";
-import { errorCode, errorMessage, isRecord } from "./execution/errors.mjs";
+import { errorCode, errorMessage } from "./execution/errors.mjs";
 // AI-012: execute a project's declared scripts. No project-specific protocol or inferred endpoints.
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -58,13 +59,8 @@ import { selectWorktreeRoot } from "./worktree-paths.mjs";
 const exec = promisify(execFile),
   sleep = (ms: number) => new Promise((r) => setTimeout(r, ms)),
   now = () => new Date().toISOString();
-import {
-  verifyProjectWorktree,
-  assertPlan,
-  verifySources,
-  verifyPermissionsSource,
-} from "./execution/project-integrity.mjs";
-export { verifyProjectWorktree } from "./execution/project-integrity.mjs";
+// Settings edits are applied only when the controller enters a lifecycle action.
+// The original plan and each replaced revision remain durable audit evidence.
 function scriptArgs(plan: ExecutionPlan, action: ScriptAction) {
   return ["-lc", action.command];
 }
@@ -85,6 +81,14 @@ async function bounded(
         command: "/bin/zsh",
         args: scriptArgs(environment.plan, action),
         timeoutMs: action.timeoutMs,
+        planHash: environment.planHash,
+        source: action.source || null,
+        configurationSource:
+          environment.originalPlan &&
+          executionPlanHash(environment.originalPlan[phase] ?? null) !==
+            executionPlanHash(action)
+            ? "crew-settings"
+            : "crew-config",
       },
     },
     phases: [phase],
@@ -115,6 +119,11 @@ async function startRuntime(
       ? environment.plan.resume || environment.plan.start
       : environment.plan.start;
   if (!action) throw new Error("Project Start action is unavailable.");
+  if (environment.runtime)
+    environment.runtimeHistory = [
+      ...(environment.runtimeHistory || []),
+      structuredClone(environment.runtime),
+    ];
   const id = randomUUID(),
     dir = path.join(args.stateDir, "runs", args.taskId, "project-runtime", id);
   await mkdir(dir, { recursive: true, mode: 0o700 });
@@ -123,6 +132,17 @@ async function startRuntime(
     runDir: dir,
     status: "starting",
     createdAt: now(),
+    planHash: environment.planHash,
+    action: structuredClone(action),
+    configurationSource:
+      environment.originalPlan &&
+      executionPlanHash(
+        environment.originalPlan[
+          restarting && environment.plan.resume ? "resume" : "start"
+        ] ?? null,
+      ) !== executionPlanHash(action)
+        ? "crew-settings"
+        : "crew-config",
   };
   environment.servicesStarted = true;
   await persist(args, environment);
@@ -132,6 +152,9 @@ async function startRuntime(
     worktree: environment.worktree,
     command: "/bin/zsh",
     args: scriptArgs(environment.plan, action),
+    planHash: environment.planHash,
+    source: action.source || null,
+    configurationSource: environment.runtime.configurationSource,
   });
   let error: string | null = null;
   const child = spawn(
@@ -173,9 +196,7 @@ async function startRuntime(
   );
 }
 export async function inspectProjectEnvironment(args: EnvironmentContext) {
-  const environment = await readEnvironmentEvidence(
-    environmentFile(args.stateDir, args.taskId),
-  );
+  const environment = await json(environmentFile(args.stateDir, args.taskId));
   if (environment?.kind !== "project-execution") return environment;
   assertOwned(args, environment);
   if (!environment.runtime) return environment;
@@ -203,6 +224,7 @@ export async function inspectProjectEnvironment(args: EnvironmentContext) {
   return environment;
 }
 export async function prepareProjectEnvironment(args: PrepareContext) {
+  args = { ...args, plan: structuredClone(args.plan) };
   const worktree = await verifyProjectWorktree(args);
   assertPlan(args.plan);
   await verifyPermissionsSource(args.repositoryPath, args.plan);
@@ -238,25 +260,32 @@ export async function prepareProjectEnvironment(args: PrepareContext) {
     throw new Error(
       "Retained baseline commit changed; existing data was retained.",
     );
-  if (executionPlanHash(environment.plan) !== executionPlanHash(args.plan))
-    throw new Error(
-      "Project execution plan changed. Ask the manager to review retained versus current lifecycle configuration and explicitly reconcile compatible changes; existing data was retained.",
-    );
-  await verifySources(worktree, args.baseCommit, args.plan, [
+  await applyLifecyclePlan(args, environment, [
     ...(!environment.prepared ? (["setup"] as const) : []),
     environment.runtime && args.plan.resume ? "resume" : "start",
     "ready",
   ]);
-  // Upgrade legacy order-sensitive hashes only after the retained sources are verified.
-  environment.planHash = executionPlanHash(args.plan);
+  // Preserve effective pinned environment while adopting configured lifecycle commands.
+  args.plan = structuredClone(environment.plan);
+  environment.planHash = executionPlanHash(environment.plan);
   await persist(args, environment);
   await args.pauseBoundary?.();
+  const setupRetry =
+    Boolean(args.setupRetry?.requestId) &&
+    !environment.setupRetryHistory?.some(
+      (entry) => entry.requestId === args.setupRetry?.requestId,
+    );
+  if (setupRetry && !environment.plan.setup)
+    throw new Error(
+      "Retry failed setup requires a configured Setup command; retained partial data was preserved.",
+    );
   if (
     !environment.prepared &&
     environment.setupAttempted &&
     !environment.hooks.some(
       (h) => h.phase === "setup" && h.status === "succeeded",
-    )
+    ) &&
+    !setupRetry
   )
     throw new Error(
       "Earlier setup did not complete. Its retained data will not be reseeded; review it before starting a fresh worker.",
@@ -266,7 +295,7 @@ export async function prepareProjectEnvironment(args: PrepareContext) {
     environment.toolchain = await resolveProjectToolchain({
       worktree,
       baseCommit: args.baseCommit,
-      plan: args.plan,
+      plan: environment.plan,
       retained: environment.toolchain,
       cacheRoot: args.toolchainCacheRoot,
       env: args.env,
@@ -283,11 +312,21 @@ export async function prepareProjectEnvironment(args: PrepareContext) {
     const completed = environment.hooks.some(
       (h) => h.phase === "setup" && h.status === "succeeded",
     );
-    if (environment.setupAttempted && !completed)
+    if (environment.setupAttempted && !completed && !setupRetry)
       throw new Error(
         "Earlier setup did not complete. Its retained data will not be reseeded; review it before starting a fresh worker.",
       );
     if (!completed && environment.plan.setup) {
+      if (setupRetry)
+        environment.setupRetryHistory = [
+          ...(environment.setupRetryHistory || []),
+          {
+            requestId: args.setupRetry?.requestId || "",
+            ...args.setupRetry,
+            at: now(),
+            planHash: environment.planHash,
+          },
+        ];
       environment.setupAttempted = true;
       await persist(args, environment);
       await bounded(args, environment, "setup", environment.plan.setup);
@@ -321,9 +360,8 @@ export async function prepareProjectEnvironment(args: PrepareContext) {
   return persist(args, environment);
 }
 export async function stopProjectEnvironment(args: EnvironmentContext) {
-  const environment = await readEnvironmentEvidence(
-    environmentFile(args.stateDir, args.taskId),
-  );
+  args = { ...args, plan: args.plan ? structuredClone(args.plan) : null };
+  const environment = await json(environmentFile(args.stateDir, args.taskId));
   if (environment?.kind !== "project-execution") return environment;
   assertOwned(args, environment);
   const cooperative = args.cooperative === true;
@@ -337,6 +375,7 @@ export async function stopProjectEnvironment(args: EnvironmentContext) {
       "Project setup/check command is still finishing; no stop completion was claimed.",
     );
   Object.assign(environment, pending || {});
+  await applyLifecyclePlan(args, environment, ["stop"]);
   const state = await runtimeState(environment);
   if (state.kind === "unknown")
     throw new Error(
@@ -420,9 +459,8 @@ export async function stopProjectEnvironment(args: EnvironmentContext) {
   return persist(args, environment);
 }
 export async function disposeProjectEnvironment(args: EnvironmentContext) {
-  const environment = await readEnvironmentEvidence(
-    environmentFile(args.stateDir, args.taskId),
-  );
+  args = { ...args, plan: args.plan ? structuredClone(args.plan) : null };
+  const environment = await json(environmentFile(args.stateDir, args.taskId));
   if (environment?.kind !== "project-execution") return environment;
   assertOwned(args, environment);
   const pending = await reconcileEnvironment({
@@ -435,6 +473,7 @@ export async function disposeProjectEnvironment(args: EnvironmentContext) {
     throw new Error(
       "Stop the owned foreground project action before teardown.",
     );
+  await applyLifecyclePlan(args, environment, ["teardown"]);
   if (
     (environment.servicesStarted || environment.setupAttempted) &&
     !environment.plan.teardown

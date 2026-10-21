@@ -1,13 +1,8 @@
 import type { WorkerExchangeRecord } from "../../contracts/manager.js";
-
 import { ChevronDown, Terminal } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-
-import { api } from "../api.js";
-
 import { Message } from "../Message.js";
-
 const markdownClass =
   "break-words text-sm leading-7 [&_p]:my-3 [&_h1]:my-4 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:my-3 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_pre]:overflow-auto [&_pre]:rounded-lg [&_pre]:bg-muted [&_pre]:p-4 [&_code]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:pl-4 [&_table]:block [&_table]:overflow-auto [&_td]:border [&_td]:p-2 [&_th]:border [&_th]:p-2";
 export function Markdown({ children }: { children?: string | null }) {
@@ -44,6 +39,9 @@ function ExchangeDetails({ item }: { item: WorkerExchangeRecord }) {
       {item.at && (
         <time dateTime={item.at}>{new Date(item.at).toLocaleString()}</time>
       )}
+      {item.assignmentId && (
+        <p className="break-all">Assignment {item.assignmentId}</p>
+      )}
       {item.runId && <p className="break-all">Run {item.runId}</p>}
       {item.kind === "execution" && (
         <p>
@@ -53,11 +51,11 @@ function ExchangeDetails({ item }: { item: WorkerExchangeRecord }) {
           {item.exitCode != null ? ` · Exit ${item.exitCode}` : ""}
         </p>
       )}
-      {(item.evidence?.length ?? 0) > 0 && (
+      {(item.evidence?.length || 0) > 0 && (
         <div>
           <p className="font-medium">Reported evidence</p>
           <ul className="mt-1 space-y-2">
-            {item.evidence!.map((value, index) => (
+            {item.evidence?.map((value, index) => (
               <li key={index} className="whitespace-pre-wrap break-all">
                 {value}
               </li>
@@ -116,7 +114,10 @@ export function WorkerExchange({ item }: { item: WorkerExchangeRecord }) {
       label={item.kind === "progress" ? `${actor} · progress` : actor}
       ariaLabel={`${item.actor} ${item.kind || "event"}`}
     >
-      {(item.at || item.runId || (item.evidence?.length ?? 0) > 0) && (
+      {(item.at ||
+        item.runId ||
+        item.assignmentId ||
+        (item.evidence?.length || 0) > 0) && (
         <details className="mt-2 text-[11px] text-muted-foreground">
           <summary className="w-fit cursor-pointer">Details</summary>
           <div className="pt-2">

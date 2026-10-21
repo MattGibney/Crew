@@ -16,7 +16,7 @@ interface LifecycleOptions {
   stateDir: string;
   projectId: string;
   bridge: ReturnType<typeof createBridge>;
-  prompts: PromptSettings;
+  prompts: Pick<PromptSettings, "snapshot">;
   onChange?: (state: ManagerLifecycleView) => void;
 }
 import { errorCode, errorMessage } from "./shared/errors.mjs";
@@ -138,6 +138,7 @@ export async function createManagerLifecycle({
       return Promise.resolve({ managerLifecycle: view() });
     if (action === "stop" && state === "stopped")
       return Promise.resolve({ managerLifecycle: view() });
+    if (action !== "start") bridge.cancelPendingWork?.();
     state =
       action === "start"
         ? "starting"

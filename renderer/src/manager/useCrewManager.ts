@@ -11,6 +11,8 @@ import type {
   WorkerApproval,
   VoiceCatalog,
   ManagerAction,
+  ManagerProfile,
+  WorkerEnvironmentConfig,
 } from "../contracts/manager.js";
 import { useCallback, useRef, useState } from "react";
 import { api, errorText } from "./api.js";
@@ -111,10 +113,16 @@ export function useCrewManager() {
     }
   }, []);
   const saveManagerProfile = useCallback(
-    async (voiceId: string | null, expectedVersion: string) => {
+    async (
+      patch: Partial<ManagerProfile> | string | null,
+      expectedVersion: string | null | undefined,
+    ) => {
       const result = await api(
         "settings/manager-profile",
-        { voice: voiceId, expectedVersion },
+        {
+          ...(patch && typeof patch === "object" ? patch : { voice: patch }),
+          expectedVersion,
+        },
         { method: "PUT" },
       );
       setSettings(result);
@@ -213,6 +221,21 @@ export function useCrewManager() {
     },
     [loadSettings],
   );
+  const saveWorkerEnvironment = useCallback(
+    async (
+      environment: WorkerEnvironmentConfig | null,
+      expectedRevision: string | null,
+    ) => {
+      const result = await api(
+        "settings/worker-environment",
+        { environment, expectedRevision },
+        { method: "PUT" },
+      );
+      setSettings(result);
+      return result;
+    },
+    [],
+  );
   const changeManagerLifecycle = useCallback(
     async (action: ManagerAction) => {
       if (lifecycleLock.current) return;
@@ -274,6 +297,7 @@ export function useCrewManager() {
     settingsError,
     loadSettings,
     savePrompt,
+    saveWorkerEnvironment,
     managerLifecycle,
     managerEnabled,
     changeManagerLifecycle,

@@ -1,15 +1,31 @@
+import { ID, text, identifier } from "./execution/task-fields.mjs";
+import {
+  currentAssignment,
+  ensureAssignments,
+  synchronizeAssignment,
+  validateAssignments,
+  preserveAssignments,
+} from "./execution/assignments.mjs";
+export {
+  currentAssignment,
+  ensureAssignments,
+} from "./execution/assignments.mjs";
 import type {
   TaskRecord,
   TaskHistory,
   TaskReport,
+  Project,
+  WorkerAssignment,
+  WorkflowEvent,
 } from "./execution/contracts.mjs";
 import { parseTaskRecord } from "./execution/task-validation.mjs";
-import { errorCode } from "./execution/errors.mjs";
+import { errorCode, isRecord } from "./execution/errors.mjs";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-export { withStateLock } from "./execution/state-lock.mjs";
 import { withStateLock } from "./execution/state-lock.mjs";
+export { withStateLock } from "./execution/state-lock.mjs";
+import { isArchivedTask } from "./worker-archive.mjs";
 import { promptSnapshot } from "./prompt-settings.mjs";
 
 const LIFECYCLE_ACTIONS = new Set([
@@ -17,7 +33,9 @@ const LIFECYCLE_ACTIONS = new Set([
   "pause",
   "resume",
   "start",
+  "retry_setup",
   "dispose",
+  "archive",
   "reconcile_plan",
   "retire_missing",
 ]);
@@ -27,35 +45,12 @@ const LIFECYCLE_STATES = new Set([
   "completed",
   "failed",
 ]);
-const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(["progress", "question", "result", "blocked"]);
 const now = () => new Date().toISOString();
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-function text(value: unknown, name: string, max = 12000) {
-  if (
-    typeof value !== "string" ||
-    !value.trim() ||
-    value.length > max ||
-    value.includes("\0")
-  )
-    throw new Error(`Invalid ${name}`);
-  // A narrow safety net, not general secret detection. Never include matches in errors.
-  if (
-    /\bsk-[a-zA-Z0-9_-]{20,}\b|\bBearer\s+[a-zA-Z0-9._~+\/-]{12,}={0,2}|-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/i.test(
-      value,
-    )
-  )
-    throw new Error(`Secret-like material is not allowed in ${name}`);
-  return value;
-}
-function identifier(value: unknown, name = "task ID") {
-  if (typeof value !== "string" || !ID.test(value))
-    throw new Error(`Invalid ${name}`);
-  return value;
-}
 const taskPath = (dir: string, id: string) =>
   path.join(dir, "tasks", `${identifier(id)}.json`);
-function validate(input: unknown, expectedId: string): TaskRecord {
+function validate(input: unknown, expectedId: string) {
   const task = parseTaskRecord(input, expectedId);
   if (
     !task ||
@@ -125,6 +120,31 @@ function validate(input: unknown, expectedId: string): TaskRecord {
     throw new Error(
       `Malformed state for ${expectedId}; refusing to replace it`,
     );
+  validateAssignments(task);
+  if (
+    task.workflowHistory !== undefined &&
+    (!Array.isArray(task.workflowHistory) ||
+      task.workflowHistory.some(
+        (event) =>
+          !event ||
+          typeof event.requestId !== "string" ||
+          !["manager", "worker"].includes(event.actor) ||
+          typeof event.value !== "string" ||
+          !event.value.trim() ||
+          !Number.isFinite(Date.parse(event.at)),
+      ))
+  )
+    throw new Error("Malformed workflow history");
+  if (
+    task.workflowState !== undefined &&
+    (!task.workflowState ||
+      typeof task.workflowState.value !== "string" ||
+      !task.workflowState.value.trim() ||
+      !task.workflowHistory?.some(
+        (event) => JSON.stringify(event) === JSON.stringify(task.workflowState),
+      ))
+  )
+    throw new Error("Malformed workflow state");
   return task;
 }
 async function readUnlocked(dir: string, id: string) {
@@ -182,11 +202,53 @@ function recordHistory(task: TaskRecord, previous: TaskRecord | null = null) {
         ...extra,
       });
   };
+  if (
+    previous &&
+    task.workerPromptSnapshot?.version !==
+      previous.workerPromptSnapshot?.version &&
+    task.workerPromptSnapshot
+  )
+    add(
+      `worker-prompt:${previous.revision + 1}`,
+      "controller",
+      "configuration",
+      "Worker instructions refreshed for the current continuation.",
+      { instructionVersion: task.workerPromptSnapshot.version },
+    );
   if (!previous)
     add("assignment", "manager", "instruction", task.brief, {
       at: task.createdAt,
       runId: null,
     });
+  for (const assignment of task.assignments || [])
+    if (assignment.id !== "initial")
+      add(
+        `assignment:${assignment.id}`,
+        "manager",
+        "instruction",
+        assignment.brief,
+        {
+          at: assignment.createdAt,
+          runId: null,
+          assignmentId: assignment.id,
+          ticket: assignment.ticket,
+          userDecision: assignment.userDecision,
+        },
+      );
+  for (const assignment of task.assignments || [])
+    for (const adoption of assignment.adoptions || [])
+      add(
+        `adoption:${assignment.id}:${adoption.id}`,
+        "manager",
+        "instruction",
+        `Authorized preservation and adoption of reviewed worktree changes: ${adoption.userDecision}`,
+        {
+          at: adoption.at,
+          runId: adoption.expectedRunId,
+          assignmentId: assignment.id,
+          worktreeFingerprint: adoption.fingerprint,
+        },
+      );
   for (const report of task.reports)
     add(
       `report:${report.runId}:${report.reportId}`,
@@ -261,6 +323,22 @@ async function save(dir: string, task: TaskRecord) {
     "## Reports",
     "",
   ];
+  if (task.assignments) {
+    lines.push("## Assignments", "");
+    for (const assignment of task.assignments)
+      lines.push(
+        `### ${assignment.ticket} — ${assignment.status} (${assignment.id})`,
+        "",
+        assignment.brief,
+        "",
+        ...(assignment.userDecision
+          ? ["User authorization: " + assignment.userDecision, ""]
+          : []),
+        ...(assignment.result
+          ? ["Result: " + assignment.result.message, ""]
+          : []),
+      );
+  }
   for (const report of task.reports)
     lines.push(
       `### ${report.kind} (${report.at})`,
@@ -275,7 +353,7 @@ async function save(dir: string, task: TaskRecord) {
       "## Current question",
       "",
       task.question.message ||
-        "Question text is unavailable in this retained record.",
+        "Question text unavailable in this retained record.",
       "",
     );
   if (task.answer) lines.push("## Answer", "", task.answer.text, "");
@@ -295,7 +373,7 @@ export async function readTask(dir: string, id: string) {
   return readUnlocked(dir, identifier(id));
 }
 export async function loadTasks(dir: string) {
-  return loadUnlocked(dir);
+  return withStateLock(dir, ".schedule.lock", () => loadUnlocked(dir));
 }
 export async function createTask(
   dir: string,
@@ -323,6 +401,12 @@ export async function createTask(
   text(ticket, "ticket", 120);
   text(brief, "brief");
   return withStateLock(dir, ".schedule.lock", async () => {
+    const retired = await fs
+      .readdir(path.join(dir, "archive-actions"))
+      .catch((error) => {
+        if (errorCode(error) === "ENOENT") return [];
+        throw error;
+      });
     const tasks = await loadUnlocked(dir);
     const existing = tasks.find((task) => task.id === requestId);
     if (existing) {
@@ -337,6 +421,14 @@ export async function createTask(
         );
       return existing;
     }
+    if (
+      retired.some(
+        (name) => name.startsWith(`${requestId}.`) && name.endsWith(".json"),
+      )
+    )
+      throw new Error(
+        "Task ID is retained by an archive operation; choose a new task ID",
+      );
     return withStateLock(dir, `.${requestId}.lock`, () => {
       const task: TaskRecord = {
         id: requestId,
@@ -394,12 +486,15 @@ export async function updateTask(
         next.createdAt !== identity.createdAt
       )
         throw new Error("Task identity is immutable");
+      synchronizeAssignment(next, previous);
+      preserveAssignments(next, previous);
       if (
-        identity.workerPromptSnapshot &&
-        JSON.stringify(next.workerPromptSnapshot) !==
-          identity.workerPromptSnapshot
+        previous.workflowHistory &&
+        JSON.stringify(
+          next.workflowHistory?.slice(0, previous.workflowHistory.length),
+        ) !== JSON.stringify(previous.workflowHistory)
       )
-        throw new Error("Worker prompt snapshot is immutable");
+        throw new Error("Workflow history is immutable");
       if (
         previous.history &&
         JSON.stringify(next.history?.slice(0, previous.history.length)) !==
@@ -446,19 +541,15 @@ export async function reportTask(
         throw new Error("Report ID reused with changed content");
       return;
     }
-    if (
-      task.reports.some(
-        (report) =>
-          report.runId === runId &&
-          ["question", "blocked", "result"].includes(report.kind),
-      )
-    )
-      throw new Error(
-        "Worker run already yielded or finished; wait for controller resume",
-      );
-    if (task.status !== "running") throw new Error("Worker is not running");
-    if (task.reports.length >= 300) throw new Error("Report limit reached");
-    task.reports.push({ reportId, runId, kind, message, evidence, at: now() });
+    task.reports.push({
+      reportId,
+      runId,
+      assignmentId: currentAssignment(task).id,
+      kind,
+      message,
+      evidence,
+      at: now(),
+    });
   });
 }
 export async function answerQuestion(
@@ -598,7 +689,17 @@ export async function requestWorkerAction(
 ) {
   identifier(taskId);
   identifier(actionId, "action ID");
-  if (!["stop", "pause", "resume", "start", "dispose"].includes(action))
+  if (
+    ![
+      "stop",
+      "pause",
+      "resume",
+      "start",
+      "retry_setup",
+      "dispose",
+      "archive",
+    ].includes(action)
+  )
     throw new Error("Invalid worker action");
   if (typeof cooperative !== "boolean" || (cooperative && action !== "pause"))
     throw new Error(
@@ -622,7 +723,11 @@ export async function requestWorkerAction(
     }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId)
       throw new Error("Stale worker run for lifecycle action");
-    if (task.status === "disposed") throw new Error("Worker has been disposed");
+    if (
+      isArchivedTask(task) ||
+      ["disposed", "removed", "archived"].includes(task.status)
+    )
+      throw new Error("Worker has been archived");
     if (
       requests.some((request) =>
         ["pending", "processing"].includes(request.status),
@@ -747,9 +852,9 @@ export async function updateWorkNotes(
   if (Buffer.byteLength(markdown) > 60000)
     throw new Error("Work notes exceed the document byte limit");
   return updateTask(dir, id, async (task) => {
+    if (isArchivedTask(task))
+      throw new Error("Archived worker history is read-only");
     if (runId && task.runId !== runId) throw new Error("Stale worker run");
-    if (runId && task.status !== "running")
-      throw new Error("Worker is not running");
     if (task.workNotes?.updateId === updateId) {
       if (
         (await fs.readFile(
@@ -777,3 +882,11 @@ export async function updateWorkNotes(
     });
   });
 }
+
+import { createArchiveStore } from "./execution/task-archive.mjs";
+export const { manageArchivedTask, ensureArchiveExecutionStopped } =
+  createArchiveStore({ readUnlocked, save, recordHistory, atomic });
+export {
+  requestWorkerFollowup,
+  setWorkflowState,
+} from "./execution/task-directions.mjs";

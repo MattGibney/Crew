@@ -1,4 +1,5 @@
-import type { WorkerTask, OrchestrationState } from "../contracts/manager.js";
+import type { ManagerProps, WorkerTask } from "../contracts/manager.js";
+
 import { useEffect, useState } from "react";
 import {
   ArrowUpRight,
@@ -11,10 +12,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  workspaceWorkers,
+  currentAssignment,
+  queuedAssignments,
   formatElapsed,
   groupWorkers,
   pendingAttention,
   workerProgress,
+  workerWorkflow,
   workerStatus,
   workerTiming,
 } from "./worker-model.js";
@@ -30,11 +35,37 @@ export function WorkerStatus({ task }: { task: WorkerTask }) {
         : ["running", "launching", "verifying"].includes(task.status)
           ? "border-primary/20 bg-primary/10 text-primary"
           : "border-border bg-muted text-muted-foreground";
+  const workflow = workerWorkflow(task);
   return (
-    <Badge variant="outline" className={`shrink-0 gap-1.5 text-[10px] ${tone}`}>
-      <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-      {task.pendingApprovalCount ? "Needs approval" : workerStatus(task)}
-    </Badge>
+    <>
+      {workflow && (
+        <Badge
+          variant="outline"
+          aria-label={`Workflow: ${workflow}`}
+          title={workflow}
+          className="max-w-64 text-[10px]"
+        >
+          <span className="truncate">{workflow}</span>
+        </Badge>
+      )}
+      <Badge
+        variant="outline"
+        aria-label={`Execution: ${workerStatus(task)}`}
+        className={`shrink-0 gap-1.5 text-[10px] ${tone}`}
+      >
+        <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
+        {workerStatus(task)}
+      </Badge>
+      {(task.pendingApprovalCount || 0) > 0 && (
+        <Badge
+          variant="outline"
+          aria-label="Native approval needed"
+          className="shrink-0 text-[10px]"
+        >
+          Needs approval
+        </Badge>
+      )}
+    </>
   );
 }
 function WorkerCard({
@@ -50,13 +81,15 @@ function WorkerCard({
 }) {
   const timing = workerTiming(task, now),
     attention = pendingAttention(task);
-  const title = task.brief?.trim().split("\n")[0] || "Worker task";
+  const assignment = currentAssignment(task),
+    queued = queuedAssignments(task).length;
+  const title = assignment.brief?.trim().split("\n")[0] || "Worker task";
   return (
     <article data-worker-id={task.id} className="h-full min-w-0">
       <button
         type="button"
         onClick={() => onSelect(task.id)}
-        aria-label={`Open worker ${task.ticket || task.id}: ${title}`}
+        aria-label={`Open worker ${assignment.ticket || task.id}: ${title}`}
         className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5">
@@ -64,7 +97,7 @@ function WorkerCard({
             className="truncate text-[11px] font-medium text-muted-foreground"
             title={task.id}
           >
-            {task.ticket || task.id}
+            {assignment.ticket || task.id}
           </span>
           <WorkerStatus task={task} />
         </div>
@@ -74,6 +107,11 @@ function WorkerCard({
         >
           {title}
         </h3>
+        {queued > 0 && (
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {queued} follow-up{queued === 1 ? "" : "s"} queued
+          </p>
+        )}
         {!compact && (
           <p
             className="mt-1 min-h-5 line-clamp-1 break-words text-xs leading-5 text-muted-foreground"
@@ -122,12 +160,12 @@ export function WorkerAttention({
   onRetry,
   compact = false,
 }: {
-  view: OrchestrationState;
+  view: ManagerProps["manager"]["orchestration"];
   onSelect: (id: string) => void;
   onRetry?: () => void;
   compact?: boolean;
 }) {
-  const tasks = view.tasks || [],
+  const tasks = workspaceWorkers(view.tasks || []),
     groups = groupWorkers(tasks);
   const [now, setNow] = useState(Date.now()),
     [filter, setFilter] = useState("all");

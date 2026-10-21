@@ -1,3 +1,5 @@
+import { managerProfileSnapshot } from "../manager-profile.mjs";
+import type { createEnvironmentSettings } from "../environment-settings.mjs";
 import type { PromptSettings } from "../shared/prompts.mjs";
 import type { LoadedProject } from "../config/contracts.mjs";
 import type { createManagerLifecycle } from "../manager-lifecycle.mjs";
@@ -7,12 +9,14 @@ interface SettingsContext {
   manager: Awaited<ReturnType<typeof createManagerLifecycle>>;
   managerProfile: ReturnType<typeof createManagerProfile>;
   project: LoadedProject;
+  environmentSettings: Awaited<ReturnType<typeof createEnvironmentSettings>>;
 }
 export function createSettingsView({
   prompts,
   manager,
   managerProfile,
   project,
+  environmentSettings,
 }: SettingsContext) {
   return async () => {
     const saved = await prompts.read(),
@@ -21,15 +25,17 @@ export function createSettingsView({
     return {
       projectId: project.id,
       projectName: project.name,
+      workerEnvironment: await environmentSettings.read(),
       managerProfile: profile,
       managerLifecycle: lifecycle,
       manager: {
+        savedBehaviorVersion: managerProfileSnapshot(saved.manager.text,profile).version,
         saved: { text: saved.manager.text, version: saved.manager.version },
         defaultText: saved.manager.defaultText,
         activeVersion: lifecycle.activeVersion,
         retainedVersion: lifecycle.retainedVersion,
         pendingRestart:
-          saved.manager.version !==
+          managerProfileSnapshot(saved.manager.text,profile).version !==
           (lifecycle.activeVersion || lifecycle.retainedVersion),
       },
       worker: {

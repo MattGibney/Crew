@@ -8,6 +8,7 @@ export interface ConversationMessage {
   phase?: string | null;
   source?: string;
   presentation?: string;
+  origin?: string;
   status?: MessageStatus;
   position?: number;
   promotionId?: string;

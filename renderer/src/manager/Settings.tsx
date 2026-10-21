@@ -17,6 +17,11 @@ import { ManagerLifecycle } from "./settings/ManagerLifecycle.js";
 import { PromptEditor } from "./settings/PromptEditor.js";
 export { ManagerLifecycle } from "./settings/ManagerLifecycle.js";
 
+import { Archive } from "lucide-react";
+import { ArchivedWorkers } from "./settings/ArchivedWorkers.js";
+import { ManagerIdentity } from "./settings/ManagerIdentity.js";
+import { ManagerPersonality } from "./settings/ManagerPersonality.js";
+import { WorkerEnvironment } from "./WorkerEnvironment.js";
 export function Settings({ manager }: ManagerProps) {
   const [page, setPage] = useState("sessions");
   const workspace = useWorkspaceSettings();
@@ -46,6 +51,13 @@ export function Settings({ manager }: ManagerProps) {
       description: "Manage the details for this project.",
     },
     {
+      id: "archive",
+      label: "Archived workers",
+      icon: Archive,
+      description:
+        "Past workers whose teardown is complete. Restore a worker or permanently delete its saved Crew history.",
+    },
+    {
       id: "sessions",
       label: "Sessions",
       icon: Radio,
@@ -55,16 +67,24 @@ export function Settings({ manager }: ManagerProps) {
       id: "manager",
       label: "Manager profile",
       icon: UserRound,
-      description: "Configure your manager’s voice and instructions.",
+      description:
+        "Customize your AI manager’s name, picture, personality, voice and instructions.",
+    },
+    {
+      id: "environment",
+      label: "Worker environment",
+      icon: SlidersHorizontal,
+      description: "Manage lifecycle commands used in worker worktrees.",
     },
     {
       id: "worker",
       label: "Worker profile",
       icon: Users,
-      description: "Set the instructions for newly launched workers.",
+      description:
+        "Set the instructions used for worker directions and launches.",
     },
   ];
-  const current = pages.find((item) => item.id === page) || pages[0];
+  const current = pages.find((item) => item.id === page);
   return (
     <section
       ref={content}
@@ -131,10 +151,10 @@ export function Settings({ manager }: ManagerProps) {
                   "This project"}
             </p>
             <h2 className="text-2xl font-semibold tracking-tight">
-              {current.label}
+              {current?.label}
             </h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              {current.description}
+              {current?.description}
             </p>
           </div>
           <div hidden={page !== "global"} aria-label="Global settings">
@@ -164,6 +184,16 @@ export function Settings({ manager }: ManagerProps) {
               </AlertDescription>
             </Alert>
           )}
+          {page === "archive" && (
+            <ArchivedWorkers
+              key={
+                manager.settings?.projectId ||
+                manager.projectInfo?.id ||
+                "loading"
+              }
+              manager={manager}
+            />
+          )}
           <div hidden={page !== "sessions"} aria-label="Session settings">
             <section
               aria-labelledby="manager-lifecycle-heading"
@@ -180,11 +210,15 @@ export function Settings({ manager }: ManagerProps) {
             aria-label="Manager profile settings"
             className="space-y-12"
           >
-            <ManagerProfile
-              key={manager.settings?.projectId || "loading"}
-              manager={manager}
-              onNotify={notify}
-            />
+            <div key={manager.settings?.projectId || "loading"}>
+              <ManagerIdentity manager={manager} onNotify={notify} />
+              <ManagerPersonality manager={manager} onNotify={notify} />
+              <ManagerProfile
+                key={manager.settings?.projectId || "loading"}
+                manager={manager}
+                onNotify={notify}
+              />
+            </div>
             {manager.settings ? (
               <PromptEditor
                 key={`${manager.settings.projectId}:manager`}
@@ -198,6 +232,16 @@ export function Settings({ manager }: ManagerProps) {
                 Loading manager instructions…
               </p>
             )}
+          </div>
+          <div
+            hidden={page !== "environment"}
+            aria-label="Worker environment settings"
+          >
+            <WorkerEnvironment
+              key={manager.settings?.projectId || "loading"}
+              manager={manager}
+              onNotify={notify}
+            />
           </div>
           <div hidden={page !== "worker"} aria-label="Worker profile settings">
             {manager.settings ? (

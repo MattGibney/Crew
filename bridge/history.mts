@@ -196,4 +196,5 @@ export async function hydrateHistory({
       timeline.resumeTurn(turn.id, savedMessages);
     } else markCompleted(turn.id);
   }
+  timeline.restoreProvenance(savedMessages);
 }

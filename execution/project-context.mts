@@ -7,6 +7,8 @@ import type {
 } from "./contracts.mjs";
 import type { ProcessSnapshot } from "../process-ownership.mjs";
 export interface EnvironmentContext {
+  plan?: ExecutionPlan | null;
+  setupRetry?: import("./contracts.mjs").SetupRetry | null;
   worktree?: string;
   repositoryPath?: string;
   baseCommit?: string;

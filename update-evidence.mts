@@ -59,16 +59,20 @@ export async function inspectUpdateEvidence({
       throw new Error("Evidence unavailable");
     };
   }
-  async function worker(task: TaskActivity): Promise<ProcessVerdict> {
+  async function workerRun(
+    task: TaskActivity,
+    runId: string | null | undefined,
+    current: boolean,
+  ): Promise<ProcessVerdict> {
     if (!(rows instanceof Map)) return "unknown";
-    const unstarted = !task.harnessStarted && !task.spawnIntentAt;
-    if (!uuid(task.runId))
+    const unstarted = current && !task.harnessStarted && !task.spawnIntentAt;
+    if (!uuid(runId))
       return unstarted && !task.runDir && task.execution?.live !== true
         ? "absent"
         : "unknown";
-    const expected = path.resolve(stateDir, "runs", task.id, task.runId);
-    if (!sameDirectory(task.runDir, expected)) return "unknown";
-    const location = ["runs", task.id, task.runId];
+    const expected = path.resolve(stateDir, "runs", task.id, runId);
+    if (current && !sameDirectory(task.runDir, expected)) return "unknown";
+    const location = ["runs", task.id, runId];
     const [owner, started, ownership, exit] = await Promise.all(
       ["owner.json", "started.json", "ownership.json", "exit.json"].map(
         (name) => json(...location, name),
@@ -76,7 +80,7 @@ export async function inspectUpdateEvidence({
     );
     if (
       [owner, started, ownership, exit].some(
-        (item) => item && item.runId !== task.runId,
+        (item) => item && item.runId !== runId,
       )
     )
       return "unknown";
@@ -93,11 +97,17 @@ export async function inspectUpdateEvidence({
       ...evidenceList(ownership?.records),
       ...evidenceList(evidenceObject(exit?.ownership).tracked),
     ];
+    const exitOwnership = evidenceObject(exit?.ownership);
+    const closed = exit?.connectionClosed === true;
+    // Connection closure leaves agent-started services alone. Re-observe their
+    // captured identities; a historical remaining list is not permanent liveness.
+    if (closed) records.push(...evidenceList(exitOwnership.remaining));
     if (owner?.supervisorIdentity) records.push(owner.supervisorIdentity);
     else if (started?.identity) records.push(started.identity);
     // Legacy started.json has only a PID: a live process with no captured
     // identity is uncertain, never grounds for claiming it stopped.
-    const pid = owner?.supervisorPid || started?.pid || task.runnerPid;
+    const pid =
+      owner?.supervisorPid || started?.pid || (current ? task.runnerPid : null);
     const uncaptured =
       typeof pid === "number" &&
       Number.isSafeInteger(pid) &&
@@ -105,12 +115,59 @@ export async function inspectUpdateEvidence({
       !records.some((record) => evidenceObject(record).pid === pid);
     return verdict({
       records,
-      terminal: exit?.stopConfirmed === true,
+      terminal: closed || exit?.stopConfirmed === true,
       processes: rows,
       contradictory:
         uncaptured ||
-        Boolean(evidenceList(evidenceObject(exit?.ownership).remaining).length),
+        (closed &&
+          exit?.stopConfirmed !== true &&
+          !(
+            evidenceList(ownership?.records).length +
+            evidenceList(exitOwnership.tracked).length +
+            evidenceList(exitOwnership.remaining).length
+          )) ||
+        (!closed && Boolean(evidenceList(exitOwnership.remaining).length)),
     });
+  }
+  async function worker(task: TaskActivity): Promise<ProcessVerdict> {
+    if (!(rows instanceof Map)) return "unknown";
+    let current: ProcessVerdict;
+    try {
+      current = await workerRun(task, task.runId, true);
+    } catch {
+      current = "unknown";
+    }
+    if (task.retainedResourceRuns === undefined) return current;
+    if (
+      !Array.isArray(task.retainedResourceRuns) ||
+      task.retainedResourceRuns.length > 256
+    )
+      return current === "live" ? "live" : "unknown";
+    const states: ProcessVerdict[] = [current],
+      seen = new Set([task.runId]);
+    for (const raw of task.retainedResourceRuns) {
+      let retained: Record<string, unknown>;
+      try {
+        retained = evidenceObject(raw);
+      } catch {
+        states.push("unknown");
+        continue;
+      }
+      if (!uuid(retained.runId)) {
+        states.push("unknown");
+        continue;
+      }
+      if (seen.has(retained.runId)) continue;
+      seen.add(retained.runId);
+      try {
+        states.push(await workerRun(task, retained.runId, false));
+      } catch {
+        states.push("unknown");
+      }
+    }
+    if (states.includes("live")) return "live";
+    if (states.includes("unknown")) return "unknown";
+    return states.includes("stopped") ? "stopped" : "absent";
   }
   async function environment(
     task: TaskActivity,

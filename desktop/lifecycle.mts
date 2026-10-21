@@ -1,10 +1,13 @@
 // Pure desktop lifecycle rules, shared with focused tests.
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
+import { activeTasks } from "../worker-archive.mjs";
 export interface TaskSummaryInput {
   error?: unknown;
   tasks?: Array<{
     status: string;
+    execution?: { live?: boolean } | null;
+    lifecycleRequests?: Array<{ status: string }>;
     attention?: Array<{ ackedAt?: string | null }>;
   }>;
 }
@@ -29,8 +32,9 @@ export function summarizeTasks(
 ): TaskCounts {
   if (!view || view.error || !Array.isArray(view.tasks))
     return { active: null, pending: null };
+  const tasks = activeTasks(view.tasks);
   return {
-    active: view.tasks.filter(
+    active: tasks.filter(
       (task) =>
         ![
           "completed",
@@ -42,7 +46,7 @@ export function summarizeTasks(
           "disposed",
         ].includes(task.status),
     ).length,
-    pending: view.tasks.reduce(
+    pending: tasks.reduce(
       (count, task) =>
         count + (task.attention || []).filter((item) => !item.ackedAt).length,
       0,
