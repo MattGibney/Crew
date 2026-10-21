@@ -6,7 +6,7 @@ The Electron desktop window uses the existing web voice interface. Its separate 
 
 ## Install on your Mac
 
-The desktop build is **Apple Silicon, macOS 13 or later**. Open the versioned DMG from `dist/desktop`, drag **Crew.app** into Applications, and launch it. This development release is unsigned and unnotarized; macOS may require explicit approval in Privacy & Security. It is not a signed public release.
+The desktop build is **Apple Silicon, macOS 13 or later**. Open the versioned DMG from `dist/desktop`, drag **Crew.app** into Applications, and launch it. Public GitHub releases are Developer ID signed and notarized. Local candidate builds are unsigned and are kept separate from production update feeds.
 
 Electron includes Chromium and the Node runtime. The Mac still needs **Git**, a compatible **Codex CLI**, ChatGPT sign-in and the intended Linear MCP connection. The realtime baseline tested in the earlier local application was Codex CLI `0.163.0-alpha.10.2`; experimental methods may change. Do not copy credentials from another machine or configure API-key fallback.
 
@@ -22,7 +22,7 @@ First launch creates editable files under:
 
 First-run setup guides local tools, ChatGPT sign-in, automatic project-folder setup, permissions and readiness. Use **Set up Crew…** in the app or menu-bar menu to return. Existing configured chats continue normally. **Edit project configuration…** and **Open configuration folder** retain direct file access. Choose your project folder and select Set up this project. Crew saves the actual folder, an available starting branch and source-grounded context, then offers real Linear team/project names. Technical settings stay optional under Advanced. Choose an unused port if another instance already uses 4317. Guided saves restart only an idle controller; external file edits need Quit and reopen. Active tasks and connecting/active voice block guided apply. See [Mac installation and operations](docs/MACOS.md) and [configuration](docs/CONFIGURATION.md).
 
-Type to your manager or choose **Connect voice**. Connecting keeps the microphone off. Hold the Push to talk button (or Space outside text fields), or choose Open microphone and explicitly Start microphone. Release/Stop ends input; End call releases the complete voice session. End other calls first. Closing the window also ends voice while leaving the controller running. **Quit this instance…** is separate: its confirmation shows active work, stops that controller, and leaves already dispatched worker supervisors alone. Reopen the instance to collect their reports. The app neither launches at login nor keeps a sleeping Mac awake.
+Type to your manager or choose **Connect voice**. Open microphone is the default: Connect starts the call and microphone once connected and permission allows. Input stays active when switching apps until you mute or end the call. Explicit mute is preserved on reconnect. Alternatively choose Push to talk and hold its button (or Space outside text fields); release or focus loss stops PTT input; End call releases the complete voice session. End other calls first. Closing the window also ends voice while leaving the controller running. **Quit this instance…** is separate: its confirmation shows active work, stops that controller, and leaves already dispatched worker supervisors alone. Reopen the instance to collect their reports. The app neither launches at login nor keeps a sleeping Mac awake.
 
 ## First work session
 
@@ -53,7 +53,7 @@ npm run desktop:dev
 npm run desktop:build:mac
 ```
 
-Build on an Apple Silicon Mac. Output is a versioned `.app`, DMG, ZIP and `SHA256SUMS.txt` under `dist/desktop`. The reproducible lockfile and stable app identifier prepare future releases; no automatic update feed, updater or signing/notarization credentials are configured. Updates currently mean quitting the instance, replacing the app, and reopening with the same external configuration and state.
+Build on an Apple Silicon Mac. Output is a versioned `.app`, DMG, ZIP and `SHA256SUMS.txt` under `dist/desktop`. The deliberate GitHub workflow builds signed/notarized public releases with a complete native update feed. Local builds default to unsigned candidates. See [release setup](docs/RELEASES.md) and [updates](docs/UPDATES.md); existing unsigned installations need one manual installation of a signed release.
 
 The source-only command-line workflow remains available with Node.js 22+:
 

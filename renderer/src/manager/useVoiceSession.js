@@ -7,7 +7,9 @@ import { createSilentAudio } from './voice-silence.js';
 export function useVoiceSession(onError) {
   const audioRef = useRef(null);
   const resource = useRef({ generation: 0, pc: null, stream: null, channel: null, busy: false, disconnecting: false });
-  const [mode, setMode] = useState('push-to-talk');
+  const [mode, setMode] = useState('open-mic');
+  // User mute intent survives call teardown; track availability is not intent.
+  const openMicWanted = useRef(true);
   const [view, setView] = useState({ busy: false, allocated: false, active: false, disconnecting: false, muted: true, transmitting: false, inputPending: false, inputError: '', activity: 'ready', status: 'Ready when you are. Microphone off.' });
   const onErrorRef = useRef(onError); onErrorRef.current = onError;
   const patch = useCallback(value => setView(previous => ({ ...previous, ...value })), []);
@@ -46,11 +48,12 @@ export function useVoiceSession(onError) {
   }, [release, patch]);
   useEffect(() => () => { dispose(); }, [dispose]);
   useEffect(() => {
-    const hidden = () => { if (document.visibilityState === 'hidden') stopInput(); };
-    window.addEventListener('blur', stopInput);
+    const loseFocus = () => { if (mode === 'push-to-talk') stopInput(); };
+    const hidden = () => { if (document.visibilityState === 'hidden') loseFocus(); };
+    window.addEventListener('blur', loseFocus);
     document.addEventListener('visibilitychange', hidden);
-    return () => { window.removeEventListener('blur', stopInput); document.removeEventListener('visibilitychange', hidden); };
-  }, [stopInput]);
+    return () => { window.removeEventListener('blur', loseFocus); document.removeEventListener('visibilitychange', hidden); };
+  }, [mode, stopInput]);
   const changeMode = useCallback(value => {
     if (resource.current.pc || resource.current.busy || !['open-mic', 'push-to-talk'].includes(value)) return;
     stopInput(); setMode(value);
@@ -78,18 +81,18 @@ export function useVoiceSession(onError) {
     if (state.busy || state.disconnecting || state.pc || !selectedVoice) return;
     state.busy = true; state.playbackError = null;
     const attempt = ++state.generation;
-    patch({ busy: true, inputError: '', status: 'Connecting voice. Microphone stays off…' });
+    patch({ busy: true, inputError: '', status: mode === 'open-mic' && openMicWanted.current ? 'Connecting voice and microphone…' : 'Connecting voice. Microphone muted…' });
     try {
       // Start a real audio transport with locally generated silence, not a mic.
       // A trackless offer connects but native voice may wait for incoming RTP.
-      // Only a later explicit Start or held push-to-talk gesture attaches input.
+      // Connect authorizes open-mic capture after connection; PTT waits for a hold.
       const connection = new RTCPeerConnection(); state.pc = connection;
       state.silence = createSilentAudio();
       state.sender = connection.addTransceiver(state.silence.track, { direction: 'sendrecv', streams: [state.silence.stream] }).sender;
       patch({ allocated: true });
       await state.silence.ready;
       if (attempt !== state.generation || state.pc !== connection) return;
-      let sessionToken, greetingRequested = false;
+      let sessionToken, greetingRequested = false, inputAttempted = false;
       const current = () => state.pc === connection && state.generation === attempt;
       const reportAudioStatus = async () => {
         if (!current() || !sessionToken) return;
@@ -121,7 +124,13 @@ export function useVoiceSession(onError) {
         if (!current()) return;
         if (connection.connectionState === 'connected') {
           clearTimeout(state.timer); state.busy = false;
-          patch({ active: true, busy: false, status: 'Connected. Microphone off until you choose to speak.' });
+          patch({ active: true, busy: false, status: 'Connected.' });
+          // One attempt per call. Repeated transport events cannot retry permission,
+          // override a mute, or recapture a disconnected device.
+          if (!inputAttempted) {
+            inputAttempted = true;
+            if (mode === 'open-mic' && openMicWanted.current) startInput();
+          }
           if (!greetingRequested && sessionToken) {
             greetingRequested = true;
             state.diagnosticsTimer = setInterval(() => void reportAudioStatus(), 2000);
@@ -149,9 +158,10 @@ export function useVoiceSession(onError) {
     } catch (error) {
       if (attempt === state.generation) { reportError(error); await disconnect('Could not connect. Microphone off.'); }
     }
-  }, [patch, disconnect, reportError]);
+  }, [mode, patch, disconnect, reportError, startInput]);
   const toggleMute = useCallback(() => {
-    if (input.current.stream || input.current.pending) stopInput(); else startInput();
+    if (input.current.stream || input.current.pending) { openMicWanted.current = false; stopInput(); }
+    else { openMicWanted.current = true; startInput(); }
   }, [startInput, stopInput]);
-  return { ...view, mode, changeMode, startInput, stopInput, audioRef, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
+  return { ...view, mode, openMicMuted: !openMicWanted.current, changeMode, startInput, stopInput, audioRef, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
 }

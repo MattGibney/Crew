@@ -15,7 +15,7 @@ The Electron package supplies Chromium and Node; Node need not be installed sepa
 ## Install and configure
 
 1. Open `Crew-0.7.0-arm64.dmg` and drag the app to Applications. ZIP is an alternative distribution of the same app.
-2. Launch **Crew**. This build is unsigned and unnotarized. If macOS blocks it, use its explicit **Open Anyway** approval in System Settings → Privacy & Security after checking the artifact's source and checksum. Do not disable Gatekeeper globally.
+2. Launch **Crew**. Public releases are signed and notarized. Local candidate builds remain unsigned; verify their source and checksum and use macOS explicit approval only when intentionally testing a candidate. Do not disable Gatekeeper globally.
 3. First launch creates an incomplete project template at `~/Library/Application Support/Crew/instances/default/project.json`, plus editable `prompts/manager.md` and `prompts/worker.md`. Existing files are not overwritten. No worker starts automatically.
 4. Follow the guided setup, or use **Set up Crew…** from the app/menu-bar menu. The configuration form, optional project-folder analysis and direct file actions edit those same files. Confirm the project context/components, repository paths, existing committed base refs and Linear identifiers. The historical template name is a compatibility alias, not the configured project identity. See [configuration reference](CONFIGURATION.md).
 5. Set a free `runtime.port` and a private, instance-specific `runtime.dataDir`. Relative state and prompt paths resolve against the config file's directory. Another process on 4317 is not stopped or adopted automatically.
@@ -76,7 +76,7 @@ env ELECTRON_RUN_AS_NODE=1 "$app/MacOS/Crew" "$app/Resources/app/cli.mjs" doctor
 
 ## Updating and acceptance
 
-Current updates are manual: quit the instance, replace the app in Applications, and reopen using the same external config path. Keep configuration and state outside the app bundle. No auto-updater/feed or cloud publishing is enabled. This release has neither Developer ID signing nor Apple notarization; future public distribution requires those release steps. Build metadata and SHA256 checksums support repeatable versioned artifacts, not a claim that signed updates already work.
+Signed public releases use the GitHub native update feed: check and download through Updates, then explicitly restart when work is safely stopped. Normal Quit does not install an update. The signed 0.9.0 → 0.9.1 native upgrade is verified; see [release acceptance](RELEASES.md#signed-release-acceptance). Existing unsigned builds need one manual signed installation after stopping work and closing instances. Keep configuration and state outside the app bundle.
 
 Before business edits, verify on the destination Mac: manager preparation; audible greeting, response and interruption; harmless scoped Linear read; bounded read-only worker using an isolated worktree; close-window continuation; pending question and manager-only answer; reopen and review verified completion. User speech and device audio must be checked by a person. Prior browser/Node acceptance does not automatically establish Electron microphone or lifecycle acceptance. Keep screenshots outside the repository.
 

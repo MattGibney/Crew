@@ -36,7 +36,7 @@ Explicit Quit asks the user, states active or unavailable task status, authentic
 
 Instance identity derives from the absolute config path. Each instance has its own Electron userData directory/Chromium partition in addition to its configured durable state and local port. The renderer has no Node integration or preload bridge; sandbox and context isolation are enabled. Media permission is restricted to audio from that instance's exact loopback origin. Navigation, downloads and new renderer windows are restricted. Opening the app never requests a microphone.
 
-Electron includes Chromium and Node; Codex, Git, ChatGPT login and the intended MCP connections remain external prerequisites. Node-mode child execution is carried through to the task-bound MCP helper. Distribution resources are allowlisted and contain code/templates/docs, never instance config, credentials, task state or worktrees. The current release is unsigned arm64 for macOS 13+; signing, notarization and a trusted update channel are separate release work.
+Electron includes Chromium and Node; Codex, Git, ChatGPT login and the intended MCP connections remain external prerequisites. Node-mode child execution is carried through to the task-bound MCP helper. Distribution resources are allowlisted and contain code/templates/docs, never instance config, credentials, task state or worktrees. Public arm64 releases for macOS 13+ are Developer ID signed and notarized, with a verified GitHub native update channel. Local candidates remain unsigned and cannot publish a stable feed.
 
 
 ## Guided setup and discovery (AI-008)
