@@ -60,8 +60,8 @@ export function useCrewManager() {
     } catch (failure) { setCatalog(null); setVoiceNotice(`Could not load Codex voices: ${errorText(failure)} Retry before connecting.`); }
     finally { setVoiceLoading(false); }
   }, []);
-  const saveManagerProfile = useCallback(async (voiceId, expectedVersion) => {
-    const result = await api('settings/manager-profile', { voice: voiceId, expectedVersion }, { method: 'PUT' });
+  const saveManagerProfile = useCallback(async (patch, expectedVersion) => {
+    const result = await api('settings/manager-profile', { ...(patch && typeof patch === 'object' ? patch : { voice: patch }), expectedVersion }, { method: 'PUT' });
     setSettings(result);
     if (catalog) setSelectedVoice(chooseVoice(catalog, result.managerProfile.voice));
     setVoiceNotice('');
@@ -80,7 +80,7 @@ export function useCrewManager() {
         if (message.type === 'work-state') { setWork(message.state); if (message.state.managerLifecycle) setManagerLifecycle(message.state.managerLifecycle); }
         if (message.type === 'manager-lifecycle') {
           setManagerLifecycle(message.state);
-          if ('activeVersion' in message.state) setSettings(previous => previous ? ({ ...previous, manager: { ...previous.manager, activeVersion: message.state.activeVersion, retainedVersion: message.state.retainedVersion, pendingRestart: previous.manager.saved.version !== (message.state.activeVersion || message.state.retainedVersion) } }) : previous);
+          if ('activeVersion' in message.state) setSettings(previous => previous ? ({ ...previous, manager: { ...previous.manager, activeVersion: message.state.activeVersion, retainedVersion: message.state.retainedVersion, pendingRestart: (previous.manager.savedBehaviorVersion || previous.manager.saved.version) !== (message.state.activeVersion || message.state.retainedVersion) } }) : previous);
           if (message.state.state !== 'running') voice.dispose();
         }
         if(message.type==='update-plan-state')setUpdates(previous=>({...previous,plan:message.plan}));
@@ -167,6 +167,10 @@ export function useCrewManager() {
     await api('settings/prompts', { role, text, expectedVersion }, { method: 'PUT' });
     return await loadSettings();
   }, [loadSettings]);
+  const saveWorkerEnvironment = useCallback(async (environment, expectedRevision) => {
+    const result = await api('settings/worker-environment', { environment, expectedRevision }, { method: 'PUT' });
+    setSettings(result); return result;
+  }, []);
   const changeManagerLifecycle = useCallback(async action => {
     if (lifecycleLock.current) return;
     lifecycleLock.current = true;
@@ -185,5 +189,5 @@ export function useCrewManager() {
       throw failure;
     } finally { lifecycleLock.current = false; }
   }, [loadSettings, loadVoices, voice.dispose, voice.disconnect]);
-  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, saveManagerProfile, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
+  return { settings, settingsError, loadSettings, savePrompt, saveWorkerEnvironment, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, saveManagerProfile, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
 }

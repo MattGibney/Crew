@@ -56,3 +56,113 @@ test('missing worktree retirement is honest history and review requests never au
  const request=workerRecoveryReviewRequest(worker({status:'failed',worktree:'/fixture/worker'}));assert.match(request,/"taskId":"task-example"/);assert.match(request,/"expectedRunId":"run-one"/);assert.match(request,/review only/);assert.match(request,/explicitly approve/);
  assert.throws(()=>workerRecoveryReviewRequest(worker({status:'running',worktree:'/fixture/worker'})));
 });
+
+test('follow-up cards show current assignment, keep pending direction visible and do not reuse an earlier result', async () => {
+  const { currentAssignment, queuedAssignments, workerFollowupRequest, canDiscussFollowup } = await import('./worker-model.js');
+  const task = worker({ worktree: '/retained/worker', result: { message: 'Old research result' }, progress: 'Implementing approved changes', currentAssignmentId: 'implementation', assignments: [
+    { id: 'initial', status: 'completed', ticket: 'GH-42', brief: 'Research only', result: { message: 'Old research result' } },
+    { id: 'implementation', status: 'active', ticket: 'GH-42', brief: 'Implement approved changes' },
+    { id: 'documentation', status: 'queued', ticket: 'GH-42', brief: 'Document approved behavior' },
+  ] });
+  assert.equal(currentAssignment(task).brief, 'Implement approved changes');
+  assert.equal(workerProgress(task), 'Implementing approved changes');
+  assert.deepEqual(queuedAssignments(task).map(item => item.id), ['documentation']);
+  assert.equal(groupWorkers([{ ...task, status: 'completed' }]).active.length, 1);
+  const discussion = workerFollowupRequest(task);
+  assert.match(discussion, /"expectedAssignmentId":"implementation"/);
+  assert.match(discussion, /"expectedRunId":"run-one"/);
+  assert.match(discussion, /does not authorize execution/);
+  assert.match(discussion, /ask me for the new brief and explicit scope authorization/);
+  assert.equal(canDiscussFollowup({ ...task, status: 'disposed' }), false);
+  assert.throws(() => workerFollowupRequest({ ...task, worktree: null }));
+  assert.equal(currentAssignment(worker({})).brief, 'Read-only audit');
+});
+
+test('legacy follow-up selection uses initial identity; held completed follow-ups surface recovery and explicit resume', async () => {
+  const { currentAssignment, workerFollowupRequest } = await import('./worker-model.js');
+  const legacy = worker({ worktree: '/retained/worker', status: 'completed', result: { message: 'Research complete' } });
+  assert.equal(currentAssignment(legacy).id, 'initial');
+  assert.match(workerFollowupRequest(legacy), /"expectedAssignmentId":"initial"/);
+  assert.deepEqual(workerActions(legacy), ['dispose']);
+  const queued = { ...legacy, currentAssignmentId: 'initial', assignments: [
+    { id: 'initial', status: 'completed', result: legacy.result },
+    { id: 'implementation', status: 'queued' },
+  ] };
+  for (const followupWait of ['Waiting for explicit resume after reopening', 'Retained worktree has unreviewed changes', 'Retained worktree is missing; review recovery']) {
+    const task = { ...queued, followupWait };
+    assert.equal(workerProgress(task), followupWait);
+    assert.deepEqual(workerActions(task), ['resume', 'dispose']);
+    assert.match(workerActionRequest(task, 'resume', 'resume-followup-action').text, /"expectedRunId":"run-one"/);
+  }
+  assert.equal(workerProgress({ ...legacy, followupWait: 'Stale wait without a pending assignment' }), 'Research complete');
+  assert.deepEqual(workerActions({ ...queued, lifecycleRequests: [{ status: 'processing' }] }), []);
+  assert.deepEqual(workerActions({ ...queued, execution: { live: true } }), ['pause', 'stop']);
+});
+
+test('archive projections retain unfinished cleanup and history without leaking archive into counts', async () => {
+  const { workspaceWorkers, archivedWorkers, workerSelectionRemoved } = await import('./worker-model.js');
+  const tasks = ['completed', 'paused', 'stopped', 'failed', 'disposed', 'removed'].map(status => worker({ id: status, projectId: 'one', status, worktree: '/retained', attention: [{ id: 'old' }] }));
+  tasks.push(worker({ id: 'pending', status: 'disposed', projectId: 'one', lifecycleRequests: [{ action: 'dispose', status: 'processing' }] }));
+  tasks.push(worker({ id: 'live', status: 'disposed', projectId: 'one', execution: { live: true } }));
+  tasks.push(worker({ id: 'other', status: 'disposed', projectId: 'two', archivedAt: at }));
+  tasks.find(t => t.id === 'disposed').archivedAt = at;
+  const visible = ['completed', 'paused', 'stopped', 'failed', 'pending', 'live'];
+  assert.deepEqual(workspaceWorkers(tasks).map(t => t.id), visible);
+  assert.deepEqual(workspaceWorkers(JSON.parse(JSON.stringify(tasks))).map(t => t.id), visible);
+  assert.deepEqual(archivedWorkers(tasks, 'one').map(t => t.id), ['disposed', 'removed']);
+  assert.deepEqual(archivedWorkers(tasks, null), []);
+  assert.equal(workerSelectionRemoved(tasks, 'disposed'), true);
+  assert.equal(workerSelectionRemoved(tasks, 'completed'), false);
+  assert.equal(workerSelectionRemoved(tasks, 'unknown'), false);
+  assert.equal(groupWorkers(tasks).history.some(t => t.status === 'disposed' && t.id !== 'pending' && t.id !== 'live'), false);
+  assert.deepEqual(workerActions(tasks.find(t => t.id === 'removed')), []);
+  assert.equal(tasks.find(t => t.id === 'disposed').attention.length, 1, 'Historical evidence is not deleted');
+});
+
+
+test('archive preserves authoritative fixture-only legacy scope without exposing foreign history', async () => {
+  const { archivedWorkers } = await import('./worker-model.js');
+  const legacy = { id: 'legacy', status: 'disposed' };
+  const foreign = { id: 'foreign', status: 'disposed', projectId: 'other' };
+  assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'fixture'), [legacy]);
+  assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'repository'), []);
+});
+
+test('history-only restore is visible and offers no runnable resume or invented environment readiness', () => {
+  const restored = worker({ status: 'blocked', worktree: '/removed', archiveRestoration: { requiresRecovery: true }, failure: 'Restore did not recreate the environment.' });
+  assert.equal(workerStatus(restored), 'History restored');
+  assert.deepEqual(workerActions(restored), ['dispose']);
+  assert.equal(workerProgress(restored), 'Restore did not recreate the environment.');
+  assert.deepEqual(workerActions({ ...restored, execution: { live: true } }), ['pause', 'stop']);
+});
+
+
+test('history-only restored workers cannot discuss follow-ups or offer retained-worktree recovery', async () => {
+  const { canDiscussFollowup, workerFollowupRequest, workerRecoveryReviewRequest } = await import('./worker-model.js');
+  const restored = worker({ status: 'blocked', worktree: '/removed', archiveRestoration: { requiresRecovery: true }, assignments: [{ id: 'queued', status: 'queued' }] });
+  assert.equal(canDiscussFollowup(restored), false);
+  assert.throws(() => workerFollowupRequest(restored), /no retained worktree available/);
+  assert.throws(() => workerRecoveryReviewRequest(restored), /not available/);
+  assert.deepEqual(workerActions(restored), ['dispose']);
+});
+
+test('failed setup offers an explicit manager-mediated retry without replacing ordinary resume',()=>{
+ const task=worker({status:'failed',environment:{kind:'project-execution',setupAttempted:true,prepared:false,hooks:[{phase:'setup',status:'failed'}]}});
+ assert.deepEqual(workerActions(task),['retry_setup','resume','dispose']);
+ const request=workerActionRequest(task,'retry_setup','setup-retry-action');assert.match(request.text,/"action":"retry_setup"/);assert.match(request.text,/explicitly authorizes rerunning the failed incomplete Setup/);
+ assert.ok(!workerActions({...task,environment:{...task.environment,prepared:true}}).includes('retry_setup'));
+});
+
+test('failed argv bootstrap exposes explicit setup retry while completed bootstrap does not',()=>{
+ const task=worker({status:'failed',environment:{hooks:[{phase:'bootstrap',status:'failed'}]}});assert.ok(workerActions(task).includes('retry_setup'));
+ task.environment.hooks.push({phase:'bootstrap',status:'succeeded'});assert.ok(!workerActions(task).includes('retry_setup'));
+});
+
+
+test('history-only restoration blocks setup retry even when failed setup and queued assignments remain in evidence', () => {
+  const task = worker({ status: 'failed', archiveRestoration: { requiresRecovery: true }, assignments: [{ id: 'queued', status: 'queued' }], environment: { kind: 'project-execution', setupAttempted: true, prepared: false, hooks: [{ phase: 'setup', status: 'failed' }] } });
+  assert.deepEqual(workerActions(task), ['dispose']);
+  assert.match(workerProgress({ ...task, failure: 'History restored; environment recovery is unavailable.', followupWait: 'Waiting to start the next assignment.' }), /History restored/);
+  assert.throws(() => workerActionRequest(task, 'retry_setup', 'restored-retry'));
+  assert.deepEqual(workerActions({ ...task, execution: { live: true } }), ['pause', 'stop']);
+});

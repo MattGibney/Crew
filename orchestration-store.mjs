@@ -2,9 +2,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
+import { inspectUpdateEvidence } from './update-evidence.mjs';
+import { isArchivedTask } from './worker-archive.mjs';
 import { promptSnapshot } from './prompt-settings.mjs';
 
-const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose', 'reconcile_plan', 'retire_missing']);
+const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'retry_setup', 'dispose', 'archive', 'reconcile_plan', 'retire_missing']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(['progress', 'question', 'result', 'blocked']);
@@ -21,6 +23,74 @@ function identifier(value, name = 'task ID') {
   return value;
 }
 const taskPath = (dir, id) => path.join(dir, 'tasks', `${identifier(id)}.json`);
+const ASSIGNMENT_STATES = new Set(['queued', 'active', 'completed', 'stopped', 'failed']);
+function assignmentStatus(status) {
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  if (['stopped', 'paused', 'disposed'].includes(status)) return 'stopped';
+  if (status === 'queued') return 'queued';
+  return 'active';
+}
+// Legacy tasks remain readable without rewriting their retained state.
+export function currentAssignment(task) {
+  return task.assignments?.find(item => item.id === task.currentAssignmentId) || {
+    id: 'initial', ticket: task.ticket, brief: task.brief, userDecision: null,
+    status: assignmentStatus(task.status), createdAt: task.createdAt,
+    runIds: [...new Set([...(task.history||[]).map(item=>item.runId),...(task.reports||[]).map(item=>item.runId),task.runId].filter(id=>typeof id==='string'&&id.trim()))],
+    ...(task.result ? { result: structuredClone(task.result) } : {}),
+    ...(task.status === 'completed' ? { endedAt: task.completedAt || task.endedAt || task.updatedAt } : {}),
+  };
+}
+export function ensureAssignments(task) {
+  if (!task.assignments) {
+    task.assignments = [currentAssignment(task)];
+    task.currentAssignmentId = 'initial';
+  }
+  return task.assignments;
+}
+function synchronizeAssignment(task, previous) {
+  if (!task.assignments) return;
+  const assignment = task.assignments.find(item => item.id === task.currentAssignmentId);
+  if (!assignment || assignment.status === 'completed') return;
+  assignment.status = assignmentStatus(task.status);
+  if(['active','queued'].includes(assignment.status))delete assignment.endedAt;
+  if (task.runId && (task.runId !== previous.runId || task.currentAssignmentId === previous.currentAssignmentId) && !task.assignments.some(other => other.id !== assignment.id && other.runIds.includes(task.runId)) && !assignment.runIds.includes(task.runId)) assignment.runIds.push(task.runId);
+  if (assignment.status === 'completed') {
+    if (task.result) assignment.result = structuredClone(task.result);
+    assignment.endedAt = task.completedAt || task.endedAt || now();
+  }
+}
+function validateAssignments(task) {
+  if (task.assignments === undefined && task.currentAssignmentId === undefined) return;
+  if (!Array.isArray(task.assignments) || !task.assignments.length
+      || !task.assignments.some(item => item.id === task.currentAssignmentId)) throw new Error('Malformed assignment history');
+  const ids = new Set();
+  for (const item of task.assignments) {
+    if (!item || (item.id !== 'initial' && !ID.test(item.id)) || ids.has(item.id)
+        || !ASSIGNMENT_STATES.has(item.status) || !Number.isFinite(Date.parse(item.createdAt))
+        || !Array.isArray(item.runIds) || new Set(item.runIds).size !== item.runIds.length
+        || item.runIds.some(id => typeof id !== 'string' || !id.trim())
+        || (item.endedAt !== undefined && !Number.isFinite(Date.parse(item.endedAt)))) throw new Error('Malformed assignment history');
+    if (item.reviewedWorktreeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(item.reviewedWorktreeFingerprint)) throw new Error('Malformed reviewed worktree fingerprint');
+    if (item.adoptions !== undefined && (!Array.isArray(item.adoptions) || new Set(item.adoptions.map(entry => entry?.id)).size !== item.adoptions.length || item.adoptions.some(entry => !entry || !ID.test(entry.id) || !/^[a-f0-9]{64}$/.test(entry.fingerprint || '') || !Number.isFinite(Date.parse(entry.at)) || entry.expectedRunId !== null && (typeof entry.expectedRunId !== 'string' || !entry.expectedRunId.trim())))) throw new Error('Malformed assignment adoption history');
+    for (const adoption of item.adoptions || []) text(adoption.userDecision, 'assignment adoption decision', 4000);
+    text(item.ticket, 'assignment ticket', 120); text(item.brief, 'assignment brief');
+    if (item.id !== 'initial') { identifier(item.id, 'assignment ID'); text(item.userDecision, 'assignment user decision', 4000); }
+    ids.add(item.id);
+  }
+}
+function preserveAssignments(next, previous) {
+  if (!previous.assignments) return;
+  if (!Array.isArray(next.assignments) || next.assignments.length < previous.assignments.length) throw new Error('Assignment history is immutable');
+  for (const [index, before] of previous.assignments.entries()) {
+    const after = next.assignments[index];
+    if (!after || ['id','ticket','brief','userDecision','createdAt','expectedRunId','expectedAssignmentId','reviewedWorktreeFingerprint'].some(key => JSON.stringify(after[key]) !== JSON.stringify(before[key]))) throw new Error('Assignment identity is immutable');
+    if (before.status === 'completed' && JSON.stringify(after) !== JSON.stringify(before)) throw new Error('Completed assignment is immutable');
+    if (JSON.stringify(after.adoptions?.slice(0, (before.adoptions || []).length) || []) !== JSON.stringify(before.adoptions || [])) throw new Error('Assignment adoption history is immutable');
+    if (JSON.stringify(after.runIds?.slice(0, before.runIds.length)) !== JSON.stringify(before.runIds)) throw new Error('Assignment run history is immutable');
+  }
+}
+
 function validate(task, expectedId) {
   if (!task || typeof task !== 'object' || Array.isArray(task) || task.id !== expectedId || !ID.test(task.id)
       || typeof task.ticket !== 'string' || !task.ticket.trim() || task.ticket.length > 120
@@ -34,6 +104,7 @@ function validate(task, expectedId) {
       || !Array.isArray(task.reports) || !Array.isArray(task.attention)
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
+  validateAssignments(task);
   return task;
 }
 async function readUnlocked(dir, id) {
@@ -148,6 +219,8 @@ function recordHistory(task, previous = null) {
     if (!history.some(event => event.id === id)) history.push({ id, actor, kind, message, at: now(), runId: task.runId || null, ...extra });
   };
   if (!previous) add('assignment', 'manager', 'instruction', task.brief, { at: task.createdAt, runId: null });
+  for (const assignment of task.assignments || []) if (assignment.id !== 'initial') add(`assignment:${assignment.id}`, 'manager', 'instruction', assignment.brief, { at: assignment.createdAt, runId: null, assignmentId: assignment.id, ticket: assignment.ticket, userDecision: assignment.userDecision });
+  for (const assignment of task.assignments || []) for (const adoption of assignment.adoptions || []) add(`adoption:${assignment.id}:${adoption.id}`, 'manager', 'instruction', `Authorized preservation and adoption of reviewed worktree changes: ${adoption.userDecision}`, {at:adoption.at,runId:adoption.expectedRunId,assignmentId:assignment.id,worktreeFingerprint:adoption.fingerprint});
   for (const report of task.reports) add(`report:${report.runId}:${report.reportId}`, 'worker', report.kind, report.message, { at: report.at, runId: report.runId, evidence: report.evidence || [] });
   if (task.answer && JSON.stringify(task.answer) !== JSON.stringify(previous?.answer)) add(`answer:${task.answer.questionId}`, 'manager', 'answer', task.answer.text, { at: task.answer.at, questionId: task.answer.questionId });
   for (const request of task.lifecycleRequests || []) {
@@ -163,6 +236,10 @@ async function save(dir, task) {
   // JSON is authoritative; Markdown is a human-readable projection only.
   await atomic(taskPath(dir, task.id), `${JSON.stringify(task, null, 2)}\n`);
   const lines = [`# ${task.id}`, '', `Ticket: ${task.ticket}`, `Status: ${task.status}`, `Revision: ${task.revision}`, '', 'Project: ' + (task.projectId || 'legacy fixture'), 'Repository: ' + (task.repositoryId || 'fixture'), '', '## Agreed brief', '', task.brief, '', '## Reports', ''];
+  if (task.assignments) {
+    lines.push('## Assignments', '');
+    for (const assignment of task.assignments) lines.push(`### ${assignment.ticket} — ${assignment.status} (${assignment.id})`, '', assignment.brief, '', ...(assignment.userDecision ? ['User authorization: ' + assignment.userDecision, ''] : []), ...(assignment.result ? ['Result: ' + assignment.result.message, ''] : []));
+  }
   for (const report of task.reports) lines.push(`### ${report.kind} (${report.at})`, '', report.message, '', ...(report.evidence || []).map(item => `- ${item}`), '');
   if (task.question) lines.push('## Current question', '', task.question.message, '');
   if (task.answer) lines.push('## Answer', '', task.answer.text, '');
@@ -171,17 +248,19 @@ async function save(dir, task) {
   return task;
 }
 export async function readTask(dir, id) { return readUnlocked(dir, identifier(id)); }
-export async function loadTasks(dir) { return loadUnlocked(dir); }
+export async function loadTasks(dir) { return withStateLock(dir, '.schedule.lock', () => loadUnlocked(dir)); }
 export async function createTask(dir, { requestId, ticket, brief, projectId = null, repositoryId = null }) {
   for (const [name, value] of Object.entries({ projectId, repositoryId })) if (value !== null && (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) throw new Error(`Invalid ${name}`);
   identifier(requestId); text(ticket, 'ticket', 120); text(brief, 'brief');
   return withStateLock(dir, '.schedule.lock', async () => {
+    const retired = await fs.readdir(path.join(dir,'archive-actions')).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
     const tasks = await loadUnlocked(dir);
     const existing = tasks.find(task => task.id === requestId);
     if (existing) {
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
+    if(retired.some(name=>name.startsWith(`${requestId}.`)&&name.endsWith('.json')))throw new Error('Task ID is retained by an archive operation; choose a new task ID');
     return withStateLock(dir, `.${requestId}.lock`, () => { const task = { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null, historyVersion: 1, history: [] }; recordHistory(task); return save(dir, task); });
   });
 }
@@ -194,6 +273,8 @@ export async function updateTask(dir, id, fn) {
     const returned = await fn(task);
     const next = returned === undefined ? task : returned;
     if (!next || next.id !== identity.id || next.ticket !== identity.ticket || next.brief !== identity.brief || next.projectId !== identity.projectId || next.repositoryId !== identity.repositoryId || next.createdAt !== identity.createdAt) throw new Error('Task identity is immutable');
+    synchronizeAssignment(next, previous);
+    preserveAssignments(next, previous);
     if (identity.workerPromptSnapshot && JSON.stringify(next.workerPromptSnapshot) !== identity.workerPromptSnapshot) throw new Error('Worker prompt snapshot is immutable');
     if (previous.history && JSON.stringify(next.history?.slice(0, previous.history.length)) !== JSON.stringify(previous.history)) throw new Error('Retained task history is immutable');
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
@@ -216,8 +297,8 @@ export async function reportTask(dir, id, runId, { reportId, kind, message, evid
     }
     if (task.reports.some(report => report.runId === runId && ['question', 'blocked', 'result'].includes(report.kind))) throw new Error('Worker run already yielded or finished; wait for controller resume');
     if (task.status !== 'running') throw new Error('Worker is not running');
-    if (task.reports.length >= 300) throw new Error('Report limit reached');
-    task.reports.push({ reportId, runId, kind, message, evidence, at: now() });
+    if (task.reports.filter(report => report.runId === runId).length >= 300) throw new Error('Report limit reached for this run');
+    task.reports.push({ reportId, runId, assignmentId: currentAssignment(task).id, kind, message, evidence, at: now() });
   });
 }
 export async function answerQuestion(dir, { taskId, questionId, answer }) {
@@ -267,7 +348,7 @@ export async function requestWorkerRecovery(dir, {taskId, actionId, action, expe
 
 export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
-  if (!['stop','pause','resume','start','dispose'].includes(action)) throw new Error('Invalid worker action');
+  if (!['stop','pause','resume','start', 'retry_setup','dispose','archive'].includes(action)) throw new Error('Invalid worker action');
   if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {
@@ -279,7 +360,7 @@ export async function requestWorkerAction(dir, { taskId, actionId, action, expec
       return;
     }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId) throw new Error('Stale worker run for lifecycle action');
-    if (task.status === 'disposed') throw new Error('Worker has been disposed');
+    if (isArchivedTask(task) || ['disposed','removed','archived'].includes(task.status)) throw new Error('Worker has been archived');
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
     requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
@@ -315,6 +396,7 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
   text(updateId, 'note update ID', 160); text(markdown, 'work notes', 60000);
   if (Buffer.byteLength(markdown) > 60000) throw new Error('Work notes exceed the document byte limit');
   return updateTask(dir, id, async task => {
+    if (isArchivedTask(task)) throw new Error('Archived worker history is read-only');
     if (runId && task.runId !== runId) throw new Error('Stale worker run');
     if (runId && task.status !== 'running') throw new Error('Worker is not running');
     if (task.workNotes?.updateId === updateId) {
@@ -324,5 +406,109 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
     await atomic(path.join(dir, 'tasks', `${id}.notes.md`), markdown);
     task.workNotes = { updateId, updatedAt: now(), actor: runId ? 'worker' : 'manager', runId };
     (task.history ||= []).push({ id: `notes:${randomUUID()}`, at: task.workNotes.updatedAt, actor: task.workNotes.actor, kind: 'notes', message: 'Updated shared work notes', runId });
+  });
+}
+
+// A follow-up is durable new scope, never an implicit resume or permission grant.
+export async function requestWorkerFollowup(dir, { taskId, requestId, expectedRunId, expectedAssignmentId, ticket, brief, userDecision, reviewedWorktreeFingerprint }) {
+  if (reviewedWorktreeFingerprint !== undefined && !/^[a-f0-9]{64}$/.test(reviewedWorktreeFingerprint)) throw new Error('Invalid reviewed worktree fingerprint');
+  identifier(taskId); identifier(requestId, 'follow-up request ID');
+  if (expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
+  text(expectedAssignmentId, 'expected assignment ID', 80);
+  text(ticket, 'ticket', 120); text(brief, 'brief'); text(userDecision, 'actual user authorization', 4000);
+  return updateTask(dir, taskId, task => {
+    const assignments = ensureAssignments(task);
+    const existing = assignments.find(item => item.id === requestId);
+    if (existing) {
+      if (existing.ticket !== ticket || existing.brief !== brief || existing.userDecision !== userDecision || existing.expectedRunId !== expectedRunId || existing.expectedAssignmentId !== expectedAssignmentId || existing.reviewedWorktreeFingerprint !== reviewedWorktreeFingerprint) throw new Error('Follow-up request ID reused with changed content');
+      return;
+    }
+    if (['disposed','removed','archived'].includes(task.status) || task.archiveRestoration?.requiresRecovery || task.lifecycleRequests?.some(item => ['dispose','archive'].includes(item.action) && ['pending','processing'].includes(item.status))) throw new Error('Worker is archived, history only, or archive/disposal is pending');
+    if ((task.runId || null) !== expectedRunId || task.currentAssignmentId !== expectedAssignmentId) throw new Error('Stale worker run or assignment for follow-up');
+    assignments.push({ id: requestId, ticket, brief, userDecision, expectedRunId, expectedAssignmentId, status: 'queued', createdAt: now(), runIds: [], ...(reviewedWorktreeFingerprint ? {reviewedWorktreeFingerprint} : {}) });
+  });
+}
+
+export async function requestWorkerFollowupAdoption(dir, {taskId, assignmentId, requestId, expectedRunId, fingerprint, userDecision}) {
+  identifier(taskId);identifier(assignmentId,'assignment ID');identifier(requestId,'adoption request ID');
+  if(expectedRunId!==null)text(expectedRunId,'expected run ID',160);
+  if(!/^[a-f0-9]{64}$/.test(fingerprint||''))throw new Error('Invalid reviewed worktree fingerprint');
+  text(userDecision,'actual user adoption authorization',4000);
+  return updateTask(dir,taskId,task=>{
+    const assignment=task.assignments?.find(item=>item.id===assignmentId);
+    if(!assignment)throw new Error('Unknown follow-up assignment');
+    const existing=assignment.adoptions?.find(item=>item.id===requestId);
+    if(existing){if(existing.expectedRunId!==expectedRunId||existing.fingerprint!==fingerprint||existing.userDecision!==userDecision)throw new Error('Adoption request ID reused with changed content');return;}
+    if(['disposed','removed','archived'].includes(task.status)||task.archiveRestoration?.requiresRecovery||task.lifecycleRequests?.some(item=>['dispose','archive'].includes(item.action)&&['pending','processing'].includes(item.status)))throw new Error('Worker is archived, history only, or archive/disposal is pending');
+    const queued=assignment.status==='queued'&&assignment.id!==task.currentAssignmentId;
+    const inactive=assignment.id===task.currentAssignmentId&&assignment.status!=='completed'&&['failed','stopped','paused','blocked'].includes(task.status);
+    if(!queued&&!inactive)throw new Error('Only a queued or current inactive assignment can adopt reviewed worktree changes');
+    if((task.runId||null)!==expectedRunId)throw new Error('Stale worker run for worktree adoption');
+    (assignment.adoptions ||= []).push({id:requestId,expectedRunId,fingerprint,userDecision,at:now()});
+  });
+}
+
+export async function ensureArchiveExecutionStopped(dir,task) {
+  const checked=await inspectUpdateEvidence({stateDir:dir,view:{tasks:[task]}});const evidence=checked.tasks[0].updateEvidence;
+  if(!['stopped','absent'].includes(evidence.worker)||!['stopped','absent'].includes(evidence.runtime)||evidence.hooks.some(hook=>!['stopped','absent'].includes(hook.state)))throw new Error('Archived worker execution is live or unverified; preserve its records until ownership and terminal evidence are resolved');
+}
+
+// Explicit archive record operations never run project commands or touch provider history.
+export async function manageArchivedTask(dir, {taskId, action, operationId, expectedRevision}, project) {
+  identifier(taskId);identifier(operationId,'operation ID');
+  if(!['restore','delete'].includes(action)||!Number.isSafeInteger(expectedRevision)||expectedRevision<1)throw new Error('Invalid archive operation');
+  if(!project?.id)throw new Error('Archive operation requires the selected project');
+  return withStateLock(dir,'.schedule.lock',async()=>{
+    const root=await fs.realpath(dir);
+    const safeDirectory=async target=>{const stat=await fs.lstat(target);if(!stat.isDirectory()||stat.isSymbolicLink()||await fs.realpath(target)!==target)throw new Error('Archive storage ownership could not be verified');};
+    await safeDirectory(path.join(root,'tasks'));
+    const journalDir=path.join(root,'archive-actions');await fs.mkdir(journalDir,{recursive:true,mode:0o700});await safeDirectory(journalDir);
+    const journalFile=path.join(journalDir,`${taskId}.${operationId}.json`);
+    const safeFile=async file=>{try{const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||await fs.realpath(file)!==file)throw new Error('Archive record is not a safe regular file');return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+    let journal=await safeFile(journalFile)?JSON.parse(await fs.readFile(journalFile,'utf8')):null;
+    const identity={taskId,action,operationId,expectedRevision,projectId:project.id};
+    if(journal&&Object.entries(identity).some(([key,value])=>journal[key]!==value))throw new Error('Archive operation ID reused with changed content');
+    if(journal?.status==='deleting'&&journal.validatedTerminal!==true)throw new Error('Archive deletion journal lacks verified terminal evidence; preserve remaining records');
+    if(journal?.status==='completed')return{ok:true,taskId,action};
+    let task;try{await safeFile(path.join(root,'tasks',`${taskId}.json`));task=await readUnlocked(root,taskId);}catch(error){if(error.code!=='ENOENT'||journal?.status!=='deleting')throw error;}
+    if(task){
+      if(task.projectId!==project.id&&!(project.mode==='fixture'&&!task.projectId))throw new Error('Task belongs to another project');
+      if(action==='restore'&&task.archiveRestoration?.operationId===operationId){journal={...identity,status:'completed',at:task.archiveRestoration.at};await atomic(journalFile,JSON.stringify(journal));return{ok:true,taskId,action};}
+      if(!isArchivedTask(task))throw new Error('Only a confirmed archived worker can be restored or permanently deleted');
+      if(task.revision!==expectedRevision)throw new Error('Archived worker changed; refresh and confirm again');
+    }
+    if(action==='restore'){
+      await ensureArchiveExecutionStopped(dir,task);
+      const previous=structuredClone(task),at=now();
+      task.status='blocked';task.failure='Restored worker history only. Its environment is absent or unavailable. Environment reconstruction is not currently supported; no setup or worker was started.';
+      task.archiveRestorations ||= [];task.archiveRestoration={operationId,at,requiresRecovery:true,reason:'history-only',archiveRevision:expectedRevision,previousStatus:previous.status,previousFailure:previous.failure||null};task.archiveRestorations.push({...task.archiveRestoration});
+      for(const item of task.attention)if(!item.ackedAt){item.ackedAt=at;item.resolution='Historical attention retained from archived worker';}
+      if(task.question){task.archivedQuestions ||= [];task.archivedQuestions.push(task.question);task.question=null;}
+      (task.history ||= []).push({id:`archive-restore:${operationId}`,actor:'controller',kind:'lifecycle',message:task.failure,at,runId:task.runId||null});
+      recordHistory(task,previous);task.revision++;task.updatedAt=at;await save(root,task);
+      await atomic(journalFile,JSON.stringify({...identity,status:'completed',at}));return{ok:true,taskId,action};
+    }
+    return withStateLock(root,'.worker-approvals.lock',async()=>{
+    if(task&&journal?.status!=='deleting'){
+      await ensureArchiveExecutionStopped(dir,task);
+    }
+    const records=['json','md','notes.md'].map(extension=>path.join(root,'tasks',`${taskId}.${extension}`));
+    for(const file of records)await safeFile(file);
+    const runsRoot=path.join(root,'runs'),runDir=path.join(runsRoot,taskId);
+    const inspectTree=async target=>{let stat;try{stat=await fs.lstat(target);}catch(error){if(error.code==='ENOENT')return false;throw error;}if(stat.isSymbolicLink()||await fs.realpath(target)!==target)throw new Error('Worker run evidence has an unsafe path; nothing was deleted');if(stat.isDirectory()){for(const name of await fs.readdir(target))await inspectTree(path.join(target,name));}else if(!stat.isFile())throw new Error('Worker run evidence contains an unsupported file');return true;};
+    const hasRuns=await fs.lstat(runsRoot).then(async()=>{await safeDirectory(runsRoot);return inspectTree(runDir);},error=>{if(error.code==='ENOENT')return false;throw error;});
+    const approvalDir=path.join(root,'worker-approvals');let approvalFiles=[];
+    if(await fs.lstat(approvalDir).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;})){
+      await safeDirectory(approvalDir);for(const name of await fs.readdir(approvalDir))if(name.endsWith('.json'))await safeFile(path.join(approvalDir,name));
+      const {listWorkerRequests}=await import('./worker-approvals.mjs');
+      approvalFiles=(await listWorkerRequests({stateDir:root,taskId})).map(record=>path.join(approvalDir,`${record.approvalId}.json`));
+    }
+    await atomic(journalFile,JSON.stringify({...identity,status:'deleting',validatedTerminal:true,at:journal?.at||now()}));
+    if(hasRuns)await fs.rm(runDir,{recursive:true});
+    for(const file of approvalFiles)if(await safeFile(file))await fs.unlink(file);
+    for(const file of records.slice(1))if(await safeFile(file))await fs.unlink(file);
+    if(await safeFile(records[0]))await fs.unlink(records[0]);
+    await atomic(journalFile,JSON.stringify({...identity,status:'completed',at:journal?.at||now()}));return{ok:true,taskId,action};
+    });
   });
 }

@@ -62,3 +62,24 @@ test('incomplete or empty delegation input has an explicit unavailable state wit
     '<realtime_delegation><input>unfinished<transcript_delta>private context',
   ]) assert.equal(conversationMessage({id:'handoff',type:'userMessage',content:[{type:'text',text}]},'t').text,'Voice request (transcript unavailable).');
 });
+
+test('backing work is secondary by exact provenance and turn, never by matching speech', async () => {
+  const { conversationRows } = await import('./conversation.js');
+  const messages = [
+    {id:'speech',role:'user',source:'voice',text:'Repeat',position:0},
+    {id:'request',role:'user',turnId:'work',origin:'realtime-delegation',text:'Repeat',position:1},
+    {id:'detail',role:'assistant',turnId:'work',origin:'realtime-delegation',text:'Detailed answer',position:2},
+    {id:'spoken',role:'assistant',source:'voice',text:'Short spoken answer',position:3},
+    {id:'later-detail',role:'assistant',turnId:'work',origin:'realtime-delegation',text:'More detail',position:4},
+    {id:'repeat',role:'user',source:'voice',text:'Repeat',position:5},
+    {id:'typed',role:'user',turnId:'typed',text:'Repeat',position:6},
+  ];
+  const before=structuredClone(messages), rows=conversationRows(messages);
+  assert.deepEqual(rows.map(row=>row.id),['speech','request','spoken','later-detail','repeat','typed']);
+  assert.deepEqual(rows[1].messages.map(m=>m.id),['request','detail']);
+  assert.equal(rows[1].kind,'work-details');
+  assert.equal(rows[3].kind,'work-details');
+  assert.equal(rows[4].kind,undefined);
+  assert.deepEqual(rows.flatMap(row=>row.messages||[row]),messages,'No content dropped or reordered');
+  assert.deepEqual(messages,before,'No raw history mutation');
+});

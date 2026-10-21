@@ -172,3 +172,19 @@ test('startup connector elicitation preserves a genuine null turn through store 
 test('native resolution racing successful delivery retains both facts without reopening the request',async t=>{
  const {input,stateDir,taskId,runId,decide}=await fixture(t),request=await recordWorkerRequest(input);await decide(request,{decision:'accept'});await markWorkerRequestResolved({stateDir,taskId,runId,approvalId:request.approvalId});const delivered=await markWorkerRequestDelivered({stateDir,taskId,runId,approvalId:request.approvalId});assert.equal(delivered.status,'resolved');assert.ok(delivered.deliveredAt);assert.ok(delivered.resolvedAt);assert.deepEqual(delivered.response,{decision:'accept'});assert.deepEqual(await workerRequestDecisions({stateDir,taskId,runId}),[]);
 });
+
+test('restored history rejects old approval decisions and never delivers previously decided historical requests',async t=>{
+ const {input,stateDir,taskId,runId,decide}=await fixture(t);
+ const pending=await recordWorkerRequest(input);
+ await updateTask(stateDir,taskId,task=>{task.status='blocked';task.archiveRestoration={requiresRecovery:true,reason:'history-only'};});
+ for(const decision of ['accept','decline','cancel'])await assert.rejects(decide(pending,{decision}),/historical approvals/);
+ assert.equal((await listWorkerRequests({stateDir,taskId}))[0].status,'pending');
+ for(const [index,decision]of ['accept','decline','cancel'].entries()){
+  await updateTask(stateDir,taskId,task=>{task.status='running';delete task.archiveRestoration;});
+  const request=await recordWorkerRequest({...input,requestId:200+index});await decide(request,{decision});
+  await updateTask(stateDir,taskId,task=>{task.status='blocked';task.archiveRestoration={requiresRecovery:true,reason:'history-only'};});
+  await assert.rejects(decide(request,{decision}),/historical approvals/);
+  let delivered=false;assert.equal(await deliverWorkerRequest({stateDir,taskId,runId,approvalId:request.approvalId},()=>{delivered=true;}),null);assert.equal(delivered,false);
+  assert.equal((await listWorkerRequests({stateDir,taskId})).find(item=>item.approvalId===request.approvalId).status,'decided');
+ }
+});

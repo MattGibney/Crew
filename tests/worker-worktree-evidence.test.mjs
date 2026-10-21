@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, writeFile, symlink, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { captureWorktreeEvidence } from '../worker-worktree-evidence.mjs';
+const exec=promisify(execFile);
+test('workspace fingerprint tracks content, mode and untracked links without following their targets',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'crew-worktree-evidence-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ await exec('git',['init',root]);await writeFile(join(root,'tracked.txt'),'initial');await exec('git',['-C',root,'add','.']);await exec('git',['-C',root,'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-m','fixture']);
+ const clean=await captureWorktreeEvidence(root);assert.equal(clean.dirty,false);
+ await writeFile(join(root,'tracked.txt'),'changed');const dirty=await captureWorktreeEvidence(root);assert.equal(dirty.dirty,true);assert.notEqual(dirty.fingerprint,clean.fingerprint);
+ assert.equal((await captureWorktreeEvidence(root)).fingerprint,dirty.fingerprint);
+ await writeFile(join(root,'untracked.txt'),'first');const first=await captureWorktreeEvidence(root);await writeFile(join(root,'untracked.txt'),'other');const other=await captureWorktreeEvidence(root);assert.notEqual(first.fingerprint,other.fingerprint);
+ await symlink('/nonexistent/private/target',join(root,'link'));const linked=await captureWorktreeEvidence(root);assert.notEqual(linked.fingerprint,other.fingerprint);assert.equal(linked.untrackedFiles,2);
+ await writeFile(join(root,'.env'),'DO_NOT_READ=value');await assert.rejects(captureWorktreeEvidence(root),/credential-like/);
+ assert.ok(!Object.values(linked).some(value=>value==='changed'));assert.ok(!JSON.stringify(linked).includes('other'));
+});

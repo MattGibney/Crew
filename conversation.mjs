@@ -31,7 +31,7 @@ export function conversationMessage(item, turnId) {
   if (text.startsWith('CREW_WORKER_ACTION\n')) {
     try {
       const selected = JSON.parse(text.match(/selected worker only: (\{[^\n]+?\})\./)?.[1] || '{}');
-      if (['pause', 'stop', 'resume', 'dispose', 'start'].includes(selected.action) && /^[\w-]{1,120}$/.test(selected.taskId)) presentation = `${selected.action === 'dispose' ? 'Remove the worktree for' : selected.action[0].toUpperCase() + selected.action.slice(1)} worker ${selected.taskId}.`;
+      if (['pause', 'stop', 'resume', 'dispose', 'start', 'retry_setup'].includes(selected.action) && /^[\w-]{1,120}$/.test(selected.taskId)) presentation = `${selected.action === 'dispose' ? 'Remove the worktree for' : selected.action === 'retry_setup' ? 'Retry failed setup for' : selected.action[0].toUpperCase() + selected.action.slice(1)} worker ${selected.taskId}.`;
     } catch { /* Keep bounded generic intent if native history has an older format. */ }
   }
   return presentUserMessage({ id: item.id, turnId, role: 'user', text: presentation });

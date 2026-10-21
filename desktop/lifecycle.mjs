@@ -1,14 +1,16 @@
 // AI-007: pure desktop lifecycle rules, shared with focused tests.
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
+import { activeTasks } from '../worker-archive.mjs';
 export function instanceKey(configPath) {
   return createHash('sha256').update(resolve(configPath)).digest('hex').slice(0, 24);
 }
 export function summarizeTasks(view) {
   if (!view || view.error || !Array.isArray(view.tasks)) return { active: null, pending: null };
+  const tasks = activeTasks(view.tasks);
   return {
-    active: view.tasks.filter(task => !['completed', 'failed', 'canceled', 'cancelled', 'stopped', 'paused', 'disposed'].includes(task.status)).length,
-    pending: view.tasks.reduce((count, task) => count + (task.attention || []).filter(item => !item.ackedAt).length, 0)
+    active: tasks.filter(task => !['completed', 'failed', 'canceled', 'cancelled', 'stopped', 'paused', 'disposed'].includes(task.status)).length,
+    pending: tasks.reduce((count, task) => count + (task.attention || []).filter(item => !item.ackedAt).length, 0)
   };
 }
 export function isAppURL(url, origin) {

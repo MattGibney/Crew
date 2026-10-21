@@ -2,6 +2,8 @@
 // Usage: npm run renderer:build; node tests/browser-fixture.mjs [port=4342]
 // This never loads Codex, project configuration, credentials or business repositories.
 import http from 'node:http';
+import { isArchivedTask } from '../worker-archive.mjs';
+import {validateWorkerEnvironment} from '../config.mjs';
 import { conversationMessage } from '../conversation.mjs';
 import { createConversationTimeline } from '../conversation-timeline.mjs';
 import { readFile } from 'node:fs/promises';
@@ -12,7 +14,7 @@ const port = Number(process.argv[2] || 4342);
 const assetsRoot = path.resolve(process.argv[3] || path.join(root, 'renderer-dist'));
 const peers = new Set(), mediaPeers = new Set();
 const now = new Date().toISOString();
-const task = (id, status, extra = {}) => ({ id: `fixture-task-${id}`, runId: `fixture-run-${id}`, ticket: `AI-${140 + id}`, brief: `Review fixture area ${id}`, status, createdAt: now, updatedAt: now, progress: `Examining area ${id} with a bounded read-only check.`, repositoryId: 'fixture', projectId: 'crew-acceptance-fixture', worktree: `/tmp/crew-fixture/w${id}`, attention: [], ...extra });
+const task = (id, status, extra = {}) => ({ id: `fixture-task-${id}`, runId: `fixture-run-${id}`, ticket: `AI-${140 + id}`, brief: `Review fixture area ${id}`, status, createdAt: now, updatedAt: now, revision: 1, progress: `Examining area ${id} with a bounded read-only check.`, repositoryId: 'fixture', projectId: 'crew-acceptance-fixture', worktree: `/tmp/crew-fixture/w${id}`, attention: [], ...extra });
 let orchestration = { maxConcurrent: 6, tasks: [
   task(1, 'running', { workerPromptSnapshot: { text: 'Original fixture worker instructions. Preserve this immutable snapshot.', version: 'fixture-original-v1' }, harnessStarted: true, execution: { runId: 'fixture-run-1', observedAt: now, endedAt: null, startedAt: new Date(Date.now() - 125000).toISOString(), live: true }, environment: { status: 'ready', kind: 'project-execution' } }),
   task(2, 'awaiting_answer', { question: { id: 'question-2', runId: 'fixture-run-2', message: 'Should the audit include archived records?' }, attention: [{ id: 'question-2', kind: 'question', message: 'Should the audit include archived records?' }] }),
@@ -48,7 +50,8 @@ let nativeAttentionSound = false;
 
 let proof = { calls: [], media: null, setup: [], sseConnections: 0 };
 const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
-const settingsView = () => ({ ...settings, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
+let workerEnvironment = {revision:'environment-0',configPath:'/private/tmp/crew-fixture/config.json',environment:{},available:true};
+const settingsView = () => ({ ...settings, workerEnvironment, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const server = http.createServer(async (req, res) => {
@@ -74,6 +77,7 @@ const server = http.createServer(async (req, res) => {
         if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
         if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
 
+        if (body.workerEnvironment) workerEnvironment = {...workerEnvironment,environment:body.workerEnvironment,revision:`environment-${++promptRevision}`};
         if (body.workerDetail) {
           const { taskId, ...change } = body.workerDetail;
           if (!workerDetails.has(taskId)) return send({ error: 'Unknown fixture worker' }, 400);
@@ -100,7 +104,35 @@ const server = http.createServer(async (req, res) => {
         return send({ ok: true });
       }
       const name = url.pathname.replace('/api/', ''); proof.calls.push({ name, body });
+      if (name === 'archived-worker-action') {
+        // Fixture-only projection mutation. Production store/ownership tests cover real deletion.
+        const target = orchestration.tasks.find(task => task.id === body.taskId);
+        if (!target || target.projectId !== settings.projectId || !isArchivedTask(target)) return send({ error: 'Archived worker not found in this project.' }, 409);
+        if (!Number.isInteger(body.expectedRevision) || body.expectedRevision !== target.revision || typeof body.operationId !== 'string' || !body.operationId.startsWith('archive-')) return send({ error: 'Archived worker changed. Refresh before retrying.' }, 409);
+        if (body.action === 'restore') {
+          const at = new Date().toISOString();
+          target.status = 'blocked';
+          target.failure = 'Restored archive history. Its environment was removed or is unavailable; review retained resources before explicit recovery. No worker or setup was started.';
+          target.archiveRestoration = { operationId: body.operationId, at, requiresRecovery: true, archiveRevision: body.expectedRevision };
+          target.archiveRestorations = [...(target.archiveRestorations || []), target.archiveRestoration];
+          target.attention = (target.attention || []).map(item => item.ackedAt ? item : { ...item, ackedAt: at, resolution: 'Historical attention retained from archived worker' });
+          if (target.question) { target.archivedQuestions = [...(target.archivedQuestions || []), target.question]; target.question = null; }
+          target.revision++; target.updatedAt = at;
+          emit({ type: 'orchestration-state', state: orchestration });
+          return send({ taskId: target.id, action: 'restore', status: 'restored' });
+        }
+        if (body.action !== 'delete') return send({ error: 'Unknown archive action.' }, 409);
+        orchestration = { ...orchestration, tasks: orchestration.tasks.filter(task => task.id !== target.id) };
+        workerDetails.delete(target.id);
+        emit({ type: 'orchestration-state', state: orchestration });
+        return send({ taskId: target.id, action: 'delete', status: 'deleted' });
+      }
       if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
+      if (name === 'settings/worker-environment') {
+        if (body.expectedRevision !== workerEnvironment.revision) return send({error:'Environment settings changed elsewhere; reload before saving.'},400);
+        workerEnvironment = {...workerEnvironment,environment:validateWorkerEnvironment(body.environment,{mode:'repository'}),revision:`environment-${++promptRevision}`};
+        return send(settingsView());
+      }
       if (name === 'settings/manager-profile') {
         if (body.expectedVersion !== profileView().version) return send({ error: 'Manager profile changed elsewhere.' }, 409);
         managerProfiles.set(fixtureProjectName, { voice: body.voice, version: `profile-${++promptRevision}` });

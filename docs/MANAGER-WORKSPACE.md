@@ -42,10 +42,38 @@ Back to manager restores the conversation and its draft. Other project views hav
 
 ## Realtime handoff display (GitHub #20)
 
-Voice work requests show the current user request in a normal You bubble. Native handoff markup and the recent conversation supplied to the agent stay out of that bubble. Empty or incomplete handoff input displays “Voice request (transcript unavailable).” until a completed item provides the words. This projection does not dispatch work, reconstruct historical dialogue or deduplicate independent messages by matching text.
+Native voice work requests project only the current user request. GitHub #38 places this backing record in Work details while the spoken transcript remains the normal You bubble. Native handoff markup and the recent conversation supplied to the agent stay out of the displayed request. Empty or incomplete handoff input displays “Voice request (transcript unavailable).” until a completed item provides the words. This projection does not dispatch work, reconstruct historical dialogue or deduplicate independent messages by matching text.
 
 `conversation.mjs` projects native user items for live events, canonical timeline hydration and recent-turn replay. `conversation-timeline.mjs` applies the same correction to legacy presentation journals on restore. A persisted presentation marker prevents another unwrapping if current user wording itself contains a literal envelope example. Native chat data, item/turn IDs, promotion references, ordering and existing voice transport remain intact. Ordinary text containing tags and independently observed voice segments retain their original content.
 
 ## Reading and rich output
 
 Message Scroller opens saved threads at the bottom and follows new messages and streaming output only while you stay at the bottom. Scrolling back preserves your position through updates; user messages do not anchor the viewport near the top. Jump to latest resumes following. Recorded tool activity expands through Trace; it never invents reasoning, execution or timing. Code blocks have their own Copy button, and manager replies offer Copy message. Text input grows with longer drafts. Enable audio appears only if playback was blocked and disappears on successful recovery or call end.
+
+## Speech and written work details (GitHub #38)
+
+Voice transcripts appear as the ordinary You/Manager conversation. Native voice
+handoffs also record a backing work request, progress and a written answer, which
+can differ from the words spoken. These appear in expandable **Work details**,
+labelled Voice work request, Work progress and Written response. A written answer
+remains available there even if no spoken response was observed. Ordinary typed
+exchanges stay in the main conversation.
+
+This is artifact presentation, not text deduplication: only the existing delegated
+request provenance and its exact native turn establish backing-work identity.
+Speech has its own stable native identity and no supplied link to a backing turn;
+Crew does not invent one from matching words or timing. Repeated utterances remain
+separate. Only consecutive backing records share a disclosure, preserving speech
+interruptions and ordering. Completed speech replaces its live row by item ID;
+interrupted speech retains a partial label. A live indication represents the
+observed protocol lifecycle, not proof that audio was heard.
+
+The presentation journal retains delegation origin on each native exchange item.
+Canonical hydration carries that origin forward only for an exact saved
+item/turn/actor match in the validated thread, keeping canonical content, status
+and position authoritative. Native chat/history, native handoffs and call/audio
+ownership are unchanged. No transcript callback launches work or returns a result.
+
+If neither a delegated native request nor matching saved provenance is available
+in the bounded history, Crew leaves the item in the ordinary conversation rather
+than guessing its origin. No text is hidden based on similarity to speech.

@@ -33,7 +33,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('#connect')?.disabled);
   assert.equal((await media()).calls, 0, 'Navigation/startup never asks for media');
   const sidebar = page.getByRole('complementary', { name: 'Project workers', exact: true });
-  assert.equal(await sidebar.locator('[data-worker-id]').count(), 10);
+  assert.equal(await sidebar.locator('[data-worker-id]').count(), 9);
   assert.equal(await sidebar.getByText(/elapsed|Timing unavailable|Examining area|Process live|Liveness unverified/).count(), 0, 'Manager sidebar cards contain identity, status and title only');
   await page.screenshot({ path: path.join(output, 'manager-compact-sidebar.png'), fullPage: true });
   await page.getByRole('tab', { name: 'Text', exact: true }).click();
@@ -46,7 +46,7 @@ try {
   const connectCalls = await callCount('connect');
   await page.getByRole('button', { name: /Workers/ }).first().click();
   const cards = page.locator('[data-worker-id]');
-  assert.equal(await cards.count(), 10, 'All statuses remain reachable in compact overview');
+  assert.equal(await cards.count(), 9, 'Retained statuses remain reachable; disposed workers are absent');
   await page.screenshot({ path: path.join(output, 'overview.png'), fullPage: true });
   await page.locator('[data-worker-id="fixture-task-1"]').click();
   await page.getByRole('tab', { name: 'Conversation', exact: true }).waitFor();
@@ -170,5 +170,5 @@ try {
   assert.ok(lifecycleRequest?.body.text.includes('fixture-task-2') && lifecycleRequest.body.text.includes('fixture-run-2') && lifecycleRequest.body.text.includes('"action":"stop"'), 'Detail action routes exact task/run identity through manager');
   assert.ok(!actionProof.some(c => c.name.includes('worker-action')), 'Detail never uses a direct worker lifecycle endpoint');
   assert.equal(errors.length, 0, errors.join('\n'));
-  console.log(JSON.stringify({ pass: true, output, syntheticMediaOnly: true, multipleWorkers: 10, liveDetail: true, liveNotes: true, navigationCallPersistence: true, mutedSettingsPersistence: true, compactInputPersistence: true, openMicBlurPreservation: true }));
+  console.log(JSON.stringify({ pass: true, output, syntheticMediaOnly: true, multipleWorkers: 9, liveDetail: true, liveNotes: true, navigationCallPersistence: true, mutedSettingsPersistence: true, compactInputPersistence: true, openMicBlurPreservation: true }));
 } finally { await cleanup(); }

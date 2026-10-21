@@ -16,6 +16,17 @@ export function createConversationTimeline() {
       options = { ...options, status: options.status === 'streaming' ? old.status : old.status === 'complete' ? 'complete' : 'partial' };
     }
     const promoted = promotions.get(message.id);
+    // The backing native exchange and the speech transcript are distinct
+    // artifacts. Only the delegation envelope and exact turn establish origin;
+    // text equality, proximity and a voice session do not establish a link.
+    const delegated = message.source !== 'voice' && message.turnId &&
+      (message.presentation === 'realtime-input-v1' || message.origin === 'realtime-delegation' ||
+        [...messages.values()].some(entry => entry.turnId === message.turnId && entry.origin === 'realtime-delegation'));
+    if (delegated) {
+      message = { ...message, origin: 'realtime-delegation' };
+      // The native input may arrive after its assistant output.
+      for (const [id, entry] of messages) if (entry.turnId === message.turnId && entry.source !== 'voice') messages.set(id, { ...entry, origin: 'realtime-delegation' });
+    }
     messages.set(message.id, { ...old, ...message, ...(promoted ? { promotionId: promoted.id } : {}), status: options.status || 'complete', position: promoted?.position ?? (Number.isFinite(options.position) ? position(options.position) : old?.position ?? position()) });
   }
   function record(item, turnId, options = {}) {
@@ -73,5 +84,15 @@ export function createConversationTimeline() {
       put(presentUserMessage(entry), { status: entry.status === 'streaming' ? 'partial' : entry.status, position: entry.position });
     }
   }
-  return { record, realtime, delta, flat, partial, snapshot, restore, resumeTurn };
+  function restoreProvenance(entries) {
+    // Canonical content/status/order wins. Carry only presentation provenance
+    // from an exact journal item/turn/actor match (the bridge validates thread).
+    for (const saved of entries || []) {
+      if (!saved || typeof saved.id !== 'string') continue;
+      const current = messages.get(saved.id);
+      if (saved.origin !== 'realtime-delegation' || !saved.turnId || current?.turnId !== saved.turnId || current.role !== saved.role || current.source === 'voice' || saved.source === 'voice') continue;
+      put({ ...current, origin: saved.origin }, { status: current.status, position: current.position });
+    }
+  }
+  return { record, realtime, delta, flat, partial, snapshot, restore, restoreProvenance, resumeTurn };
 }
