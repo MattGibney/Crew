@@ -10,7 +10,7 @@ At restart, Crew takes an exclusive installation lease and rechecks live activit
 
 Your project JSON, editable prompts, ChatGPT/Codex authentication, conversations, worker records and retained worktrees remain outside the application bundle. They are not replaced by an update. Custom `--config` instances use a bounded private one-time restart handoff so the native installer's relaunch returns to the same instance instead of falling back to the default. If you normally run several instances, close the others before updating and reopen them with their usual configurations afterward.
 
-Unsigned local candidates cannot automatically update: they show a clear explanation and a link to releases. Older builds that did not include an updater, or were unsigned, require one manual installation of a signed updater-enabled release. Keep the existing instance configuration and data when replacing the application.
+Unsigned local candidates cannot automatically update: they show a clear explanation and a link to releases. Older builds that did not include an updater, or were unsigned, require one manual installation of a signed updater-enabled release. Finish or explicitly stop active work and close all Crew instances before replacing the application. Keep the existing instance configuration and data.
 
 See [release setup and signing prerequisites](RELEASES.md) and [theme customization](UI-FOUNDATION.md).
 
