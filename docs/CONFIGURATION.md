@@ -1,6 +1,6 @@
 # One-project instance configuration
 
-`node cli.mjs init --template set1` creates a private local config and editable prompt copies without overwriting existing files. `--config /absolute/path/instance.json` selects another local instance. Relative paths resolve against that JSON file's directory. Use real paths; shell variables and `~` are not expanded.
+`node runtime/cli.mjs init --template set1` creates a private local config and editable prompt copies without overwriting existing files. `--config /absolute/path/instance.json` selects another local instance. Relative paths resolve against that JSON file's directory. Use real paths; shell variables and `~` are not expanded.
 
 The complete schema is illustrated by `config/set1.example.json` and `config/fixture.example.json`. Unknown keys, malformed JSON, missing prompt files, invalid ports/sandbox values, unusable runtime paths and missing Node/Git dependencies produce clear startup errors. Structurally valid but incomplete business settings allow conversation/setup and expose readiness issues as context. Crew does not gate directions on business readiness; creating a worker still needs an actual configured repository and usable native session. `validate` reports configuration readiness; this does not establish application-service health.
 
