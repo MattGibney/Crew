@@ -296,6 +296,10 @@ export async function createController({ stateDir, sourceDir, executable, projec
     const runtime=await json(path.join(task.runDir,'runtime.json')),started=await json(path.join(task.runDir,'started.json')),owner=await json(path.join(task.runDir,'owner.json')),exit=await json(path.join(task.runDir,'exit.json'));
     if(started?.runId===task.runId&&task.runnerPid!==started.pid)task=await updateTask(stateDir,task.id,n=>{n.runnerPid=started.pid;});
     if(runtime?.runId===task.runId&&runtime.threadId&&task.threadId!==runtime.threadId)task=await updateTask(stateDir,task.id,n=>{n.threadId=runtime.threadId;});
+    const protocolError=await json(path.join(task.runDir,'protocol-error.json'));
+    if(protocolError?.runId===task.runId&&!task.attention.some(item=>item.id===`${task.runId}:native-protocol-error`)){
+      task=await updateTask(stateDir,task.id,n=>{attention(n,`${n.runId}:native-protocol-error`,'blocked','Worker approval or lifecycle transport needs review. Pending requests and owned process evidence were retained; no automatic response was sent.');});
+    }
     const currentExit=exit?.runId===task.runId?exit:null;
     const isLive=!currentExit&&await ownedRunnerAlive(task);
     const spawnAgeMs=Date.now()-Date.parse(task.spawnIntentAt||(started?.runId===task.runId?started.at:null)||task.startedAt||task.launchAt);
@@ -329,6 +333,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       if(!confirmedExit(task,exit)){await fail(task.id,'Worker descendants have not confirmed they stopped; preserve its environment.');return;}
       if(exit.stopped&&task.status!=='resume_queued'){await updateTask(stateDir,task.id,n=>{n.status=exit.stopAction==='pause'?'paused':'stopped';n.endedAt=exit.at;});return;}
       if(task.status==='resume_queued')return;
+      if(exit.nativeTurnStatus==='interrupted'&&!exit.error){await updateTask(stateDir,task.id,n=>{n.status='stopped';n.endedAt=exit.at;n.nativeTurnStatus='interrupted';attention(n,`${n.runId}:native-interrupted`,'blocked','Codex ended this worker turn after an interruption or canceled approval. Its worktree and history are retained; no successful result is claimed. Discuss explicit resume with the manager.');});return;}
       if(exit.exitCode!==0||!exit.completedTurn){await fail(task.id,`Worker exited without successful turn: ${exit.error||`exit ${exit.exitCode}`}.`);return;}
       if(['resume_queued','awaiting_answer','blocked'].includes(task.status))return;
       if(task.status==='verifying'){const report=task.reports.find(r=>r.runId===task.runId&&r.reportId===task.candidateReportId);if(!report)throw new Error('Missing candidate result report.');try{await verify(task,exit,report);}catch(error){await fail(task.id,`Completion verification failed: ${error.message}`);}}

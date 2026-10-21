@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTask, updateTask, readTask } from '../orchestration-store.mjs';
+import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../worker-approvals.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() { const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port; }
@@ -33,6 +34,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   const reply = result => send({ id, result });
   if (method === 'initialize') return reply({});
   if (method === 'account/read') return reply({ account: { type: 'chatgpt', planType: 'synthetic' } });
+  if (method === 'config/read') return reply({ config: {} });
   if (method === 'thread/start' || method === 'thread/resume') return reply({ thread: { id: 'http-retained-chat' } });
   if (method === 'thread/turns/list') return reply({ data: [{ id: 'historic-turn', status: 'completed', items: [{ id: 'historic-message', type: 'agentMessage', text: 'Preserved HTTP history.' }] }] });
   if (method === 'mcpServerStatus/list') return reply({ data: [] });
@@ -70,6 +72,30 @@ createInterface({ input: process.stdin }).on('line', line => {
   return { directory, dataDir, stateDir, request, start, stop, calls, events };
 }
 const instructions = calls => calls.filter(c => ['thread/start', 'thread/resume', 'thread/fork'].includes(c.method));
+
+test('worker approval HTTP endpoint rejects cross-origin and stale correlation, persists an actual decision without starting manager work', async t => {
+  const f = await fixture(t);
+  const taskId = 'http-approval-task', runId = 'http-approval-run', threadId = 'native-http-thread', turnId = 'native-http-turn';
+  await createTask(f.stateDir, { requestId: taskId, ticket: 'GH-13', brief: 'Read-only synthetic request', projectId: 'http-settings-fixture' });
+  await updateTask(f.stateDir, taskId, task => { task.status = 'running'; task.runId = runId; });
+  // Publish the retained synthetic run before controller startup. A live
+  // controller may legitimately admit a newly created queued task between writes.
+  await f.start();
+  const native = await recordWorkerRequest({ stateDir: f.stateDir, taskId, runId, threadId, turnId, requestId: 5, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, command: 'docker version', availableDecisions: ['accept', 'decline', 'cancel'] } });
+  const { approvalId, requestId } = native;
+  const body = { taskId, runId, threadId, turnId, approvalId, requestId, response: { decision: 'decline' } };
+  assert.equal((await f.request('/api/worker-approval', { body, requestOrigin: 'https://untrusted.example' })).status, 403);
+  const stale = await f.request('/api/worker-approval', { body: { ...body, runId: 'stale-http-run' } });
+  assert.equal(stale.status, 400); assert.match(stale.value.error, /correlation mismatch/);
+  assert.deepEqual(await workerRequestDecisions({ stateDir: f.stateDir, taskId, runId }), []);
+  const result = await f.request('/api/worker-approval', { body });
+  assert.equal(result.status, 200, JSON.stringify(result.value)); assert.equal(result.value.status, 'decided');
+  assert.equal((await workerRequestDecisions({ stateDir: f.stateDir, taskId, runId }))[0].response.decision, 'decline');
+  assert.equal((await f.request('/api/worker-approval', { body })).status, 200);
+  assert.equal((await f.request('/api/worker-approval', { body: { ...body, response: { decision: 'accept' } } })).status, 400);
+  assert.equal((await listWorkerRequests({ stateDir: f.stateDir, pendingOnly: true })).length, 0);
+  assert.equal((await f.calls()).some(call => call.method === 'turn/start'), false);
+});
 
 test('real HTTP save, explicit restart, durable stop and Start preserve conversation, worker settings and task history', async t => {
   const f = await fixture(t);

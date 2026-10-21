@@ -83,8 +83,8 @@ test('cancel and install operations serialize: cancellation first prevents every
  const f=await fixture(t);const plan=await f.engine.begin({targetVersion:'1.1.0'});const canceled=f.engine.cancel(),install=f.engine.markInstalling({planId:plan.id,targetVersion:'1.1.0'});await canceled;assert.equal((await install).marked,false);assert.equal(f.calls.some(call=>call.endsWith('update-plan-installing')),false);
 });
 test('pending child begin is synchronously holding and forced registry mutation blocks final readiness',async t=>{
- const f=await fixture(t),pending=deferred(),normal=f.values[0].host.updateToken;f.values[0].host.updateToken=async(route,input)=>{if(route==='update-plan-begin')await pending.promise;return normal(route,input);};
- const begun=f.engine.begin({targetVersion:'1.1.0'});assert.equal(f.engine.isHolding(),true);await new Promise(resolve=>setTimeout(resolve,20));f.values=f.values.slice(0,1);pending.resolve();await begun;assert.equal(f.engine.status().phase,'blocked');assert.equal(f.paused,true);
+ const f=await fixture(t),pending=deferred(),entered=deferred(),normal=f.values[0].host.updateToken;f.values[0].host.updateToken=async(route,input)=>{if(route==='update-plan-begin'){entered.resolve();await pending.promise;}return normal(route,input);};
+ const begun=f.engine.begin({targetVersion:'1.1.0'});assert.equal(f.engine.isHolding(),true);await entered.promise;f.values=f.values.slice(0,1);pending.resolve();await begun;assert.equal(f.engine.status().phase,'blocked');assert.equal(f.paused,true);
 });
 test('unreadable persisted journal is never replaced and startup retains global hold',async t=>{
  const f=await fixture(t);await writeFile(f.path,'{broken');const next=createWorkspacePauseUpdate(f.options);assert.equal(next.isHolding(),true);await assert.rejects(next.ready,/cannot be verified/);assert.equal(next.isHolding(),true);assert.equal(f.paused,true);assert.equal(await readFile(f.path,'utf8'),'{broken');

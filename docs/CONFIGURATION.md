@@ -16,7 +16,7 @@ The complete schema is illustrated by `config/set1.example.json` and `config/fix
 | project.linear.teamId/teamKey | Actual discovered or explicitly configured Linear scope; required for repository dispatch |
 | project.linear.projectId | Confirmed Linear project ID if tasks are limited to a project; null means team scope |
 | project.prompts.manager/worker | Editable Markdown paths |
-| project.worker.sandbox | read-only (default) or workspace-write for explicitly agreed local edits |
+| project.worker.sandbox | Legacy task edit-scope guard: read-only or workspace-write. Native sandbox permissions resolve through Codex configuration. |
 | project.worker.maxConcurrent | Executing capacity, 1–8; default 2. Explicit extra tasks queue. |
 | project.worker.environment | Optional bootstrap/start/ready/resume/cleanup hooks; see WORKERS.md. No hooks means application readiness is not established. |
 | project.worker.timeoutMs | Per-run ceiling, 10000–86400000 ms; questions end a run and resume starts the next |
@@ -36,3 +36,19 @@ Worker lifecycle and hook semantics are documented in [WORKERS.md](WORKERS.md). 
 ## Project execution plan
 
 `project.worker.environment.executionPlan` retains version 1 source hashes and optional setup, start, resume, ready, stop and teardown phases. Each phase stores the exact script, its source path/hash and a bounded timeout. Guided discovery reads existing Codex environment setup and Start actions; no project patch or specific lifecycle API is required. Scripts use the worker worktree as cwd. Optional `env.PATH` selects installed tools locally. Generic argv hooks remain supported separately. See [Project execution](PROJECT-ENVIRONMENTS.md).
+
+
+## Normal Codex configuration
+
+Repository manager and worker sessions use Codex's normal user, applicable trusted-project and managed configuration resolution. Crew does not pass `--ignore-user-config`, force sandbox/approval policies, or overwrite `shell_environment_policy`. The installed Codex version determines supported settings and trust/policy behaviour. Crew supplies the project/worktree cwd, immutable runtime instructions, subscription sign-in requirements and its own orchestration MCP binding. The manager resolves configured developer instructions through `config/read` for that cwd and retains them before its Crew role/runtime instructions in memory; it does not separately save or log configuration contents. Native Codex conversation persistence still applies. A worker's agreed edit scope remains an additional task guard, not a statement of native sandbox permissions.
+
+Managed Node/npm are process launch defaults with inherited discovery paths retained. Explicit Codex environment/PATH/profile settings and ordinary shell startup remain authoritative. Host lifecycle scripts use login zsh and are separately supervised; they are not executed under the worker's Codex permissions or environment policy. They do not prove worker Docker or localhost access. Existing configuration and project scripts are reused in place without copying credentials or making project changes. See [Project execution](PROJECT-ENVIRONMENTS.md).
+
+
+Configuration resolution is relative to each actual Codex cwd and its trusted project layers. A repository-local ignored `.codex/config.toml` that exists only in the original checkout may not be present or discovered in a linked worker worktree. Crew follows the installed Codex resolver for that worktree; it does not copy the original checkout's ignored configuration, settings or credentials. Confirm effective policy from the worker rather than assuming the original checkout's local policy carried across. User and managed configuration still resolve normally.
+
+## Worker approval requests (GH-13)
+
+Workers use separate supported Codex app-server sessions. Native approval and input requests appear in the manager conversation and worker review cards; they do not create a worker conversation or another turn. The user may choose only the decisions offered by the native request. Session approvals, offered policy amendments, requested permission subsets and connector forms retain their original meaning. A canceled native turn is retained as stopped, without claiming a successful result or automatically resuming it.
+
+Private request records retain project-state, task, run, native thread, turn and request identity. A decision, successful pipe delivery and native acknowledgement are separate evidence. Controller/window reload adopts the surviving supervisor and pending requests; a new run cannot consume an old response. Pending stop/pause blocks positive delivery; explicit denial remains available. Unknown transport or ownership keeps evidence and blocks a clean-success claim. The manager MCP tool relays an explicit human instruction; it cannot independently attest the origin of spoken consent. Direct UI decisions remain available.

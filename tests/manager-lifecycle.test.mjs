@@ -39,6 +39,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   const { id, method, params } = message; if (id === undefined || !method) return;
   if (method === 'initialize') return reply(id, {});
   if (method === 'account/read') return reply(id, { account: { type: 'chatgpt', planType: 'synthetic' } });
+  if (method === 'config/read') return reply(id, { config: {} });
   if (method === 'thread/start' || method === 'thread/resume') return setTimeout(() => reply(id, { thread: { id: 'preserved-manager' } }), ${threadDelay});
   if (method === 'thread/turns/list') return reply(id, { data: [{ id: 'historic-turn', status: 'completed', items: [{ id: 'historic-message', type: 'agentMessage', text: 'Retained conversation history.' }] }] });
   if (method === 'mcpServerStatus/list') return reply(id, { data: [] });
