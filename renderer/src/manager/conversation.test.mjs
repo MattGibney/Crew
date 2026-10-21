@@ -28,3 +28,8 @@ test('identical speech and typed messages remain distinct without explicit corre
   const messages = [{ id: 'typed', role: 'user', text: 'Yes' }, { id: 'voice', role: 'user', source: 'voice', text: 'Yes' }];
   assert.equal(orderedMessages(messages).length, 2);
 });
+
+test('recovery-review control shows readable human intent without internal instructions',()=>{
+ const message=conversationMessage({id:'review',type:'userMessage',content:[{type:'text',text:'CREW_WORKER_RECOVERY_REVIEW\nInternal selected task/run review protocol'}]},'turn');
+ assert.equal(message.text,'Review recovery options for this worker with me.');
+});

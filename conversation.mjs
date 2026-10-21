@@ -14,5 +14,6 @@ export function conversationMessage(item, turnId) {
       if (['pause', 'stop', 'resume', 'dispose', 'start'].includes(selected.action) && /^[\w-]{1,120}$/.test(selected.taskId)) presentation = `${selected.action === 'dispose' ? 'Remove the worktree for' : selected.action[0].toUpperCase() + selected.action.slice(1)} worker ${selected.taskId}.`;
     } catch { /* Keep bounded generic intent if native history has an older format. */ }
   }
+  if(text.startsWith('CREW_WORKER_RECOVERY_REVIEW\n'))presentation='Review recovery options for this worker with me.';
   return { id: item.id, turnId, role: 'user', text: presentation };
 }

@@ -3,6 +3,8 @@ import readline from 'node:readline';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction, updateWorkNotes } from './orchestration-store.mjs';
+import { requestWorkerRecovery } from './orchestration-store.mjs';
+import { reviewProjectRecovery } from './project-environment.mjs';
 import { listWorkerRequests, decideWorkerRequest } from './worker-approvals.mjs';
 
 const [stateDirArg, role, taskId, runId] = process.argv.slice(2);
@@ -22,6 +24,8 @@ const object = (properties, required = []) => ({ type: 'object', properties, req
 const string = (description, maxLength = 12000) => ({ type: 'string', description, minLength: 1, maxLength });
 const taskIdentifier = { type: 'string', pattern: '^[a-zA-Z0-9_-]{8,80}$' };
 const tools = role === 'manager' ? [
+  { name: 'review_worker_recovery', description: 'Read retained versus current lifecycle configuration and exact blockers for one inactive worker. Shows source-backed command changes and a reviewHash. No commands or model work execute. Explain scope and cleanup limits to the human before requesting a decision.', inputSchema: object({ taskId: taskIdentifier, action: {type:'string',enum:['reconcile_plan','retire_missing']} }, ['taskId','action']) },
+  { name: 'request_worker_recovery', description: 'Queue one explicitly human-reviewed recovery decision using the exact reviewHash and current run. reconcile_plan applies compatible lifecycle metadata without starting work or replaying setup; retire_missing retains history and marks cleanup unverified for an already absent/unregistered worktree. Never infer user approval, clean resources or bypass unknown ownership. Read status for actual completion; reuse actionId only for exact retries.', inputSchema: object({ taskId:taskIdentifier, actionId:taskIdentifier, action:{type:'string',enum:['reconcile_plan','retire_missing']}, expectedRunId:{type:['string','null'],description:'Exact current run ID, or JSON null for no run'}, reviewHash:string('Exact reviewHash from review_worker_recovery',64), decision:string('Actual human decision approving these exact changes and their resource scope; retirement acknowledges unverified cleanup',2000) }, ['taskId','actionId','action','expectedRunId','reviewHash','decision']) },
   { name: 'request_attention', description: 'Notify the user only when their response or action is required. Explain the specific decision/action in message. Reuse requestId for retries. Never use for routine completion, progress, failures you can resolve yourself, or duplicate native input requests/worker question alerts. Does not start work or microphone capture.', inputSchema: object({ requestId: taskIdentifier, message: string('Specific question or action the user needs to address', 2000) }, ['requestId', 'message']) },
   {
     name: 'submit_task',
@@ -77,6 +81,8 @@ async function callTool(name, args) {
       if (hasJsonTurn) { if (JSON.parse(turnIdJson) !== null) throw new Error('turnIdJson must encode JSON null'); identity.turnId = null; }
       return decideWorkerRequest({ ...identity, stateDir, requestId: JSON.parse(requestIdJson), response: JSON.parse(responseJson) });
     }
+    case 'review_worker_recovery': return reviewProjectRecovery({stateDir,task:scoped(await readTask(stateDir,args.taskId)),project,mode:args.action});
+    case 'request_worker_recovery': scoped(await readTask(stateDir,args.taskId)); return requestWorkerRecovery(stateDir,args);
     case 'answer_question': scoped(await readTask(stateDir, args.taskId)); return answerQuestion(stateDir, args);
     case 'worker_action': scoped(await readTask(stateDir, args.taskId)); return requestWorkerAction(stateDir, args);
     case 'acknowledge_attention': scoped(await readTask(stateDir, args.taskId)); return acknowledgeAttention(stateDir, args);
