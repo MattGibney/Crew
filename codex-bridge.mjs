@@ -11,7 +11,7 @@ export const safeError = error => String(error?.message || error).replace(/Beare
 export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent = () => {} }) {
   // Keep app-owned MCP scripts rooted in cwd; project configuration resolves in sessionCwd.
   const sessionCwd = project?.repositories?.find(repository => repository.path)?.path || cwd;
-  let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0, requestEpoch;
+  let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0, requestEpoch, threadBootstrap;
   let voiceActive = false, connecting = false, negotiation, activeTurnId = null, status = 'idle', voiceGeneration = 0, workStarting = false;
   let connectors = [], connectorError = null, voiceCatalog, greetingSession, lastVoice = null;
   const pending = new Map(), approvals = new Map(), items = new Map(), workRequests = new Map();
@@ -39,7 +39,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   const expectedExits = new WeakSet();
   const completedTurns = new Set();
   function markCompleted(id){completedTurns.add(id);if(completedTurns.size>100)completedTurns.delete(completedTurns.values().next().value);}
-  const state = () => ({ threadId, managerConnected: Boolean(threadReady && child && child.exitCode === null && child.signalCode === null), activeTurnId, status, voiceActive, voiceConnecting:connecting, workStarting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: timeline.snapshot() });
+  const state = () => ({ threadId: threadBootstrap?.observedThreadId || threadId, managerConnected: Boolean(threadReady && child && child.exitCode === null && child.signalCode === null), activeTurnId, status, voiceActive, voiceConnecting:connecting, workStarting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: timeline.snapshot() });
   const emit = (type, data = {}) => onEvent({ type, ...data });
   const changed = () => { persistTimeline(); emit('work-state', { state: state() }); };
   const send = message => child?.stdin.write(`${JSON.stringify(message)}\n`);
@@ -51,6 +51,31 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       pending.set(id, { resolve, reject, timer }); send({ id, method, params });
     });
   }
+  function bindBootstrapThread(id) {
+    if (!threadBootstrap || typeof id !== 'string' || !/^[\w-]+$/.test(id)) return false;
+    if (threadBootstrap.expectedThreadId && id !== threadBootstrap.expectedThreadId || threadBootstrap.observedThreadId && id !== threadBootstrap.observedThreadId) return false;
+    threadBootstrap.observedThreadId = id;
+    return true;
+  }
+  async function openNativeThread(method, params) {
+    const bootstrap = { expectedThreadId: method === 'thread/resume' ? params.threadId : null, observedThreadId: null, approvals: new Map() };
+    threadBootstrap = bootstrap;
+    let opened = false;
+    try {
+      const result = await rpc(method, params);
+      if (!bindBootstrapThread(result.thread?.id)) throw new Error('Native manager thread startup correlation mismatch; pending requests were not answered automatically.');
+      threadId = result.thread.id;
+      opened = true;
+      return result;
+    } finally {
+      if (threadBootstrap === bootstrap) threadBootstrap = undefined;
+      if (!opened) {
+        let cleared = false;
+        for (const [id, request] of bootstrap.approvals) if (approvals.get(id) === request) { approvals.delete(id); cleared = true; }
+        if (cleared) { emit('notice', { message: 'Native manager startup did not complete; its pending requests are no longer actionable. No response was sent automatically.' }); changed(); }
+      }
+    }
+  }
   function record(item, turnId, options) {
     timeline.record(item, turnId, options);
     if (item.type === 'commandExecution') items.set(item.id, { id: item.id, turnId, type: item.type, name: item.command, status: item.status, exitCode: item.exitCode, output: safeError(item.aggregatedOutput || '').slice(0, 2500) });
@@ -59,21 +84,26 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     if (items.size > 80) items.delete(items.keys().next().value);
   }
   function handle(message) {
-    if (message.id !== undefined && pending.has(message.id)) {
+    if (message.id !== undefined && !message.method && pending.has(message.id)) {
       const entry = pending.get(message.id); pending.delete(message.id); clearTimeout(entry.timer);
       message.error ? entry.reject(Object.assign(new Error(message.error.message), { code: message.error.code })) : entry.resolve(message.result); return;
     }
     const { method, params = {} } = message;
     if (message.id !== undefined && method) {
       if (method === 'currentTime/read') return send({ id: message.id, result: { currentTimeAt: Math.floor(Date.now() / 1000) } });
-      if (params.threadId === threadId && ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput', 'mcpServer/elicitation/request', 'item/permissions/requestApproval'].includes(method)) {
+      const requestThreadMatches = threadBootstrap
+        ? Boolean(threadBootstrap.observedThreadId) && params.threadId === threadBootstrap.observedThreadId || !threadBootstrap.observedThreadId && method === 'mcpServer/elicitation/request' && bindBootstrapThread(params.threadId)
+        : params.threadId === threadId;
+      if (requestThreadMatches && ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput', 'mcpServer/elicitation/request', 'item/permissions/requestApproval'].includes(method)) {
         const attentionId = approvals.get(String(message.id))?.attentionId || createHash('sha256').update(JSON.stringify([params.turnId || items.get(params.itemId)?.turnId || activeTurnId || requestEpoch, params.itemId || '', method, String(message.id)])).digest('hex');
-        approvals.set(String(message.id), { id: message.id, attentionId, method, params }); changed(); return;
+        const request = { id: message.id, attentionId, method, params };
+        approvals.set(String(message.id), request); threadBootstrap?.approvals.set(String(message.id), request); changed(); return;
       }
       send({ id: message.id, error: { code: -32601, message: `This minimal client does not support ${method}. No action was approved.` } });
       emit('notice', { message: `Codex requested ${method}, which this client cannot handle.` }); return;
     }
-    if (params.threadId !== threadId) return;
+    if (method === 'thread/started' && threadBootstrap) { if (bindBootstrapThread(params.thread?.id)) changed(); return; }
+    if (params.threadId !== (threadBootstrap?.observedThreadId || threadId)) return;
     if (loadingHistory) { historyNotifications.push(message); return; }
     // Passive observers only: NEVER start turns or append speech from these events.
     // Native realtime handoffs own routing, steering and result return.
@@ -153,7 +183,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       let result, recoveredFromThreadId = recoveredJournalSource;
       loadingHistory = true;
       if (threadId) {
-        try { result = await rpc('thread/resume', { threadId, excludeTurns: true, ...options }); }
+        try { result = await openNativeThread('thread/resume', { threadId, excludeTurns: true, ...options }); }
         catch (error) {
           if (!/already has an active writer/.test(error.message)) throw error;
           const previousThreadId = threadId;
@@ -162,7 +192,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
           if (source.thread.status?.type === 'active' || recent.data.some(turn => turn.status === 'inProgress')) throw new Error('ChatGPT is signed in, but the saved manager chat is active in another Codex client. Finish that work before reconnecting.');
           // Native history-preserving fork avoids terminating the owning desktop runtime.
           // It starts no turn; controller task files remain the same source of execution state.
-          result = await rpc('thread/fork', { threadId, ...options, excludeTurns: true, ephemeral: false, deferGoalContinuation: true });
+          result = await openNativeThread('thread/fork', { threadId, ...options, excludeTurns: true, ephemeral: false, deferGoalContinuation: true });
           await journalWrites;
           let journalSourceThreadId = recoveredJournalSource || previousThreadId;
           try {
@@ -180,7 +210,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
         }
       }
       else {
-        result = await rpc('thread/start', { ...options, ephemeral: false }); threadId = result.thread.id;
+        result = await openNativeThread('thread/start', { ...options, ephemeral: false }); threadId = result.thread.id;
         await writeFile(`${statePath}.tmp`, JSON.stringify({ threadId }) + '\n', { mode: 0o600 }); await rename(`${statePath}.tmp`, statePath);
         await rpc('thread/name/set', { threadId, name: 'Crew work chat' });
       }

@@ -8,13 +8,13 @@ import {createBridge} from '../codex-bridge.mjs';
 import {updateActivity} from '../update-activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
-async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,configuredInstructions=null,timelinePages=null,timelineDelay=0,timelineError=null,writerConflict=false,conflictThreadIds=null,recoveryActive=false,turnsError=null}={}){
+async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,configuredInstructions=null,timelinePages=null,timelineDelay=0,timelineError=null,writerConflict=false,conflictThreadIds=null,recoveryActive=false,turnsError=null,startupApproval=false,startupThreadNotification=true,startupResultThreadId=null}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-turn-state-')),statePath=join(directory,'manager.json'),control=join(directory,'notifications.jsonl'),calls=join(directory,'calls.jsonl'),executable=join(directory,'fake-codex.mjs');
  await writeFile(control,'');await writeFile(calls,'');if(saved)await writeFile(statePath,JSON.stringify({threadId:'manager-thread'}));
  const program=`#!${process.execPath}
 import {createInterface} from 'node:readline';
 import {readFileSync,appendFileSync} from 'node:fs';
-const control=${JSON.stringify(control)},calls=${JSON.stringify(calls)},history=${JSON.stringify(history)};let sequence=0,seen=0;
+const control=${JSON.stringify(control)},calls=${JSON.stringify(calls)},history=${JSON.stringify(history)};let sequence=0,seen=0;const startupPending=new Map();
 process.stdin.on('end',()=>{if(${exitOnEOF})process.exit(0)});process.on('SIGTERM',()=>{appendFileSync(calls,JSON.stringify({signal:'SIGTERM'})+'\\n');process.exit(0)});
 const send=value=>process.stdout.write(JSON.stringify(value)+'\\n');
 const reply=(id,result)=>send({id,result});
@@ -23,13 +23,17 @@ setInterval(()=>{const lines=readFileSync(control,'utf8').split('\\n').filter(Bo
 createInterface({input:process.stdin}).on('line',line=>{
  const message=JSON.parse(line);if(message.id===undefined)return;
  appendFileSync(calls,JSON.stringify({...message,processCwd:process.cwd(),processArgs:process.argv.slice(2)})+'\\n');const {id,method,params}=message;
+ if(!method){const waiting=startupPending.get(id);if(waiting){startupPending.delete(id);send({method:'serverRequest/resolved',params:{threadId:waiting.threadId,requestId:id}});reply(waiting.clientId,{thread:{id:${JSON.stringify(startupResultThreadId)}||waiting.threadId}});}return;}
  if(method==='initialize')return reply(id,{});
  if(method==='account/read')return reply(id,{account:{type:'chatgpt',planType:'synthetic'}});
  if(method==='config/read')return reply(id,{config:{developer_instructions:${JSON.stringify(configuredInstructions)}}});
  if(method==='thread/resume'&&(${JSON.stringify(conflictThreadIds)}||(${writerConflict}?['manager-thread']:[])).includes(params.threadId))return send({id,error:{code:-32600,message:'Thread already has an active writer'}});
  if(method==='thread/read')return reply(id,{thread:{id:'manager-thread',status:{type:${JSON.stringify(recoveryActive?'active':'idle')}}}});
- if(method==='thread/fork')return reply(id,{thread:{id:params.threadId==='forked-thread'?'reforked-thread':'forked-thread'}});
- if(method==='thread/start'||method==='thread/resume')return setTimeout(()=>reply(id,{thread:{id:params.threadId||'manager-thread'}}),${threadDelay});
+ if(['thread/start','thread/resume','thread/fork'].includes(method)){
+  const nativeThreadId=method==='thread/fork'?(params.threadId==='forked-thread'?'reforked-thread':'forked-thread'):(params.threadId||'manager-thread');
+  if(${startupApproval}){startupPending.set(id,{clientId:id,threadId:nativeThreadId});if(${startupThreadNotification})send({method:'thread/started',params:{thread:{id:nativeThreadId}}});send({id,method:'mcpServer/elicitation/request',params:{threadId:nativeThreadId,turnId:null,serverName:'fixture-connector',mode:'form',requestedSchema:{type:'object',properties:{}},_meta:{codex_approval_kind:'mcp_tool_call'},message:'Confirm fixture connector startup'}});return;}
+  return setTimeout(()=>reply(id,{thread:{id:nativeThreadId}}),${threadDelay});
+ }
  if(method==='thread/name/set')return reply(id,{});
  if(method==='thread/timeline/list'){let error=${JSON.stringify(timelineError)};try{error=JSON.parse(readFileSync(${JSON.stringify(join(directory,'timeline-error.json'))},'utf8'));}catch{};if(error)return send({id,error});const pages=${JSON.stringify(timelinePages)};return pages ? setTimeout(()=>reply(id,pages[Number(params.cursor||0)]),${timelineDelay}) : send({id,error:{code:-32601,message:'Method not found'}});}
  if(method==='thread/turns/list'){const error=${JSON.stringify(turnsError)};return error?send({id,error}):reply(id,{data:history});}
@@ -415,4 +419,40 @@ test('manager start and resume retain project-resolved developer instructions be
   assert.equal(thread.params.developerInstructions.split(configuredInstructions).length,2);
   assert.deepEqual(Object.keys(JSON.parse(await readFile(join(f.directory,'manager.json'),'utf8'))),['threadId']);
  }
+});
+
+test('manager startup connector approvals remain interactive before start/resume/fork completes, including colliding native RPC IDs',async t=>{
+ for(const options of [{},{startupThreadNotification:false},{saved:true},{saved:true,writerConflict:true}]){
+  const f=await fixture(t,{...options,startupApproval:true});
+  let settled=false;const starting=f.bridge.ensureThread().finally(()=>{settled=true;});
+  await until(()=>f.bridge.state().approvals.length===1);
+  const state=f.bridge.state(),request=state.approvals[0],expected=options.writerConflict?'forked-thread':'manager-thread';
+  assert.equal(settled,false);assert.equal(state.managerConnected,false);assert.equal(state.threadId,expected);
+  assert.equal(request.params.threadId,expected);assert.equal(request.params.turnId,null);
+  assert.equal((await f.calls()).some(call=>String(call.id)===request.id&&!call.method),false,'startup request has no automatic response');
+  assert.throws(()=>f.bridge.answerApproval('unknown-native-request',{action:'accept'}),/already been resolved/);
+  await f.request(9000,'mcpServer/elicitation/request',{threadId:'unrelated-native-thread',turnId:null,mode:'form',requestedSchema:{type:'object',properties:{}},_meta:{codex_approval_kind:'mcp_tool_call'}});
+  await until(async()=> (await f.calls()).some(call=>call.id===9000&&call.error));
+  assert.equal(f.bridge.state().approvals.length,1,'unrelated native thread cannot replace startup approval');
+  f.bridge.answerApproval(request.id,{action:'decline'});
+  await starting;
+  const response=(await f.calls()).find(call=>String(call.id)===request.id&&!call.method&&call.result);
+  assert.deepEqual(response.result,{action:'decline',content:null,_meta:null});
+  assert.equal(f.bridge.state().threadId,expected);assert.equal(f.bridge.state().approvals.length,0);
+  assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,0);
+ }
+});
+test('failed manager startup correlation removes only its own pending forms without answering them',async t=>{
+ const f=await fixture(t,{startupApproval:true,startupResultThreadId:'different-result-thread'});
+ const starting=f.bridge.ensureThread();const rejected=assert.rejects(starting,/startup correlation mismatch/);
+ await until(()=>f.bridge.state().approvals.length===1);
+ const first=f.bridge.state().approvals[0];
+ await f.request(9100,'mcpServer/elicitation/request',{threadId:'manager-thread',turnId:null,mode:'form',requestedSchema:{type:'object',properties:{}},_meta:{codex_approval_kind:'mcp_tool_call'}});
+ await until(()=>f.bridge.state().approvals.length===2);
+ f.bridge.answerApproval(first.id,{action:'decline'});
+ await rejected;
+ assert.equal(f.bridge.state().approvals.length,0);
+ assert.throws(()=>f.bridge.answerApproval(9100,{action:'accept'}),/already been resolved/);
+ assert.equal((await f.calls()).some(call=>call.id===9100&&!call.method),false);
+ assert.ok(f.events.some(event=>event.type==='notice'&&event.message.includes('No response was sent automatically')));
 });

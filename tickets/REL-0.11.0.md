@@ -1,6 +1,6 @@
 # REL-0.11.0 — Grouped manager experience release
 
-Status: integrated locally; release gates in progress.
+Status: integration PR #19; release gates in progress.
 
 The user explicitly authorized one grouped release of PRs #10, #16, #17 and #18, including required semantic integration fixes, combined tests, merge to main and signed/notarized publication. Histories and exact approved source heads are retained in sequential merges. Existing user installation, authentication, configuration and shared project services are preserved.
 
@@ -15,3 +15,11 @@ The first combined regression retained two timing failures (prepared worker and 
 Real subscription acceptance on the combined source passed: Allow produced multiple distinct visible replies, a successful command and one durable result on the same task/run/thread. Cancel produced an interrupted native turn, stopped task, no command output and no result. The production worker-detail reader verified live pending and terminal evidence, without duplicate final fallback. An additional reader regression excludes wrong task/run events and incomplete log tails. Prior actual unchanged-project setup/Start/Docker/endpoint and cleanup acceptance from PR #16 remains separate historical evidence; this run did not reprovision shared services.
 
 Private operational evidence and screenshots remain outside Git. Publication and upgrade results will be recorded after their actual completion.
+
+The clean combined rerun passed 466/466 tests with zero failures, skips or cancellations. Twenty-seven focused attention/HTTP/detail checks passed. Compiled synthetic-media acceptance passed on desktop, 390px and the native minimum 540×500: stable mixed-timeline rows, partial/final/promotion/replay, disconnected SSE/reload history, draft retention, exact native approval decisions, compact/details/notes/actions, call continuity through project views/Settings, mute/PTT and one approval sound across transcript deltas/reconnect. Browser/native-owner suppression passed; no console/page errors or horizontal overflow. A detail-header correction consistently labels pending native approval.
+
+A bounded current-delta privacy scan found no personal source paths, private session identifiers, GitHub tokens or API keys; the private-key-marker match is a deliberate rejection-test string without key material. The source package contains 222 unique allowlisted entries and all actual local module imports; the sole string-based scan exception is the existing generated disposable totals fixture. Current privacy checks do not reclassify earlier history audit disposition.
+
+Independent combined review identified manager connector requests arriving before native thread-start responses and native request/client RPC ID overlap. A narrowly scoped startup binding/correlation correction and regression are required before merge, preserving native history and configuration. No automatic approval or fabricated turn is introduced.
+
+Startup correction passes all 29 bridge regressions, including genuine null-turn connector forms during start/resume/fork, native/client request-ID overlap, mismatched-thread rejection and cleanup on failed correlation. Existing UI/API permits answering while preparation is pending. Native thread startup retains its existing bounded 90-second RPC deadline; a human-held startup request beyond that bound reports failure and invalidates pending forms for explicit retry, without automatic response. Independent combined review found no additional blocker in call/timeline/forms or worker evidence/notes routing. The exact corrected source requires the final full rerun and packaged gates below.
