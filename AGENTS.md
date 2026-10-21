@@ -1,11 +1,5 @@
 # Working scope and durable engineering guidance
 
-
-## Retained worker recovery (GitHub #24)
-
-- Recovery begins with a read-only retained/current plan review and a decision bound to the exact task, run, environment and plan hashes. Compatible updates may change resume/readiness/stop/teardown and add verified source provenance; Setup, Start, existing source identities, environment and permissions stay pinned. Never replay incomplete setup or run project commands merely to reconcile metadata. Require fresh terminal worker/hook/runtime evidence and canonical registered worktree identity; unknown process evidence blocks.
-- Apply only the human-approved command/resource scope through the ordinary durable controller. Keep prior plans, decisions and task history across crash/retry. A missing worktree may be retired only when its owned canonical location is absent and Git registration is absent; do not prune Git or run cleanup for retirement. Label resource cleanup unverified, preserve records and resolve only that task's stale attention. A live runtime with no declared stop remains blocked rather than force-stopped.
-
 - Tie implementation to an appropriate Crew ticket and explicitly agreed scope. Keep AGENTS guidance current when the user corrects a working assumption. Maintain clear technical and user-facing documentation; private operational evidence belongs outside the public repository.
 - Use existing ChatGPT/Codex subscription sign-in and allowance. Never add API-key fallback, extract private credentials/endpoints or copy another machine's auth files. Keep feasibility checks bounded and disposable.
 - The human converses with one persistent manager. Preserve native server-managed realtime handoffs; transcript/handoff events must not launch duplicate turns or relay results twice. Keep normal approvals and truthful correlation of dispatch, execution and result evidence.
@@ -29,6 +23,11 @@
 - Native accessibility observation can reactivate a closed app. For background acceptance, close once, inspect only lifecycle/HTTP/process evidence, then reopen. If the user leaves the Mac locked, do not bypass security; continue independent browser/headless/build checks and report native/device acceptance as pending.
 - Keep local configs, credentials, conversations, task/run/worktree state, installers and screenshots out of Git. Crew is the current product name; legacy names and local.voice.manager remain compatibility identities. Migration must preserve state/profile provenance and offer recovery rather than reset, merge, force-stop or blind relocation.
 - Historical test evidence stays separate from current human acceptance. Before a fresh human worker test, preserve automated records in an archive and leave the intended current task list empty. Never launch/answer/acknowledge the user's acceptance work on their behalf.
+
+## Retained worker recovery (GitHub #24)
+
+- Recovery begins with a read-only retained/current plan review and a decision bound to the exact task, run, environment and plan hashes. Compatible updates may change resume/readiness/stop/teardown and add verified source provenance; Setup, Start, existing source identities, environment and permissions stay pinned. Never replay incomplete setup or run project commands merely to reconcile metadata. Require fresh terminal worker/hook/runtime evidence and canonical registered worktree identity; unknown process evidence blocks.
+- Apply only the human-approved command/resource scope through the ordinary durable controller. Keep prior plans, decisions and task history across crash/retry. A missing worktree may be retired only when its owned canonical location is absent and Git registration is absent; do not prune Git or run cleanup for retirement. Label resource cleanup unverified, preserve records and resolve only that task's stale attention. A live runtime with no declared stop remains blocked rather than force-stopped.
 
 ## Release and publication scope (AI-015)
 
