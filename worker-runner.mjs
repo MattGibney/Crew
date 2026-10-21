@@ -67,7 +67,6 @@ async function applyModelReroute(params){
  if(!selectedModel||!modelTurnAcknowledged||ending||params.threadId!==threadId||!turnId||params.turnId!==turnId)return;
  await modelEvidence('rerouted',`The native provider rerouted this turn from ${params.fromModel} to ${params.toModel}. Review the reported model with the manager; Crew did not substitute a model.`,{selectedModel:params.toModel,source:'native-model-rerouted',reason:params.reason});
 }
-async function reconcileModelReroute(){if(selectedModel&&(!modelTurnAcknowledged||turnStartPending))return;const observed=pendingModelReroutes.get(turnId);pendingModelReroutes.clear();if(observed)await applyModelReroute(observed);}
 async function completeTurn(params){
  if(selectedModel&&(!modelTurnAcknowledged||ending))return;
  if(turnId&&params.turn.id!==turnId)return;
@@ -75,7 +74,6 @@ async function completeTurn(params){
  if(params.turn.error){errorMessage=params.turn.error.message||'Codex turn failed';await modelEvidence('failed',`Native worker failed after model selection: ${errorMessage}`,{selectedModel:null});}
  await finish();
 }
-async function reconcileModelCompletion(){if(selectedModel&&(!modelTurnAcknowledged||turnStartPending))return;const observed=pendingModelCompletions.get(turnId);pendingModelCompletions.clear();if(observed)await completeTurn(observed);}
 async function finish(){if(ending)return;if(turnStartPending){finishPending=true;return;}ending=true;await saveRuntime();await writeFile(finalFile,finalMessage,{mode:0o600});await invalidateWorkerRequests({...requestContext(),reason:'Worker turn ended; this native request is no longer actionable.'});worker.stdin.end();}
 const approvalMethods=new Set(['item/commandExecution/requestApproval','item/fileChange/requestApproval','item/permissions/requestApproval','item/tool/requestUserInput','mcpServer/elicitation/request']);
 async function handle(message,replayModelEvent=false){
