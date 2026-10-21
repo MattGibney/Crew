@@ -51,6 +51,9 @@ test('custom behavior fully replaces Crew defaults in actual instruction builder
   assert.ok(worker.startsWith('WORKER_REPLACEMENT\n'));
   assert.doesNotMatch(worker, /You are the ONE|Give one useful progress|Investigate whether|Inspect actual files|technical lead/);
   assert.match(worker, /local_orchestration.report/); assert.match(worker, /workspace|worktree/);
+  assert.match(worker,/effective Codex configuration controls sandbox and approval/);
+  assert.doesNotMatch(worker,/Read-only sandbox/);
+  assert.match(buildWorkerInstructions({project:{mode:'fixture'},sandbox:'workspace-write'}),/Read-only fixture/);
   assert.equal(promptVersion('same'), promptVersion('same'));
 });
 

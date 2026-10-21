@@ -8,7 +8,7 @@ import {createBridge} from '../codex-bridge.mjs';
 import {updateActivity} from '../update-activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
-async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false}={}){
+async function fixture(t,{history=[],saved=false,threadDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,configuredInstructions=null}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-turn-state-')),statePath=join(directory,'manager.json'),control=join(directory,'notifications.jsonl'),calls=join(directory,'calls.jsonl'),executable=join(directory,'fake-codex.mjs');
  await writeFile(control,'');await writeFile(calls,'');if(saved)await writeFile(statePath,JSON.stringify({threadId:'manager-thread'}));
  const program=`#!${process.execPath}
@@ -25,6 +25,7 @@ createInterface({input:process.stdin}).on('line',line=>{
  appendFileSync(calls,JSON.stringify({...message,processCwd:process.cwd(),processArgs:process.argv.slice(2)})+'\\n');const {id,method,params}=message;
  if(method==='initialize')return reply(id,{});
  if(method==='account/read')return reply(id,{account:{type:'chatgpt',planType:'synthetic'}});
+ if(method==='config/read')return reply(id,{config:{developer_instructions:${JSON.stringify(configuredInstructions)}}});
  if(method==='thread/start'||method==='thread/resume')return setTimeout(()=>reply(id,{thread:{id:'manager-thread'}}),${threadDelay});
  if(method==='thread/name/set')return reply(id,{});
  if(method==='thread/turns/list')return reply(id,{data:history});
@@ -113,8 +114,27 @@ test('project repository scopes child and thread configuration while orchestrati
   const awaitedRepository=await realpath(f.repository);
   const calls=await f.calls(),thread=calls.find(call=>call.method===(saved?'thread/resume':'thread/start'));
   assert.equal(thread.params.cwd,f.repository);assert.ok(calls.every(call=>call.processCwd===awaitedRepository));
+  for(const key of ['sandbox','approvalPolicy','approvalsReviewer'])assert.equal(Object.hasOwn(thread.params,key),false);
+  assert.equal(calls[0].processArgs.some(arg=>/ignore-user-config|shell_environment_policy/.test(arg)),false);
   const argument=calls[0].processArgs.find(arg=>arg.startsWith('mcp_servers.local_orchestration.args='));
   assert.deepEqual(JSON.parse(argument.slice(argument.indexOf('=')+1)),[join(f.directory,'orchestration-mcp.mjs'),f.orchestrationDir,'manager',f.runtimeProjectPath]);
   assert.notEqual(f.repository,f.directory);
+ }
+});
+
+
+test('manager start and resume retain project-resolved developer instructions before Crew runtime',async t=>{
+ const configuredInstructions='Configured development instructions must survive Crew.';
+ for(const saved of [false,true]){
+  const f=await fixture(t,{saved,projectScoped:true,configuredInstructions});
+  await f.bridge.startWork('complete',saved?'configured-resume':'configured-start');
+  await until(()=>f.bridge.state().status==='completed');
+  const calls=await f.calls(),read=calls.find(call=>call.method==='config/read'),thread=calls.find(call=>call.method===(saved?'thread/resume':'thread/start'));
+  assert.equal(read.params.cwd,f.repository);assert.equal(read.params.includeLayers,false);
+  assert.ok(calls.indexOf(read)<calls.indexOf(thread));
+  assert.ok(thread.params.developerInstructions.startsWith(configuredInstructions+'\n\n'));
+  assert.match(thread.params.developerInstructions,/Crew runtime context/);
+  assert.equal(thread.params.developerInstructions.split(configuredInstructions).length,2);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(join(f.directory,'manager.json'),'utf8'))),['threadId']);
  }
 });

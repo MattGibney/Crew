@@ -9,6 +9,7 @@ import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
 import { readTask, requestWorkerAction } from './orchestration-store.mjs';
+import { listWorkerRequests, decideWorkerRequest } from './worker-approvals.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRendererAssets } from './renderer-assets.mjs';
 import { createUpdateBridge } from './update-bridge.mjs';
@@ -53,6 +54,14 @@ const broadcast = event => {
     catch { clients.delete(client); }
   }
 };
+let workerApprovalSnapshot = '';
+const publishWorkerApprovals = async () => {
+  const requests = await listWorkerRequests({ stateDir: orchestrationDir, pendingOnly: true });
+  const serialized = JSON.stringify(requests);
+  if (serialized !== workerApprovalSnapshot) { workerApprovalSnapshot = serialized; broadcast({ type: 'worker-approval-state', requests }); }
+  return requests;
+};
+const workerApprovalTimer = setInterval(() => void publishWorkerApprovals().catch(error => broadcast({ type: 'notice', message: safeError(error) })), 1000);
 let drainHeld=false,updatePlan,updatePlanTimer;
 const prompts = await createPromptSettings({ stateDir: orchestrationDir, sourceDir: root, projectId: project.id, managerPrompt, workerPrompt });
 const controller = await createController({ admissionHeld:async()=>await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)||drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR ? {dir:process.env.CREW_GLOBAL_CAPACITY_DIR} : null, onChange: state => broadcast({ type: 'orchestration-state', state }) });
@@ -102,6 +111,7 @@ const server = http.createServer(async (req, res) => {
       res.write(`data: ${JSON.stringify({ type: 'work-state', state: bridge.state() })}\n\n`); clients.add(res);
       res.write(`data: ${JSON.stringify({ type: 'manager-lifecycle', state: manager.view() })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'orchestration-state', state: await controller.view() })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'worker-approval-state', requests: await publishWorkerApprovals() })}\n\n`);
       res.on('error', () => { clients.delete(res); void bridge.stopVoice({ preserveWork: true }).catch(error => broadcast({ type: 'error', message: safeError(error) })); });
       const timer = setInterval(() => res.write(': heartbeat\n\n'), 15000);
       req.on('close', () => { clearInterval(timer); clients.delete(res); void bridge.stopVoice({ preserveWork: true }).catch(error => broadcast({ type: 'error', message: safeError(error) })); }); return;
@@ -161,6 +171,13 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/voice-ready') return send(200, await manager.run(() => bridge.greetVoice(input.sessionToken)));
     if (req.url === '/api/disconnect') { await bridge.stopVoice({ preserveWork: true }); return send(200, { disconnected: true }); }
     if (req.url === '/api/stop-work') { await bridge.interrupt(); return send(200, { interrupted: true }); }
+    if(req.url==='/api/worker-approval') {
+      const task = await readTask(orchestrationDir, input.taskId);
+      if (task.projectId !== project.id && !(project.mode === 'fixture' && !task.projectId)) throw new Error('Worker request belongs to another project');
+      const request = await decideWorkerRequest({ ...input, stateDir: orchestrationDir });
+      await publishWorkerApprovals();
+      return send(200, { approvalId: request.approvalId, status: request.status });
+    }
     if(req.url==='/api/approval'){const answer=async()=>{bridge.answerApproval(input.id,input.response);return{answered:true};};return send(200,drainHeld&&updatePlan.status()?.phase==='draining'?await answer():await updateAdmission.run(answer));}
     // Text diagnostic enters the SAME work chat; never invoked by transcript events.
     if (req.url === '/api/work') {
@@ -178,6 +195,7 @@ const server = http.createServer(async (req, res) => {
 let shuttingDown;
 async function shutdown() {
   clearInterval(updatePlanTimer);
+  clearInterval(workerApprovalTimer);
   if (shuttingDown) return shuttingDown;
   shuttingDown = (async () => {
     for (const client of clients) client.end();

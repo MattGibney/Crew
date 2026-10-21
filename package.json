@@ -45,6 +45,7 @@
   },
   "main": "desktop/main.mjs",
   "dependencies": {
+    "ajv": "8.20.0",
     "electron-updater": "6.8.9"
   }
 }

@@ -23,6 +23,7 @@ export function useCrewManager() {
   const retryRequests = useRef(new Map());
   const [work, setWork] = useState(EMPTY_WORK), [workNotice, setWorkNotice] = useState('');
   const [orchestration, setOrchestration] = useState({ tasks: [], loading: true });
+  const [workerApprovals, setWorkerApprovals] = useState([]);
   const [transcript, dispatchTranscript] = useReducer(transcriptReducer, EMPTY_TRANSCRIPT);
   const [catalog, setCatalog] = useState(null), [selectedVoice, setSelectedVoice] = useState('');
   const [voiceLoading, setVoiceLoading] = useState(true), [voiceNotice, setVoiceNotice] = useState('Loading available Codex voices. Microphone stays off.');
@@ -63,6 +64,7 @@ export function useCrewManager() {
         }
         if(message.type==='update-plan-state')setUpdates(previous=>({...previous,plan:message.plan}));
         if (message.type === 'orchestration-state') setOrchestration(message.state);
+        if (message.type === 'worker-approval-state') setWorkerApprovals(message.requests);
         if (message.type === 'notice') setWorkNotice(message.message);
         if (message.type === 'transcript-delta' || message.type === 'transcript-done') dispatchTranscript({ role: message.role, text: message.text, done: message.type === 'transcript-done' });
         voice.handleEvent(message);
@@ -106,6 +108,11 @@ export function useCrewManager() {
   }, [showError]);
   const answerApproval = useCallback(async (id, response) => {
     try { await api('approval', { id, response }); } catch (failure) { setWorkNotice(errorText(failure)); }
+  }, []);
+  const answerWorkerApproval = useCallback(async (request, response) => {
+    const { taskId, runId, approvalId, threadId, turnId, requestId } = request;
+    try { await api('worker-approval', { taskId, runId, approvalId, threadId, turnId, requestId, response }); }
+    catch (failure) { setWorkNotice(errorText(failure)); throw failure; }
   }, []);
   const interruptManager = useCallback(async () => {
     try { await api('stop-work'); } catch (failure) { setWorkNotice(errorText(failure)); }
@@ -158,5 +165,5 @@ export function useCrewManager() {
       throw failure;
     } finally { lifecycleLock.current = false; }
   }, [loadSettings, loadVoices, voice.dispose, voice.disconnect]);
-  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
+  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
 }

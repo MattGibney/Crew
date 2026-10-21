@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import { readFile, writeFile, rename } from 'node:fs/promises';
 import { conversationMessage } from './conversation.mjs';
 import { buildManagerInstructions } from './prompt-settings.mjs';
+import { workerApprovalResponse } from './worker-approvals.mjs';
 export const safeError = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1500);
 export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent = () => {} }) {
   // Keep app-owned MCP scripts rooted in cwd; project configuration resolves in sessionCwd.
@@ -112,7 +113,12 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
         catch (error) { if (error.code !== 'ENOENT') throw new Error('Cannot read the saved chat reference. It has not been replaced.'); }
       }
       const managerInstructions = buildManagerInstructions({ managerPrompt: managerPrompt ?? await readFile(new URL('./prompts/manager.md', import.meta.url), 'utf8'), project });
-      const options = { cwd: sessionCwd, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandbox: 'read-only', developerInstructions: managerInstructions };
+      // Preserve configured instructions before adding Crew's narrower runtime
+      // role/protocol. Resolve in the project cwd; never log or copy config data.
+      const effectiveConfig = await rpc('config/read', { cwd: sessionCwd, includeLayers: false });
+      const configuredInstructions = effectiveConfig.config?.developer_instructions;
+      const developerInstructions = [typeof configuredInstructions === 'string' ? configuredInstructions : '', managerInstructions].filter(Boolean).join('\n\n');
+      const options = { cwd: sessionCwd, developerInstructions };
       let result;
       if (threadId) {
         try { result = await rpc('thread/resume', { threadId, excludeTurns: true, ...options }); }
@@ -290,29 +296,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   async function interrupt({expectedTurnId}={}) { if(expectedTurnId&&activeTurnId!==expectedTurnId)throw new Error('The active manager turn changed. Review the update plan before interrupting work.'); if (activeTurnId) await rpc('turn/interrupt', { threadId, turnId: activeTurnId }); }
   function answerApproval(id, response) {
     const request = approvals.get(String(id)); if (!request) throw new Error('This request has already been resolved.');
-    const { method, params } = request; let result;
-    if (method === 'item/tool/requestUserInput') {
-      const answers = {};
-      for (const question of params.questions) {
-        const answer = response.answers?.[question.id];
-        if (typeof answer !== 'string' || !answer.trim()) throw new Error('Answer each question before submitting.');
-        if (question.options?.length && !question.isOther && !question.options.some(o => o.label === answer)) throw new Error('Choose one of the offered answers.');
-        answers[question.id] = { answers: [answer] };
-      }
-      result = { answers };
-    } else if (method === 'mcpServer/elicitation/request') {
-      if (!['accept', 'decline', 'cancel'].includes(response.action)) throw new Error('Invalid MCP response.');
-      const emptyToolApproval = params.mode === 'form' && params._meta?.codex_approval_kind === 'mcp_tool_call' && Object.keys(params.requestedSchema?.properties || {}).length === 0;
-      if (response.action === 'accept' && params.mode !== 'url' && !emptyToolApproval) throw new Error('This MCP form needs a fuller client. Cancel it and use the normal Codex client.');
-      result = { action: response.action, content: response.action === 'accept' && emptyToolApproval ? {} : null, _meta: null };
-    } else if (method === 'item/permissions/requestApproval') {
-      if (!['accept', 'decline'].includes(response.decision)) throw new Error('Invalid permission decision.');
-      result = { permissions: response.decision === 'accept' ? params.permissions : {}, scope: 'turn' };
-    } else {
-      if (!['accept', 'decline', 'cancel'].includes(response.decision)) throw new Error('Invalid approval decision.');
-      if (params.availableDecisions && !params.availableDecisions.includes(response.decision)) throw new Error('That decision is not available for this request.');
-      result = { decision: response.decision };
-    }
+    const result = workerApprovalResponse(request, response);
     send({ id: request.id, result }); approvals.delete(String(id)); changed();
   }
   return { stopManager, setManagerPrompt, prepare, ensureThread, listVoices, startVoice, greetVoice, reportVoiceStatus, stopVoice, shutdown, startWork, interrupt, answerApproval, state };

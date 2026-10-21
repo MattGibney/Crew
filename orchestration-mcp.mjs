@@ -3,6 +3,7 @@ import readline from 'node:readline';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction } from './orchestration-store.mjs';
+import { listWorkerRequests, decideWorkerRequest } from './worker-approvals.mjs';
 
 const [stateDirArg, role, taskId, runId] = process.argv.slice(2);
 if (!stateDirArg || !['manager', 'worker'].includes(role) || (role === 'worker' && (!taskId || !runId))) {
@@ -27,6 +28,7 @@ const tools = role === 'manager' ? [
     inputSchema: object({ requestId: taskIdentifier, ticket: string('Development ticket, e.g. AI-004', 120), brief: string('Agreed bounded task brief and explicit scope limits'), repositoryId: string('Exact configured repository ID', 80) }, ['requestId', 'ticket', 'brief', ...(repositoryMode ? ['repositoryId'] : [])]),
   },
   { name: 'get_status', description: 'Read durable actual worker status, meaningful reports, questions and pending attention. Dispatch is not completion. Do not repeat low-level logs aloud.', inputSchema: object({ taskId: taskIdentifier }) },
+  { name: 'answer_worker_approval', description: 'Relay an actual explicit user response to one native worker approval or input request from get_status. Never approve automatically, infer consent from the task brief, expand requested permissions, or answer for the user. Copy every request identity exactly; this continues the same worker request and does not resume or start a turn. Supply exactly one of turnId or turnIdJson; startup connector requests may have JSON null as their native turn.', inputSchema: object({ taskId: taskIdentifier, runId: string('Exact current run ID', 200), approvalId: taskIdentifier, threadId: string('Exact native thread ID', 200), turnId: string('Exact native turn ID; omit when using turnIdJson', 200), turnIdJson: string('The literal JSON null for a connector request whose native turnId is null; omit turnId', 4), requestIdJson: string('JSON encoding of the exact native request ID, preserving number versus string', 250), responseJson: string('Actual user response JSON: decision must match an offered native choice; permissions may select a requested subset and turn/session scope; connectors use action and content; input uses answers keyed by question ID', 16000) }, ['taskId', 'runId', 'approvalId', 'threadId', 'requestIdJson', 'responseJson']) },
   { name: 'answer_question', description: 'Relay the user answer to the currently pending worker question. This queues a controller resume; never invent user consent or expand the brief.', inputSchema: object({ taskId: taskIdentifier, questionId: string('Exact active question ID', 160), answer: string('User answer within agreed scope') }, ['taskId', 'questionId', 'answer']) },
   { name: 'worker_action', description: 'Request a lifecycle change for one explicitly selected worker. Actions are durable queued intent: read status for actual execution. Stop retains task, history and worktree; pause retains resumable work; resume/start continues the same task; dispose tears down only a safely removable inactive worktree and retains records. Never invent user consent or expand scope. Use the current run ID from get_status to reject stale actions and reuse actionId for retries.', inputSchema: object({ taskId: taskIdentifier, actionId: taskIdentifier, action: { type: 'string', enum: ['stop', 'pause', 'resume', 'start', 'dispose'] }, expectedRunId: string('Current run ID read from get_status, when a run exists', 160) }, ['taskId', 'actionId', 'action']) },
   { name: 'acknowledge_attention', description: 'Mark one attention item acknowledged after discussing it with the user. Does not launch work, activate a microphone or grant speaking permission.', inputSchema: object({ taskId: taskIdentifier, attentionId: string('Exact attention ID', 160) }, ['taskId', 'attentionId']) },
@@ -58,7 +60,19 @@ async function callTool(name, args) {
       } else if (args.repositoryId) throw new Error('Fixture tasks do not accept repositoryId');
       return createTask(stateDir, { ...args, projectId: project?.id || null });
     }
-    case 'get_status': return args.taskId ? scoped(await readTask(stateDir, args.taskId)) : (await loadTasks(stateDir)).map(scoped);
+    case 'get_status': {
+      const requests = await listWorkerRequests({ stateDir });
+      const withApprovals = task => ({ ...scoped(task), approvals: requests.filter(request => request.taskId === task.id && request.runId === task.runId && ['pending', 'decided', 'delivered', 'delivery-unknown'].includes(request.status)) });
+      return args.taskId ? withApprovals(await readTask(stateDir, args.taskId)) : (await loadTasks(stateDir)).map(withApprovals);
+    }
+    case 'answer_worker_approval': {
+      scoped(await readTask(stateDir, args.taskId));
+      const { requestIdJson, responseJson, turnIdJson, ...identity } = args;
+      const hasTurn = Object.hasOwn(args, 'turnId'), hasJsonTurn = Object.hasOwn(args, 'turnIdJson');
+      if (hasTurn === hasJsonTurn) throw new Error('Supply exactly one of turnId or turnIdJson');
+      if (hasJsonTurn) { if (JSON.parse(turnIdJson) !== null) throw new Error('turnIdJson must encode JSON null'); identity.turnId = null; }
+      return decideWorkerRequest({ ...identity, stateDir, requestId: JSON.parse(requestIdJson), response: JSON.parse(responseJson) });
+    }
     case 'answer_question': scoped(await readTask(stateDir, args.taskId)); return answerQuestion(stateDir, args);
     case 'worker_action': scoped(await readTask(stateDir, args.taskId)); return requestWorkerAction(stateDir, args);
     case 'acknowledge_attention': scoped(await readTask(stateDir, args.taskId)); return acknowledgeAttention(stateDir, args);
