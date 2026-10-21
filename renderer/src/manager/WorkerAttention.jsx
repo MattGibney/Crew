@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { ArrowUpRight, Clock3, FolderGit2, Hand, Layers, LoaderCircle } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { formatElapsed, groupWorkers, pendingAttention, workerProgress, workerStatus, workerTiming } from './worker-model.js';
+import { workspaceWorkers, formatElapsed, groupWorkers, pendingAttention, workerProgress, workerStatus, workerTiming } from './worker-model.js';
 
 export function WorkerStatus({ task }) {
   const tone = ['failed', 'blocked'].includes(task.status) ? 'border-destructive/25 bg-destructive/10 text-destructive' : ['awaiting_answer', 'paused'].includes(task.status) || pendingAttention(task).length ? 'border-chart-4/35 bg-chart-4/10 text-foreground' : task.status === 'completed' ? 'border-chart-2/30 bg-chart-2/10 text-foreground' : ['running', 'launching', 'verifying'].includes(task.status) ? 'border-primary/20 bg-primary/10 text-primary' : 'border-border bg-muted text-muted-foreground';
@@ -21,7 +21,7 @@ function WorkerCard({ task, now, onSelect, compact }) {
   </article>;
 }
 export function WorkerAttention({ view, onSelect, onRetry, compact = false }) {
-  const tasks = view.tasks || [], groups = groupWorkers(tasks);
+  const tasks = workspaceWorkers(view.tasks || []), groups = groupWorkers(tasks);
   const [now, setNow] = useState(Date.now()), [filter, setFilter] = useState('all');
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   const shown = filter === 'attention' ? tasks.filter(task => task.pendingApprovalCount || pendingAttention(task).length || ['failed', 'blocked', 'awaiting_answer'].includes(task.status)) : filter === 'active' ? groups.active : tasks;

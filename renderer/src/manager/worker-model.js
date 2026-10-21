@@ -1,14 +1,18 @@
+import { isArchivedTask, activeTasks, archivedTasks } from '../../../worker-archive.mjs';
 const HISTORY = new Set(['completed', 'failed', 'stopped', 'disposed', 'canceled', 'cancelled']);
-const LABELS = { queued: 'Queued', launching: 'Preparing', running: 'Working', resume_queued: 'Resume queued', awaiting_answer: 'Needs your answer', blocked: 'Blocked', verifying: 'Checking result', pausing: 'Pausing', stopping: 'Stopping', paused: 'Paused', stopped: 'Stopped', completed: 'Completed', failed: 'Needs attention', disposed: 'Removed', canceled: 'Canceled', cancelled: 'Canceled' };
+const LABELS = { queued: 'Queued', launching: 'Preparing', running: 'Working', resume_queued: 'Resume queued', awaiting_answer: 'Needs your answer', blocked: 'Blocked', verifying: 'Checking result', pausing: 'Pausing', stopping: 'Stopping', paused: 'Paused', stopped: 'Stopped', completed: 'Completed', failed: 'Needs attention', disposed: 'Archived', removed: 'Archived', canceled: 'Canceled', cancelled: 'Canceled' };
 export const pendingAttention = task => (task.attention || []).filter(item => !item.ackedAt);
 export const pendingLifecycle = task => (task.lifecycleRequests || []).find(item => ['pending', 'processing'].includes(item.status));
+export const workspaceWorkers = activeTasks;
+export const archivedWorkers = (tasks, projectId, projectMode) => projectId ? archivedTasks(tasks.filter(task => task.projectId === projectId || projectMode === 'fixture' && !task.projectId)) : [];
+export const workerSelectionRemoved = (tasks, id) => Boolean(id) && tasks.some(task => task.id === id && isArchivedTask(task));
 export function groupWorkers(tasks) {
   const active = [], history = [];
-  for (const task of tasks) {
+  for (const task of workspaceWorkers(tasks)) {
     // Pending reviews, retained paused workers and observed live processes must never disappear into history.
     (HISTORY.has(task.status) && !pendingAttention(task).length && !pendingLifecycle(task) && task.execution?.live !== true ? history : active).push(task);
   }
-  return { active, history: history.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)), retained: tasks.filter(task => task.worktree && task.status !== 'disposed').length };
+  return { active, history: history.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)), retained: workspaceWorkers(tasks).filter(task => task.worktree).length };
 }
 export function workerStatus(task) { return task.retirement?.reason === 'worktree-already-missing' ? 'Retired' : LABELS[task.status] || 'Status unavailable'; }
 export function workerProgress(task) {
@@ -36,7 +40,7 @@ export function formatElapsed(ms) {
   return hours ? `${hours}h ${minutes % 60}m` : minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 }
 export function workerActions(task) {
-  if (pendingLifecycle(task) || ['disposed', 'stopping', 'pausing'].includes(task.status)) return [];
+  if (isArchivedTask(task) || pendingLifecycle(task) || ['disposed', 'stopping', 'pausing'].includes(task.status)) return [];
   if (task.execution?.live === true) return ['pause', 'stop'];
   if (['running', 'queued', 'launching', 'resume_queued', 'verifying', 'awaiting_answer'].includes(task.status)) return ['pause', 'stop'];
   if (['paused', 'stopped', 'failed', 'blocked'].includes(task.status)) return [...(task.question?.runId === task.runId && task.answer?.questionId !== task.question.id ? [] : ['resume']), 'dispose'];
@@ -45,7 +49,7 @@ export function workerActions(task) {
 export function workerActionRequest(task, action, id = `worker-${crypto.randomUUID()}`) {
   if (!workerActions(task).includes(action)) throw new Error('This worker action is no longer available. Refresh its status.');
   const selection = { taskId: task.id, action, actionId: id, expectedRunId: task.runId || null };
-  return { requestId: id, text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Dispose is authorized only through the existing safe teardown, which must refuse dirty or unresolved work and retain task records. Report queued intent separately from confirmed completion.` };
+  return { requestId: id, text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Archive (the compatible dispose action) is authorized only through the existing safe teardown, which must refuse dirty or unresolved work and retain task records. Report queued intent separately from confirmed completion.` };
 }
 
 export function workerRecoveryReviewRequest(task) {

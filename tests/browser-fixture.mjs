@@ -2,6 +2,7 @@
 // Usage: npm run renderer:build; node tests/browser-fixture.mjs [port=4342]
 // This never loads Codex, project configuration, credentials or business repositories.
 import http from 'node:http';
+import { isArchivedTask } from '../worker-archive.mjs';
 import { conversationMessage } from '../conversation.mjs';
 import { createConversationTimeline } from '../conversation-timeline.mjs';
 import { readFile } from 'node:fs/promises';
@@ -12,7 +13,7 @@ const port = Number(process.argv[2] || 4342);
 const assetsRoot = path.resolve(process.argv[3] || path.join(root, 'renderer-dist'));
 const peers = new Set(), mediaPeers = new Set();
 const now = new Date().toISOString();
-const task = (id, status, extra = {}) => ({ id: `fixture-task-${id}`, runId: `fixture-run-${id}`, ticket: `AI-${140 + id}`, brief: `Review fixture area ${id}`, status, createdAt: now, updatedAt: now, progress: `Examining area ${id} with a bounded read-only check.`, repositoryId: 'fixture', projectId: 'crew-acceptance-fixture', worktree: `/tmp/crew-fixture/w${id}`, attention: [], ...extra });
+const task = (id, status, extra = {}) => ({ id: `fixture-task-${id}`, runId: `fixture-run-${id}`, ticket: `AI-${140 + id}`, brief: `Review fixture area ${id}`, status, createdAt: now, updatedAt: now, revision: 1, progress: `Examining area ${id} with a bounded read-only check.`, repositoryId: 'fixture', projectId: 'crew-acceptance-fixture', worktree: `/tmp/crew-fixture/w${id}`, attention: [], ...extra });
 let orchestration = { maxConcurrent: 6, tasks: [
   task(1, 'running', { workerPromptSnapshot: { text: 'Original fixture worker instructions. Preserve this immutable snapshot.', version: 'fixture-original-v1' }, harnessStarted: true, execution: { runId: 'fixture-run-1', observedAt: now, endedAt: null, startedAt: new Date(Date.now() - 125000).toISOString(), live: true }, environment: { status: 'ready', kind: 'project-execution' } }),
   task(2, 'awaiting_answer', { question: { id: 'question-2', runId: 'fixture-run-2', message: 'Should the audit include archived records?' }, attention: [{ id: 'question-2', kind: 'question', message: 'Should the audit include archived records?' }] }),
@@ -100,6 +101,17 @@ const server = http.createServer(async (req, res) => {
         return send({ ok: true });
       }
       const name = url.pathname.replace('/api/', ''); proof.calls.push({ name, body });
+      if (name === 'archived-worker-action') {
+        // Fixture-only projection mutation. Production store/ownership tests cover real deletion.
+        const target = orchestration.tasks.find(task => task.id === body.taskId);
+        if (!target || target.projectId !== settings.projectId || !isArchivedTask(target)) return send({ error: 'Archived worker not found in this project.' }, 409);
+        if (!Number.isInteger(body.expectedRevision) || body.expectedRevision !== target.revision || typeof body.operationId !== 'string' || !body.operationId.startsWith('archive-')) return send({ error: 'Archived worker changed. Refresh before retrying.' }, 409);
+        if (body.action !== 'delete') return send({ error: 'Restore is not simulated by this acceptance fixture.' }, 409);
+        orchestration = { ...orchestration, tasks: orchestration.tasks.filter(task => task.id !== target.id) };
+        workerDetails.delete(target.id);
+        emit({ type: 'orchestration-state', state: orchestration });
+        return send({ taskId: target.id, action: 'delete', status: 'deleted' });
+      }
       if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
       if (name === 'settings/manager-profile') {
         if (body.expectedVersion !== profileView().version) return send({ error: 'Manager profile changed elsewhere.' }, 409);

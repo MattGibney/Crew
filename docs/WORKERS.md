@@ -35,3 +35,17 @@ The next native worker checks the exact model ID through paginated `model/list` 
 `get_status` and the worker detail show the requested model, pending/validating/selected/failed state and correlated native selection evidence. “Selected” means the native thread response confirmed that exact model and the turn start was acknowledged, not that the task succeeded. History retains the user decision and each selected/failed run. Exact request retries are safe and do not change future-task defaults, subscription authentication or native permissions.
 
 A native provider can independently reroute a turn under its own policies. Crew preserves those policies and shows a separate “Rerouted by native provider” state with the reported destination model; it never continues claiming that the requested model was selected. This event is retained in correlated history for review with the manager.
+
+## Archive a worker
+
+When you are finished with a retained worker, open its Overview and choose Archive, then Archive safely. Your manager requests the existing safe teardown operation for that exact worker/run. Dirty files, unresolved work, unknown ownership and undeclared cleanup retain their existing protections. Pending or failed teardown remains in the workspace with its status/error so you can discuss recovery with the manager.
+
+After teardown succeeds, the worker disappears from ordinary cards, counts and attention. Open Settings → Project settings → Archived workers for a simple table with one row per worker, newest known archive time first. Legacy records without a recorded time say Time unavailable. Each row offers Restore and Delete permanently; no archive detail view is included.
+
+Delete permanently asks for confirmation before removing that worker's saved local Crew history, result, notes and per-run evidence. It does not delete unrelated tasks, existing worktrees/services, credentials or global Codex conversation history. Cancellation leaves the record intact; stale confirmations cannot act on a changed worker.
+
+Restore behavior is awaiting the owner's clarification about rebuilding the removed environment versus returning history for explicit manager recovery. Restoration must never invent running/ready state or silently start a worker assignment.
+
+Assignment completion, stop and pause do not archive a worker. Retained workers stay in the workspace until explicitly archived. Finishing an archive while its detail is open returns you to the manager without reconnecting the established call or discarding your draft.
+
+The persisted lifecycle remains compatible with `dispose`; manager tools also accept `archive` through the same controller. `archivedAt` is recorded only after confirmed success. The shared worker-archive projection excludes finalized records from ordinary surfaces while leaving raw controller tasks available for historical lookup. An inconsistent record with a pending action or observed live execution remains visible for recovery. Generic updatedAt timestamps are never treated as archive evidence.

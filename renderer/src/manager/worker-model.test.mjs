@@ -56,3 +56,32 @@ test('missing worktree retirement is honest history and review requests never au
  const request=workerRecoveryReviewRequest(worker({status:'failed',worktree:'/fixture/worker'}));assert.match(request,/"taskId":"task-example"/);assert.match(request,/"expectedRunId":"run-one"/);assert.match(request,/review only/);assert.match(request,/explicitly approve/);
  assert.throws(()=>workerRecoveryReviewRequest(worker({status:'running',worktree:'/fixture/worker'})));
 });
+
+test('archive projections retain unfinished cleanup and history without leaking archive into counts', async () => {
+  const { workspaceWorkers, archivedWorkers, workerSelectionRemoved } = await import('./worker-model.js');
+  const tasks = ['completed', 'paused', 'stopped', 'failed', 'disposed', 'removed'].map(status => worker({ id: status, projectId: 'one', status, worktree: '/retained', attention: [{ id: 'old' }] }));
+  tasks.push(worker({ id: 'pending', status: 'disposed', projectId: 'one', lifecycleRequests: [{ action: 'dispose', status: 'processing' }] }));
+  tasks.push(worker({ id: 'live', status: 'disposed', projectId: 'one', execution: { live: true } }));
+  tasks.push(worker({ id: 'other', status: 'disposed', projectId: 'two', archivedAt: at }));
+  tasks.find(t => t.id === 'disposed').archivedAt = at;
+  const visible = ['completed', 'paused', 'stopped', 'failed', 'pending', 'live'];
+  assert.deepEqual(workspaceWorkers(tasks).map(t => t.id), visible);
+  assert.deepEqual(workspaceWorkers(JSON.parse(JSON.stringify(tasks))).map(t => t.id), visible);
+  assert.deepEqual(archivedWorkers(tasks, 'one').map(t => t.id), ['disposed', 'removed']);
+  assert.deepEqual(archivedWorkers(tasks, null), []);
+  assert.equal(workerSelectionRemoved(tasks, 'disposed'), true);
+  assert.equal(workerSelectionRemoved(tasks, 'completed'), false);
+  assert.equal(workerSelectionRemoved(tasks, 'unknown'), false);
+  assert.equal(groupWorkers(tasks).history.some(t => t.status === 'disposed' && t.id !== 'pending' && t.id !== 'live'), false);
+  assert.deepEqual(workerActions(tasks.find(t => t.id === 'removed')), []);
+  assert.equal(tasks.find(t => t.id === 'disposed').attention.length, 1, 'Historical evidence is not deleted');
+});
+
+
+test('archive preserves authoritative fixture-only legacy scope without exposing foreign history', async () => {
+  const { archivedWorkers } = await import('./worker-model.js');
+  const legacy = { id: 'legacy', status: 'disposed' };
+  const foreign = { id: 'foreign', status: 'disposed', projectId: 'other' };
+  assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'fixture'), [legacy]);
+  assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'repository'), []);
+});

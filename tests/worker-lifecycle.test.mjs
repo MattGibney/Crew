@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, readTask, updateTask, reportTask, answerQuestion, requestWorkerAction } from '../orchestration-store.mjs';
+import { createTask, readTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../orchestration-store.mjs';
 const roots=[];
 test.after(async()=>Promise.all(roots.map(root=>rm(root,{recursive:true,force:true}))));
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'crew-lifecycle-test-'));roots.push(dir);return dir;}
@@ -55,7 +55,8 @@ test('legacy task records accept lifecycle requests; disposal never deletes dura
  assert.equal(t.lifecycleRequests[0].expectedRunId,null);
  await updateTask(dir,'worker-legacy',t=>{t.lifecycleRequests[0].status='completed';t.status='disposed';});
  assert.equal((await readTask(dir,'worker-legacy')).ticket,'AI-011');
- await assert.rejects(requestWorkerAction(dir,{taskId:'worker-legacy',actionId:'action-restart',action:'start'}),/disposed/);
+ await assert.rejects(updateWorkNotes(dir,'worker-legacy',{updateId:'archived-edit',markdown:'Do not overwrite historical notes'}),/read-only/);
+ await assert.rejects(requestWorkerAction(dir,{taskId:'worker-legacy',actionId:'action-restart',action:'start'}),/archived/);
 });
 test('manager lifecycle MCP is project-scoped; bound worker exposes reports and shared notes only',async()=>{
  const {spawn}=await import('node:child_process');const {writeFile}=await import('node:fs/promises');
@@ -73,6 +74,15 @@ test('manager lifecycle MCP is project-scoped; bound worker exposes reports and 
  await writeFile(runtime,JSON.stringify({project:{id:'another',mode:'repository'}}));
  const denied=await rpc('manager',[runtime],'tools/call',{name:'worker_action',arguments:{...args,actionId:'mcp-other-action'}});
  assert.match(denied.content[0].text,/another project/);
+ await updateTask(dir,'worker-alpha',task=>{task.status='disposed';task.archivedAt='2026-10-21T10:00:00Z';task.lifecycleRequests[0].status='completed';});
+ await writeFile(runtime,JSON.stringify({project:{id:'crew',mode:'repository'}}));
+ const active=await rpc('manager',[runtime],'tools/call',{name:'get_status',arguments:{}});
+ assert.deepEqual(JSON.parse(active.content[0].text),[]);
+ const history=await rpc('manager',[runtime],'tools/call',{name:'get_status',arguments:{taskId:'worker-alpha'}});
+ assert.equal(JSON.parse(history.content[0].text).status,'disposed');
+ await writeFile(runtime,JSON.stringify({project:{id:'another',mode:'repository'}}));
+ const foreignHistory=await rpc('manager',[runtime],'tools/call',{name:'get_status',arguments:{taskId:'worker-alpha'}});
+ assert.match(foreignHistory.content[0].text,/another project/);
  const tools=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/list',{});
  assert.deepEqual(tools.tools.map(t=>t.name),['report','update_work_notes']);
  const workerDenied=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/call',{name:'worker_action',arguments:args});

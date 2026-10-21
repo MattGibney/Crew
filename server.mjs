@@ -1,4 +1,5 @@
 // AI-002: narrow localhost HTTP surface for the native Codex bridge.
+import { isArchivedTask } from './worker-archive.mjs';
 import http from 'node:http';
 import { readFile, writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -10,7 +11,7 @@ import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
 import { readWorkerDetail } from './worker-detail.mjs';
-import { readTask, requestWorkerAction } from './orchestration-store.mjs';
+import { readTask, loadTasks, requestWorkerAction, manageArchivedTask } from './orchestration-store.mjs';
 import { listWorkerRequests, decideWorkerRequest } from './worker-approvals.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRendererAssets } from './renderer-assets.mjs';
@@ -61,7 +62,8 @@ const broadcast = event => {
 };
 let workerApprovalSnapshot = '';
 const publishWorkerApprovals = async () => {
-  const requests = await listWorkerRequests({ stateDir: orchestrationDir, pendingOnly: true });
+  const tasks = await loadTasks(orchestrationDir);
+  const requests = (await listWorkerRequests({ stateDir: orchestrationDir, pendingOnly: true })).filter(request => tasks.some(task => task.id === request.taskId && task.runId === request.runId && !isArchivedTask(task) && !task.archiveRestoration?.requiresRecovery));
   const serialized = JSON.stringify(requests);
   if (serialized !== workerApprovalSnapshot) { workerApprovalSnapshot = serialized; broadcast({ type: 'worker-approval-state', requests }); }
   return requests;
@@ -129,12 +131,13 @@ const server = http.createServer(async (req, res) => {
     let body = '';
     for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
     const input = JSON.parse(body || '{}');
-    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts','/api/settings/manager-profile'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
+    if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts','/api/settings/manager-profile','/api/archived-worker-action'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
     if (req.method === 'PUT') {
       if (req.url === '/api/settings/manager-profile') { await managerProfile.save(input); return send(200, await settingsView()); }
       if (req.url !== '/api/settings/prompts') return send(404, { error: 'Not found.' });
       await prompts.save(input); return send(200, await settingsView());
     }
+    if (req.url === '/api/archived-worker-action') return send(200, await updateAdmission.run(async () => { const result = await manageArchivedTask(orchestrationDir, input, project); broadcast({type:'orchestration-state',state:await controller.view()}); return result; }));
     if (req.url === '/api/manager/lifecycle') return send(200, await updateAdmission.run(() => manager.request(input.action)));
     if(req.url==='/api/updates'){if(typeof process.send==='function'&&['resume-paused-work','return-to-work'].includes(input.action))return send(200,await updates.request(input.action));if(input.action==='return-to-work'){await updatePlan.releaseForReview();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}if(input.action==='resume-paused-work'){await updatePlan.resumeAfterCancel();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}return send(200,{...await updates.request(input.action||'status'),plan:updatePlan.status()});}
     if(req.url==='/api/update-plan-status')return send(200,{plan:updatePlan.status()});
@@ -170,6 +173,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/worker-approvals') return send(200, { requests: await publishWorkerApprovals() });
     if (req.url === '/api/discuss-attention') return send(200,await updateAdmission.run(()=>manager.run(async()=>{
       const task = await readTask(orchestrationDir, input.taskId);
+      if (isArchivedTask(task)) throw new Error('This worker is archived; restore it from Project settings before reviewing.');
       const item = task.attention.find(a => a.id === input.attentionId && !a.ackedAt);
       if (!item) throw new Error('This attention item is no longer pending.');
       const requestId = `review-${createHash('sha256').update(`${task.id}:${item.id}`).digest('hex').slice(0, 32)}`;

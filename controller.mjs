@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import { promptSnapshot, promptVersion } from './prompt-settings.mjs';
 import path from 'node:path';
 import os from 'node:os';
+import { isArchivedTask } from './worker-archive.mjs';
 import { loadTasks, readTask, updateTask } from './orchestration-store.mjs';
 import { createGlobalCapacity } from './global-capacity.mjs';
 const exec = promisify(execFile);
@@ -193,7 +194,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
     });
   }
   async function finishRequest(id,requestId,error=null){await updateTask(stateDir,id,next=>{const r=next.lifecycleRequests?.find(r=>r.id===requestId);if(r){r.status=error?'failed':'completed';r.handledAt=now();if(error)r.error=error;}});}
-  async function dispose(task){
+  async function dispose(task,request){
     const environment=await reconcileEnvironment({stateDir,taskId:task.id});if(environment?.pending)throw new Error('An environment command has not confirmed it stopped. Wait for its bounded supervisor before removing this worktree.');
     const previousExit=task.runDir?await json(path.join(task.runDir,'exit.json')):null;if(task.harnessStarted&&(!previousExit||previousExit.runId!==task.runId||previousExit.stopConfirmed!==true))throw new Error('This worker has no matching confirmed terminal record. Preserve this environment until its process ownership can be reconciled.');
     if(task.runnerPid&&alive(task.runnerPid)&&!(await json(path.join(task.runDir,'exit.json'))))throw new Error('Wait until the worker has stopped before removing its environment.');
@@ -207,7 +208,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       else await runEnvironmentHooks({stateDir,taskId:task.id,worktree:task.worktree,hooks:project?.worker?.environment||{},phases:['cleanup'],existing,env:applyProjectToolchain(existing?.toolchain),onEvidence:e=>updateTask(stateDir,task.id,n=>{n.environment=e;})});
       await exec('git',['-C',repo,'worktree','remove',actual]);
     }
-    await updateTask(stateDir,task.id,n=>{n.status='disposed';n.disposedAt=now();n.endedAt=n.endedAt||now();if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};});
+    await updateTask(stateDir,task.id,n=>{n.status='disposed';n.disposedAt=now();n.archivedAt=n.disposedAt;n.endedAt=n.endedAt||n.disposedAt;if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};const current=n.lifecycleRequests?.find(r=>r.id===request.id);if(current){current.status='completed';current.handledAt=n.disposedAt;}});
   }
   async function completeStop(task,request){
     if(task.environment?.kind!=='project-execution')return false;
@@ -261,6 +262,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
         await atomic(path.join(task.runDir,'control.json'),{runId:task.runId,requestId:request.id,action:request.action,cooperative:request.cooperative===true,at:now()});
         task=await updateTask(stateDir,task.id,n=>{n.status=request.action==='pause'?'pausing':'stopping';});
       }else if(['resume','start'].includes(request.action)){
+        if(task.archiveRestoration?.requiresRecovery)throw new Error('Restored archive has no runnable environment. Review missing-worktree recovery with the manager; no setup was started.');
         if(!['queued','paused','stopped','failed','blocked','awaiting_answer'].includes(task.status))throw new Error('This worker is already active or finished.');
         if(task.question&&task.question.runId===task.runId&&task.answer?.questionId!==task.question.id)throw new Error('Answer this worker’s question before resuming it.');
         const environment=await reconcileEnvironment({stateDir,taskId:task.id});if(environment?.pending)throw new Error('An earlier environment command is still running or lacks a stop confirmation. Wait for its bounded supervisor and retry.');
@@ -276,7 +278,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
             if((n.runId||null)!==request.expectedRunId)throw new Error('Worker run changed during recovery. Preserve its decision evidence.');
             if(request.action==='reconcile_plan')n.environment=value;
             else {
-              n.status='disposed';n.disposedAt=now();n.endedAt=n.endedAt||n.disposedAt;
+              n.status='disposed';n.disposedAt=now();n.archivedAt=n.disposedAt;n.endedAt=n.endedAt||n.disposedAt;
               n.retirement={reason:'worktree-already-missing',cleanupVerified:false,at:n.disposedAt,reviewHash:request.reviewHash,decision:request.decision};
               if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};
               for(const item of n.attention)if(!item.ackedAt){item.ackedAt=n.disposedAt;item.resolution='Retired missing-worktree record; cleanup unverified';}
@@ -286,15 +288,16 @@ export async function createController({ stateDir, sourceDir, executable, projec
           }))
           .catch(error=>finishRequest(task.id,request.id,error.message)).finally(()=>operations.delete(task.id));
         operations.set(task.id,operation);return task;
-      }else if(request.action==='dispose'){
+      }else if(['dispose','archive'].includes(request.action)){
         if(!['paused','stopped','completed','failed','blocked'].includes(task.status))throw new Error('Stop this worker before removing its environment.');
-        if(!operations.has(task.id)){const operation=dispose(task).then(()=>finishRequest(task.id,request.id)).catch(error=>finishRequest(task.id,request.id,error.message)).finally(()=>operations.delete(task.id));operations.set(task.id,operation);}return task;
+        if(!operations.has(task.id)){const operation=dispose(task,request).catch(error=>finishRequest(task.id,request.id,error.message)).finally(()=>operations.delete(task.id));operations.set(task.id,operation);}return task;
       }else throw new Error('Unknown worker action.');
     }catch(error){await finishRequest(task.id,request.id,error.message);}
     return await readTask(stateDir,task.id);
   }
   async function reconcile(task){
     if (project && task.projectId !== project.id && !(project.mode === 'fixture' && !task.projectId)) throw new Error('Stored task belongs to another project; refusing to process it');
+    if(isArchivedTask(task))return;
     if(task.environment?.kind==='project-execution'&&!launches.has(task.id)&&!operations.has(task.id)){const environment=await inspectProjectEnvironment({stateDir,taskId:task.id,processes:processSnapshot,onEvidence:environment=>updateTask(stateDir,task.id,n=>{n.environment=environment;})});if(environment)task.environment=environment;}
     // Durable supervisor evidence wins over a controller write interrupted at spawn.
     // A pending spawn intent without an owner/terminal record remains uncertain and
@@ -310,6 +313,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
     }
     if(task.environment?.preset)throw new Error('Obsolete project-specific state is retained; recover it with its original project tooling.');
     task=await lifecycle(task);
+    if(task.archiveRestoration?.requiresRecovery)return;
     if(!task.runDir)return;
     const runtime=await json(path.join(task.runDir,'runtime.json')),started=await json(path.join(task.runDir,'started.json')),owner=await json(path.join(task.runDir,'owner.json')),exit=await json(path.join(task.runDir,'exit.json'));
     if(started?.runId===task.runId&&task.runnerPid!==started.pid)task=await updateTask(stateDir,task.id,n=>{n.runnerPid=started.pid;});

@@ -2,9 +2,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
+import { inspectUpdateEvidence } from './update-evidence.mjs';
+import { isArchivedTask } from './worker-archive.mjs';
 import { promptSnapshot } from './prompt-settings.mjs';
 
-const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose', 'reconcile_plan', 'retire_missing']);
+const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose', 'archive', 'reconcile_plan', 'retire_missing']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
 const ID = /^[a-zA-Z0-9_-]{8,80}$/;
 const REPORT_KINDS = new Set(['progress', 'question', 'result', 'blocked']);
@@ -171,17 +173,19 @@ async function save(dir, task) {
   return task;
 }
 export async function readTask(dir, id) { return readUnlocked(dir, identifier(id)); }
-export async function loadTasks(dir) { return loadUnlocked(dir); }
+export async function loadTasks(dir) { return withStateLock(dir, '.schedule.lock', () => loadUnlocked(dir)); }
 export async function createTask(dir, { requestId, ticket, brief, projectId = null, repositoryId = null }) {
   for (const [name, value] of Object.entries({ projectId, repositoryId })) if (value !== null && (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) throw new Error(`Invalid ${name}`);
   identifier(requestId); text(ticket, 'ticket', 120); text(brief, 'brief');
   return withStateLock(dir, '.schedule.lock', async () => {
+    const retired = await fs.readdir(path.join(dir,'archive-actions')).catch(error=>{if(error.code==='ENOENT')return [];throw error;});
     const tasks = await loadUnlocked(dir);
     const existing = tasks.find(task => task.id === requestId);
     if (existing) {
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
+    if(retired.some(name=>name.startsWith(`${requestId}.`)&&name.endsWith('.json')))throw new Error('Task ID is retained by an archive operation; choose a new task ID');
     return withStateLock(dir, `.${requestId}.lock`, () => { const task = { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null, historyVersion: 1, history: [] }; recordHistory(task); return save(dir, task); });
   });
 }
@@ -267,7 +271,7 @@ export async function requestWorkerRecovery(dir, {taskId, actionId, action, expe
 
 export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
-  if (!['stop','pause','resume','start','dispose'].includes(action)) throw new Error('Invalid worker action');
+  if (!['stop','pause','resume','start','dispose','archive'].includes(action)) throw new Error('Invalid worker action');
   if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {
@@ -279,7 +283,7 @@ export async function requestWorkerAction(dir, { taskId, actionId, action, expec
       return;
     }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId) throw new Error('Stale worker run for lifecycle action');
-    if (task.status === 'disposed') throw new Error('Worker has been disposed');
+    if (isArchivedTask(task) || ['disposed','removed','archived'].includes(task.status)) throw new Error('Worker has been archived');
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
     requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
@@ -315,6 +319,7 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
   text(updateId, 'note update ID', 160); text(markdown, 'work notes', 60000);
   if (Buffer.byteLength(markdown) > 60000) throw new Error('Work notes exceed the document byte limit');
   return updateTask(dir, id, async task => {
+    if (isArchivedTask(task)) throw new Error('Archived worker history is read-only');
     if (runId && task.runId !== runId) throw new Error('Stale worker run');
     if (runId && task.status !== 'running') throw new Error('Worker is not running');
     if (task.workNotes?.updateId === updateId) {
@@ -324,5 +329,65 @@ export async function updateWorkNotes(dir, id, { updateId, markdown, runId = nul
     await atomic(path.join(dir, 'tasks', `${id}.notes.md`), markdown);
     task.workNotes = { updateId, updatedAt: now(), actor: runId ? 'worker' : 'manager', runId };
     (task.history ||= []).push({ id: `notes:${randomUUID()}`, at: task.workNotes.updatedAt, actor: task.workNotes.actor, kind: 'notes', message: 'Updated shared work notes', runId });
+  });
+}
+
+// Explicit archive record operations never run project commands or touch provider history.
+export async function manageArchivedTask(dir, {taskId, action, operationId, expectedRevision}, project) {
+  identifier(taskId);identifier(operationId,'operation ID');
+  if(!['restore','delete'].includes(action)||!Number.isSafeInteger(expectedRevision)||expectedRevision<1)throw new Error('Invalid archive operation');
+  if(!project?.id)throw new Error('Archive operation requires the selected project');
+  return withStateLock(dir,'.schedule.lock',async()=>{
+    const root=await fs.realpath(dir);
+    const safeDirectory=async target=>{const stat=await fs.lstat(target);if(!stat.isDirectory()||stat.isSymbolicLink()||await fs.realpath(target)!==target)throw new Error('Archive storage ownership could not be verified');};
+    await safeDirectory(path.join(root,'tasks'));
+    const journalDir=path.join(root,'archive-actions');await fs.mkdir(journalDir,{recursive:true,mode:0o700});await safeDirectory(journalDir);
+    const journalFile=path.join(journalDir,`${taskId}.${operationId}.json`);
+    const safeFile=async file=>{try{const stat=await fs.lstat(file);if(!stat.isFile()||stat.isSymbolicLink()||await fs.realpath(file)!==file)throw new Error('Archive record is not a safe regular file');return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+    let journal=await safeFile(journalFile)?JSON.parse(await fs.readFile(journalFile,'utf8')):null;
+    const identity={taskId,action,operationId,expectedRevision,projectId:project.id};
+    if(journal&&Object.entries(identity).some(([key,value])=>journal[key]!==value))throw new Error('Archive operation ID reused with changed content');
+    if(journal?.status==='deleting'&&journal.validatedTerminal!==true)throw new Error('Archive deletion journal lacks verified terminal evidence; preserve remaining records');
+    if(journal?.status==='completed')return{ok:true,taskId,action};
+    let task;try{await safeFile(path.join(root,'tasks',`${taskId}.json`));task=await readUnlocked(root,taskId);}catch(error){if(error.code!=='ENOENT'||journal?.status!=='deleting')throw error;}
+    if(task){
+      if(task.projectId!==project.id&&!(project.mode==='fixture'&&!task.projectId))throw new Error('Task belongs to another project');
+      if(action==='restore'&&task.archiveRestoration?.operationId===operationId){journal={...identity,status:'completed',at:task.archiveRestoration.at};await atomic(journalFile,JSON.stringify(journal));return{ok:true,taskId,action};}
+      if(!isArchivedTask(task))throw new Error('Only a confirmed archived worker can be restored or permanently deleted');
+      if(task.revision!==expectedRevision)throw new Error('Archived worker changed; refresh and confirm again');
+    }
+    if(action==='restore'){
+      const previous=structuredClone(task),at=now();
+      task.status='blocked';task.failure='Restored archive history. Its environment was removed or is unavailable; review retained resources before explicit recovery. No worker or setup was started.';
+      task.archiveRestorations ||= [];task.archiveRestoration={operationId,at,requiresRecovery:true,archiveRevision:expectedRevision};task.archiveRestorations.push({...task.archiveRestoration});
+      for(const item of task.attention)if(!item.ackedAt){item.ackedAt=at;item.resolution='Historical attention retained from archived worker';}
+      if(task.question){task.archivedQuestions ||= [];task.archivedQuestions.push(task.question);task.question=null;}
+      (task.history ||= []).push({id:`archive-restore:${operationId}`,actor:'controller',kind:'lifecycle',message:task.failure,at,runId:task.runId||null});
+      recordHistory(task,previous);task.revision++;task.updatedAt=at;await save(root,task);
+      await atomic(journalFile,JSON.stringify({...identity,status:'completed',at}));return{ok:true,taskId,action};
+    }
+    return withStateLock(root,'.worker-approvals.lock',async()=>{
+    if(task&&journal?.status!=='deleting'){
+      const checked=await inspectUpdateEvidence({stateDir:dir,view:{tasks:[task]}});const evidence=checked.tasks[0].updateEvidence;
+      if(!['stopped','absent'].includes(evidence.worker)||!['stopped','absent'].includes(evidence.runtime)||evidence.hooks.some(hook=>!['stopped','absent'].includes(hook.state)))throw new Error('Archived worker execution is live or unverified; preserve its records until ownership and terminal evidence are resolved');
+    }
+    const records=['json','md','notes.md'].map(extension=>path.join(root,'tasks',`${taskId}.${extension}`));
+    for(const file of records)await safeFile(file);
+    const runsRoot=path.join(root,'runs'),runDir=path.join(runsRoot,taskId);
+    const inspectTree=async target=>{let stat;try{stat=await fs.lstat(target);}catch(error){if(error.code==='ENOENT')return false;throw error;}if(stat.isSymbolicLink()||await fs.realpath(target)!==target)throw new Error('Worker run evidence has an unsafe path; nothing was deleted');if(stat.isDirectory()){for(const name of await fs.readdir(target))await inspectTree(path.join(target,name));}else if(!stat.isFile())throw new Error('Worker run evidence contains an unsupported file');return true;};
+    const hasRuns=await fs.lstat(runsRoot).then(async()=>{await safeDirectory(runsRoot);return inspectTree(runDir);},error=>{if(error.code==='ENOENT')return false;throw error;});
+    const approvalDir=path.join(root,'worker-approvals');let approvalFiles=[];
+    if(await fs.lstat(approvalDir).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;})){
+      await safeDirectory(approvalDir);for(const name of await fs.readdir(approvalDir))if(name.endsWith('.json'))await safeFile(path.join(approvalDir,name));
+      const {listWorkerRequests}=await import('./worker-approvals.mjs');
+      approvalFiles=(await listWorkerRequests({stateDir:root,taskId})).map(record=>path.join(approvalDir,`${record.approvalId}.json`));
+    }
+    await atomic(journalFile,JSON.stringify({...identity,status:'deleting',validatedTerminal:true,at:journal?.at||now()}));
+    if(hasRuns)await fs.rm(runDir,{recursive:true});
+    for(const file of approvalFiles)if(await safeFile(file))await fs.unlink(file);
+    for(const file of records.slice(1))if(await safeFile(file))await fs.unlink(file);
+    if(await safeFile(records[0]))await fs.unlink(records[0]);
+    await atomic(journalFile,JSON.stringify({...identity,status:'completed',at:journal?.at||now()}));return{ok:true,taskId,action};
+    });
   });
 }

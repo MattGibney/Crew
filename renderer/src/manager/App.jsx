@@ -7,6 +7,7 @@ import { WorkerAttention } from './WorkerAttention.jsx';
 import {UpdateControls} from './UpdateControls.jsx';
 import { Settings } from './Settings.jsx';
 import { WorkChat } from './WorkChat.jsx';
+import { workspaceWorkers, workerSelectionRemoved } from './worker-model.js';
 import { WorkerDetail } from './WorkerDetail.jsx';
 import { ManagerCallBar } from './ManagerCallBar.jsx';
 import { ProjectSwitcher } from './ProjectSwitcher.jsx';
@@ -32,9 +33,18 @@ export function App() {
   };
   const openPane = next => { setPane(next); };
   const showWorker = id => { setSelectedWorker(id); openPane('detail'); };
-  const tasks = (manager.orchestration.tasks || []).map(task => ({ ...task, pendingApprovalCount: (manager.workerApprovals || []).filter(request => request.taskId === task.id && request.runId === task.runId).length }));
+  const recordedTasks = manager.orchestration.tasks || [];
+  const tasks = workspaceWorkers(recordedTasks).map(task => ({ ...task, pendingApprovalCount: (manager.workerApprovals || []).filter(request => request.taskId === task.id && request.runId === task.runId).length }));
+  useEffect(() => {
+    if (workerSelectionRemoved(recordedTasks, selectedWorker)) {
+      setSelectedWorker(null);
+      setPane(current => current === 'detail' ? 'conversation' : current);
+      setSettingsReturn(current => current === 'detail' ? 'conversation' : current);
+    }
+  }, [recordedTasks, selectedWorker]);
   const selectedTask = tasks.find(task => task.id === selectedWorker);
-  const approvalCount = (manager.workerApprovals || []).length;
+  const workspaceManager = { ...manager, workerApprovals: (manager.workerApprovals || []).filter(request => tasks.some(task => task.id === request.taskId && task.runId === request.runId)) };
+  const approvalCount = workspaceManager.workerApprovals.length;
   const workerView = { ...manager.orchestration, tasks };
   const pending = tasks.reduce((count, task) => count + (task.attention || []).filter(item => !item.ackedAt).length, 0);
   return <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -46,7 +56,7 @@ export function App() {
     <nav aria-label="Workspace views" className={`${pane === 'conversation' || pane === 'workers' ? 'flex' : 'hidden'} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}><Button variant={pane === 'conversation' ? 'secondary' : 'ghost'} aria-pressed={pane === 'conversation'} className="h-8 text-xs" onClick={() => openPane('conversation')}><MessageSquare />Conversation {approvalCount > 0 && <Badge>{approvalCount} approval{approvalCount === 1 ? '' : 's'}</Badge>}</Button><Button variant={pane === 'workers' ? 'secondary' : 'ghost'} aria-pressed={pane === 'workers'} className="h-8 text-xs" onClick={() => openPane('workers')}><Layers />Workers {pending > 0 && <Badge>{pending}</Badge>}</Button></nav>
     <main ref={workspace} id="workspace-content" style={workerWidth === null ? undefined : { '--crew-worker-width': `${workerWidth}px` }} className={`${pane === 'conversation' || pane === 'workers' ? 'grid' : 'hidden'} min-h-0 flex-1 ${pane === 'conversation' ? 'manager-split' : ''}`}>
       <section aria-label="Manager workspace" className={`min-h-0 min-w-0 overflow-y-auto flex-col ${pane === 'conversation' ? 'flex' : 'hidden'}`}>
-        <WorkChat manager={manager} />
+        <WorkChat manager={workspaceManager} />
       </section>
       <div role="separator" aria-label="Resize worker panel" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={maximumWorkerWidth} aria-valuenow={Math.min(workerWidth || 560, maximumWorkerWidth)} tabIndex={pane === 'conversation' ? 0 : -1}
         className={`${pane === 'conversation' ? 'hidden lg:block' : 'hidden'} relative z-10 cursor-col-resize touch-none bg-border outline-none before:absolute before:inset-y-0 before:-left-1.5 before:w-3 hover:bg-primary focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring`}
