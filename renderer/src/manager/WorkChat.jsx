@@ -9,14 +9,14 @@ import { ApprovalForm } from './ApprovalForm.jsx';
 import { Message } from './Message.jsx';
 import { VoiceControls } from './VoiceControls.jsx';
 import { ManagerCallBar } from './ManagerCallBar.jsx';
-import { orderedMessages } from './conversation.js';
+import { conversationRows } from './conversation.js';
 import { projectDraftStorage, readDraft, writeDraft } from './draft-storage.js';
 
 
 export function WorkChat({ manager }) {
   const { work, workNotice: notice, prepared, eventReady, sending } = manager;
   const approvals = work.approvals || [], items = work.items || [];
-  const messages = orderedMessages(work.messages);
+  const messages = conversationRows(work.messages);
   const [inputMode, setInputMode] = useState('voice');
   const selectInput = next => { setInputMode(next); };
   const [draft, setDraftState] = useState(() => readDraft(projectDraftStorage()));
@@ -57,7 +57,7 @@ export function WorkChat({ manager }) {
         {manager.error && <Alert variant="destructive" id="error" role="alert"><AlertDescription className="space-y-3 break-words"><p>{manager.error}</p>{!prepared && <Button type="button" variant="outline" onClick={() => void manager.retryConnection()}>Retry connection</Button>}</AlertDescription></Alert>}
         {!messages.length && !approvals.length && !manager.workerApprovals?.length && <div className="flex min-h-64 flex-col items-center justify-center px-2 py-10 text-center"><div className="mb-5 flex size-12 items-center justify-center rounded-2xl border bg-background"><MessageSquare className="size-5 text-primary" aria-hidden="true" /></div><h2 className="text-2xl font-semibold tracking-tight">What are we working on?</h2><p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">Talk through an idea, review progress, or agree on a task. Your manager brings in workers when you ask.</p><div className="mt-6 flex flex-wrap justify-center gap-2">{['What is the current project status?', 'Help me plan a task'].map(text => <Button key={text} variant="outline" className="h-auto whitespace-normal py-2 text-xs" onClick={() => { setDraft(text); selectInput('text'); requestAnimationFrame(() => inputRef.current?.focus()); }}>{text}</Button>)}</div></div>}
         </MessageScrollerItem>
-        {messages.map(message => <MessageScrollerItem key={message.id} messageId={message.id}><Message message={message} profile={manager.settings?.managerProfile} copyable /></MessageScrollerItem>)}
+        {messages.map(message => <MessageScrollerItem key={message.id} messageId={message.id}>{message.kind === 'work-details' ? <WorkDetails row={message} profile={manager.settings?.managerProfile} /> : <Message message={message} profile={manager.settings?.managerProfile} copyable />}</MessageScrollerItem>)}
         {busy && <MessageScrollerItem messageId="conversation-status">
         <p id="work-status" role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />{approvals.length ? 'Waiting for your answer below' : sending ? 'Sending your message…' : 'Your manager is working…'}</p>
         </MessageScrollerItem>}
@@ -101,4 +101,16 @@ export function WorkChat({ manager }) {
       </div>
     </div>
   </div></MessageScrollerProvider>;
+}
+
+function WorkDetails({ row, profile }) {
+  const hasResponse = row.messages.some(message => message.role === 'assistant' && message.phase !== 'commentary' && message.text);
+  return <details data-work-turn-id={row.turnId} className="rounded-lg border px-4 py-3 text-sm">
+    <summary className="cursor-pointer rounded-sm text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <span className="inline-flex items-center gap-2"><Wrench className="size-3.5" aria-hidden="true" />Work details{hasResponse && <span className="text-xs">· Written response</span>}</span>
+    </summary>
+    <div className="mt-4 space-y-5" aria-label="Backing work exchange">
+      {row.messages.map(message => <Message key={message.id} message={message} label={message.role === 'user' ? 'Voice work request' : message.phase === 'commentary' ? 'Work progress' : 'Written response'} copyable />)}
+    </div>
+  </details>;
 }

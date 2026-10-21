@@ -279,6 +279,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
         if (turn.status === 'inProgress') { activeTurnId = turn.id; status = 'working'; timeline.resumeTurn(turn.id, savedMessages); }
         else markCompleted(turn.id);
       }
+      timeline.restoreProvenance(savedMessages);
       threadReady = true;
       journalThreadId = threadId;
       loadingHistory = false;
