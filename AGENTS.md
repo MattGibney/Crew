@@ -124,3 +124,7 @@
 
 - Native server requests may share numeric IDs with client RPCs: classify method-bearing requests before matching replies. Manager start/resume/fork can require connector input before their RPC resolves; bind observed native identity, preserve null turns, validate final correlation and invalidate failed-start forms without automatic answers.
 - A genuine native update of a CREW_APP_DATA portable profile can replace the bundle yet relaunch in the default root, leaving the custom-root handoff unconsumed. Verify actual post-update profile/config/voice identity; hashes of retained files alone do not prove automatic recovery. Do not use global environment changes or user-root registration to manufacture an isolated passing result. Capture a trustworthy before snapshot before any test that can touch shared user roots; unknown prior state is never permission for deletion/rollback.
+
+## Realtime handoff presentation (GitHub #20)
+
+- Native realtime delegation user items contain current input plus historical transcript context. Project only the current input for display; never render or split historical context into new conversation rows. Preserve native item/turn/promotion identity and passive handoff observation. Repair legacy presentation journals without rewriting native chat, and retain projection provenance so literal envelope examples in user wording are not unwrapped again on restore.
