@@ -51,3 +51,5 @@
 ## Delivery policy correction
 
 - Feature/fix work belongs on codex/ feature branches with reviewable pull requests targeting main. Do not push implementation directly to main or automatically merge. Group features into releases only when the user explicitly requests the intended release; do not create a release/tag or dispatch publication for every small change. Preserve existing main history and published artifacts. Release workflow dispatch is a deliberate user-authorized stage after review, not a completion requirement for each ticket.
+
+- Disposable controller/process tests must register cleanup before their first observation wait. Distinguish a generous ordinary fixture lifetime from an intentionally short timeout under test; wait for correlated lifecycle completion rather than assuming an awaited tick ran when another tick was in progress. Keep test-only timing changes separate from product timeout/no-force guarantees.
