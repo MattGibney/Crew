@@ -172,6 +172,7 @@ async function packageSource(options) {
   allowed.push('environment-settings.mjs', 'tests/environment-settings.test.mjs', 'tests/environment-bootstrap.test.mjs', 'renderer/src/manager/WorkerEnvironment.jsx', 'tickets/GH-045.md', 'scripts/environment-browser-acceptance.mjs', 'scripts/environment-native-acceptance.mjs');
   allowed.push('tickets/GH-SIX-INTEGRATION.md');
   allowed.push('tests/fixtures/prompts-v0.14.0.json', 'scripts/worker-direction-packaged-smoke.mjs', 'scripts/worker-upgrade-native-acceptance.mjs');
+  allowed.push('tickets/REL-0.15.0.md');
   const sources = [...new Set(allowed)];
   for (const path of sources) if (!(await stat(join(appRoot, path))).isFile()) throw new Error(`Missing package source file: ${path}.`);
   await mkdir(dirname(output), { recursive: true });

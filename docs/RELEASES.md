@@ -1,5 +1,9 @@
 # Delivery policy
 
+## Crew 0.15.0 release scope
+
+The user authorized shipping [PR #51](https://github.com/MattGibney/Crew/pull/51), including pristine saved-default prompt migration, as one signed/notarized feature release. Version 0.15.0 follows verified public 0.14.0. The implementation passed 638 tests, compiled browser checks, packaged Electron smoke, disposable default/custom manual upgrade recovery and genuine retained subscription continuations. See [REL-0.15.0](../tickets/REL-0.15.0.md) for evidence, explicit manager Restart adoption, custom-prompt preservation and current updater/reload boundaries. Usage work is planning-only; TypeScript #37 remains paused.
+
 Develop features/fixes on codex/ branches and open pull requests targeting main. Review and merge are separate from release publication; agents must not automatically merge or publish a release for each small change. The user chooses the set of changes and explicitly authorizes the intended grouped release. Existing releases and main history remain intact. The workflow stays manual-dispatch only; creating a branch, PR, merge or tag must not automatically publish.
 
 # Building and publishing Crew
