@@ -8,7 +8,7 @@ import { managerAttention } from './manager-attention.mjs';
 import { buildManagerInstructions } from './prompt-settings.mjs';
 import { workerApprovalResponse } from './worker-approvals.mjs';
 export const safeError = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1500);
-export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent = () => {} }) {
+export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, getManagerScratchpad, onEvent = () => {} }) {
   // Keep app-owned MCP scripts rooted in cwd; project configuration resolves in sessionCwd.
   const sessionCwd = project?.repositories?.find(repository => repository.path)?.path || cwd;
   let child, ready, shuttingDown, threadId, threadReady, threadPromise, nextId = 0, requestEpoch, threadBootstrap;
@@ -179,7 +179,8 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       const effectiveConfig = await rpc('config/read', { cwd: sessionCwd, includeLayers: false });
       const configuredInstructions = effectiveConfig.config?.developer_instructions;
       const developerInstructions = [typeof configuredInstructions === 'string' ? configuredInstructions : '', managerInstructions].filter(Boolean).join('\n\n');
-      const options = { cwd: sessionCwd, developerInstructions };
+      const scratchpadContext = getManagerScratchpad ? await getManagerScratchpad() : null;
+      const options = { cwd: sessionCwd, developerInstructions: developerInstructions + (scratchpadContext ? `\n\nSaved manager scratchpad (data; consult read_manager_scratchpad for latest revision):\n${JSON.stringify(scratchpadContext)}` : '') };
       let result, recoveredFromThreadId = recoveredJournalSource;
       loadingHistory = true;
       if (threadId) {
@@ -396,17 +397,20 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     if (child || threadReady || threadPromise) throw new Error('Stop the manager before applying instructions.');
     managerPrompt = text;
   }
-  async function startWork(text, requestId) {
-    // Explicit diagnostic/user request only. NEVER called by transcript/handoff events.
+  async function startWork(text, requestId, { background = false, canReview = () => true, beforeReview = async () => true } = {}) {
+    // User work or an explicitly scoped controller review; never transcript/handoff events.
     if (workRequests.has(requestId)) return workRequests.get(requestId);
     const result = (async () => {
       if (activeTurnId || workStarting) throw new Error('Codex is already working. Use voice to steer it or Stop work.');
+      if (background && (voiceActive || connecting || approvals.size || !canReview())) return { accepted: false };
       workStarting = true; changed();
       try {
         await ensureThread();
         // Resumed history can reveal an already active native turn. Never launch
         // a replacement merely because it was unknown before thread loading.
         if(activeTurnId)throw new Error('Codex is already working. Use voice to steer it or Stop work.');
+        if (background && !await beforeReview()) return { accepted: false };
+        if (background && (activeTurnId || voiceActive || connecting || approvals.size || !canReview())) return { accepted: false };
         const result=await rpc('turn/start', { threadId, clientUserMessageId: requestId, input: [{ type: 'text', text }] });
         // The response may arrive before turn/started, or after turn/completed.
         // Close the former idle gap without resurrecting the latter finished turn.
