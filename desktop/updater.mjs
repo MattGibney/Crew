@@ -108,8 +108,8 @@ export function createNativeUpdateGate({busy=()=>false}={}){
 }
 export function createUpdateCoordinator({updater,currentVersion,support={supported:false,error:'Updates are unavailable.'},activity,prepare,cancel,stopBackend,install,lease,otherInstances=async()=>[],onState=()=>{}}){
  updater.autoDownload=false;updater.autoInstallOnAppQuit=false;updater.allowDowngrade=false;updater.allowPrerelease=false;updater.logger=null;
- let state={phase:'idle',currentVersion,availableVersion:null,downloadPercent:null,error:support.error||null,installBlocked:true,reasons:[],supported:support.supported===true,releaseUrl:RELEASE_URL},busy=false;
- const publish=patch=>{state={...state,...patch};onState({...state,reasons:[...state.reasons]});return {...state,reasons:[...state.reasons]};};
+ let state={phase:'idle',currentVersion,availableVersion:null,downloadPercent:null,error:support.error||null,installBlocked:true,reasons:[],notices:[],supported:support.supported===true,releaseUrl:RELEASE_URL},busy=false;
+ const publish=patch=>{state={...state,...patch};onState({...state,reasons:[...state.reasons],notices:[...state.notices]});return {...state,reasons:[...state.reasons],notices:[...state.notices]};};
  const on=(name,fn)=>updater.on(name,fn);
  on('update-available',info=>{if(newerVersion(info?.version,currentVersion))publish({phase:'available',availableVersion:info.version,error:null});else publish({phase:'idle',availableVersion:null,error:null});});
  on('update-not-available',()=>publish({phase:'current',availableVersion:null,error:null}));
@@ -117,11 +117,11 @@ export function createUpdateCoordinator({updater,currentVersion,support={support
  on('update-downloaded',info=>{if(newerVersion(info?.version,currentVersion))publish({phase:'downloaded',availableVersion:info.version,downloadPercent:100,error:null});});
  on('error',()=>{if(state.phase!=='installing')publish({phase:'error',error:'The update could not be verified or retrieved. Check your connection and the published signed release, then retry.'});});
  async function refresh(){
-  let reasons=[];
+  let reasons=[],notices=[];
   if(!state.supported)reasons.push(support.error||'Automatic updates are unavailable.');
-  try{const value=await activity();if(value?.safe!==true)reasons.push(...(Array.isArray(value?.reasons)&&value.reasons.length?value.reasons:['Controller activity is unavailable.']));}catch{reasons.push('Controller activity is unavailable.');}
+  try{const value=await activity();if(Array.isArray(value?.notices))notices=value.notices.filter(item=>typeof item==='string').slice(0,12).map(item=>item.slice(0,600));if(value?.safe!==true)reasons.push(...(Array.isArray(value?.reasons)&&value.reasons.length?value.reasons:['Controller activity is unavailable.']));}catch{reasons.push('Controller activity is unavailable.');}
   try{if((await otherInstances()).length)reasons.push('Quit other Crew instances before restarting to update.');}catch{reasons.push('Other Crew instances could not be checked.');}
-  return publish({installBlocked:reasons.length>0,reasons});
+  return publish({installBlocked:reasons.length>0,reasons,notices});
  }
  async function request(action){
   if(!UPDATE_ACTIONS.has(action))throw new Error('Unknown update action.');
@@ -159,5 +159,5 @@ export function createUpdateCoordinator({updater,currentVersion,support={support
    publish({phase:action==='restart'?previousPhase:'error',error:detail});throw new Error(detail);
   }finally{if(release)await release();busy=false;}
  }
- return {request,refresh,getStatus:()=>({...state,reasons:[...state.reasons]})};
+ return {request,refresh,getStatus:()=>({...state,reasons:[...state.reasons],notices:[...state.notices]})};
 }

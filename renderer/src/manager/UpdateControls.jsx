@@ -24,6 +24,7 @@ export function UpdateControls({liveStatus}){
    {(error||status?.error)&&<p role="alert" className="break-words text-destructive">{error||status.error}</p>}
    {phase==='downloading'&&status?.downloadPercent!=null&&<progress aria-label="Update download" value={status.downloadPercent} max="100" className="h-2 w-full accent-primary"/>}
    {phase==='downloaded'&&status.installBlocked&&<div className="space-y-1 text-xs leading-relaxed text-muted-foreground">{status.reasons?.map(reason=><p key={reason}>{reason}</p>)}</div>}
+   {phase==='downloaded'&&status.notices?.length>0&&<div className="space-y-1 text-xs leading-relaxed text-muted-foreground">{status.notices.map(notice=><p key={notice}>{notice}</p>)}</div>}
    <div className="flex flex-wrap gap-2">
     {status?.supported&&<Button type="button" variant="outline" size="sm" disabled={busy||['checking','downloading','installing'].includes(phase)} onClick={()=>void request('check')}>{busy?<LoaderCircle className="animate-spin" aria-hidden="true"/>:<RefreshCw aria-hidden="true"/>}Check for updates</Button>}
     {phase==='available'&&<Button type="button" size="sm" disabled={busy} onClick={()=>void request('download')}><Download aria-hidden="true"/>Download update</Button>}

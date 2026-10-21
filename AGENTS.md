@@ -35,3 +35,9 @@
 ## Voice interaction correction (AI-016)
 
 - The user's current preference supersedes earlier connect-never-captures guidance: default open microphone; explicit Connect authorizes capture once connected and permission allows. Ordinary blur/hidden/app switching must retain established open-mic input. Only PTT is released on blur. Explicit mute/cancel survives reconnect and error cleanup; repeated connected events never retry capture or override mute. Disconnect/window destruction/quit still release all microphone and transport resources. Never activate a physical microphone during another user voice session; use synthetic media for autonomous checks.
+
+## Update readiness correction (AI-017)
+
+- Completed/interrupted native manager statuses are terminal only when no active turn, pending start or approval remains. Correlate delayed turn notifications/RPC replies; never clear newer work or resurrect a completed turn. Publish the final workStarting reset.
+- Failed/retained worktrees are history, not proof of running work. Before permitting an update, read fresh matching terminal/owned-process evidence for hook, worker and foreground runtime execution. Unknown evidence blocks with specific task/phase guidance; never mark resources stopped, delete a worktree or stop Docker/shared services merely to clear an update blocker. Preserved partial provisioning can outlive a stopped setup command.
+- A screenshot is not a live process check. If the reported installation is on another/unavailable Mac, state that boundary and give normal Quit/manual signed replacement steps rather than changing local unrelated state or bypassing active-work checks.

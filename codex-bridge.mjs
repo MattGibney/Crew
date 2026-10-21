@@ -12,6 +12,8 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   let connectors = [], connectorError = null, voiceCatalog, greetingSession, lastVoice = null;
   const pending = new Map(), approvals = new Map(), items = new Map(), messages = new Map(), workRequests = new Map();
   const expectedExits = new WeakSet();
+  const completedTurns = new Set();
+  function markCompleted(id){completedTurns.add(id);if(completedTurns.size>100)completedTurns.delete(completedTurns.values().next().value);}
   const state = () => ({ threadId, activeTurnId, status, voiceActive, voiceConnecting:connecting, workStarting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: [...messages.values()].slice(-20) });
   const emit = (type, data = {}) => onEvent({ type, ...data });
   const changed = () => emit('work-state', { state: state() });
@@ -56,11 +58,11 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     else if (method === 'thread/realtime/closed') { if (lastVoice) { lastVoice.closedAt = new Date().toISOString(); lastVoice.closeReason = safeError(params.reason || 'Voice ended.'); } voiceActive = false; negotiation?.reject(new Error(params.reason || 'Voice closed.')); emit('closed', { reason: params.reason || 'Voice ended.' }); changed(); }
     else if (method === 'thread/realtime/transcript/delta') { if (lastVoice) { const key = params.role === 'user' ? 'inputTranscriptEvents' : 'outputTranscriptEvents'; lastVoice[key]++; } emit('transcript-delta', { role: params.role, text: params.delta }); }
     else if (method === 'thread/realtime/transcript/done') emit('transcript-done', { role: params.role, text: params.text });
-    else if (method === 'turn/started') { activeTurnId = params.turn.id; status = 'working'; changed(); }
+    else if (method === 'turn/started') { if(completedTurns.has(params.turn.id))return;activeTurnId = params.turn.id; status = 'working'; changed(); }
     else if (method === 'turn/completed') {
       for (const item of params.turn.items || []) record(item, params.turn.id);
-      if (activeTurnId === params.turn.id) activeTurnId = null;
-      status = params.turn.status;
+      markCompleted(params.turn.id);
+      if (!activeTurnId || activeTurnId === params.turn.id) { activeTurnId = null; status = params.turn.status; }
       if (params.turn.error) emit('notice', { message: safeError(params.turn.error.message) });
       changed();
     } else if (method === 'item/started' || method === 'item/completed') { record(params.item, params.turnId); changed(); }
@@ -236,9 +238,19 @@ If project readiness is false, discuss and help configure it but do not dispatch
     if (workRequests.has(requestId)) return workRequests.get(requestId);
     const result = (async () => {
       if (activeTurnId || workStarting) throw new Error('Codex is already working. Use voice to steer it or Stop work.');
-      workStarting = true;
-      try { await ensureThread(); return await rpc('turn/start', { threadId, clientUserMessageId: requestId, input: [{ type: 'text', text }] }); }
-      finally { workStarting = false; }
+      workStarting = true; changed();
+      try {
+        await ensureThread();
+        // Resumed history can reveal an already active native turn. Never launch
+        // a replacement merely because it was unknown before thread loading.
+        if(activeTurnId)throw new Error('Codex is already working. Use voice to steer it or Stop work.');
+        const result=await rpc('turn/start', { threadId, clientUserMessageId: requestId, input: [{ type: 'text', text }] });
+        // The response may arrive before turn/started, or after turn/completed.
+        // Close the former idle gap without resurrecting the latter finished turn.
+        if(result?.turn?.status==='inProgress'&&!completedTurns.has(result.turn.id)&&!activeTurnId){activeTurnId=result.turn.id;status='working';changed();}
+        return result;
+      }
+      finally { workStarting = false; changed(); }
     })();
     workRequests.set(requestId, result);
     result.catch(() => { if (workRequests.get(requestId) === result) workRequests.delete(requestId); });

@@ -16,3 +16,9 @@ See [release setup and signing prerequisites](RELEASES.md) and [theme customizat
 
 
 The signed 0.9.0 → 0.9.1 production-feed upgrade has been verified in an isolated native installation, including replacement/relaunch, signature/notarization checks and unchanged configuration/prompts/saved chat. See [release acceptance](RELEASES.md#signed-release-acceptance).
+
+## Finished work and retained failures
+
+A finished or interrupted manager turn does not block installation once it has no active turn, pending start or approval. Failed setup commands and retained worktrees also do not block solely because their history says failed. Crew reads matching command exit/ownership records and current process identities before declaring execution stopped. A missing/mismatched terminal record or still-live owned process stays blocked, with the worker and phase identified. Partial external resources and retained data are preserved; update readiness never runs teardown or deletes a worktree.
+
+If an older 0.9.1/0.9.2 build remains blocked after its manager finished and a setup failed, Refresh readiness cannot repair the old classification logic. Do not Resume or Remove a worker simply to install an update. Verify no work is still active, quit Crew normally (closing the window alone leaves its controller running), and manually replace the app with the signed corrected release. Keep the same external configuration/state. Unavailable activity or genuinely live project commands require investigation before replacing the application.

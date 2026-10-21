@@ -11,6 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { createRendererAssets } from './renderer-assets.mjs';
 import { createUpdateBridge } from './update-bridge.mjs';
 import { updateActivity } from './update-activity.mjs';
+import { inspectUpdateEvidence } from './update-evidence.mjs';
 import { createUpdateAdmission } from './update-admission.mjs';
 const root = fileURLToPath(new URL('.', import.meta.url));
 let renderer;
@@ -55,7 +56,7 @@ const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable
 const version = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version;
 const updates = createUpdateBridge({version,onStatus:status=>broadcast({type:'update-state',status})});
 const updateAdmission=createUpdateAdmission();
-const activity=async()=>{const view=await controller.view();return updateActivity({view,work:bridge.state()});};
+const activity=async()=>{const view=await inspectUpdateEvidence({stateDir:orchestrationDir,view:await controller.view()});return updateActivity({view,work:bridge.state()});};
 const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'");
