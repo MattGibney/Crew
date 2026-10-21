@@ -209,3 +209,46 @@ test('worker detail HTTP is read-only, same-origin and project scoped', async t 
   assert.equal(other.status, 400); assert.match(other.value.error, /another project/);
   assert.equal((await f.calls()).some(call => call.method === 'turn/start'), false);
 });
+
+test('profile behavior waits for explicit restart on the same chat and survives controller reload without changing custom prompts', async t => {
+  const f = await fixture(t); await f.start();
+  await f.request('/api/prepare');
+  const original = (await f.request('/api/settings', { method: 'GET' })).value;
+  const save = await f.request('/api/settings/manager-profile', { method: 'PUT', body: { name: 'Ada', personality: 'Use PROFILE_STYLE concise replies.', expectedVersion: original.managerProfile.version } });
+  assert.equal(save.status, 200); assert.equal(save.value.manager.pendingRestart, true);
+  assert.deepEqual(save.value.manager.saved, original.manager.saved);
+  assert.deepEqual(save.value.worker, original.worker);
+  assert.equal(save.value.managerProfile.voice, original.managerProfile.voice);
+  assert.equal((await f.calls()).filter(c => ['thread/start', 'thread/resume'].includes(c.method)).length, 1);
+  await f.stop(); await f.start(); await f.request('/api/prepare');
+  let threads = (await f.calls()).filter(c => ['thread/start', 'thread/resume'].includes(c.method));
+  assert.doesNotMatch(threads.at(-1).params.developerInstructions, /PROFILE_STYLE/);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.pendingRestart, true);
+  assert.equal((await f.request('/api/manager/lifecycle', { body: { action: 'restart' } })).status, 200);
+  threads = (await f.calls()).filter(c => ['thread/start', 'thread/resume'].includes(c.method));
+  assert.equal(threads.at(-1).params.threadId, 'http-retained-chat');
+  assert.match(threads.at(-1).params.developerInstructions, /HTTP MANAGER ORIGINAL/);
+  assert.match(threads.at(-1).params.developerInstructions, /PROFILE_STYLE/);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.pendingRestart, false);
+  assert.equal((await f.calls()).some(c => ['turn/start','thread/realtime/start'].includes(c.method)), false);
+  await f.request('/api/work', { body: { text: 'Explicit synthetic conversational check', requestId: 'profile-context-proof' } });
+  const turn = (await f.calls()).find(c => c.method === 'turn/start');
+  assert.match(turn.params.additionalContext.crewManagerInstructions.value, /PROFILE_STYLE/);
+  assert.match(turn.params.additionalContext.crewManagerInstructions.value, /replaces earlier Crew/);
+  assert.equal(turn.params.additionalContext.crewManagerInstructions.kind, 'application');
+  assert.equal(turn.params.input[0].text, 'Explicit synthetic conversational check');
+});
+
+test('combined instruction limit rejects either editor before persisting an unusable manager profile', async t => {
+  const f = await fixture(t); await f.start();
+  let saved = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'x'.repeat(63999), expectedVersion: saved.manager.saved.version } })).status, 200);
+  saved = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.equal((await f.request('/api/settings/manager-profile', { method: 'PUT', body: { name: 'Ada', expectedVersion: saved.managerProfile.version } })).status, 400);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.managerProfile.name, '');
+  assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'Short instructions', expectedVersion: saved.manager.saved.version } })).status, 200);
+  assert.equal((await f.request('/api/settings/manager-profile', { method: 'PUT', body: { name: 'Ada', expectedVersion: saved.managerProfile.version } })).status, 200);
+  saved = (await f.request('/api/settings', { method: 'GET' })).value;
+  assert.equal((await f.request('/api/settings/prompts', { method: 'PUT', body: { role: 'manager', text: 'x'.repeat(63999), expectedVersion: saved.manager.saved.version } })).status, 400);
+  assert.equal((await f.request('/api/settings', { method: 'GET' })).value.manager.saved.text, 'Short instructions');
+});

@@ -202,3 +202,13 @@
 
 - The user's bottom-follow preference supersedes turn anchoring: open at the bottom, follow appended/streamed output only while at the bottom, and preserve the reader's position through state refreshes and new messages while scrolled back. Do not mark user rows as scroll anchors or reapply opening position on updates. Jump to latest explicitly resumes following. Verify repeated refresh, near-bottom reading, new user/assistant rows, streaming, completion and composer resizing in the real compiled renderer.
 - The user explicitly authorized releasing the chat-scroll fix in PR #33 as patch 0.13.1. Merge through that PR, preserve published 0.13.0, and use the existing signed/notarized workflow and public artifact verification. This authorization covers this patch only.
+
+## Manager profile (GitHub #35)
+
+- Optional manager name, local picture and personality belong to each project's existing manager profile; preserve its independently selected audio voice. Saved presentation updates immediately, while name/personality join the existing native instruction snapshot only on initial creation or explicit Start/Restart. Window/controller reload must keep the retained snapshot.
+- Profile preferences are an explicit editable supplement to the complete replacement instructions, never a hidden personality engine or a rewrite of custom prompt bytes. Empty fields preserve original behavior. A configured manager name is used in introductions rather than the audio voice name; explain this in Settings. Profile edits never launch a turn/call, reset history or alter worker/scratchpad state.
+- Bound local raster data at both renderer and server; never accept SVG, external picture URLs or arbitrary file paths. Keep pictures out of model instructions. Preserve legacy voice profiles and reject stale/invalid/oversized combined instruction saves before mutation.
+
+- A native `thread/resume` acknowledgement alone does not prove changed instructions affect a materialized chat. Validate actual responses across restart and clearing. The retained Crew snapshot also uses keyed native application context on actual typed turns and realtime start/end instruction fields; never force a model, mode, permission policy or synthetic user turn to activate it.
+
+- Keep newly observed shutdown hangs separate from profile acceptance. Record failed attempts and exact-owned fixture cleanup; label baseline/introduction unproven until compared. A close-window-then-Quit or inspector-detach workaround proves only that sequence, never ordinary open-window Quit reliability (GitHub #39).
