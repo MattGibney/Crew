@@ -208,24 +208,34 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     if (lastVoice) lastVoice.browser = { ...snapshot, at: new Date().toISOString() };
     return { recorded: true };
   }
-  async function stopVoice({ preserveWork = true } = {}) {
+  async function stopVoice({ preserveWork = true, cooperative = false } = {}) {
     greetingSession = undefined;
     voiceGeneration++;
     if (child && threadId && (voiceActive || connecting)) {
       let timer;
       try { await Promise.race([rpc('thread/realtime/stop', { threadId }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Voice stop timed out.')), 3000); })]); }
-      catch (error) { if (preserveWork) throw error; await shutdown(); }
+      catch (error) { if (cooperative) throw new Error(`Voice shutdown could not be confirmed: ${safeError(error)}`); if (preserveWork) throw error; await shutdown(); }
       finally { clearTimeout(timer); }
     }
     voiceActive = false; negotiation?.reject(new Error('Disconnected.')); changed();
   }
-  async function shutdown() {
+  async function shutdown({cooperative=false}={}) {
     if (shuttingDown) return shuttingDown;
     shuttingDown = (async () => {
       const proc = child;
       if (proc?.pid && proc.exitCode === null && proc.signalCode === null) {
-        expectedExits.add(proc); proc.kill('SIGTERM');
-        await new Promise((resolve, reject) => { const force = setTimeout(() => proc.kill('SIGKILL'), 1500); const deadline = setTimeout(() => { clearTimeout(force); reject(new Error('Manager process exit could not be confirmed.')); }, 4500); proc.once('exit', () => { clearTimeout(force); clearTimeout(deadline); resolve(); }); });
+        if (cooperative) {
+          if (activeTurnId || workStarting || voiceActive || connecting || approvals.size) throw new Error('Manager activity changed before cooperative shutdown.');
+          expectedExits.add(proc);
+          await new Promise((resolve, reject) => {
+            const done = () => { clearTimeout(timer); resolve(); };
+            const timer = setTimeout(() => { proc.removeListener('exit', done); reject(new Error('Manager runtime shutdown is still pending. No force signal was sent.')); }, 3000);
+            proc.once('exit', done); proc.stdin.end();
+          });
+        } else {
+          expectedExits.add(proc); proc.kill('SIGTERM');
+          await new Promise((resolve, reject) => { const force = setTimeout(() => proc.kill('SIGKILL'), 1500); const deadline = setTimeout(() => { clearTimeout(force); reject(new Error('Manager process exit could not be confirmed.')); }, 4500); proc.once('exit', () => { clearTimeout(force); clearTimeout(deadline); resolve(); }); });
+        }
       }
       child = undefined; ready = undefined; threadReady = false; voiceActive = false;
     })();
@@ -275,7 +285,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     if (workRequests.size > 100) workRequests.delete(workRequests.keys().next().value);
     return result;
   }
-  async function interrupt() { if (activeTurnId) await rpc('turn/interrupt', { threadId, turnId: activeTurnId }); }
+  async function interrupt({expectedTurnId}={}) { if(expectedTurnId&&activeTurnId!==expectedTurnId)throw new Error('The active manager turn changed. Review the update plan before interrupting work.'); if (activeTurnId) await rpc('turn/interrupt', { threadId, turnId: activeTurnId }); }
   function answerApproval(id, response) {
     const request = approvals.get(String(id)); if (!request) throw new Error('This request has already been resolved.');
     const { method, params } = request; let result;

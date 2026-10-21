@@ -8,13 +8,14 @@ import { createPromptSettings } from './prompt-settings.mjs';
 import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
-import { readTask } from './orchestration-store.mjs';
+import { readTask, requestWorkerAction } from './orchestration-store.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createRendererAssets } from './renderer-assets.mjs';
 import { createUpdateBridge } from './update-bridge.mjs';
 import { updateActivity } from './update-activity.mjs';
 import { inspectUpdateEvidence } from './update-evidence.mjs';
 import { createUpdateAdmission } from './update-admission.mjs';
+import { createUpdatePlan,readUpdatePlan,isUpdatePlanHolding } from './update-plan.mjs';
 const root = fileURLToPath(new URL('.', import.meta.url));
 let renderer;
 try { renderer = await createRendererAssets(path.join(root, 'renderer-dist')); }
@@ -51,8 +52,9 @@ const broadcast = event => {
     catch { clients.delete(client); }
   }
 };
+let drainHeld=false,updatePlan,updatePlanTimer;
 const prompts = await createPromptSettings({ stateDir: orchestrationDir, sourceDir: root, projectId: project.id, managerPrompt, workerPrompt });
-const controller = await createController({ stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), onChange: state => broadcast({ type: 'orchestration-state', state }) });
+const controller = await createController({ admissionHeld:async()=>drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), onChange: state => broadcast({ type: 'orchestration-state', state }) });
 await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
 const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent: broadcast });
@@ -62,7 +64,7 @@ const settingsView = async () => {
   return { projectId: project.id, projectName: project.name, managerLifecycle: lifecycle, manager: { saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: saved.manager.version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
 };
 const version = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version;
-const updates = createUpdateBridge({version,onStatus:status=>broadcast({type:'update-state',status})});
+const updates = createUpdateBridge({version,onStatus:status=>broadcast({type:'update-state',status:{...status,plan:updatePlan?.status()||null}})});
 const updateAdmission=createUpdateAdmission();
 const activity = async () => {
   const view = await inspectUpdateEvidence({ stateDir: orchestrationDir, view: await controller.view() });
@@ -71,6 +73,10 @@ const activity = async () => {
   if (!['running', 'stopped'].includes(lifecycle.state)) { result.safe = false; result.reasons.push(`Manager lifecycle is ${lifecycle.state}. Resolve it in Settings before installing an update.`); }
   return result;
 };
+const synchronizePlan=plan=>{drainHeld=isUpdatePlanHolding(plan);if(drainHeld)updateAdmission.hold();else updateAdmission.releaseHold();broadcast({type:'update-plan-state',plan});};
+updatePlan=createUpdatePlan({stateDir:orchestrationDir,version,getView:async()=>inspectUpdateEvidence({stateDir:orchestrationDir,view:await controller.view()}),getManager:()=>bridge.state(),stopVoice:()=>bridge.stopVoice({cooperative:true}),interruptManager:input=>bridge.interrupt(input),requestAction:input=>requestWorkerAction(orchestrationDir,input),activity,onChange:synchronizePlan});
+await updatePlan.ready;synchronizePlan(updatePlan.status());await updatePlan.recover();
+updatePlanTimer=setInterval(()=>void updatePlan.tick().catch(error=>broadcast({type:'notice',message:safeError(error)})),500);
 const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'");
@@ -109,14 +115,23 @@ const server = http.createServer(async (req, res) => {
       await prompts.save(input); return send(200, await settingsView());
     }
     if (req.url === '/api/manager/lifecycle') return send(200, await updateAdmission.run(() => manager.request(input.action)));
-    if (req.url === '/api/updates') return send(200, await updates.request(input.action || 'status'));
+    if(req.url==='/api/updates'){if(input.action==='return-to-work'){await updatePlan.releaseForReview();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}if(input.action==='resume-paused-work'){await updatePlan.resumeAfterCancel();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}return send(200,{...await updates.request(input.action||'status'),plan:updatePlan.status()});}
+    if(req.url==='/api/update-plan-status')return send(200,{plan:updatePlan.status()});
+    if(['/api/update-plan-begin','/api/update-plan-cancel','/api/update-plan-installing','/api/update-plan-blocked'].includes(req.url)){
+      if(input.token!==shutdownToken||typeof process.send!=='function')return send(403,{error:'Only this desktop owner may coordinate an update.'});
+      if(req.url==='/api/update-plan-begin'){drainHeld=true;updateAdmission.hold();try{await updatePlan.begin({targetVersion:input.targetVersion});}finally{synchronizePlan(updatePlan.status());}return send(200,{plan:updatePlan.status()});}
+      if(req.url==='/api/update-plan-cancel'){if(input.planId&&input.planId!==updatePlan.status()?.id)return send(409,{error:'The update plan changed. Refresh before canceling.'});await updatePlan.cancel();return send(200,{plan:updatePlan.status()});}
+      if(req.url==='/api/update-plan-installing')return send(200,await updatePlan.markInstalling({planId:input.planId,targetVersion:input.targetVersion}));
+      await updatePlan.markBlocked('The update could not finish. Paused work is retained; review it or choose Resume paused work.',{planId:input.planId,targetVersion:input.targetVersion});return send(200,{plan:updatePlan.status()});
+    }
     if (req.url === '/api/update-activity') return send(200, await activity());
     if (req.url === '/api/update-prepare' || req.url === '/api/update-cancel') {
       if (input.token !== shutdownToken || typeof process.send !== 'function') return send(403, {error:'Only this desktop owner may reserve an update.'});
       if (req.url === '/api/update-cancel') {updateAdmission.cancel();return send(200,{reserved:false});}
-      return send(200,await updateAdmission.reserve(activity));
+      if(drainHeld&&!['ready','installing'].includes(updatePlan.status()?.phase))return send(200,{reserved:false,reasons:['Work is still pausing or needs review. Wait for the update plan to become ready.']});
+      const reservation=await updateAdmission.reserve(activity);if(reservation.reserved){try{await bridge.shutdown({cooperative:true});}catch(error){updateAdmission.cancel();throw error;}}return send(200,reservation);
     }
-    if (updateAdmission.reserved && ['/api/work','/api/connect','/api/discuss-attention','/api/approval','/api/prepare','/api/voice-ready'].includes(req.url)) return send(409,{error:'Crew is preparing a safe update restart. Wait for it to finish before starting work.'});
+    if (updateAdmission.reserved && ['/api/work','/api/connect','/api/discuss-attention','/api/prepare','/api/voice-ready'].includes(req.url)) return send(409,{error:'Crew is preparing a safe update restart. Wait for it to finish before starting work.'});
     if (req.url === '/api/config') return send(200, { name: 'Crew', project: { id: project.id, name: project.name, mode: project.mode, readiness: project.readiness }, legacyState: configuration.legacyState });
     if (req.url === '/api/shutdown') {
       if (input.token !== shutdownToken) return send(403, { error: 'Use this instance’s local stop command.' });
@@ -143,7 +158,7 @@ const server = http.createServer(async (req, res) => {
     if (req.url === '/api/voice-ready') return send(200, await manager.run(() => bridge.greetVoice(input.sessionToken)));
     if (req.url === '/api/disconnect') { await bridge.stopVoice({ preserveWork: true }); return send(200, { disconnected: true }); }
     if (req.url === '/api/stop-work') { await bridge.interrupt(); return send(200, { interrupted: true }); }
-    if (req.url === '/api/approval') return send(200,await updateAdmission.run(async()=>{bridge.answerApproval(input.id,input.response);return {answered:true};}));
+    if(req.url==='/api/approval'){const answer=async()=>{bridge.answerApproval(input.id,input.response);return{answered:true};};return send(200,drainHeld&&updatePlan.status()?.phase==='draining'?await answer():await updateAdmission.run(answer));}
     // Text diagnostic enters the SAME work chat; never invoked by transcript events.
     if (req.url === '/api/work') {
       if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 8000 || !/^[\w-]{8,100}$/.test(input.requestId || '')) return send(400, { error: 'Text and a unique requestId are required.' });
@@ -159,6 +174,7 @@ const server = http.createServer(async (req, res) => {
 });
 let shuttingDown;
 async function shutdown() {
+  clearInterval(updatePlanTimer);
   if (shuttingDown) return shuttingDown;
   shuttingDown = (async () => {
     for (const client of clients) client.end();

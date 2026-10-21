@@ -183,22 +183,23 @@ export async function acknowledgeAttention(dir, { taskId, attentionId }) {
 
 // Requests are durable intent, not evidence that a process has stopped or restarted.
 // The controller alone performs lifecycle transitions and marks each request handled.
-export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId }) {
+export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
   if (!LIFECYCLE_ACTIONS.has(action)) throw new Error('Invalid worker action');
+  if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {
     const requests = task.lifecycleRequests ||= [];
     const existing = requests.find(request => request.id === actionId);
     if (existing) {
       // An exact retry remains valid even after the controller advances to a new run.
-      if (existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
+      if (Boolean(existing.cooperative) !== cooperative || existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
       return;
     }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId) throw new Error('Stale worker run for lifecycle action');
     if (task.status === 'disposed') throw new Error('Worker has been disposed');
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
-    requests.push({ id: actionId, action, expectedRunId: task.runId || null, status: 'pending', at: now() });
+    requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
   });
 }

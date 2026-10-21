@@ -6,6 +6,7 @@ import {randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {OwnedProcessTree,snapshotProcesses} from './process-ownership.mjs';
+import {waitOwnedNatural} from './cooperative-process.mjs';
 const configPath=process.argv[2],config=JSON.parse(await readFile(configPath,'utf8')),dir=path.dirname(configPath),now=()=>new Date().toISOString();
 async function save(name,value){const file=path.join(dir,name),temp=`${file}.${randomUUID()}.tmp`;await writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(temp,file);}
 let closed=false,spawnError=null,commandCode=null,resolveCommand,stopPromise=null,stopRequest=null,diagnostics=null;
@@ -18,8 +19,10 @@ const lines=createInterface({input:child.stdout});lines.on('line',line=>{try{con
 const tree=child.pid?new OwnedProcessTree(child.pid):null;
 await save('started.json',{id:config.id,environmentId:config.environmentId,pid:process.pid,identity:(await snapshotProcesses()).get(process.pid)||null,workerPid:child.pid||null,at:now()});
 if(tree)await tree.capture();if(!closed)child.stdin.write('start\n');
+let cooperative=false;
+async function acceptControl(){const control=JSON.parse(await readFile(path.join(dir,'control.json'),'utf8'));if(control.id!==config.id||control.environmentId!==config.environmentId||control.action!=='stop')return;stopRequest=control;if(control.cooperative===true){if(!cooperative){cooperative=true;stopPromise=waitOwnedNatural(tree,{onBlocked:state=>save('cooperative-stop.json',{id:config.id,environmentId:config.environmentId,...state,at:now()}),isSuperseded:()=>!cooperative});}}else{if(cooperative){cooperative=false;stopPromise=null;}void stop();}}
 const stop=()=>{if(!stopPromise)stopPromise=tree?tree.stop({graceMs:2500}):Promise.resolve({confirmed:Boolean(spawnError),remaining:[]});return stopPromise;};
-let checking=false;const timer=setInterval(async()=>{if(checking)return;checking=true;try{if(tree)await save('ownership.json',{id:config.id,records:await tree.capture(),at:now()});const control=JSON.parse(await readFile(path.join(dir,'control.json'),'utf8'));if(control.id===config.id&&control.environmentId===config.environmentId&&control.action==='stop'){stopRequest=control;void stop();}}catch{}finally{checking=false;}},150);
-process.on('SIGTERM',()=>{stopRequest={id:config.id,action:'stop',reason:'supervisor signal'};void stop();});
-await commandDone;clearInterval(timer);const ownership=await(stopPromise||stop());await childDone;lines.close();
+let checking=false;const timer=setInterval(async()=>{if(checking)return;checking=true;try{if(tree)await save('ownership.json',{id:config.id,records:await tree.capture(),at:now()});await acceptControl();}catch{}finally{checking=false;}},150);
+process.on('SIGTERM',()=>{stopRequest={id:config.id,action:'stop',reason:'supervisor signal'};if(cooperative){cooperative=false;stopPromise=null;}void stop();});
+await commandDone;clearInterval(timer);await acceptControl().catch(()=>{});if(cooperative){await tree?.capture();child.stdin.end('release\n');}let observedStop=stopPromise;let ownership=await(observedStop||stop());if(stopPromise&&stopPromise!==observedStop)ownership=await stopPromise;await childDone;lines.close();
 await save('exit.json',{id:config.id,environmentId:config.environmentId,stopConfirmed:ownership.confirmed,remaining:ownership.remaining||[],exitCode:commandCode,error:spawnError,requestedStop:Boolean(stopRequest),diagnostics,at:now()});

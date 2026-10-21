@@ -4,7 +4,7 @@ Signed production builds check GitHub Releases automatically after startup and e
 
 The app checks the public release feed without requiring a GitHub login or distributing a GitHub publishing token. Update state distinguishes checking, available, downloading, downloaded, errors and unavailable/unsigned builds. A failed download can be retried; an unverified release is not installed.
 
-Restart is blocked while voice is connected or connecting, the manager is working or waiting for input, workers are queued/active, a worker lifecycle or project environment command is pending, shutdown evidence is uncertain, or a project environment is still running. Disconnect voice and finish or explicitly stop the relevant work; Crew does not stop workers for an update. Resolve any unavailable evidence before retrying. Other live instances and detached runtimes using the same installed bundle also block installation.
+Restart is blocked while voice is connected or connecting, the manager is working or waiting for input, workers are queued/active, a worker lifecycle or project environment command is pending, shutdown evidence is uncertain, or a project environment is still running. Finish or explicitly stop the relevant work, or choose Pause work and update to coordinate a safe pause. Resolve any unavailable evidence before retrying. Other live instances and detached runtimes using the same installed bundle also block installation.
 
 At restart, Crew takes an exclusive installation lease and rechecks live activity. It freezes new chat/voice/setup requests before shutting down its owned controller. No detached worker is killed. The native updater verifies and installs the signed release. If installation fails before process exit, Crew releases the reservation and attempts to restore its controller without opening the microphone or starting model work.
 
@@ -22,3 +22,23 @@ The signed 0.9.0 → 0.9.1 production-feed upgrade has been verified in an isola
 A finished or interrupted manager turn does not block installation once it has no active turn, pending start or approval. Failed setup commands and retained worktrees also do not block solely because their history says failed. Crew reads matching command exit/ownership records and current process identities before declaring execution stopped. A missing/mismatched terminal record or still-live owned process stays blocked, with the worker and phase identified. Partial external resources and retained data are preserved; update readiness never runs teardown or deletes a worktree.
 
 If an older 0.9.1/0.9.2 build remains blocked after its manager finished and a setup failed, Refresh readiness cannot repair the old classification logic. Do not Resume or Remove a worker simply to install an update. Verify no work is still active, quit Crew normally (closing the window alone leaves its controller running), and manually replace the app with the signed corrected release. Keep the same external configuration/state. Unavailable activity or genuinely live project commands require investigation before replacing the application.
+
+## Pause work and update
+
+When a downloaded update is blocked by active work, choose **Pause work and update**. Crew immediately holds new conversation/voice requests and worker launches, saves a durable plan, disconnects voice and requests targeted cooperative pauses. A running setup phase finishes before the worker launch boundary. A running worker receives a cooperative interrupt; a persistent project environment must have a declared stop command. Crew waits for fresh verified shutdown evidence. The update panel shows each captured worker and specific blockers.
+
+This action does not force-stop processes, delete worktrees, run teardown or answer questions/approvals. If something cannot safely pause, the update remains blocked. Review required questions/approvals through the existing manager flow. The manager turn may be interrupted and remains visibly interrupted; its input is never automatically replayed.
+
+After the exact approved update relaunches, Crew resumes only eligible workers whose pause was confirmed for this plan, using their retained chats/worktrees. Work already paused, failed, blocked or waiting for an unanswered question is not automatically resumed. Voice remains disconnected.
+
+**Cancel update** preserves the plan and admission hold. Choose **Resume paused work** to restore eligible work paused by the plan, or **Return to work** to release the hold while leaving paused workers paused for manual review. Unknown execution ownership and shutdown evidence always remain blockers; cancellation is not a force-cleanup operation.
+
+Implementation is tracked by AI-018. This feature is prepared on a pull request and is not claimed present in the already published 0.9.3 release. Native signed installation acceptance will follow an explicitly requested grouped release.
+
+## Integration contract
+
+The single-instance engine lives in update-plan.mjs. Its callbacks provide fresh task/manager evidence, voice shutdown, correlated manager interruption, ordinary lifecycle requests and aggregate install readiness. The controller's admissionHeld callback freezes queued/pre-spawn work; cooperative:true is accepted only for targeted pause requests. Plan targetVersion, task/run/action IDs and confirmed lifecycle/process evidence determine recovery. Preserve these checks when adapting the engine.
+
+A future multi-project coordinator must enumerate every managed instance, hold all admissions, collect all worker/runtime evidence and keep the native installation lease/other-instance checks global. One project's idle state cannot approve a shared application replacement. A separate manager-lifecycle start/restart endpoint must enter the same update-admission barrier; lifecycle transitions or errors remain unverified until a positively stopped/ready process state is confirmed. Manager stop is not worker pause. No multi-project registry or manager-settings feature is implemented by AI-018.
+
+Retained worker questions/blocked records with freshly confirmed stopped execution can survive an update unanswered. Missing or live execution evidence still blocks. Recovery does not resume those previously waiting workers.

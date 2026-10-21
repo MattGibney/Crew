@@ -13,7 +13,7 @@ import {discoverWorkerEnvironment,assertWorkerEnvironmentSelection} from './envi
 import {selectExecutionPlan} from './execution-selection.mjs';
 import { randomUUID } from 'node:crypto';
 import {createRequire} from 'node:module';
-import {createUpdateCoordinator,createNativeUpdateGate,createInstallLease,createRestartHandoff,signedUpdateSupport,otherNativeInstances,UPDATE_ACTIONS} from './updater.mjs';
+import {createUpdateCoordinator,createPauseUpdateCoordinator,PAUSE_UPDATE_ACTIONS,createNativeUpdateGate,createInstallLease,createRestartHandoff,signedUpdateSupport,otherNativeInstances,UPDATE_ACTIONS} from './updater.mjs';
 import { relative, sep, isAbsolute } from 'node:path';
 import { prepareCrewStorage } from './storage.mjs';
 import { loadAppConfig } from '../config.mjs';
@@ -41,7 +41,7 @@ let discoveryController, discoveryRoot, discoveryProposal, discoverySummary, lin
 const repositoryOptions=new Map();
 let setupWindow, setupChecks = {}, setupRevision, setupInputs, setupOperation = false;
 let window, tray, config, origin, backend, pollTimer, starting = false, quitting = false, closing = false;
-let cancelRestartHandoff, updateCoordinator, nativeUpdater, updateCheckTimer, updateInitialCheck=false;
+let cancelRestartHandoff, pauseUpdate, updateCoordinator, nativeUpdater, updateCheckTimer, updateInitialCheck=false;
 const updateLease=createInstallLease({directory:updatesDirectory});
 const nativeUpdateGate=createNativeUpdateGate({busy:()=>Boolean(discoveryController||setupOperation||starting||quitting)});
 let counts = { active: null, pending: null }, lastError = null, backendReady = false;
@@ -94,6 +94,8 @@ function updateTray() {
     { label:'Check for updates…',enabled:Boolean(updateCoordinator),click:()=>void updateAction('check') },
     { label:'Download update',enabled:updateCoordinator?.getStatus().phase==='available',click:()=>void updateAction('download') },
     { label:'Restart to update…',enabled:updateCoordinator?.getStatus().phase==='downloaded',click:()=>void updateAction('restart') },
+    { label:'Pause work and update…',enabled:updateCoordinator?.getStatus().phase==='downloaded',click:()=>void updateAction('pause-update') },
+    { label:'Cancel pause and update',enabled:Boolean(pauseUpdate?.getPlan()&&!['complete','canceled','cancelled','completed','resumed','installing'].includes(pauseUpdate.getPlan().phase)),click:()=>void updateAction('cancel-pause-update') },
     { label:'Retry startup', enabled:!backendReady && !starting && !backend, click:() => void startup() },
     { type:'separator' }, { label:'Quit this instance…', click:() => void quitInstance() }
   ]));
@@ -133,6 +135,7 @@ async function poll() {
   try { const view = await api('orchestration'); counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null; }
   catch (error) { counts = { active:null, pending:null }; lastError = safe(error); }
   await updateCoordinator?.refresh();
+  try{await pauseUpdate?.advancePlan();}catch(error){lastError=safe(error);}
   updateTray(); await statusFile().catch(() => {});
 }
 async function startup({ showWindow = true } = {}) {
@@ -162,8 +165,8 @@ async function startup({ showWindow = true } = {}) {
     finally { await log.close(); }
     const owned = backend;
     owned.on('message',message=>{
-      if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action))return;
-      void (async()=>{try{const status=await updateCoordinator.request(message.action);sendUpdate(owned,{type:'crew:update:response',id:message.id,status});}catch(error){sendUpdate(owned,{type:'crew:update:response',id:message.id,status:updateCoordinator?.getStatus(),error:safe(error)});}})();
+      if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||(!UPDATE_ACTIONS.has(message.action)&&!PAUSE_UPDATE_ACTIONS.has(message.action)))return;
+      void (async()=>{try{const status=await requestUpdate(message.action);sendUpdate(owned,{type:'crew:update:response',id:message.id,status});}catch(error){sendUpdate(owned,{type:'crew:update:response',id:message.id,status:updateCoordinator?.getStatus(),error:safe(error)});}})();
     });
     sendUpdate(owned,{type:'crew:update:status',status:updateCoordinator?.getStatus()});
     let spawnFailure;
@@ -190,6 +193,7 @@ async function startup({ showWindow = true } = {}) {
     partition.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => contents === window?.webContents && permitsAudio(permission, { ...details, securityOrigin:requestingOrigin }, origin));
     partition.on('will-download', event => event.preventDefault());
     counts = summarizeTasks(await api('orchestration'));
+    await pauseUpdate?.refreshPlan();
     if(!updateInitialCheck&&updateCoordinator?.getStatus().supported){
       updateInitialCheck=true;
       const check=()=>void updateCoordinator.request('check').catch(()=>{});
@@ -221,7 +225,7 @@ async function quitInstance() {
   await poll();
   const active = counts.active;
   const warning = discoveryController ? 'A setup project analysis is running. Quitting will cancel this analysis without applying its draft.' : active === null ? 'Worker status is unavailable.' : active ? `${active} task${active === 1 ? ' is' : 's are'} still active.` : 'There are no active tasks.';
-  const result = await dialog.showMessageBox({ type:active === 0 ? 'question' : 'warning', title:'Quit this instance?', message:'Quit Crew?', detail:`${warning}\n\nClosing the window keeps the controller running. Quitting stops this instance’s controller and voice. Independently launched workers are not canceled; their reports can be reviewed when this instance starts again. No new work starts until you reopen it.`, buttons:['Keep running', 'Quit this instance'], defaultId:0, cancelId:0, noLink:true });
+  const result = await dialog.showMessageBox({ type:active === 0 ? 'question' : 'warning', title:'Quit this instance?', message:'Quit Crew?', detail:`${warning}${pauseUpdate?.getPlan()?'\nThe durable update plan is retained. Quitting does not cancel the plan or resume paused workers.':''}\n\nClosing the window keeps the controller running. Quitting stops this instance’s controller and voice. Independently launched workers are not canceled; their reports can be reviewed when this instance starts again. No new work starts until you reopen it.`, buttons:['Keep running', 'Quit this instance'], defaultId:0, cancelId:0, noLink:true });
   if (result.response !== 1) return;
   quitting = true; discoveryController?.abort(); clearInterval(pollTimer);
   try {
@@ -238,20 +242,25 @@ function sendUpdate(child,message){
   if(!child?.connected)return;
   try{child.send(message,error=>{if(error)console.error('Update status delivery failed.');});}catch{console.error('Update status delivery failed.');}
 }
+async function requestUpdate(action){
+  if(PAUSE_UPDATE_ACTIONS.has(action))return pauseUpdate.request(action);
+  if(action==='restart')return pauseUpdate.restart();
+  return updateCoordinator.request(action);
+}
 async function updateAction(action){
   try{
-    if(action==='restart'){
-      const result=await dialog.showMessageBox({type:'question',message:'Restart Crew to install the downloaded update?',detail:'Crew checks that this project is idle and other Crew instances are closed. Your local configuration, authentication, history and retained worktrees stay in place.',buttons:['Keep running','Restart to update'],defaultId:0,cancelId:0,noLink:true});
+    if(action==='restart'||action==='pause-update'){
+      const result=await dialog.showMessageBox({type:'question',message:action==='pause-update'?'Pause this project’s work and update Crew?':'Restart Crew to install the downloaded update?',detail:action==='pause-update'?'Crew will retain worker sessions, request a controlled pause, and install only after the approved plan is ready. This consent allows the restart when the safety checks pass. Other Crew instances must be closed.':'Crew checks that this project is idle and other Crew instances are closed. Your local configuration, authentication, history and retained worktrees stay in place.',buttons:['Keep running',action==='pause-update'?'Pause work and update':'Restart to update'],defaultId:0,cancelId:0,noLink:true});
       if(result.response!==1)return;
     }
-    await updateCoordinator.request(action);
+    await requestUpdate(action);
   }catch(error){await dialog.showMessageBox({type:'warning',message:'Crew update needs attention',detail:safe(error)});}
 }
-async function updateToken(route){
+async function updateToken(route,input={}){
   if(!backendReady||!backend)throw new Error('Local controller is unavailable.');
   const marker=JSON.parse(await readFile(config.serverStatePath,'utf8'));
   if(marker.pid!==backend.pid||marker.configPath!==config.configPath||marker.projectId!==config.project.id)throw new Error('Controller ownership could not be verified.');
-  return api(route,{token:marker.token});
+  return api(route,{...input,token:marker.token});
 }
 async function initializeUpdates(){
   const support=await signedUpdateSupport({packaged:app.isPackaged});
@@ -283,6 +292,14 @@ async function initializeUpdates(){
     }),lease:updateLease,otherInstances:()=>otherNativeInstances({backendPid:backend?.pid}),onState:status=>{
       sendUpdate(backend,{type:'crew:update:status',status});updateTray();void statusFile().catch(()=>{});
     }});
+  pauseUpdate=createPauseUpdateCoordinator({native:updateCoordinator,
+    begin:input=>{
+      nativeUpdateGate.assertSetupAllowed();
+      if(discoveryController||setupOperation||starting||quitting)throw new Error('Finish Crew setup before pausing work to update.');
+      return updateToken('update-plan-begin',input);
+    },status:()=>api('update-plan-status'),cancel:input=>updateToken('update-plan-cancel',input),
+    markInstalling:input=>updateToken('update-plan-installing',input),markBlocked:input=>updateToken('update-plan-blocked',input),
+  });
 }
 // Setup uses a separate trusted local page. The manager renderer has no preload.
 function projectDraftStatus(issues=[]) {const detail=issues.map(issue=>/teamId|teamKey/.test(issue)?'Choose your Linear team, or connect it later before assigning ticketed work.':/baseRef/.test(issue)?'Choose a starting branch for each project folder.':/path/.test(issue)?'Choose your local project folder.':issue);return {status:issues.length?'incomplete':'configured',detail:[...new Set(detail)].join(' ')||'Project settings are saved. Ticket access is checked when you ask for work.'};}
@@ -359,6 +376,9 @@ ipcMain.handle('crew:setup', async (event, action, input) => {
   // Serialize native checks/mutations. Snapshot is read-only and may run during a check.
   if (action === 'snapshot') return setupSnapshot();
   nativeUpdateGate.assertSetupAllowed();
+  if(pauseUpdate?.isCommandPending())throw new Error('Wait for the update plan action before changing project setup.');
+  const updatePlan=pauseUpdate?.getPlan();
+  if(updatePlan&&updatePlan.phase!=='complete')throw new Error('Choose Resume paused work or Return to work before changing project setup.');
   if (action === 'cancel-discovery') {if(discoveryPhase==='saving')return {notice:'Your validated settings are already saving. Please wait for the result.'};discoveryController?.abort();return {notice:'Canceling project setup. Your saved settings stay unchanged.'};}
   if (setupOperation) throw new Error('Another setup action is still running. Wait for it to finish.');
   setupOperation = true;

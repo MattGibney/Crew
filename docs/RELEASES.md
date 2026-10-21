@@ -1,3 +1,7 @@
+# Delivery policy
+
+Develop features/fixes on codex/ branches and open pull requests targeting main. Review and merge are separate from release publication; agents must not automatically merge or publish a release for each small change. The user chooses the set of changes and explicitly authorizes the intended grouped release. Existing releases and main history remain intact. The workflow stays manual-dispatch only; creating a branch, PR, merge or tag must not automatically publish.
+
 # Building and publishing Crew
 
 Crew releases are deliberately initiated through **Build or release Crew for macOS** in GitHub Actions. Normal pushes, pull requests and tag creation never publish installers.
@@ -29,7 +33,7 @@ Local equivalent: `npm ci && npm run desktop:build:mac`. Output is `dist/desktop
 
 ## Signed production release
 
-1. Commit the intended source and matching stable `package.json`/lockfile version to `main`. Run the required checks.
+1. After the user explicitly chooses the grouped release, review/merge its feature PRs through the agreed workflow. Prepare the matching stable `package.json`/lockfile version through a PR targeting `main`, then run the required checks. Do not push implementation directly to `main`.
 2. Create and push the matching `vMAJOR.MINOR.PATCH` tag deliberately. Tags do not trigger publishing.
 3. Run the workflow from its default branch, selecting that exact tag as `ref`, `mode: release`, and `publish: true`.
 4. The workflow validates exact version/tag identity and main ancestry, public repository status and required credentials. It builds with hardened runtime, Developer ID signing and notarization, then checks signatures, team, stapled ticket, Gatekeeper, DMG integrity and ZIP metadata.

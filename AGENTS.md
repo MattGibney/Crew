@@ -40,7 +40,6 @@
 
 - Completed/interrupted native manager statuses are terminal only when no active turn, pending start or approval remains. Correlate delayed turn notifications/RPC replies; never clear newer work or resurrect a completed turn. Publish the final workStarting reset.
 - Failed/retained worktrees are history, not proof of running work. Before permitting an update, read fresh matching terminal/owned-process evidence for hook, worker and foreground runtime execution. Unknown evidence blocks with specific task/phase guidance; never mark resources stopped, delete a worktree or stop Docker/shared services merely to clear an update blocker. Preserved partial provisioning can outlive a stopped setup command.
-- A screenshot is not a live process check. If the reported installation is on another/unavailable Mac, state that boundary and give normal Quit/manual signed replacement steps rather than changing local unrelated state or bypassing active-work checks.
 
 ## Managed project toolchains (GH-1)
 
@@ -54,3 +53,16 @@
 - Settings replaces the full Crew-authored manager/worker behavior, including default voice greeting; never retain hidden role/personality/default behavior appendices outside the editors. Required project/task/run identity, execution permissions and tool/report protocol stay separate and documented. Provider system instructions remain outside Crew control.
 - Saved manager instructions activate only on explicit manager Restart or Start after Stop. Retain the prior snapshot across ordinary controller/window reloads. Lifecycle actions preserve native chat history and project tasks; Start never starts a turn, backlog or voice capture.
 - Manager stop holds new requests and requires actual native turn/approval/process-exit evidence. Unknown/failed interruption remains held with recovery guidance. Never auto-answer approvals, restart workers or delete worktrees to finish a manager action. Workers keep immutable original prompt snapshots across resume; new launches capture saved instructions.
+- A screenshot is not a live process check. If the reported installation is on another/unavailable Mac, state that boundary and preserve that instance. Do not repeat manual workaround instructions when the user has asked to focus on the product fix.
+
+## Coordinated update scope (AI-018)
+
+- Explicit Pause work and update authorizes a durable local batch lifecycle plan through the ordinary controller. Freeze new admissions/launches, close voice without microphone capture, interrupt the correlated manager turn honestly, and cooperatively pause captured workers. This narrow update action is an exception to manager-mediated worker UI actions; it never starts a worker conversation.
+- Update pause sends only a verified cooperative interrupt and waits for owned execution to exit naturally; bounded setup phases finish before the pause boundary. Persistent project runtimes require declared stop commands. Never force-kill, teardown, auto-answer questions/approvals or clear uncertain evidence to install. Update voice shutdown failures must block without forcing the manager runtime; the renderer releases local tracks and cancels pending input as soon as it observes the plan.
+- Preserve chat/worktree/dirty files and pre-existing paused/failed/blocked work. Restart recovery resumes only correlated eligible workers paused by this specific update, once. Manager interruption is retained for user continuation, never replayed automatically. Cancellation keeps admissions held until explicit Resume paused work or Return to work; Return to work releases the hold without resuming paused workers.
+
+## Delivery policy correction
+
+- Feature/fix work belongs on codex/ feature branches with reviewable pull requests targeting main. Do not push implementation directly to main or automatically merge. Group features into releases only when the user explicitly requests the intended release; do not create a release/tag or dispatch publication for every small change. Preserve existing main history and published artifacts. Release workflow dispatch is a deliberate user-authorized stage after review, not a completion requirement for each ticket.
+
+- Disposable controller/process tests must register cleanup before their first observation wait. Distinguish a generous ordinary fixture lifetime from an intentionally short timeout under test; wait for correlated lifecycle completion rather than assuming an awaited tick ran when another tick was in progress. Keep test-only timing changes separate from product timeout/no-force guarantees.

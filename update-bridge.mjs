@@ -1,6 +1,6 @@
 // AI-015: bounded inherited process IPC; never expose native/Node access to a renderer.
 import {randomUUID} from 'node:crypto';
-export const updateActions=new Set(['status','check','download','restart']);
+export const updateActions=new Set(['status','check','download','restart','pause-update','cancel-pause-update']);
 export function unavailableUpdateStatus(version){return {phase:'unavailable',currentVersion:version,availableVersion:null,downloadPercent:null,error:null,installBlocked:true,reasons:['Open the installed desktop app to manage updates.'],supported:false,releaseUrl:'https://github.com/MattGibney/crew/releases/latest'};}
 export function createUpdateBridge({transport=process,version,onStatus=()=>{},timeoutMs=30000}={}){
  let status=unavailableUpdateStatus(version),closed=false;

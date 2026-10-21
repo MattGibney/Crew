@@ -61,6 +61,7 @@ export function useCrewManager() {
           if ('activeVersion' in message.state) setSettings(previous => previous ? ({ ...previous, manager: { ...previous.manager, activeVersion: message.state.activeVersion, retainedVersion: message.state.retainedVersion, pendingRestart: previous.manager.saved.version !== (message.state.activeVersion || message.state.retainedVersion) } }) : previous);
           if (message.state.state !== 'running') voice.dispose();
         }
+        if(message.type==='update-plan-state')setUpdates(previous=>({...previous,plan:message.plan}));
         if (message.type === 'orchestration-state') setOrchestration(message.state);
         if (message.type === 'notice') setWorkNotice(message.message);
         if (message.type === 'transcript-delta' || message.type === 'transcript-done') dispatchTranscript({ role: message.role, text: message.text, done: message.type === 'transcript-done' });
