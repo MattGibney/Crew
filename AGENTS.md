@@ -43,6 +43,11 @@
 - Keep local configs, credentials, conversations, task/run/worktree state, installers and screenshots out of Git. Crew is the current product name; legacy names and local.voice.manager remain compatibility identities. Migration must preserve state/profile provenance and offer recovery rather than reset, merge, force-stop or blind relocation.
 - Historical test evidence stays separate from current human acceptance. Before a fresh human worker test, preserve automated records in an archive and leave the intended current task list empty. Never launch/answer/acknowledge the user's acceptance work on their behalf.
 
+## Retained worker recovery (GitHub #24)
+
+- Recovery begins with a read-only retained/current plan review and a decision bound to the exact task, run, environment and plan hashes. Compatible updates may change resume/readiness/stop/teardown and add verified source provenance; Setup, Start, existing source identities, environment and permissions stay pinned. Never replay incomplete setup or run project commands merely to reconcile metadata. Require fresh terminal worker/hook/runtime evidence and canonical registered worktree identity; unknown process evidence blocks.
+- Apply only the human-approved command/resource scope through the ordinary durable controller. Keep prior plans, decisions and task history across crash/retry. A missing worktree may be retired only when its owned canonical location is absent and Git registration is absent; do not prune Git or run cleanup for retirement. Label resource cleanup unverified, preserve records and resolve only that task's stale attention. A live runtime with no declared stop remains blocked rather than force-stopped.
+
 ## Release and publication scope (AI-015)
 
 - AI-015 authorizes public repository publication only after a full current-source and reachable-history privacy/secret audit, deliberate GitHub release automation and native auto-update. Never silently rewrite/delete history to hide findings. Keep publication private until concrete audit disposition is settled. A public repo needs no shipped GitHub token.
@@ -170,3 +175,24 @@
 - The user authorized auditing and completing the annotation changes in the real Electron application, beyond the synthetic design preview. Use isolated candidate bundles/profiles and the real controller/storage/IPC with a synthetic provider for autonomous checks; preserve the running design preview and the user's installed app/profile. Physical microphone capture, human acoustic acceptance and signed production-update installation remain separate from synthetic/native UI evidence.
 - Browser clipboard success does not establish Electron clipboard support. The media-only permission policy remains intact: expose a bounded write-only clipboard action in the workspace preload, validate again in main and enforce the existing selected-window/main-frame/exact-origin guard. Never add clipboard read access or broadly grant browser clipboard permissions.
 - Show Enable audio only after playback is blocked, clear it after successful recovery/disconnect, and reject stale playback callbacks. Preserve prior project-partition voice choices with a one-time profile migration; an explicitly saved manager profile, including Codex default, remains authoritative.
+
+## Realtime handoff presentation (GitHub #20)
+
+- Native realtime delegation user items contain current input plus historical transcript context. Project only the current input for display; never render or split historical context into new conversation rows. Preserve native item/turn/promotion identity and passive handoff observation. Repair legacy presentation journals without rewriting native chat, and retain projection provenance so literal envelope examples in user wording are not unwrapped again on restore.
+## Worker model continuity (GitHub #22)
+
+- A model change is explicit user-authorized next-turn intent for one exact task/current run. Store the decision separately from the immutable brief and prompt snapshot; it supersedes only the resolved model requirement. Never change another worker or future-task defaults.
+- The current turn retains its model. For an immediate transition, the manager requests cooperative pause, waits for verified owned exit, then explicitly resumes the same native thread/worktree. A model request alone never pauses or launches work. Preserve native approvals and normal user/project configuration.
+- Pending intent is not provider availability or effective selection. Validate an exact model/list ID on continuation, require matching native thread/resume model and turn/start acknowledgement, and retain correlated result history. Missing, mismatched or unavailable selection fails without a fallback turn or replacement thread.
+- Correlate native model reroutes to the exact current thread and turn. Buffer early turn-start notifications by turn identity and never apply stale same-thread events.
+
+## Authorized grouped 0.12.0 release
+
+- The human explicitly authorized merging the three open PRs #23, #25 and #27 and publishing one new version while UI iteration continues separately. Integrate their complete histories, validate their interactions and publish one signed/notarized 0.12.0 release. This permission covers only those changes and necessary integration corrections; the independent UI playground, installed application, user profiles and business workers remain outside scope.
+- The known portable CREW_APP_DATA updater relaunch limitation is unchanged. Do not repeat a native installer test that could fall through to the user's default profile, or silently include a separate updater correction. Verify signed artifacts and isolated explicit-profile launch/manual replacement honestly; do not claim automatic profile preservation without independent safe evidence.
+
+- 0.12.0 is published at immutable 772f7fb516f2cec1d9a2f2ee5cb681b389facebb. An Apple CloudKit connection loss during stapling failed the first attempt before publication; retrying the unchanged tag passed all gates. Preserve failed-attempt provenance and never bypass signing/stapling verification for transient provider failures. Public payload verification and tagged runtime-source parity remain distinct from automatic updater/profile acceptance.
+
+## Authorized UI release 0.13.0 (GitHub #30)
+
+- The user explicitly authorized merging the reviewed UI work and deploying a new version. Integrate current main, preserve 0.12.0 transcript/recovery/model continuity, validate the combined source, merge through a reviewable PR, and publish one signed/notarized 0.13.0 release through the existing workflow. This does not authorize unrelated issue #26, rewriting published history/assets, changing installed profiles or bypassing the known portable-profile updater boundary.

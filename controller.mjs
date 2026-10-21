@@ -5,7 +5,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, readFile, writeFile, rename, mkdtemp, open, unlink, realpath } from 'node:fs/promises';
 import { runEnvironmentHooks, environmentFile, reconcileEnvironment } from './worker-environment.mjs';
-import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment} from './project-environment.mjs';
+import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,applyProjectRecovery} from './project-environment.mjs';
 import {selectWorktreeRoot,ensureWorktreeRoot} from './worktree-paths.mjs';
 import {snapshotProcesses} from './process-ownership.mjs';
 import { randomUUID } from 'node:crypto';
@@ -128,8 +128,8 @@ export async function createController({ stateDir, sourceDir, executable, projec
         await exec('git', ['-C', meta.repo, 'worktree', 'add', '--detach', worktree, meta.commit]);
       }
       if ((resume||task.worktree) && task.repositoryPath !== meta.repo) throw new Error('Repository changed since this task started; review before resuming');
-      if(resume||task.worktree){const {stdout}=await exec('git',['-C',worktree,'rev-parse','HEAD']);if(stdout.trim()!==task.baseCommit)throw new Error('Worker baseline changed; refusing resume.');}
-      if(task.worktree){const actual=await realpath(worktree),expected=await realpath(path.join(meta.base,task.worktreeName||(repositoryMode?task.id:`worker-${task.id}`)));const {stdout:list}=await exec('git',['-C',meta.repo,'worktree','list','--porcelain']);if(actual!==expected||actual===meta.repo||!list.includes(`worktree ${actual}\n`))throw new Error('Retained worktree ownership could not be verified.');}
+      if(resume||task.worktree){try{await realpath(worktree);}catch(error){if(error.code==='ENOENT')throw new Error('Retained worktree is missing. Ask the manager to review missing-worktree recovery; cleanup is unverified.');throw error;}const {stdout}=await exec('git',['-C',worktree,'rev-parse','HEAD']);if(stdout.trim()!==task.baseCommit)throw new Error('Worker baseline changed; refusing resume.');}
+      if(task.worktree){const actual=await realpath(worktree),expected=await realpath(path.join(meta.base,task.worktreeName||(repositoryMode?task.id:`worker-${task.id}`)));const {stdout:list}=await exec('git',['-C',meta.repo,'worktree','list','--porcelain']);if(actual!==expected||actual===meta.repo)throw new Error('Retained worktree path ownership does not match this task.');if(!list.includes(`worktree ${actual}\n`))throw new Error('Retained worktree is not registered with its repository. Review Git registration before resuming.');}
       const runDir = path.join(stateDir, 'runs', task.id, runId); await mkdir(runDir, { recursive: true, mode: 0o700 });
       await updateTask(stateDir,task.id,next=>{next.worktree=worktree;next.repositoryPath=meta.repo;next.baseCommit=task.worktree?task.baseCommit:meta.commit;next.runDir=runDir;next.harnessStarted=false;next.fixtureRepo=repositoryMode?null:meta.repo;next.fixtureCommit=repositoryMode?null:meta.commit;});
       const existingEnvironment=await json(environmentFile(stateDir,task.id));
@@ -145,7 +145,7 @@ export async function createController({ stateDir, sourceDir, executable, projec
       if(abort.signal.aborted)throw new Error('Worker environment preparation canceled.');
 
       await pauseBoundary();
-      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
+      const config = { project, workerPrompt: workerPromptSnapshot.text, workerPromptVersion: workerPromptSnapshot.version, sandbox: repositoryMode ? project.worker.sandbox : 'read-only', timeoutMs: project?.worker?.timeoutMs || 300000, taskId: task.id, runId, ticket: task.ticket, brief: task.brief, modelSelection: task.modelSelection || null, environment, answer: resume ? task.answer : null, threadId: resume ? task.threadId : null, worktree, stateDir, executable, mcpScript: path.join(sourceDir, 'orchestration-mcp.mjs') };
       if (resume && !config.threadId) throw new Error('Cannot resume: no recorded worker Codex session.');
       await atomic(path.join(runDir, 'config.json'), config);
       await updateTask(stateDir, task.id, next => { next.worktree = worktree; next.fixtureRepo = repositoryMode ? null : meta.repo; next.fixtureCommit = repositoryMode ? null : meta.commit; next.repositoryPath = meta.repo; next.baseCommit = task.worktree ? task.baseCommit : meta.commit; next.workerSandbox = config.sandbox; next.runDir = runDir; next.runId = runId; next.status = 'running'; next.harnessStarted='pending'; next.spawnIntentAt=now(); next.startedAt=null; next.endedAt=null; next.execution=null; next.handledReports = next.handledReports || []; });
@@ -268,6 +268,24 @@ export async function createController({ stateDir, sourceDir, executable, projec
         if(task.worktree&&!task.threadId&&task.harnessStarted)throw new Error('This worker has no saved conversation to resume. Preserve its worktree and start another worker.');
         if(!task.harnessStarted&&task.runId)await capacity.releasePreparation({taskId:task.id,runId:task.runId});
         task=await updateTask(stateDir,task.id,n=>{n.status=n.threadId?'resume_queued':'queued';n.failure=null;startupQueued.delete(n.id);});await finishRequest(task.id,request.id);
+      }else if(['reconcile_plan','retire_missing'].includes(request.action)){
+        if(await admissionHeld({taskId:task.id,resume:false}))throw new Error('Recovery is held while the manager or application reserves lifecycle changes. Return to work before recovery.');
+        if(launches.has(task.id))throw new Error('Worker preparation is still active. Wait for a safe stopped boundary before recovery.');
+        const operation=applyProjectRecovery({stateDir,task,project,mode:request.action,request})
+          .then(value=>updateTask(stateDir,task.id,n=>{
+            if((n.runId||null)!==request.expectedRunId)throw new Error('Worker run changed during recovery. Preserve its decision evidence.');
+            if(request.action==='reconcile_plan')n.environment=value;
+            else {
+              n.status='disposed';n.disposedAt=now();n.endedAt=n.endedAt||n.disposedAt;
+              n.retirement={reason:'worktree-already-missing',cleanupVerified:false,at:n.disposedAt,reviewHash:request.reviewHash,decision:request.decision};
+              if(n.execution)n.execution={...n.execution,live:false,endedAt:n.endedAt};
+              for(const item of n.attention)if(!item.ackedAt){item.ackedAt=n.disposedAt;item.resolution='Retired missing-worktree record; cleanup unverified';}
+            }
+            (n.history ||= []).push({id:`recovery:${request.id}`,actor:'controller',kind:'recovery',at:now(),runId:n.runId||null,message:request.action==='reconcile_plan'?'Applied reviewed compatible lifecycle configuration. Setup and worker execution were not started.':'Retired an already missing and unregistered worktree record. Resource cleanup was not independently verified.',evidence:[`Review ${request.reviewHash}`,request.decision]});
+            const current=n.lifecycleRequests.find(r=>r.id===request.id);current.status='completed';current.handledAt=now();
+          }))
+          .catch(error=>finishRequest(task.id,request.id,error.message)).finally(()=>operations.delete(task.id));
+        operations.set(task.id,operation);return task;
       }else if(request.action==='dispose'){
         if(!['paused','stopped','completed','failed','blocked'].includes(task.status))throw new Error('Stop this worker before removing its environment.');
         if(!operations.has(task.id)){const operation=dispose(task).then(()=>finishRequest(task.id,request.id)).catch(error=>finishRequest(task.id,request.id,error.message)).finally(()=>operations.delete(task.id));operations.set(task.id,operation);}return task;
@@ -296,6 +314,17 @@ export async function createController({ stateDir, sourceDir, executable, projec
     const runtime=await json(path.join(task.runDir,'runtime.json')),started=await json(path.join(task.runDir,'started.json')),owner=await json(path.join(task.runDir,'owner.json')),exit=await json(path.join(task.runDir,'exit.json'));
     if(started?.runId===task.runId&&task.runnerPid!==started.pid)task=await updateTask(stateDir,task.id,n=>{n.runnerPid=started.pid;});
     if(runtime?.runId===task.runId&&runtime.threadId&&task.threadId!==runtime.threadId)task=await updateTask(stateDir,task.id,n=>{n.threadId=runtime.threadId;});
+    const modelEvidence=await json(path.join(task.runDir,'model-selection.json'));
+    if(modelEvidence?.runId===task.runId&&modelEvidence.requestId===task.modelSelection?.id&&JSON.stringify(task.modelSelection.runtime)!==JSON.stringify(modelEvidence)){
+      task=await updateTask(stateDir,task.id,n=>{
+        if(n.runId!==modelEvidence.runId||n.modelSelection?.id!==modelEvidence.requestId)return;
+        n.modelSelection={...n.modelSelection,status:modelEvidence.status,message:modelEvidence.message,runtime:modelEvidence};
+        if(['selected','failed','rerouted'].includes(modelEvidence.status)){
+          const id=`model:${modelEvidence.requestId}:${modelEvidence.runId}:${modelEvidence.status}`;
+          if(!n.history.some(item=>item.id===id))n.history.push({id,actor:'controller',kind:'model_selection',message:modelEvidence.message,at:modelEvidence.at,runId:n.runId});
+        }
+      });
+    }
     const protocolError=await json(path.join(task.runDir,'protocol-error.json'));
     if(protocolError?.runId===task.runId&&!task.attention.some(item=>item.id===`${task.runId}:native-protocol-error`)){
       task=await updateTask(stateDir,task.id,n=>{attention(n,`${n.runId}:native-protocol-error`,'blocked','Worker approval or lifecycle transport needs review. Pending requests and owned process evidence were retained; no automatic response was sent.');});

@@ -83,3 +83,17 @@ The genuine signed 0.10.0 native updater replaced the test app with 0.11.0. Its 
 Keep this failed acceptance separate from verified replacement and candidate/native lifecycle evidence. No published asset/tag was rewritten, and no extra patch release or shared-registry retry was performed. A separate updater correction requires user scope; physical sound preference remains hands-on acceptance. Full sanitized provenance is in tickets/REL-0.11.0.md.
 
 Manual recovery with the original explicit portable root/configuration restored the same project/chat/voice and unchanged configuration/prompts/chat bytes, then quit with all owned processes stopped. Recovery initially held admission; explicit Retry connection returned Ready after the retained update reservation recovered. This establishes recoverability, not automatic update profile preservation. Any separate updater implementation/release is held for user direction.
+
+## Grouped 0.12.0 release scope
+
+The human selected PRs #23, #25 and #27 for one new signed/notarized release. Version 0.12.0 combines clean realtime user-message presentation, reviewed retained-worker lifecycle recovery and explicit model continuation on the same task/worktree/native conversation. Full histories are preserved through a reviewable integration PR. The concurrently edited UI playground is excluded.
+
+The 0.11.0 portable CREW_APP_DATA relaunch limitation remains unresolved in this version. Verify payload signing/notarization and isolated explicit-profile launches without repeating a restart that could open the personal default profile. Manual replacement/recovery is not proof of native automatic profile preservation. See tickets/REL-0.12.0.md for current combined validation and publication evidence.
+
+## Grouped 0.12.0 production evidence
+
+[Crew 0.12.0](https://github.com/MattGibney/Crew/releases/tag/v0.12.0) is published from immutable tag/commit 772f7fb516f2cec1d9a2f2ee5cb681b389facebb. PRs #23, #25 and #27 merged through #28 with full histories. Local and hosted combined regression each passed 491/491. Compiled UI, registered-worktree recovery/model continuation and isolated packaged candidate acceptance passed with voice off. Final source/newly reachable-history privacy review found no actual secrets or private runtime identifiers.
+
+[Workflow 39627665712 attempt 2](https://github.com/MattGibney/Crew/actions/runs/39627665712/attempts/2) passed signing, notarization and publication. Attempt 1 failed at Apple CloudKit stapling after a network connection loss; no release existed, and the same tag was retried without bypassing gates. Independent six-asset download/hash/feed/signature/staple/Gatekeeper/DMG verification passed, and 54 packaged runtime modules match tagged source. The known portable-root automatic relaunch limitation remains explicitly unresolved. See tickets/REL-0.12.0.md for scope and acceptance boundaries.
+
+The signed public bundle also passed isolated explicit-profile native acceptance: Ready/controller connected/microphone off/zero workers, all eight config/prompt/chat/journal/registry/setup-review hashes unchanged, zero turn/realtime starts, and normal confirmed Quit with owned backend/listener exit. This establishes signed manual-launch continuity only; automatic updater installation/profile relaunch was deliberately not repeated.

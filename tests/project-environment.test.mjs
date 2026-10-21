@@ -7,10 +7,10 @@ import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,executionPlanHash} from '../project-environment.mjs';
+import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,executionPlanHash,reviewProjectRecovery,applyProjectRecovery} from '../project-environment.mjs';
 const exec=promisify(execFile);
 async function fixture(t,{ready=true,teardown=true,failSetup=false,gracefulStop=false}={}){
- const dir=await mkdtemp(path.join(tmpdir(),'crew-project-runtime-')),repo=path.join(dir,'repo'),worktree=path.join(dir,'worker-unique'),stateDir=path.join(dir,'state');await mkdir(repo);await mkdir(path.join(stateDir,'runs','project-test'),{recursive:true});
+ const dir=await mkdtemp(path.join(tmpdir(),'crew-project-runtime-')),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state'),worktree=path.join(stateDir,'worktrees','worker-unique');await mkdir(repo);await mkdir(path.dirname(worktree),{recursive:true});await mkdir(path.join(stateDir,'runs','project-test'),{recursive:true});
  const script=`import fs from 'node:fs';const phase=process.argv[2],file='.test-data/state.json';fs.mkdirSync('.test-data',{recursive:true});const data=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};const save=()=>fs.writeFileSync(file,JSON.stringify(data));if(phase==='setup'){data.seeds=(data.seeds||0)+1;save();${failSetup?'process.exit(7);':''}}else if(phase==='start'){data.starts=(data.starts||0)+1;data.pid=process.pid;data.resources=true;data.stopRequested=false;save();${gracefulStop?"process.on('SIGTERM',()=>{data.forced=true;save();process.exit(0);});setInterval(()=>{if(JSON.parse(fs.readFileSync(file)).stopRequested)process.exit(0);},100);":'setInterval(()=>{},1000);'}}else if(phase==='ready'){process.kill(data.pid,0);if(data.seeds!==1)process.exit(5);}else if(phase==='stop'){data.resources=false;${gracefulStop?'data.stopRequested=true;':''}save();}else if(phase==='teardown'){data.disposed=true;save();}`;
  await writeFile(path.join(repo,'action.mjs'),script);await writeFile(path.join(repo,'.gitignore'),'.test-data/\n');await writeFile(path.join(repo,'AGENTS.md'),'Fixture project instructions.\n');await exec('git',['init','-q','-b','main',repo]);await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-qm','Generic project scripts']);const {stdout}=await exec('git',['-C',repo,'rev-parse','HEAD']);await exec('git',['-C',repo,'worktree','add','--detach',worktree,stdout.trim()]);
  const source={path:'action.mjs',sha256:createHash('sha256').update(script).digest('hex')},action=phase=>({command:`${JSON.stringify(process.execPath)} action.mjs ${phase}`,source,timeoutMs:10000});
@@ -79,7 +79,7 @@ test('plan identity ignores deep object-key ordering but preserves array order a
 test('legacy ordered plan hash migrates on a reordered equivalent stop/resume without reseeding',async t=>{
  const f=await fixture(t),first=await prepareProjectEnvironment(f.args);await stopProjectEnvironment(f.args);const file=path.join(f.args.stateDir,'runs',f.args.taskId,'environment.json'),saved=JSON.parse(await readFile(file,'utf8'));saved.planHash=createHash('sha256').update(JSON.stringify(saved.plan)).digest('hex');await writeFile(file,JSON.stringify(saved));
  const reorder=value=>Array.isArray(value)?value.map(reorder):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).reverse().map(([k,v])=>[k,reorder(v)])):value,reordered=reorder(f.args.plan),resumed=await prepareProjectEnvironment({...f.args,plan:reordered,resume:true});assert.equal(resumed.id,first.id);assert.equal(resumed.worktree,first.worktree);assert.equal(resumed.planHash,executionPlanHash(reordered));assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
- await assert.rejects(prepareProjectEnvironment({...f.args,plan:{...reordered,start:{...reordered.start,timeoutMs:reordered.start.timeoutMs+1}},resume:true}),/plan or worktree ownership changed/);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
+ await assert.rejects(prepareProjectEnvironment({...f.args,plan:{...reordered,start:{...reordered.start,timeoutMs:reordered.start.timeoutMs+1}},resume:true}),/execution plan changed/);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
 });
 
 
@@ -109,4 +109,105 @@ test('completed work retains its result while update pause gracefully stops its 
  const controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:{id:'completed-project',mode:'repository',worker:{maxConcurrent:1}},admissionHeld:async()=>true});
  try{const until=Date.now()+10000;let task;for(;;){task=await readTask(f.args.stateDir,f.args.taskId);if(task.lifecycleRequests.at(-1).status==='completed')break;if(Date.now()>until)throw new Error('Completed runtime did not stop');await new Promise(r=>setTimeout(r,50));await controller.tick();}assert.equal(task.status,'completed');assert.equal(task.result.message,'Previously verified work');assert.equal(task.environment.runtime.status,'stopped');assert.equal((await f.read()).forced,undefined);assert.equal(task.threadId,'completed-chat');assert.equal(task.runId,runId);}
  finally{await controller.stop();}
+});
+
+async function retainedRecovery(t, options={}) {
+ const f=await fixture(t,{teardown:false,...options});
+ if(options.instructionSource)f.args.plan.sources.push({path:'AGENTS.md',sha256:createHash('sha256').update('Fixture project instructions.\n').digest('hex')});
+ const original=structuredClone(f.args.plan);
+ await prepareProjectEnvironment(f.args).catch(error=>{if(!options.failSetup)throw error;});
+ await stopProjectEnvironment(f.args);
+ const task={id:f.args.taskId,projectId:'recovery-project',repositoryId:'repo',status:'failed',worktree:f.args.worktree,worktreeName:path.basename(f.args.worktree),repositoryPath:f.args.repositoryPath,baseCommit:f.args.baseCommit,runId:null,harnessStarted:false};
+ const current={...original,teardown:{...original.stop,command:original.stop.command.replace(' stop',' teardown')}};
+ const project={id:task.projectId,mode:'repository',repositories:[{id:'repo',path:task.repositoryPath,baseRef:'main'}],worker:{sandbox:'read-only',maxConcurrent:1,environment:{executionPlan:current}}};
+ const recovery={stateDir:f.args.stateDir,task,project,mode:'reconcile_plan'};
+ const review=()=>reviewProjectRecovery(recovery);
+ const apply=async(actionId='recover-plan-one')=>{const viewed=await review();assert.deepEqual(viewed.blockers,[]);return applyProjectRecovery({...recovery,request:{id:actionId,reviewHash:viewed.reviewHash,decision:'Use the reviewed teardown for this worker only.'}});};
+ return {...f,task,project,recovery,review,apply,original,current};
+}
+
+test('reviewed teardown adoption preserves original plan, data and dirty work; teardown executes only on safe disposal',async t=>{
+ const f=await retainedRecovery(t);
+ await writeFile(path.join(f.task.worktree,'keep.txt'),'Retained user work');
+ const reviewed=await f.review();assert.equal(reviewed.allowed,true);assert.deepEqual(reviewed.differences.map(d=>d.field),['teardown']);
+ const applied=await f.apply();assert.equal(applied.plan.teardown.command,f.current.teardown.command);assert.deepEqual(applied.recoveryHistory[0].previousPlan,f.original);
+ assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).disposed,undefined);assert.equal(await readFile(path.join(f.task.worktree,'keep.txt'),'utf8'),'Retained user work');
+ const replay=await applyProjectRecovery({...f.recovery,request:{id:'recover-plan-one',reviewHash:reviewed.reviewHash,decision:'Use the reviewed teardown for this worker only.'}});assert.equal(replay.recoveryHistory.length,1);
+ await rm(path.join(f.task.worktree,'keep.txt'));
+ await disposeProjectEnvironment(f.args);assert.equal((await f.read()).disposed,true);
+});
+
+test('compatible lifecycle recovery resumes retained environment without repeating setup',async t=>{
+ const f=await retainedRecovery(t);f.current.resume={...f.current.start};f.current.ready={...f.current.ready,timeoutMs:11000};
+ const before=await inspectProjectEnvironment(f.args);await f.apply();
+ const resumed=await prepareProjectEnvironment({...f.args,plan:f.current,resume:true});assert.equal(resumed.id,before.id);assert.equal(resumed.worktree,before.worktree);assert.equal((await f.read()).seeds,1);assert.equal((await f.read()).starts,2);
+});
+
+test('recovery rejects incompatible metadata, changed sources, stale reviews and unknown foreground ownership',async t=>{
+ const f=await retainedRecovery(t),base=structuredClone(f.current),reviewed=await f.review();
+ for(const patch of [{setup:null},{start:null},{env:{PATH:'/different'}},{networkAccess:true},{permissionsSource:{path:'/unknown',sha256:'a'.repeat(64)}},{unknownSetting:true}]){
+  f.project.worker.environment.executionPlan={...base,...patch};const review=await f.review();assert.equal(review.allowed,false);assert.match(review.blockers.join(' '),/Incompatible plan changes/);
+ }
+ f.project.worker.environment.executionPlan={...base,ready:{...base.ready,timeoutMs:12000}};
+ await assert.rejects(applyProjectRecovery({...f.recovery,request:{id:'stale-recovery',reviewHash:reviewed.reviewHash,decision:'Reviewed prior plan'}}),/review is stale/);
+ f.project.worker.environment.executionPlan=base;
+ await writeFile(path.join(f.task.worktree,'action.mjs'),'// changed executable source');assert.match((await f.review()).blockers.join(' '),/sources changed/);
+ await writeFile(path.join(f.task.worktree,'action.mjs'),(await exec('git',['-C',f.task.worktree,'show',`${f.task.baseCommit}:action.mjs`])).stdout);
+ const file=path.join(f.args.stateDir,'runs',f.task.id,'environment.json'),env=JSON.parse(await readFile(file,'utf8'));env.runtime.id='unresolved-runtime';env.runtime.runDir=path.join(f.args.stateDir,'runs',f.task.id,'project-runtime',env.runtime.id);await writeFile(file,JSON.stringify(env));
+ assert.match((await f.review()).blockers.join(' '),/Foreground project runtime/);
+});
+
+test('failed setup permits adding teardown but never replays incomplete provisioning',async t=>{
+ const f=await retainedRecovery(t,{failSetup:true});await f.apply();await assert.rejects(prepareProjectEnvironment({...f.args,plan:f.current,resume:true}),/will not be reseeded/);assert.equal((await f.read()).seeds,1);await disposeProjectEnvironment(f.args);assert.equal((await f.read()).disposed,true);
+});
+
+test('missing recovery requires absence and no registration, rejects foreign paths and dangling links',async t=>{
+ const {symlink}=await import('node:fs/promises');const f=await retainedRecovery(t);f.recovery.mode='retire_missing';
+ assert.match((await f.review()).blockers.join(' '),/path still exists/);
+ await rm(f.task.worktree,{recursive:true});assert.match((await f.review()).blockers.join(' '),/still registered/);
+ await exec('git',['-C',f.task.repositoryPath,'worktree','prune']);assert.equal((await f.review()).allowed,true);
+ await symlink(path.join(f.dir,'absent'),f.task.worktree);assert.match((await f.review()).blockers.join(' '),/path still exists/);await rm(f.task.worktree);
+ f.task.worktree=path.join(f.dir,'foreign-absent');assert.match((await f.review()).blockers.join(' '),/does not belong|owned workspace/);
+});
+
+test('controller processes exact reviewed recovery, preserves unrelated workers, refuses dirty disposal and retires missing history honestly',async t=>{
+ let controller;t.after(()=>controller?.stop());
+ const {createController}=await import('../controller.mjs');const {createTask,updateTask,readTask,requestWorkerRecovery,requestWorkerAction}=await import('../orchestration-store.mjs');
+ const f=await retainedRecovery(t);
+ await createTask(f.args.stateDir,{requestId:f.task.id,ticket:'GH-24',brief:'Retained recovery fixture',projectId:f.task.projectId,repositoryId:f.task.repositoryId});
+ await updateTask(f.args.stateDir,f.task.id,n=>Object.assign(n,f.task));
+ await createTask(f.args.stateDir,{requestId:'unrelated-worker',ticket:'GH-24',brief:'Untouched worker',projectId:f.task.projectId,repositoryId:f.task.repositoryId});await updateTask(f.args.stateDir,'unrelated-worker',n=>{n.status='paused';});
+ const other=await readFile(path.join(f.args.stateDir,'tasks','unrelated-worker.json'),'utf8');
+ controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:f.project});
+ const wait=async id=>{const until=Date.now()+15000;for(;;){await controller.tick();const task=await readTask(f.args.stateDir,f.task.id),request=task.lifecycleRequests.find(r=>r.id===id);if(['completed','failed'].includes(request?.status))return{task,request};if(Date.now()>until)throw Error('Recovery did not complete');await new Promise(r=>setTimeout(r,25));}};
+ const runtimeFile=path.join(f.dir,'manager-runtime.json');await writeFile(runtimeFile,JSON.stringify({project:f.project}));
+ const managerTool=async(name,args)=>{const {spawn}=await import('node:child_process');const child=spawn(process.execPath,[path.resolve('orchestration-mcp.mjs'),f.args.stateDir,'manager',runtimeFile]);let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})+'\n');const code=await new Promise(resolve=>child.once('close',resolve));assert.equal(code,0,errors);const result=JSON.parse(output.trim()).result;assert.equal(result.isError,undefined,result.content[0].text);return JSON.parse(result.content[0].text);};
+ const viewed=await managerTool('review_worker_recovery',{taskId:f.task.id,action:'reconcile_plan'}),request={taskId:f.task.id,actionId:'controller-recovery',action:'reconcile_plan',expectedRunId:null,reviewHash:viewed.reviewHash,decision:'Adopt only the reviewed teardown for this environment.'};
+ await controller.stop();
+ await managerTool('request_worker_recovery',request);
+ // Simulate a crash after durable environment adoption but before task completion.
+ await updateTask(f.args.stateDir,f.task.id,n=>{n.lifecycleRequests[0].status='processing';});
+ await applyProjectRecovery({...f.recovery,task:await readTask(f.args.stateDir,f.task.id),request:{...request,id:request.actionId}});
+ controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:f.project});
+ assert.equal((await wait(request.actionId)).request.status,'completed');
+ assert.equal((await readTask(f.args.stateDir,f.task.id)).environment.recoveryHistory.length,1);
+ assert.equal((await f.read()).seeds,1);
+ await requestWorkerRecovery(f.args.stateDir,request);await assert.rejects(requestWorkerRecovery(f.args.stateDir,{...request,decision:'Changed decision'}),/changed content/);
+ await writeFile(path.join(f.task.worktree,'dirty.txt'),'Keep this work');await requestWorkerAction(f.args.stateDir,{taskId:f.task.id,actionId:'dirty-disposal',action:'dispose',expectedRunId:null});assert.match((await wait('dirty-disposal')).request.error,/contains changes/);assert.equal((await f.read()).disposed,undefined);
+ await rm(path.join(f.task.worktree,'dirty.txt'));await exec('git',['-C',f.task.repositoryPath,'worktree','remove',f.task.worktree]);
+ const currentTask=await readTask(f.args.stateDir,f.task.id);const missing=await reviewProjectRecovery({...f.recovery,task:currentTask,mode:'retire_missing'});assert.equal(missing.allowed,true);
+ await requestWorkerRecovery(f.args.stateDir,{taskId:f.task.id,actionId:'retire-missing-one',action:'retire_missing',expectedRunId:null,reviewHash:missing.reviewHash,decision:'Retire this missing record; resource cleanup remains unverified.'});const retired=await wait('retire-missing-one');assert.equal(retired.request.status,'completed');assert.equal(retired.task.status,'disposed');assert.equal(retired.task.retirement.cleanupVerified,false);assert.ok(retired.task.history.some(h=>h.kind==='recovery'&&h.message.includes('not independently verified')));
+ assert.equal(await readFile(path.join(f.args.stateDir,'tasks','unrelated-worker.json'),'utf8'),other);
+});
+
+test('recovery rejects a worktree repointed to another registered worktree at the same baseline',async t=>{
+ const {symlink}=await import('node:fs/promises');const f=await retainedRecovery(t);
+ await exec('git',['-C',f.task.repositoryPath,'worktree','remove',f.task.worktree]);
+ const other=path.join(f.args.stateDir,'worktrees','other-worker');await exec('git',['-C',f.task.repositoryPath,'worktree','add','--detach',other,f.task.baseCommit]);
+ await symlink(other,f.task.worktree);const reviewed=await f.review();assert.equal(reviewed.allowed,false);assert.match(reviewed.blockers.join(' '),/canonical directory/);assert.equal((await exec('git',['-C',other,'rev-parse','HEAD'])).stdout.trim(),f.task.baseCommit);
+});
+
+test('reviewed lifecycle adoption retains edited non-executable instruction files',async t=>{
+ const f=await retainedRecovery(t,{instructionSource:true});await writeFile(path.join(f.task.worktree,'AGENTS.md'),'Retained worker guidance edits.\n');
+ assert.equal((await f.review()).allowed,true);await f.apply();assert.equal(await readFile(path.join(f.task.worktree,'AGENTS.md'),'utf8'),'Retained worker guidance edits.\n');
 });
