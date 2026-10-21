@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { EMPTY_TRANSCRIPT, chooseVoice, connectorVerificationURL, transcriptReducer, visibleWorkers } from './state.js';
+import { EMPTY_TRANSCRIPT, chooseVoice, connectorVerificationURL, transcriptReducer } from './state.js';
 
 test('transcript deltas accumulate in first-arrival order and final text replaces the partial turn', () => {
   const initial = structuredClone(EMPTY_TRANSCRIPT);
@@ -36,9 +36,4 @@ test('saved voice is used only while advertised; unavailable and absent choices 
 test('connector verification accepts only credential-free HTTPS destinations', () => {
   assert.equal(connectorVerificationURL('https://example.com/verify?code=one'), 'https://example.com/verify?code=one');
   for (const value of ['javascript:alert(1)', 'data:text/html,test', 'file:///tmp/config', 'http://example.com', 'https://user:secret@example.com', '//example.com', undefined]) assert.equal(connectorVerificationURL(value), null);
-});
-test('all active workers remain visible with only the last three terminal workers', () => {
-  const tasks = [{ id: 'old', status: 'completed' }, { id: 'active', status: 'running' }, { id: 'failed', status: 'failed' }, { id: 'paused', status: 'paused' }, { id: 'stopped', status: 'stopped' }, { id: 'queued', status: 'queued' }];
-  assert.deepEqual(visibleWorkers(tasks).map(task => task.id), ['active', 'queued', 'failed', 'paused', 'stopped']);
-  assert.equal(tasks[0].id, 'old');
 });

@@ -14,10 +14,6 @@ export function transcriptReducer(state, event) {
 export function chooseVoice(catalog, saved) {
   return catalog.voices.some(voice => voice.id === saved) ? saved : catalog.defaultVoice;
 }
-export function visibleWorkers(tasks) {
-  const terminal = new Set(['completed', 'failed', 'stopped', 'paused', 'disposed', 'canceled', 'cancelled']);
-  return [...tasks.filter(task => !terminal.has(task.status)), ...tasks.filter(task => terminal.has(task.status)).slice(-3)];
-}
 export function connectorVerificationURL(value) {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password ? url.href : null; }
   catch { return null; }

@@ -1,12 +1,4 @@
-import { useEffect, useRef } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { AudioLines } from 'lucide-react';
 export function Transcript({ items }) {
-  const scrollRef = useRef(null);
-  useEffect(() => { const node = scrollRef.current; if (node) node.scrollTop = node.scrollHeight; }, [items]);
-  return <section aria-label="Conversation transcript"><Card>
-    <CardHeader><CardTitle>Conversation</CardTitle></CardHeader>
-    <CardContent><div id="transcript" ref={scrollRef} className="min-h-24 max-h-72 space-y-3 overflow-auto whitespace-pre-wrap break-words text-sm">
-      {!items.length ? <p className="text-muted-foreground">Your transcript will appear here during the session.</p> : items.map(item => <p key={item.id} data-part="true"><strong>{item.role === 'user' ? 'You' : 'Codex'}: </strong>{item.text}</p>)}
-    </div></CardContent>
-  </Card></section>;
+  return <section aria-label="Voice transcript" className="space-y-4 rounded-xl border bg-muted/20 p-4"><h2 className="flex items-center gap-2 text-xs font-medium text-muted-foreground"><AudioLines className="size-3.5" aria-hidden="true" />This call · voice transcript</h2><div id="transcript" className="space-y-4 whitespace-pre-wrap break-words text-sm leading-6">{items.map(item => <div key={item.id} data-part="true"><p className="mb-1 text-xs font-medium text-muted-foreground">{item.role === 'user' ? 'You' : 'Manager'}</p><p>{item.text}</p></div>)}</div></section>;
 }

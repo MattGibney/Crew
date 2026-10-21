@@ -1,35 +1,66 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, errorText } from './api.js';
+import { createVoiceInput, voiceActivityEvent } from './voice-input.js';
+import { createSilentAudio } from './voice-silence.js';
 
 // Media resources belong to this hook, never to a worker or an SSE notification.
 export function useVoiceSession(onError) {
   const audioRef = useRef(null);
   const resource = useRef({ generation: 0, pc: null, stream: null, channel: null, busy: false, disconnecting: false });
-  const [view, setView] = useState({ busy: false, allocated: false, active: false, muted: false, status: 'Microphone off. No voice session started.' });
+  const [mode, setMode] = useState('push-to-talk');
+  const [view, setView] = useState({ busy: false, allocated: false, active: false, disconnecting: false, muted: true, transmitting: false, inputPending: false, inputError: '', activity: 'ready', status: 'Ready when you are. Microphone off.' });
   const onErrorRef = useRef(onError); onErrorRef.current = onError;
   const patch = useCallback(value => setView(previous => ({ ...previous, ...value })), []);
   const reportError = useCallback(error => onErrorRef.current(errorText(error)), []);
+  const input = useRef(null);
+  if (!input.current) input.current = createVoiceInput({
+    acquire: () => navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }),
+    idleTrack: () => resource.current.silence?.track || null,
+    onChange: value => patch({ ...value, muted: !value.transmitting }),
+    onError: error => {
+      const message = error.name === 'NotAllowedError' ? 'Microphone permission was denied. Allow microphone access in system or browser settings, then try again.' : errorText(error);
+      patch({ inputError: message });
+    },
+  });
+  const stopInput = useCallback(() => input.current.stop(), []);
+  const startInput = useCallback(() => {
+    const state = resource.current;
+    if (state.pc?.connectionState !== 'connected' || state.busy || state.disconnecting) return;
+    void input.current.start(state.sender);
+  }, []);
   const release = useCallback(() => {
     const state = resource.current;
     clearTimeout(state.timer); clearInterval(state.diagnosticsTimer);
+    input.current.reset();
     state.timer = null; state.diagnosticsTimer = null;
+    if (state.channel) state.channel.onmessage = null;
     if (state.pc) { state.pc.onconnectionstatechange = null; state.pc.ontrack = null; state.pc.close(); }
-    state.stream?.getTracks().forEach(track => track.stop());
-    state.pc = null; state.stream = null; state.channel = null;
+    state.silence?.dispose(); state.silence = null;
+    state.pc = null; state.stream = null; state.channel = null; state.sender = null;
     if (audioRef.current) audioRef.current.srcObject = null;
-    patch({ allocated: false, active: false, muted: false });
+    patch({ allocated: false, active: false, muted: true, activity: 'ready' });
   }, [patch]);
   const dispose = useCallback(() => {
     const state = resource.current;
     state.generation++; state.busy = state.disconnecting; release(); patch({ busy: state.disconnecting });
   }, [release, patch]);
   useEffect(() => () => { dispose(); }, [dispose]);
+  useEffect(() => {
+    const hidden = () => { if (document.visibilityState === 'hidden') stopInput(); };
+    window.addEventListener('blur', stopInput);
+    document.addEventListener('visibilitychange', hidden);
+    return () => { window.removeEventListener('blur', stopInput); document.removeEventListener('visibilitychange', hidden); };
+  }, [stopInput]);
+  const changeMode = useCallback(value => {
+    if (resource.current.pc || resource.current.busy || !['open-mic', 'push-to-talk'].includes(value)) return;
+    stopInput(); setMode(value);
+  }, [stopInput]);
   const disconnect = useCallback(async (message = 'Disconnected. Microphone off.') => {
     const state = resource.current;
     if (state.disconnecting) return;
-    state.disconnecting = true; state.generation++; release(); state.busy = true; patch({ busy: true });
+    state.disconnecting = true; state.generation++; release(); state.busy = true; patch({ busy: true, disconnecting: true, status: 'Ending call. Microphone off.' });
     try { await api('disconnect'); } catch (error) { reportError(error); }
-    finally { state.busy = false; state.disconnecting = false; patch({ busy: false, status: message }); }
+    finally { state.busy = false; state.disconnecting = false; patch({ busy: false, disconnecting: false, status: message }); }
   }, [release, patch, reportError]);
   const transportLost = useCallback(() => {
     const state = resource.current, hadVoice = Boolean(state.pc || state.busy);
@@ -47,14 +78,17 @@ export function useVoiceSession(onError) {
     if (state.busy || state.disconnecting || state.pc || !selectedVoice) return;
     state.busy = true; state.playbackError = null;
     const attempt = ++state.generation;
-    patch({ busy: true, status: 'Waiting for microphone permission…' });
+    patch({ busy: true, inputError: '', status: 'Connecting voice. Microphone stays off…' });
     try {
-      // This call is reached only from the user's Connect button.
-      const acquired = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (attempt !== state.generation) { acquired.getTracks().forEach(track => track.stop()); return; }
-      state.stream = acquired;
+      // Start a real audio transport with locally generated silence, not a mic.
+      // A trackless offer connects but native voice may wait for incoming RTP.
+      // Only a later explicit Start or held push-to-talk gesture attaches input.
       const connection = new RTCPeerConnection(); state.pc = connection;
+      state.silence = createSilentAudio();
+      state.sender = connection.addTransceiver(state.silence.track, { direction: 'sendrecv', streams: [state.silence.stream] }).sender;
       patch({ allocated: true });
+      await state.silence.ready;
+      if (attempt !== state.generation || state.pc !== connection) return;
       let sessionToken, greetingRequested = false;
       const current = () => state.pc === connection && state.generation === attempt;
       const reportAudioStatus = async () => {
@@ -62,19 +96,18 @@ export function useVoiceSession(onError) {
         try {
           const stats = await connection.getStats();
           if (!current()) return;
-          const local = state.stream?.getAudioTracks()[0], audio = audioRef.current;
+          const local = input.current.stream?.getAudioTracks()[0], audio = audioRef.current;
           if (!audio) return;
-          const snapshot = { connection: connection.connectionState, ice: connection.iceConnectionState, channel: state.channel?.readyState || null, localTrack: local?.readyState || null, localEnabled: local?.enabled ?? null, localMuted: local?.muted ?? null, remoteTrack: audio.srcObject?.getAudioTracks()[0]?.readyState || null, audioPaused: audio.paused, audioMuted: audio.muted, audioVolume: audio.volume, audioReady: audio.readyState, playbackError: state.playbackError, packetsSent: null, packetsReceived: null, bytesSent: null, bytesReceived: null, inputEnergy: null };
+          const snapshot = { inputSource: local ? 'microphone' : state.silence ? 'silence' : 'none', connection: connection.connectionState, ice: connection.iceConnectionState, channel: state.channel?.readyState || null, localTrack: local?.readyState || null, localEnabled: local?.enabled ?? null, localMuted: local?.muted ?? null, remoteTrack: audio.srcObject?.getAudioTracks()[0]?.readyState || null, audioPaused: audio.paused, audioMuted: audio.muted, audioVolume: audio.volume, audioReady: audio.readyState, playbackError: state.playbackError, packetsSent: null, packetsReceived: null, bytesSent: null, bytesReceived: null, inputEnergy: null };
           stats.forEach(item => {
             if (item.kind !== 'audio' && item.mediaType !== 'audio') return;
             if (item.type === 'outbound-rtp') { snapshot.packetsSent = item.packetsSent ?? null; snapshot.bytesSent = item.bytesSent ?? null; }
             if (item.type === 'inbound-rtp') { snapshot.packetsReceived = item.packetsReceived ?? null; snapshot.bytesReceived = item.bytesReceived ?? null; }
-            if (item.type === 'media-source') snapshot.inputEnergy = item.totalAudioEnergy ?? null;
+            if (item.type === 'media-source' && local && item.trackIdentifier === local.id) snapshot.inputEnergy = item.totalAudioEnergy ?? null;
           });
           await api('voice-status', { sessionToken, status: snapshot });
         } catch { /* Diagnostics cannot stop a functioning call. */ }
       };
-      acquired.getTracks().forEach(track => connection.addTrack(track, acquired));
       connection.ontrack = event => {
         if (!current() || !audioRef.current) return;
         const audio = audioRef.current;
@@ -88,7 +121,7 @@ export function useVoiceSession(onError) {
         if (!current()) return;
         if (connection.connectionState === 'connected') {
           clearTimeout(state.timer); state.busy = false;
-          patch({ active: true, busy: false, status: 'Connected. Microphone on — speak naturally, or interrupt Codex.' });
+          patch({ active: true, busy: false, status: 'Connected. Microphone off until you choose to speak.' });
           if (!greetingRequested && sessionToken) {
             greetingRequested = true;
             state.diagnosticsTimer = setInterval(() => void reportAudioStatus(), 2000);
@@ -100,6 +133,11 @@ export function useVoiceSession(onError) {
         }
       };
       state.channel = connection.createDataChannel('oai-events');
+      state.channel.onmessage = event => {
+        if (!current()) return;
+        try { const activity = voiceActivityEvent(JSON.parse(event.data).type); if (activity) patch({ activity }); }
+        catch { /* Unknown events never alter the native realtime conversation. */ }
+      };
       await connection.setLocalDescription(await connection.createOffer());
       if (!current()) return;
       patch({ status: 'Connecting voice through Codex…' });
@@ -113,10 +151,7 @@ export function useVoiceSession(onError) {
     }
   }, [patch, disconnect, reportError]);
   const toggleMute = useCallback(() => {
-    const track = resource.current.stream?.getAudioTracks()[0]; if (!track) return;
-    const enabled = !track.enabled;
-    resource.current.stream.getAudioTracks().forEach(item => { item.enabled = enabled; });
-    patch({ muted: !enabled, status: enabled ? 'Connected. Microphone on.' : 'Connected. Microphone muted; Codex may still speak.' });
-  }, [patch]);
-  return { ...view, audioRef, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
+    if (input.current.stream || input.current.pending) stopInput(); else startInput();
+  }, [startInput, stopInput]);
+  return { ...view, mode, changeMode, startInput, stopInput, audioRef, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
 }

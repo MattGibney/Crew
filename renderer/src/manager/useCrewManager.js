@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useReducer, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { api, endVoiceBeacon, errorText } from './api.js';
 import { chooseVoice, EMPTY_TRANSCRIPT, EMPTY_WORK, transcriptReducer } from './state.js';
 import { useVoiceSession } from './useVoiceSession.js';
+import { workerActionRequest } from './worker-model.js';
 const VOICE_KEY = 'crew.voice.v3';
 
 // Backend state and transcript events remain evidence; they never initiate work or microphone capture.
@@ -11,6 +12,10 @@ export function useCrewManager() {
   const [prepared, setPrepared] = useState(false), [eventReady, setEventReady] = useState(false);
   const [account, setAccount] = useState('Checking ChatGPT sign-in…');
   const [project, setProject] = useState('Loading this instance’s project…');
+  const [projectInfo, setProjectInfo] = useState(null);
+  const [sending, setSending] = useState(false);
+  const requestLock = useRef(false);
+  const retryRequests = useRef(new Map());
   const [work, setWork] = useState(EMPTY_WORK), [workNotice, setWorkNotice] = useState('');
   const [orchestration, setOrchestration] = useState({ tasks: [], loading: true });
   const [transcript, dispatchTranscript] = useReducer(transcriptReducer, EMPTY_TRANSCRIPT);
@@ -54,7 +59,7 @@ export function useCrewManager() {
     void (async () => {
       try {
         const config = await api('config');
-        if (!canceled) setProject(`${config.project.name} · ${config.project.mode === 'fixture' ? 'disposable fixture' : 'configured project'}${config.project.readiness.ready ? '' : ' · setup needed: ' + config.project.readiness.issues.join('; ')}`);
+        if (!canceled) { setProjectInfo(config.project); setProject(`${config.project.name} · ${config.project.mode === 'fixture' ? 'disposable fixture' : 'configured project'}${config.project.readiness.ready ? '' : ' · setup needed: ' + config.project.readiness.issues.join('; ')}`); }
       } catch (failure) { if (!canceled) setProject(`Project configuration unavailable: ${errorText(failure)}`); }
       if (canceled) return;
       try {
@@ -78,7 +83,7 @@ export function useCrewManager() {
     setError(''); dispatchTranscript({ type: 'reset' }); void voice.connect(selectedVoice);
   }, [prepared, eventReady, catalog, voice.busy, voice.allocated, voice.connect, selectedVoice]);
   const reviewAttention = useCallback(async (taskId, attentionId) => {
-    try { await api('discuss-attention', { taskId, attentionId }); } catch (failure) { showError(failure); }
+    try { await api('discuss-attention', { taskId, attentionId }); } catch (failure) { showError(failure); throw failure; }
   }, [showError]);
   const answerApproval = useCallback(async (id, response) => {
     try { await api('approval', { id, response }); } catch (failure) { setWorkNotice(errorText(failure)); }
@@ -86,5 +91,26 @@ export function useCrewManager() {
   const stopManager = useCallback(async () => {
     try { await api('stop-work'); } catch (failure) { setWorkNotice(errorText(failure)); }
   }, []);
-  return { error, project, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, stopManager };
+  const retryConnection = useCallback(async () => {
+    setError(''); setAccount('Reconnecting your saved chat…');
+    try { const result = await api('prepare'); setPrepared(true); setAccount(`Signed in with ChatGPT · ${result.plan || 'subscription'}.`); if (result.state) setWork(result.state); await loadVoices(); }
+    catch (failure) { setPrepared(false); showError(failure); }
+  }, [loadVoices, showError]);
+  const sendRequest = useCallback(async request => {
+    if (requestLock.current) throw new Error('A message is already being sent.');
+    requestLock.current = true; setSending(true); setWorkNotice('');
+    try { return await api('work', request); }
+    catch (failure) { setWorkNotice(errorText(failure)); throw failure; }
+    finally { requestLock.current = false; setSending(false); }
+  }, []);
+  const correlatedRequest = useCallback(async (key, create) => {
+    const request = retryRequests.current.get(key) || create();
+    retryRequests.current.set(key, request);
+    const result = await sendRequest(request);
+    retryRequests.current.delete(key);
+    return result;
+  }, [sendRequest]);
+  const sendMessage = useCallback(text => correlatedRequest(`message:${text}`, () => ({ text, requestId: `message-${crypto.randomUUID()}` })), [correlatedRequest]);
+  const workerAction = useCallback((task, action) => correlatedRequest(`worker:${task.id}:${task.runId}:${action}`, () => workerActionRequest(task, action)), [correlatedRequest]);
+  return { error, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, stopManager, sending, sendMessage, workerAction, retryConnection };
 }

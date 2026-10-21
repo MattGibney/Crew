@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { readFile, writeFile, rename } from 'node:fs/promises';
+import { conversationMessage } from './conversation.mjs';
 export const safeError = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1500);
 const instructions = 'Work in this single Codex chat on the user\'s spoken goals. Use configured tools and MCP servers when needed and report real results, not imagined execution. Do not start built-in subagents or unrelated work; delegate authorized workers only through local orchestration. Respect agreed scope; discussion alone does not authorize external mutations. Use normal approvals. Keep spoken progress concise and return a useful completion summary. Never read or reveal credentials or use API-key voice fallbacks.';
 export function createBridge({ cwd, statePath, executable, orchestrationDir, project, managerPrompt = '', runtimeProjectPath, onEvent = () => {} }) {
@@ -24,7 +25,8 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
     });
   }
   function record(item, turnId) {
-    if (item.type === 'agentMessage') messages.set(item.id, { id: item.id, turnId, phase: item.phase, text: item.text });
+    const message = conversationMessage(item, turnId);
+    if (message) messages.set(item.id, message);
     if (item.type === 'commandExecution') items.set(item.id, { id: item.id, turnId, type: item.type, name: item.command, status: item.status, exitCode: item.exitCode, output: safeError(item.aggregatedOutput || '').slice(0, 2500) });
     if (item.type === 'mcpToolCall') items.set(item.id, { id: item.id, turnId, type: item.type, name: `${item.server}/${item.tool}`, status: item.status, resultPresent: item.result != null, error: item.error ? safeError(item.error.message || 'MCP call failed') : null });
     if (item.type === 'fileChange') items.set(item.id, { id: item.id, turnId, type: item.type, name: 'File changes', status: item.status, changes: item.changes });
@@ -197,7 +199,7 @@ If project readiness is false, discuss and help configure it but do not dispatch
     if (!greetingSession || greetingSession.token !== sessionToken || greetingSession.generation !== voiceGeneration || !voiceActive) return { recorded: false };
     if (!data || typeof data !== 'object' || Array.isArray(data)) return { recorded: false };
     const snapshot = {};
-    const allowed = ['connection', 'ice', 'channel', 'localTrack', 'localEnabled', 'localMuted', 'remoteTrack', 'audioPaused', 'audioMuted', 'audioVolume', 'audioReady', 'playbackError', 'packetsSent', 'packetsReceived', 'bytesSent', 'bytesReceived', 'inputEnergy'];
+    const allowed = ['connection', 'ice', 'channel', 'inputSource', 'localTrack', 'localEnabled', 'localMuted', 'remoteTrack', 'audioPaused', 'audioMuted', 'audioVolume', 'audioReady', 'playbackError', 'packetsSent', 'packetsReceived', 'bytesSent', 'bytesReceived', 'inputEnergy'];
     for (const key of allowed) {
       const value = data[key];
       if (value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value))) snapshot[key] = value;

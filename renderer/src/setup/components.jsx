@@ -28,7 +28,7 @@ export function Hint({ children, className = '', ...props }) {
 }
 export function Actions({ children, ...props }) { return <div className="flex flex-wrap items-center gap-2" {...props}>{children}</div>; }
 export function Panel({ title, description, children, id, ...props }) {
-  return <Card id={id} {...props}><CardHeader><h2 className="text-xl font-semibold tracking-tight">{title}</h2>{description && <CardDescription className="leading-relaxed">{description}</CardDescription>}</CardHeader><CardContent className="space-y-6">{children}</CardContent></Card>;
+  return <Card id={id} className="shadow-none" {...props}><CardHeader><h2 className="text-2xl font-semibold tracking-tight">{title}</h2>{description && <CardDescription className="leading-relaxed">{description}</CardDescription>}</CardHeader><CardContent className="space-y-6">{children}</CardContent></Card>;
 }
 export function Status({ name, value = { status: 'unknown', detail: 'Not checked.' } }) {
   const status = value?.status || 'unknown';
