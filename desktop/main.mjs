@@ -12,6 +12,8 @@ import {composeProjectSetup,assertLinearSelection} from './project-setup.mjs';
 import {discoverWorkerEnvironment,assertWorkerEnvironmentSelection} from './environment-options.mjs';
 import {selectExecutionPlan} from './execution-selection.mjs';
 import { randomUUID } from 'node:crypto';
+import {createRequire} from 'node:module';
+import {createUpdateCoordinator,createNativeUpdateGate,createInstallLease,createRestartHandoff,signedUpdateSupport,otherNativeInstances,UPDATE_ACTIONS} from './updater.mjs';
 import { relative, sep, isAbsolute } from 'node:path';
 import { prepareCrewStorage } from './storage.mjs';
 import { loadAppConfig } from '../config.mjs';
@@ -20,7 +22,11 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(app.isPackaged ? 1 : 2);
 const flag = args.indexOf('--config');
 if (flag >= 0 && (!args[flag + 1] || args[flag + 1].startsWith('--'))) { console.error('--config requires an existing config path.'); app.exit(1); }
-const configOverride=flag>=0?args[flag+1]:process.env.AI_MANAGER_CONFIG||null;
+const updatesDirectory=join(app.getPath('appData'),'Crew','updates');
+const restartHandoff=createRestartHandoff({directory:updatesDirectory});
+const explicitConfig=flag>=0?args[flag+1]:process.env.AI_MANAGER_CONFIG||null;
+const restartedConfig=await restartHandoff.consume(app.getVersion(),explicitConfig);
+const configOverride=explicitConfig||restartedConfig;
 const storage=await prepareCrewStorage({appData:app.getPath('appData'),configOverride});
 const configPath=storage.configPath,key=storage.key,desktopData=storage.desktopData;
 mkdirSync(desktopData, { recursive:true, mode:0o700 });
@@ -35,6 +41,9 @@ let discoveryController, discoveryRoot, discoveryProposal, discoverySummary, lin
 const repositoryOptions=new Map();
 let setupWindow, setupChecks = {}, setupRevision, setupInputs, setupOperation = false;
 let window, tray, config, origin, backend, pollTimer, starting = false, quitting = false, closing = false;
+let cancelRestartHandoff, updateCoordinator, nativeUpdater, updateCheckTimer, updateInitialCheck=false;
+const updateLease=createInstallLease({directory:updatesDirectory});
+const nativeUpdateGate=createNativeUpdateGate({busy:()=>Boolean(discoveryController||setupOperation||starting||quitting)});
 let counts = { active: null, pending: null }, lastError = null, backendReady = false;
 const env = childEnvironment(configPath);
 const setupURL = pathToFileURL(join(root, 'renderer-dist/setup.html')).href;
@@ -44,7 +53,7 @@ const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&':'&amp;', 
 async function statusFile() {
   if (!config) return;
   const target = join(config.dataDir, 'desktop-status.json');
-  const value = { pid: process.pid, backendPid: backend?.exitCode === null ? backend.pid : null, configPath, projectId: config.project.id, port: config.port, backendReady, windowOpen: Boolean(window && !window.isDestroyed()), windowCount: window && !window.isDestroyed() ? 1 : 0, isQuitting:quitting, pendingCount:counts.pending, activeCount:counts.active, ...counts, error: lastError, updatedAt: new Date().toISOString() };
+  const value = { pid: process.pid, backendPid: backend?.exitCode === null ? backend.pid : null, configPath, projectId: config.project.id, port: config.port, backendReady, windowOpen: Boolean(window && !window.isDestroyed()), windowCount: window && !window.isDestroyed() ? 1 : 0, isQuitting:quitting, pendingCount:counts.pending, activeCount:counts.active, ...counts, error: lastError, update:updateCoordinator?.getStatus(), updatedAt: new Date().toISOString() };
   const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, target);
@@ -81,6 +90,10 @@ function updateTray() {
     { label:'Edit project configuration…', click:() => void shell.openPath(configPath) },
     { label:'Open configuration folder', click:() => void shell.openPath(dirname(configPath)) },
     { label:'Open logs folder', enabled:Boolean(config), click:() => void shell.openPath(config.dataDir) },
+    { label:updateCoordinator?.getStatus().phase==='downloaded'?'Update downloaded':'Crew updates',enabled:false },
+    { label:'Check for updates…',enabled:Boolean(updateCoordinator),click:()=>void updateAction('check') },
+    { label:'Download update',enabled:updateCoordinator?.getStatus().phase==='available',click:()=>void updateAction('download') },
+    { label:'Restart to update…',enabled:updateCoordinator?.getStatus().phase==='downloaded',click:()=>void updateAction('restart') },
     { label:'Retry startup', enabled:!backendReady && !starting && !backend, click:() => void startup() },
     { type:'separator' }, { label:'Quit this instance…', click:() => void quitInstance() }
   ]));
@@ -119,6 +132,7 @@ async function poll() {
   if (!backendReady || quitting) return;
   try { const view = await api('orchestration'); counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null; }
   catch (error) { counts = { active:null, pending:null }; lastError = safe(error); }
+  await updateCoordinator?.refresh();
   updateTray(); await statusFile().catch(() => {});
 }
 async function startup({ showWindow = true } = {}) {
@@ -144,9 +158,14 @@ async function startup({ showWindow = true } = {}) {
       if (alive) throw new Error(`This configuration already has a local server (PID ${marker.pid}). Stop it with its existing local stop command before opening this instance in the desktop app. No process was changed.`);
     } catch (error) { if (error.code !== 'ENOENT' && !error.message?.startsWith('Unexpected')) throw error; if (error instanceof SyntaxError) throw new Error('Instance server marker is malformed. Inspect it before restarting.'); }
     const log = await open(join(config.dataDir, 'desktop.log'), 'a', 0o600);
-    try { backend = spawn(process.execPath, [join(root, 'server.mjs')], { cwd:root, env, stdio:['ignore', log.fd, log.fd] }); }
+    try { backend = spawn(process.execPath, [join(root, 'server.mjs')], { cwd:root, env, stdio:['ignore', log.fd, log.fd, 'ipc'] }); }
     finally { await log.close(); }
     const owned = backend;
+    owned.on('message',message=>{
+      if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action))return;
+      void (async()=>{try{const status=await updateCoordinator.request(message.action);sendUpdate(owned,{type:'crew:update:response',id:message.id,status});}catch(error){sendUpdate(owned,{type:'crew:update:response',id:message.id,status:updateCoordinator?.getStatus(),error:safe(error)});}})();
+    });
+    sendUpdate(owned,{type:'crew:update:status',status:updateCoordinator?.getStatus()});
     let spawnFailure;
     owned.once('error', error => { spawnFailure = error; });
     owned.once('exit', () => {
@@ -171,6 +190,12 @@ async function startup({ showWindow = true } = {}) {
     partition.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => contents === window?.webContents && permitsAudio(permission, { ...details, securityOrigin:requestingOrigin }, origin));
     partition.on('will-download', event => event.preventDefault());
     counts = summarizeTasks(await api('orchestration'));
+    if(!updateInitialCheck&&updateCoordinator?.getStatus().supported){
+      updateInitialCheck=true;
+      const check=()=>void updateCoordinator.request('check').catch(()=>{});
+      const initial=setTimeout(check,30000);initial.unref();
+      updateCheckTimer=setInterval(check,6*60*60*1000);updateCheckTimer.unref();
+    }
     if (window && !window.isDestroyed()) await window.loadURL(origin); else if (showWindow) await openWindow();
     if (!pollTimer) pollTimer = setInterval(() => void poll(), 1500);
   } catch (error) {
@@ -192,6 +217,7 @@ async function stopOwnedBackend() {
 }
 async function quitInstance() {
   if (quitting) return;
+  if(nativeUpdateGate.isReserved()){await dialog.showMessageBox({type:'info',message:'Crew is preparing an update restart',detail:'Wait for the update to finish before quitting this instance.'});return;}
   await poll();
   const active = counts.active;
   const warning = discoveryController ? 'A setup project analysis is running. Quitting will cancel this analysis without applying its draft.' : active === null ? 'Worker status is unavailable.' : active ? `${active} task${active === 1 ? ' is' : 's are'} still active.` : 'There are no active tasks.';
@@ -207,6 +233,56 @@ async function quitInstance() {
     quitting = false; lastError = safe(error); pollTimer = setInterval(() => void poll(), 1500); updateTray();
     await dialog.showMessageBox({ type:'error', message:'Could not finish quitting', detail:lastError });
   }
+}
+function sendUpdate(child,message){
+  if(!child?.connected)return;
+  try{child.send(message,error=>{if(error)console.error('Update status delivery failed.');});}catch{console.error('Update status delivery failed.');}
+}
+async function updateAction(action){
+  try{
+    if(action==='restart'){
+      const result=await dialog.showMessageBox({type:'question',message:'Restart Crew to install the downloaded update?',detail:'Crew checks that this project is idle and other Crew instances are closed. Your local configuration, authentication, history and retained worktrees stay in place.',buttons:['Keep running','Restart to update'],defaultId:0,cancelId:0,noLink:true});
+      if(result.response!==1)return;
+    }
+    await updateCoordinator.request(action);
+  }catch(error){await dialog.showMessageBox({type:'warning',message:'Crew update needs attention',detail:safe(error)});}
+}
+async function updateToken(route){
+  if(!backendReady||!backend)throw new Error('Local controller is unavailable.');
+  const marker=JSON.parse(await readFile(config.serverStatePath,'utf8'));
+  if(marker.pid!==backend.pid||marker.configPath!==config.configPath||marker.projectId!==config.project.id)throw new Error('Controller ownership could not be verified.');
+  return api(route,{token:marker.token});
+}
+async function initializeUpdates(){
+  const support=await signedUpdateSupport({packaged:app.isPackaged});
+  try{nativeUpdater=createRequire(import.meta.url)('electron-updater').autoUpdater;}
+  catch{nativeUpdater={on(){},autoDownload:false};support.supported=false;support.error='The updater is unavailable in this build. Install an official signed Crew release.';}
+  updateCoordinator=createUpdateCoordinator({updater:nativeUpdater,currentVersion:app.getVersion(),support,
+    activity:async()=>{
+      if(discoveryController||setupOperation||starting||quitting)return {safe:false,reasons:['Crew setup or shutdown is in progress.']};
+      if(!backendReady)return {safe:false,reasons:['Local controller activity is unavailable.']};
+      return api('update-activity');
+    },prepare:()=>nativeUpdateGate.reserve(()=>updateToken('update-prepare')),cancel:async()=>{
+      nativeUpdateGate.cancel();
+      await cancelRestartHandoff?.();cancelRestartHandoff=undefined;
+      quitting=false;
+      if(backendReady)await updateToken('update-cancel');
+      else if(!backend)await startup({showWindow:Boolean(window&&!window.isDestroyed())});
+      if(!pollTimer)pollTimer=setInterval(()=>void poll(),1500);
+    },stopBackend:async()=>{
+      cancelRestartHandoff=await restartHandoff.write({configPath,version:updateCoordinator.getStatus().availableVersion});
+      quitting=true;clearInterval(pollTimer);pollTimer=undefined;
+      await stopOwnedBackend();
+    },install:()=>new Promise((done,reject)=>{
+      const timer=setTimeout(()=>finish(new Error('The native installer did not restart Crew. Crew will try to restore its controller.')),60000);
+      const failed=()=>finish(new Error('The native installer could not verify or install this update. Crew will try to restore its controller.'));
+      const exiting=()=>finish();
+      const finish=error=>{clearTimeout(timer);nativeUpdater.removeListener('error',failed);app.removeListener('before-quit',exiting);error?reject(error):done();};
+      nativeUpdater.once('error',failed);app.once('before-quit',exiting);
+      try{nativeUpdater.quitAndInstall(false,true);}catch{failed();}
+    }),lease:updateLease,otherInstances:()=>otherNativeInstances({backendPid:backend?.pid}),onState:status=>{
+      sendUpdate(backend,{type:'crew:update:status',status});updateTray();void statusFile().catch(()=>{});
+    }});
 }
 // Setup uses a separate trusted local page. The manager renderer has no preload.
 function projectDraftStatus(issues=[]) {const detail=issues.map(issue=>/teamId|teamKey/.test(issue)?'Choose your Linear team, or connect it later before assigning ticketed work.':/baseRef/.test(issue)?'Choose a starting branch for each project folder.':/path/.test(issue)?'Choose your local project folder.':issue);return {status:issues.length?'incomplete':'configured',detail:[...new Set(detail)].join(' ')||'Project settings are saved. Ticket access is checked when you ask for work.'};}
@@ -282,6 +358,7 @@ ipcMain.handle('crew:setup', async (event, action, input) => {
   if (typeof action !== 'string') throw new Error('Invalid setup request.');
   // Serialize native checks/mutations. Snapshot is read-only and may run during a check.
   if (action === 'snapshot') return setupSnapshot();
+  nativeUpdateGate.assertSetupAllowed();
   if (action === 'cancel-discovery') {if(discoveryPhase==='saving')return {notice:'Your validated settings are already saving. Please wait for the result.'};discoveryController?.abort();return {notice:'Canceling project setup. Your saved settings stay unchanged.'};}
   if (setupOperation) throw new Error('Another setup action is still running. Wait for it to finish.');
   setupOperation = true;
@@ -422,7 +499,9 @@ else {
   // Do not hold ESM entry evaluation open waiting for Electron's ready event.
   // Electron can defer ready until the entry module finishes evaluating.
   void app.whenReady().then(async () => {
-  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label:'Crew', submenu:[{ label:'About Crew', role:'about' }, { label:'Set up Crew…', click:() => void openSetup() }, { type:'separator' }, { label:'Open window', click:() => void openWindow() }, { label:'Quit this instance…', accelerator:'Command+Q', click:() => void quitInstance() }] }, { label:'Edit', submenu:[{ role:'undo' }, { role:'redo' }, { type:'separator' }, { role:'cut' }, { role:'copy' }, { role:'paste' }, { role:'selectAll' }] }, { label:'Window', submenu:[{ role:'minimize' }, { role:'close' }] }]));
+  try{const release=await updateLease.acquire();await release();}catch(error){await dialog.showMessageBox({type:'warning',message:'Crew update in progress',detail:safe(error)});app.exit(1);return;}
+  await initializeUpdates();
+  Menu.setApplicationMenu(Menu.buildFromTemplate([{ label:'Crew', submenu:[{ label:'About Crew', role:'about' }, { label:'Check for updates…',click:()=>void updateAction('check') }, { label:'Set up Crew…', click:() => void openSetup() }, { type:'separator' }, { label:'Open window', click:() => void openWindow() }, { label:'Quit this instance…', accelerator:'Command+Q', click:() => void quitInstance() }] }, { label:'Edit', submenu:[{ role:'undo' }, { role:'redo' }, { type:'separator' }, { role:'cut' }, { role:'copy' }, { role:'paste' }, { role:'selectAll' }] }, { label:'Window', submenu:[{ role:'minimize' }, { role:'close' }] }]));
   tray = new Tray(trayIcon(false)); updateTray();
   await bootstrap();
   }).catch(error => { console.error(safe(error)); app.exit(1); });

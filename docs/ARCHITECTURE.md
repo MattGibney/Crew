@@ -47,7 +47,7 @@ Optional project analysis uses one cancelable subscription Codex setup job over 
 
 ## Concurrent execution and environments (AI-011)
 
-Executing capacity is configurable (default two), with a durable queue and independent per-task provisioning/cleanup. Question-yielded runs release capacity; target/run-correlated lifecycle requests support stop/pause/resume/start/dispose and idempotent retries. Supervisors own their Codex process groups, record actual exits and support durable stop controls. Restart reconciles surviving runs without duplicate launch; execution timing excludes waiting. Disposable fixtures cover concurrent workers and optional shell-free bounded environment hooks. See [worker lifecycle](WORKERS.md) for contracts and Set1 limitations.
+Executing capacity is configurable (default two), with a durable queue and independent per-task provisioning/cleanup. Question-yielded runs release capacity; target/run-correlated lifecycle requests support stop/pause/resume/start/dispose and idempotent retries. Supervisors own their Codex process groups, record actual exits and support durable stop controls. Restart reconciles surviving runs without duplicate launch; execution timing excludes waiting. Disposable fixtures cover concurrent workers and optional shell-free bounded environment hooks. See [worker lifecycle](WORKERS.md) for contracts and project-tool limitations.
 
 ## React renderer foundation (AI-013)
 

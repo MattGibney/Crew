@@ -16,10 +16,17 @@ files:
   - README.md
   - '!**/.DS_Store'
   - '!**/*.log'
-  - '!**/node_modules/**'
 artifactName: '${productName}-${version}-${arch}.${ext}'
 npmRebuild: false
-publish: null
+# electron-builder includes only production dependency closure automatically.
+forceCodeSigning: true
+publish:
+  provider: github
+  owner: MattGibney
+  repo: crew
+  private: false
+  channel: latest
+  releaseType: draft
 mac:
   icon: build/icon.icns
   category: public.app-category.productivity
@@ -28,16 +35,15 @@ mac:
       arch: arm64
     - target: zip
       arch: arm64
-  identity: null
-  # Unsigned local distribution only; enable with a Developer ID release later.
-  hardenedRuntime: false
-  notarize: false
+  hardenedRuntime: true
+  notarize: true
+  entitlements: build/entitlements.mac.plist
   minimumSystemVersion: '13.0'
   extendInfo:
     NSMicrophoneUsageDescription: 'Crew uses your microphone for voice conversations you explicitly start. You can approve access during setup without starting a call.'
     NSLocalNetworkUsageDescription: 'Crew connects its window to its local controller on this Mac and uses WebRTC for voice when you start a call.'
 dmg:
-  sign: false
+  sign: true
   contents:
     - x: 150
       y: 180

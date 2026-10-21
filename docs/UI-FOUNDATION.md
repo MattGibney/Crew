@@ -23,10 +23,8 @@ Run `npm ci`, then `npm run renderer:build`. `npm run desktop:dev` and `npm run 
 
 The manager uses the existing loopback API and one SSE consumer. Its renderer has no Node or preload access. Setup uses only the existing bounded `window.crewSetup` API and an exact trusted compiled file URL, with context isolation/sandbox and blocked navigation. Compiled scripts and styles are local; browser origins and API request checks remain enforced.
 
-## Next presentation owner
+## Presentation and evidence boundaries
 
-This ticket establishes reusable React state/hooks and components while preserving the existing product behavior. A separate Astra chat owns the subsequent full presentation refinement, all-worktree progress cards and new open-mic/hold-to-talk interactions. Do not infer liveness, ticket metadata, percentage or compute time from cosmetic states. Existing workers continue independently of the window/voice. Never acquire the microphone on launch, reconnect or mode selection.
+The manager presentation and explicit microphone modes build on these reusable components and hooks. Do not infer process liveness, ticket metadata, percentage or compute time from cosmetic state. Workers remain independent of voice/window lifetime. Never acquire the microphone on launch, Connect, reconnect or mode selection.
 
-## Verification boundary
-
-AI-013 passed 146 automated tests, official full-theme paste compilation, actual subscription-backed manager/capability preparation, browser setup/approval/review/responsive journeys, simulated WebRTC resource lifecycle, and packaged bundled-runtime asset/API checks. Setup preload calls and media resources were fixtures in the browser functional tests; no physical microphone was acquired. The Mac was locked while the user slept, and the user instructed continued work without unlock/security changes. Native accessibility and physical-audio acceptance remain pending; this does not prevent the separate Astra presentation stage. See `tickets/AI-013.md` for exact evidence and limits.
+Automated model/asset/theme checks, official full-theme compilation, actual subscription-backed preparation, browser setup/manager journeys, synthetic media cleanup and packaged bundled-runtime asset/API checks have passed. Browser setup/media fixtures do not prove native picker/permission or physical audio behavior. Those checks require observation on the actual device; unavailable native observations remain pending without bypassing security. See the current renderer tickets for measured capability boundaries.

@@ -8,6 +8,7 @@ const VOICE_KEY = 'crew.voice.v3';
 // Backend state and transcript events remain evidence; they never initiate work or microphone capture.
 export function useCrewManager() {
   const [error, setError] = useState('');
+  const [updates, setUpdates] = useState(null);
   const voice = useVoiceSession(setError);
   const [prepared, setPrepared] = useState(false), [eventReady, setEventReady] = useState(false);
   const [account, setAccount] = useState('Checking ChatGPT sign-in…');
@@ -49,6 +50,7 @@ export function useCrewManager() {
       if (canceled) return;
       try {
         const message = JSON.parse(event.data);
+        if (message.type === 'update-state') setUpdates(message.status);
         if (message.type === 'work-state') setWork(message.state);
         if (message.type === 'orchestration-state') setOrchestration(message.state);
         if (message.type === 'notice') setWorkNotice(message.message);
@@ -112,5 +114,5 @@ export function useCrewManager() {
   }, [sendRequest]);
   const sendMessage = useCallback(text => correlatedRequest(`message:${text}`, () => ({ text, requestId: `message-${crypto.randomUUID()}` })), [correlatedRequest]);
   const workerAction = useCallback((task, action) => correlatedRequest(`worker:${task.id}:${task.runId}:${action}`, () => workerActionRequest(task, action)), [correlatedRequest]);
-  return { error, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, stopManager, sending, sendMessage, workerAction, retryConnection };
+  return { error, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, stopManager, sending, sendMessage, workerAction, retryConnection };
 }

@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { useCrewManager } from './useCrewManager.js';
 import { WorkerAttention } from './WorkerAttention.jsx';
 import { VoiceControls } from './VoiceControls.jsx';
+import {UpdateControls} from './UpdateControls.jsx';
 import { WorkChat } from './WorkChat.jsx';
 import crewMark from '../../../build/crew-mark.png';
 
@@ -18,7 +19,7 @@ export function App() {
     <a href="#message-input" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-md focus:bg-background focus:p-3">Skip to message</a>
     <header className="flex min-h-18 shrink-0 items-center justify-between gap-4 border-b px-5 sm:px-7">
       <div className="flex min-w-0 items-center gap-4"><div className="flex items-center gap-2.5"><img src={crewMark} alt="" width="34" height="34" className="size-8" /><span className="text-xl font-semibold tracking-tight">Crew</span></div><span className="h-6 border-l" aria-hidden="true" /><div className="min-w-0"><p className="truncate text-sm font-medium" id="instance-project">{manager.projectInfo?.name || 'Your project'}</p><p className="flex items-center gap-1.5 text-xs text-muted-foreground"><GitBranch className="size-3" aria-hidden="true" />{manager.projectInfo?.mode === 'fixture' ? 'Acceptance workspace' : 'Local workspace'}</p></div></div>
-      <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" role="status"><Circle className={`size-2 ${manager.eventReady ? 'fill-primary text-primary' : ''}`} aria-hidden="true" /><span className="hidden sm:inline">{manager.eventReady ? 'Controller connected' : 'Reconnecting…'}</span>{manager.voice.active && <Badge variant="secondary"><AudioLines className="size-3" aria-hidden="true" />Voice connected</Badge>}</div>
+      <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><UpdateControls liveStatus={manager.updates}/><Circle className={`size-2 ${manager.eventReady ? 'fill-primary text-primary' : ''}`} aria-hidden="true" /><span className="hidden sm:inline">{manager.eventReady ? 'Controller connected' : 'Reconnecting…'}</span>{manager.voice.active && <Badge variant="secondary"><AudioLines className="size-3" aria-hidden="true" />Voice connected</Badge>}</div>
     </header>
     <nav aria-label="Workspace views" className="flex gap-1 border-b p-2 lg:hidden"><Button variant={pane === 'conversation' ? 'secondary' : 'ghost'} aria-pressed={pane === 'conversation'} className="flex-1" onClick={() => setPane('conversation')}><MessageSquare />Conversation</Button><Button variant={pane === 'workers' ? 'secondary' : 'ghost'} aria-pressed={pane === 'workers'} className="flex-1" onClick={() => setPane('workers')}><Layers />Workers {pending > 0 && <Badge>{pending}</Badge>}</Button></nav>
     <main className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_370px] xl:grid-cols-[minmax(0,1fr)_410px]">

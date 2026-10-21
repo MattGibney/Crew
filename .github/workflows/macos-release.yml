@@ -1,0 +1,146 @@
+name: Build or release Crew for macOS
+
+# Deliberate only: pushes, pull requests and tag creation never publish a release.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Existing branch or tag to build (release mode requires its exact vVERSION tag)'
+        required: true
+        default: main
+        type: string
+      mode:
+        description: 'Unsigned validation artifact or signed production release build'
+        required: true
+        default: candidate
+        type: choice
+        options: [candidate, release]
+      publish:
+        description: 'Publish the verified signed build to GitHub Releases (release mode only)'
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crew-release-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 50
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Check requested mode
+        env:
+          MODE: ${{ inputs.mode }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "$PUBLISH" = true ] && [ "$MODE" != release ]; then
+            echo 'Unsigned candidates cannot be published as releases or update feeds.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.22.0'
+          cache: npm
+      - name: Validate version and release provenance
+        id: version
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+          MODE: ${{ inputs.mode }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { assertReleaseVersion } from './scripts/release-policy.mjs';
+          const { version } = JSON.parse(readFileSync('package.json'));
+          if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Stable semantic version required.');
+          if (process.env.MODE === 'release') assertReleaseVersion(version, process.env.REQUESTED_REF);
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=v${version}\n`);
+          JS
+          if [ "$MODE" = release ]; then
+            git merge-base --is-ancestor HEAD origin/main || { echo 'Release commit must belong to main.' >&2; exit 1; }
+            test "$(git rev-parse "refs/tags/$REQUESTED_REF^{commit}")" = "$(git rev-parse HEAD)"
+            test "$(gh api repos/MattGibney/crew --jq .visibility)" = public || { echo 'Public release is blocked until repository visibility and history audit are approved.' >&2; exit 1; }
+          fi
+      - name: Require signing credentials before release build
+        if: inputs.mode == 'release'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: node --input-type=module -e "import { assertSigningEnvironment } from './scripts/release-policy.mjs'; assertSigningEnvironment(process.env)"
+      - run: npm ci
+      - run: npm test
+      - name: Build unsigned validation artifact only
+        if: inputs.mode == 'candidate'
+        run: npm run desktop:build:mac
+      - name: Build and verify signed notarized release without publishing
+        if: inputs.mode == 'release'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run desktop:build:mac -- --release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: crew-${{ steps.version.outputs.version }}-${{ inputs.mode }}-arm64
+          path: |
+            dist/desktop/${{ inputs.mode }}/${{ steps.version.outputs.version }}/*.dmg
+            dist/desktop/${{ inputs.mode }}/${{ steps.version.outputs.version }}/*.zip
+            dist/desktop/${{ inputs.mode }}/${{ steps.version.outputs.version }}/*.blockmap
+            dist/desktop/${{ inputs.mode }}/${{ steps.version.outputs.version }}/latest-mac.yml
+            dist/desktop/${{ inputs.mode }}/${{ steps.version.outputs.version }}/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    if: inputs.mode == 'release' && inputs.publish
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: crew-${{ needs.build.outputs.version }}-release-arm64
+          path: release
+      - name: Publish verified artifacts through a draft release
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: MattGibney/crew
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          sha256sum --check SHA256SUMS.txt
+          test -f latest-mac.yml
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'A release already exists for this tag; refusing to overwrite it.' >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "Crew $VERSION" --generate-notes
+          gh release upload "$RELEASE_TAG" \
+            "Crew-$VERSION-arm64.dmg" "Crew-$VERSION-arm64.zip" \
+            "Crew-$VERSION-arm64.dmg.blockmap" "Crew-$VERSION-arm64.zip.blockmap" \
+            latest-mac.yml SHA256SUMS.txt
+          gh release edit "$RELEASE_TAG" --draft=false --latest

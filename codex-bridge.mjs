@@ -12,7 +12,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   let connectors = [], connectorError = null, voiceCatalog, greetingSession, lastVoice = null;
   const pending = new Map(), approvals = new Map(), items = new Map(), messages = new Map(), workRequests = new Map();
   const expectedExits = new WeakSet();
-  const state = () => ({ threadId, activeTurnId, status, voiceActive, voiceConnecting:connecting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: [...messages.values()].slice(-20) });
+  const state = () => ({ threadId, activeTurnId, status, voiceActive, voiceConnecting:connecting, workStarting, lastVoice, connectors, connectorError, approvals: [...approvals.values()].map(r => ({ ...r, id: String(r.id) })), items: [...items.values()].slice(-40), messages: [...messages.values()].slice(-20) });
   const emit = (type, data = {}) => onEvent({ type, ...data });
   const changed = () => emit('work-state', { state: state() });
   const send = message => child?.stdin.write(`${JSON.stringify(message)}\n`);
@@ -235,10 +235,9 @@ If project readiness is false, discuss and help configure it but do not dispatch
     // Explicit diagnostic/user request only. NEVER called by transcript/handoff events.
     if (workRequests.has(requestId)) return workRequests.get(requestId);
     const result = (async () => {
-      await ensureThread();
       if (activeTurnId || workStarting) throw new Error('Codex is already working. Use voice to steer it or Stop work.');
       workStarting = true;
-      try { return await rpc('turn/start', { threadId, clientUserMessageId: requestId, input: [{ type: 'text', text }] }); }
+      try { await ensureThread(); return await rpc('turn/start', { threadId, clientUserMessageId: requestId, input: [{ type: 'text', text }] }); }
       finally { workStarting = false; }
     })();
     workRequests.set(requestId, result);

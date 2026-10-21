@@ -23,7 +23,7 @@ The complete schema is illustrated by `config/set1.example.json` and `config/fix
 
 Repository work starts from the configured committed base ref, not uncommitted source-checkout changes. Fetch refs yourself when appropriate; the application does not invent or silently update a base. Keep task worktrees until reviewed. Worktree edits remain uncommitted; commit/publish/deploy actions require a later supported workflow.
 
-The initial Set1 example is an incomplete starting template. Normal onboarding replaces its provisional context with source-grounded understanding, canonical chosen folder, actual available starting branch and real Linear team/project choices. Unavailable values remain unset; no opaque ID needs to be invented or looked up manually. Add a separate repository entry for each confirmed boundary and describe its components. No Set1 name or domain behavior belongs in the generic application core.
+The historical `set1` example filename and CLI template name are retained for compatibility; its contents are a generic incomplete project template. Normal onboarding replaces its provisional context with source-grounded understanding, canonical chosen folder, actual available starting branch and real Linear team/project choices. Unavailable values remain unset; no opaque ID needs to be invented or looked up manually. Add a separate repository entry for each confirmed boundary and describe its components. No business-specific name or domain behavior belongs in the generic application core.
 
 Manager prompt edits tune role, personality and communication. Worker prompt edits tune execution behavior and reporting. They do not change immutable authentication, consent, project isolation or evidence boundaries. Restart to apply changes; do not change sandbox/base/project identity under an active task.
 
@@ -31,7 +31,7 @@ Discovery order: explicit AI_MANAGER_CODEX_BINARY/CODEX_BINARY or runtime.codexB
 
 To use another business, create another instance directory/config, dataDir and port. Never repoint an existing instance's state at another project. Logs, backing chat history and task files must remain bound to the same configured project.
 
-Worker lifecycle and hook semantics are documented in [WORKERS.md](WORKERS.md). Environment hook commands run directly without a shell, take an explicit args array and timeoutMs of 1000–600000. Only configured scoped resource handling is supported; Crew does not automatically provision Set1 services or clean shared infrastructure.
+Worker lifecycle and hook semantics are documented in [WORKERS.md](WORKERS.md). Environment hook commands run directly without a shell, take an explicit args array and timeoutMs of 1000–600000. Only configured scoped resource handling is supported; Crew does not automatically infer service provisioning or clean shared infrastructure.
 
 ## Project execution plan
 
