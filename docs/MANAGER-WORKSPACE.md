@@ -31,3 +31,11 @@ See `tickets/AI-014.md` for the public capability summary. Browser fixtures cove
 ## Audible feedback
 
 See [Voice and attention sounds](SOUNDS.md) for call connection, hang-up and mute/unmute cues, action-required notifications, deduplication and playback ownership. Routine completion and self-resolved failures stay quiet.
+
+## Following workers (GitHub #14)
+
+The manager's compact worker cards show ticket/task identity, a labelled colour status and title. Select a card to open the worker across the main workspace. The Workers navigation opens a wider overview with latest progress and execution timing when fresh run evidence supports it. All tasks remain reachable through All, Current and Needs attention filters.
+
+Conversation displays available recorded manager assignments, worker reports/replies, questions, answers, lifecycle decisions and execution activity. Older tasks explicitly disclose gaps in retained history. Work notes displays the actual shared Markdown document once the manager or worker writes one; generated orchestration state is separate. Links contains supplied resource URLs and recorded local paths, without guessing a Linear URL or PR from a ticket key or branch. Original instructions remain reviewable in Links. Ask questions, give direction and review decisions with the manager; Pause, Stop, Resume and safe Remove worktree in detail submit the existing correlated manager requests.
+
+Back to manager restores the conversation and its draft. Other project views have a thin manager call bar with call state, microphone state and start/mute/end controls (hold to talk in PTT mode). Navigation preserves the same voice session and open-mic intent. Settings is outside the project content layout: it hides call controls while the call continues in the background, then restores the previous project view. A held PTT input is released when navigating. Selecting another project still ends the departing project's voice session.

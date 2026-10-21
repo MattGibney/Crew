@@ -6,13 +6,13 @@ import { NativeSelect } from '@/components/ui/native-select';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { isTalkShortcut } from './voice-input.js';
 
-export function VoiceControls({ manager }) {
+export function VoiceControls({ manager, visible = true }) {
   const { voice, catalog, selectedVoice, voiceLoading, voiceNotice, prepared, eventReady } = manager;
   const voiceLocked = voice.allocated || voice.busy;
   const heldKey = useRef(null);
   const holdMode = voice.mode === 'push-to-talk';
   useEffect(() => {
-    if (!voice.active || !holdMode) return;
+    if (!voice.active || !holdMode || !visible) return;
     const keydown = event => {
       if (!isTalkShortcut(event) || heldKey.current) return;
       event.preventDefault(); heldKey.current = event.code; voice.startInput();
@@ -30,7 +30,7 @@ export function VoiceControls({ manager }) {
       window.removeEventListener('blur', release); window.removeEventListener('pagehide', release);
       document.removeEventListener('visibilitychange', release); release();
     };
-  }, [voice.active, holdMode, voice.startInput, voice.stopInput]);
+  }, [voice.active, holdMode, visible, voice.startInput, voice.stopInput]);
   const phase = voice.inputPending ? 'Waiting for microphone permission' : voice.transmitting ? 'Listening' : voice.activity === 'speaking' && voice.active ? 'Speaking' : voice.activity === 'processing' && voice.active ? 'Processing' : voice.disconnecting ? 'Ending call' : voice.busy ? 'Connecting' : voice.active ? 'Connected · microphone off' : 'Microphone off';
   const Icon = voice.busy || voice.inputPending ? LoaderCircle : voice.transmitting ? Mic : voice.activity === 'speaking' && voice.active ? AudioLines : MicOff;
   return <section aria-label="Voice controls" className="rounded-xl border bg-card text-card-foreground">
@@ -65,7 +65,7 @@ export function VoiceControls({ manager }) {
           <p id="voice-hint" className="text-xs leading-relaxed text-muted-foreground sm:col-span-2">{voiceLocked ? 'End the call to change mode or voice.' : voiceNotice || 'Your voice choice is saved for the next call. Changing these settings never starts the microphone.'}</p>
           {!catalog && !voiceLoading && <Button id="retry-voices" type="button" variant="outline" onClick={() => void manager.loadVoices()}>Retry loading voices</Button>}
         </div>
-        <div className="mt-4 space-y-2"><audio id="audio" ref={voice.audioRef} autoPlay controls className="h-9 w-full" aria-label="Manager voice playback" /><p className="text-xs leading-relaxed text-muted-foreground">Playback controls affect what you hear. End call releases voice; your manager and workers can keep working.</p></div>
+        <div className="mt-4 space-y-2"><Button type="button" size="sm" variant="outline" onClick={() => void voice.audioRef.current?.play()}>Play manager audio</Button><p className="text-xs leading-relaxed text-muted-foreground">Playback controls affect what you hear. End call releases voice; your manager and workers can keep working.</p></div>
       </details>
     </div>
   </section>;

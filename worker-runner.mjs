@@ -79,7 +79,7 @@ async function handle(message){
   const item=params.item;
   if(item?.type==='agentMessage')finalMessage=item.text||'';
   if(item?.type==='commandExecution')commands.push({command:item.command,exitCode:item.exitCode,output:String(item.aggregatedOutput||'').slice(0,5000)});
-  writes=writes.then(()=>appendFile(path.join(runDir,'events.jsonl'),JSON.stringify({type:method,itemType:item?.type,status:item?.status,turnId:params.turnId})+'\n',{mode:0o600}));await saveRuntime();
+  writes=writes.then(()=>appendFile(path.join(runDir,'events.jsonl'),JSON.stringify({taskId:config.taskId,runId:config.runId,at:new Date().toISOString(),type:'item.completed',nativeMethod:method,turnId:params.turnId,item:item?.type==='agentMessage'?{id:item.id,type:'agent_message',text:String(item.text||'').slice(0,12000)}:item?.type==='commandExecution'?{id:item.id,type:'command_execution',command:item.command,status:item.status,exitCode:item.exitCode}:{type:item?.type,status:item?.status}})+'\n',{mode:0o600}));await saveRuntime();
  }
  if(method==='serverRequest/resolved'&&!ending&&!nativeTurnStatus){
   for(const [id,request]of nativeRequests)if(request.requestId===params.requestId){await markWorkerRequestResolved({...requestContext(),approvalId:id});nativeRequests.delete(id);}

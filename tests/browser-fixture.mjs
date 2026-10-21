@@ -19,6 +19,17 @@ let orchestration = { maxConcurrent: 6, tasks: [
   task(7, 'completed', { result: { message: 'Read-only fixture verification passed.' }, attention: [{ id: 'result-7', kind: 'completion', message: 'Read-only fixture verification passed.' }] }),
   task(8, 'failed', { failure: 'Fixture environment readiness check failed.' }), task(9, 'stopped'), task(10, 'disposed'),
 ] };
+let detailRevision = 1;
+const workerDetails = new Map(orchestration.tasks.map(item => [item.id, {
+  taskId: item.id, revision: detailRevision,
+  conversation: [
+    { id: `${item.id}-dispatch`, at: now, actor: 'manager', kind: 'instruction', message: `Inspect fixture area ${item.id.split('-').at(-1)} and report verified evidence.`, runId: item.runId, evidence: ['Persisted synthetic dispatch'] },
+    { id: `${item.id}-progress`, at: now, actor: 'worker', kind: 'progress', message: item.progress, runId: item.runId, evidence: ['Persisted synthetic report'] },
+  ],
+  notes: item.id === 'fixture-task-1' ? { exists: true, markdown: '# Area 1 work notes\n\nVerified the synthetic fixture source.\n\n- Next: review the observed boundary.', path: '/tmp/crew-fixture/w1/WORK-NOTES.md', updatedAt: now, source: 'Task-owned shared Markdown' } : { exists: false, markdown: '', path: null, updatedAt: null, source: null },
+  links: item.id === 'fixture-task-1' ? [{ kind: 'ticket', label: 'AI-141 fixture ticket', url: 'https://linear.app/crew-fixture/issue/AI-141' }, { kind: 'pull-request', label: 'Fixture pull request', url: 'https://github.com/example/crew-fixture/pull/1' }, { kind: 'worktree', label: 'Worktree', path: item.worktree }] : [],
+  historyNotice: 'Synthetic persisted observable events; no hidden reasoning is available.',
+}]));
 let work = { threadId: 'fixture-manager', managerConnected: true, status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
 let workerApprovals = [];
 let managerLifecycle = { state: 'running' };
@@ -39,6 +50,8 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' }); res.write(': connected\n\n');
       const set = url.pathname === '/events' ? peers : mediaPeers; set.add(res); if (url.pathname === '/events') res.write(`data: ${JSON.stringify({ type: 'worker-approval-state', requests: workerApprovals })}\n\n`); req.on('close', () => set.delete(res)); return;
     }
+    const workerMatch = url.pathname.match(/^\/api\/workers\/([^/]+)$/);
+    if (workerMatch && req.method === 'GET') return workerDetails.has(decodeURIComponent(workerMatch[1])) ? send(workerDetails.get(decodeURIComponent(workerMatch[1]))) : send({ error: 'Worker not found in this project.' }, 404);
     if (url.pathname === '/api/settings' && req.method === 'GET') return send(settingsView());
     if (req.method === 'POST' || req.method === 'PUT') {
       let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 100000) throw Error('Too large'); }
@@ -48,6 +61,13 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/__control') {
         if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
         if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
+
+        if (body.workerDetail) {
+          const { taskId, ...change } = body.workerDetail;
+          if (!workerDetails.has(taskId)) return send({ error: 'Unknown fixture worker' }, 400);
+          workerDetails.set(taskId, { ...workerDetails.get(taskId), ...change, taskId, revision: ++detailRevision });
+          emit({ type: 'orchestration-state', state: orchestration });
+        }
         if (body.work) { work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
         if (body.orchestration) { orchestration = body.orchestration; emit({ type: 'orchestration-state', state: orchestration }); }
         if (body.workerApprovals) { workerApprovals = body.workerApprovals; emit({ type: 'worker-approval-state', requests: workerApprovals }); }
