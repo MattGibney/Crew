@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { ApprovalForm } from './ApprovalForm.jsx';
 import { Transcript } from './Transcript.jsx';
 import { orderedMessages } from './conversation.js';
+import { projectDraftStorage, readDraft, writeDraft } from './draft-storage.js';
 import crewMark from '../../../build/crew-mark.png';
 
 function Message({ message }) {
@@ -27,11 +28,19 @@ export function WorkChat({ manager, children }) {
   const { work, workNotice: notice, prepared, eventReady, sending } = manager;
   const approvals = work.approvals || [], connectors = work.connectors || [], items = work.items || [];
   const messages = orderedMessages(work.messages);
-  const [draft, setDraft] = useState(''), [sendError, setSendError] = useState('');
+  const [draft, setDraftState] = useState(() => readDraft(projectDraftStorage()));
+  const draftRef = useRef(draft);
+  const setDraft = value => {
+    const next = typeof value === 'function' ? value(draftRef.current) : value;
+    draftRef.current = next;
+    writeDraft(projectDraftStorage(), next);
+    setDraftState(next);
+  };
+  const [sendError, setSendError] = useState('');
   const scrollRef = useRef(null), nearBottom = useRef(true), inputRef = useRef(null), submitLock = useRef(false);
   const [scrolledUp, setScrolledUp] = useState(false);
   const busy = Boolean(work.activeTurnId) || sending;
-  const ready = prepared && eventReady && !busy;
+  const ready = manager.managerEnabled && prepared && eventReady && !busy;
   const toBottom = () => { const node = scrollRef.current; if (node) node.scrollTop = node.scrollHeight; nearBottom.current = true; setScrolledUp(false); };
   useEffect(() => { if (nearBottom.current) toBottom(); }, [work.messages, manager.transcript, work.approvals, work.items]);
   const submit = async event => {
@@ -47,6 +56,7 @@ export function WorkChat({ manager, children }) {
     <div ref={scrollRef} onScroll={() => { const node = scrollRef.current; nearBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 100; setScrolledUp(!nearBottom.current); }} className="min-h-72 flex-1 overflow-y-auto overscroll-contain px-5 pb-6 sm:px-7 lg:min-h-0" aria-label="Manager conversation">
       <div className="mx-auto max-w-3xl space-y-6">
         {(manager.projectInfo?.readiness?.ready === false || (!manager.projectInfo && manager.project.startsWith('Project configuration unavailable'))) && <Alert role="alert"><AlertDescription className="break-words">{manager.project}<p className="mt-2">Open Set up Crew in the app menu to review your project. You can still discuss setup with your manager.</p></AlertDescription></Alert>}
+        {!manager.managerEnabled && <Alert><AlertDescription>Your manager is {manager.managerLifecycle.state === 'stopped' ? 'stopped' : 'unavailable while its state is checked'}. Open Settings to start or restart it. Your conversation and worker history stay here.</AlertDescription></Alert>}
         {manager.soundUnavailable && <p role="status" className="text-xs text-muted-foreground">Sound is unavailable. Click or press a key in Crew to enable future cues; requests remain visible here.</p>}
         {manager.error && <Alert variant="destructive" id="error" role="alert"><AlertDescription className="space-y-3 break-words"><p>{manager.error}</p>{!prepared && <Button type="button" variant="outline" onClick={() => void manager.retryConnection()}>Retry connection</Button>}</AlertDescription></Alert>}
         {!messages.length && !manager.transcript.length && <div className="flex min-h-64 flex-col items-center justify-center px-2 py-10 text-center"><div className="mb-5 flex size-12 items-center justify-center rounded-2xl border bg-background"><MessageSquare className="size-5 text-primary" aria-hidden="true" /></div><h2 className="text-2xl font-semibold tracking-tight">What are we working on?</h2><p className="mt-3 max-w-sm text-sm leading-6 text-muted-foreground">Talk through an idea, review progress, or agree on a task. Your manager brings in workers when you ask.</p><div className="mt-6 flex flex-wrap justify-center gap-2">{['What is the current project status?', 'Help me plan a task'].map(text => <Button key={text} variant="outline" className="h-auto whitespace-normal py-2 text-xs" onClick={() => { setDraft(text); inputRef.current?.focus(); }}>{text}</Button>)}</div></div>}
@@ -64,9 +74,9 @@ export function WorkChat({ manager, children }) {
         <form onSubmit={submit} className="rounded-xl border bg-background p-2 shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20">
           <label htmlFor="message-input" className="sr-only">Message your manager</label>
           <Textarea ref={inputRef} id="message-input" placeholder="Message your manager…" value={draft} maxLength={8000} onChange={event => setDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (ready) void submit(event); } }} className="min-h-14 max-h-40 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0" />
-          <div className="flex items-center justify-between gap-2 px-1"><p className="text-[11px] text-muted-foreground">{!prepared ? 'Preparing your manager…' : !eventReady ? 'Waiting for connection…' : busy ? 'You can draft your next message while work continues.' : 'Enter to send · Shift Enter for a new line'}</p>{busy ? <Button id="stop-work" type="button" variant="outline" size="sm" disabled={!work.activeTurnId} onClick={() => void manager.stopManager()}><Square className="size-3" />Stop manager</Button> : <Button id="send-message" type="submit" size="icon" aria-label="Send message" disabled={!ready || !draft.trim()}><ArrowUp /></Button>}</div>
+          <div className="flex items-center justify-between gap-2 px-1"><p className="text-[11px] text-muted-foreground">{!manager.managerEnabled ? 'Manager is stopped or unavailable. Open Settings to start it. Your draft is kept.' : !prepared ? 'Preparing your manager…' : !eventReady ? 'Waiting for connection…' : busy ? 'You can draft your next message while work continues.' : 'Enter to send · Shift Enter for a new line'}</p>{busy ? <Button id="stop-work" type="button" variant="outline" size="sm" disabled={!work.activeTurnId} onClick={() => void manager.interruptManager()}><Square className="size-3" />Stop current turn</Button> : <Button id="send-message" type="submit" size="icon" aria-label="Send message" disabled={!ready || !draft.trim()}><ArrowUp /></Button>}</div>
         </form>
-        <details className="text-xs text-muted-foreground"><summary className="flex w-fit cursor-pointer items-center gap-1.5"><ShieldCheck className="size-3.5" aria-hidden="true" />Local workspace · ChatGPT subscription<ChevronDown className="size-3" /></summary><div className="space-y-2 pb-1 pt-3 leading-5"><p id="account">{manager.account}</p><p id="connectors">{work.connectorError || `${connectors.filter(server => server.status === 'connected').length} tool connections available. Individual access is verified when used.`}</p><p>Workers keep running when you close this window. Stop manager cancels this conversation’s current work; use a worker’s actions to stop that worker.</p><p id="chat-reference" className="break-all">Saved conversation: {work.threadId || 'Preparing…'}</p></div></details>
+        <details className="text-xs text-muted-foreground"><summary className="flex w-fit cursor-pointer items-center gap-1.5"><ShieldCheck className="size-3.5" aria-hidden="true" />Local workspace · ChatGPT subscription<ChevronDown className="size-3" /></summary><div className="space-y-2 pb-1 pt-3 leading-5"><p id="account">{manager.account}</p><p id="connectors">{work.connectorError || `${connectors.filter(server => server.status === 'connected').length} tool connections available. Individual access is verified when used.`}</p><p>Workers keep running when you close this window. Stop current turn interrupts this conversation’s current work. Use Settings to stop the manager session, or a worker’s actions to stop that worker.</p><p id="chat-reference" className="break-all">Saved conversation: {work.threadId || 'Preparing…'}</p></div></details>
       </div>
     </div>
   </div>;

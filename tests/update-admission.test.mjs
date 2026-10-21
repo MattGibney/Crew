@@ -15,3 +15,10 @@ test('native chat initialization is already visible as work before the first asy
  assert.equal(bridge.state().workStarting,true,'pending ensureThread must not appear idle');await assert.rejects(bridge.startWork('Other request','request-two'),/already working/);
  await writeFile(release,'continue');assert.deepEqual(await first,await duplicate);const calls=(await readFile(log,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(calls.filter(c=>c.method==='turn/start').length,1);assert.equal(bridge.state().workStarting,false);
 });
+
+test('durable update hold survives unsafe reservation and native cancellation until explicit release',async()=>{
+ const gate=createUpdateAdmission();gate.hold();assert.equal((await gate.reserve(async()=>({safe:false,reasons:['live worker']}))).reserved,false);assert.equal(gate.reserved,true);gate.cancel();await assert.rejects(gate.run(async()=>{}),/preparing an update/);await assert.rejects(gate.reserve(async()=>{throw new Error('unknown evidence');}),/unknown evidence/);assert.equal(gate.reserved,true);gate.releaseHold();let ran=false;await gate.run(async()=>{ran=true;});assert.equal(ran,true);
+});
+test('reserved installation always rechecks fresh activity before accepting another reservation',async()=>{
+ const gate=createUpdateAdmission();assert.equal((await gate.reserve(async()=>({safe:true}))).reserved,true);let checked=false;assert.equal((await gate.reserve(async()=>{checked=true;return{safe:false,reasons:['changed']};})).reserved,false);assert.equal(checked,true);assert.equal(gate.reserved,false);
+});

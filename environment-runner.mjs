@@ -6,6 +6,7 @@ import {readFile,writeFile,rename} from 'node:fs/promises';
 import path from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {OwnedProcessTree,snapshotProcesses} from './process-ownership.mjs';
+import {waitOwnedNatural} from './cooperative-process.mjs';
 const configPath=process.argv[2],config=JSON.parse(await readFile(configPath,'utf8')),runDir=path.dirname(configPath);
 const now=()=>new Date().toISOString();
 async function atomic(name,value){const file=path.join(runDir,name),tmp=`${file}.${randomUUID()}.tmp`;await writeFile(tmp,JSON.stringify(value,null,2)+'\n',{mode:0o600});await rename(tmp,file);}
@@ -23,13 +24,14 @@ async function capture(){if(tree){await tree.capture();await atomic('ownership.j
 await capture();
 if(!closed)child.stdin.write('start\n');
 const stop=reason=>{stopReason=stopReason||reason;if(!stopPromise)stopPromise=(async()=>tree?await tree.stop({graceMs:1500}):{confirmed:true,remaining:[]})();return stopPromise;};
-const timeout=setTimeout(()=>void stop('timeout'),config.timeoutMs);
+const timeout=setTimeout(()=>{if(config.cooperative===true){stopReason='cooperative-timeout';void atomic('cooperative-stop.json',{id:config.id,confirmed:false,reason:'Declared stop action exceeded its bound. No force signal was sent.',at:now()});}else void stop('timeout');},config.timeoutMs);
 const timer=setInterval(async()=>{try{await capture();const request=JSON.parse(await readFile(path.join(runDir,'control.json'),'utf8'));if(request.id===config.id&&request.action==='stop')void stop('canceled');}catch{}},100);
 process.on('SIGTERM',()=>void stop('supervisor-stop'));
 await commandDone;
 clearTimeout(timeout);clearInterval(timer);
+if(config.cooperative===true){await tree?.capture();child.stdin.end('release\n');}
 // Reap captured descendants even when the command exits first; foreground hooks cannot
 // leave unowned background services behind when their bounded phase has ended.
-const result=await(stopPromise||tree?.stop({graceMs:1000})||Promise.resolve({confirmed:true,remaining:[]}));
+const result=await(stopPromise||(config.cooperative===true&&tree?waitOwnedNatural(tree,{onBlocked:state=>atomic('cooperative-stop.json',{id:config.id,...state,at:now()})}):tree?.stop({graceMs:1000}))||Promise.resolve({confirmed:true,remaining:[]}));
 await closedPromise;lines.close();
 await atomic('exit.json',{id:config.id,exitCode,error:spawnError,status:exitCode===0&&!spawnError&&!stopReason&&result.confirmed?'succeeded':'failed',timedOut:stopReason==='timeout',canceled:stopReason==='canceled',stopReason,confirmed:result.confirmed,remaining:result.remaining||[],diagnostics,at:now()});

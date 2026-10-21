@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import {snapshotProcesses} from './process-ownership.mjs';
+import { promptSnapshot } from './prompt-settings.mjs';
 
 const LIFECYCLE_ACTIONS = new Set(['stop', 'pause', 'resume', 'start', 'dispose']);
 const LIFECYCLE_STATES = new Set(['pending', 'processing', 'completed', 'failed']);
@@ -28,6 +29,7 @@ function validate(task, expectedId) {
       || typeof task.status !== 'string' || !task.status || !Number.isSafeInteger(task.revision) || task.revision < 1
       || !Number.isFinite(Date.parse(task.createdAt)) || !Number.isFinite(Date.parse(task.updatedAt))
       || (task.lifecycleRequests !== undefined && (!Array.isArray(task.lifecycleRequests) || task.lifecycleRequests.some(request => !request || typeof request.id !== 'string' || !ID.test(request.id) || !LIFECYCLE_ACTIONS.has(request.action) || !LIFECYCLE_STATES.has(request.status) || !Number.isFinite(Date.parse(request.at)) || (request.expectedRunId != null && (typeof request.expectedRunId !== 'string' || !request.expectedRunId.trim())))))
+      || (task.workerPromptSnapshot !== undefined && (!task.workerPromptSnapshot || typeof task.workerPromptSnapshot.text !== 'string' || task.workerPromptSnapshot.version !== promptSnapshot(task.workerPromptSnapshot.text).version))
       || !Array.isArray(task.reports) || !Array.isArray(task.attention)
       || task.reports.some(r => !r || typeof r.reportId !== 'string' || typeof r.runId !== 'string' || !REPORT_KINDS.has(r.kind) || typeof r.message !== 'string')
       || task.attention.some(a => !a || typeof a.id !== 'string')) throw new Error(`Malformed state for ${expectedId}; refusing to replace it`);
@@ -51,13 +53,40 @@ async function ownIdentity(){
   return processIdentity;
 }
 async function lockOwner(lockPath){try{return JSON.parse(await fs.readFile(path.join(lockPath,'owner.json'),'utf8'));}catch(error){if(['ENOENT','ENOTDIR'].includes(error.code))return null;throw error;}}
-async function ownerActive(owner){
+async function ownerActive(owner,{inspect=true}={}){
   if(!owner||!Number.isSafeInteger(owner.pid)||typeof owner.start!=='string'||typeof owner.token!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner.token))return true; // unknown is never permission to steal
   if(owner.pid===process.pid)return owner.start===(await ownIdentity()).start;
   try{process.kill(owner.pid,0);}catch(error){if(error.code==='ESRCH')return false;return true;}
-  try{const actual=(await snapshotProcesses()).get(owner.pid);return Boolean(actual&&actual.start===owner.start&&!actual.state?.includes('Z'));}catch{return true;}
+  if(!inspect)return true; // Fresh observer: retain conservatively without a process-table scan.
+  try{const actual=(await snapshotProcesses()).get(owner.pid);return !actual||actual.start===owner.start&&!actual.state?.includes('Z');}catch{return true;}
 }
-async function lock(dir,name,fn){
+async function candidateObservers(dir,name,ownToken){
+  let unknown=false;
+  for(const entry of await fs.readdir(dir)){
+    if(!entry.startsWith(`${name}.candidate-`)||entry===`${name}.candidate-${ownToken}`)continue;
+    const candidate=path.join(dir,entry);let owner;
+    try{owner=await lockOwner(candidate);}catch(error){if(!(error instanceof SyntaxError))throw error;}
+    if(!owner||entry!==`${name}.candidate-${owner.token}`||!Number.isSafeInteger(owner.pid)||owner.pid<=1||typeof owner.start!=='string'||!owner.start.trim()||typeof owner.token!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(owner.token)){
+      // Publication may still be in flight. Never delete incomplete evidence or
+      // keep admitting writes that would accumulate unreclaimable barriers.
+      if(await fs.stat(candidate).then(()=>true,error=>{if(error.code==='ENOENT')return false;throw error;}))unknown=true;
+      continue;
+    }
+    // Candidate paths are unique to this exact acquisition token. They cannot
+    // be reused by a successor, so verified-dead candidates can be removed.
+    const published=Date.parse(owner.at),elapsed=Date.now()-published;
+    const withinWindow=Number.isFinite(published)&&elapsed>=0&&elapsed<5000;
+    if(!await ownerActive(owner,{inspect:!withinWindow}))await fs.rm(candidate,{recursive:true,force:true});
+    else {
+      // This is an admission barrier, never permission to delete a live or
+      // unknown observer. Suspended observers must not accumulate retirements
+      // beyond their original bounded acquisition window.
+      if(!withinWindow)unknown=true;
+    }
+  }
+  return unknown;
+}
+export async function withStateLock(dir,name,fn){
   await fs.mkdir(dir,{recursive:true,mode:0o700});
   const lockPath=path.join(dir,name),token=randomUUID(),candidate=`${lockPath}.candidate-${token}`,owner={...await ownIdentity(),token,at:now()};
   // Publish a complete, nonempty owner directory atomically. A process killed
@@ -66,6 +95,10 @@ async function lock(dir,name,fn){
   const deadline=Date.now()+5000;let acquired=false;
   try{
     while(!acquired){
+      if(await candidateObservers(dir,name,token)){
+        if(Date.now()>=deadline)throw new Error(`State lock observer ownership unknown or acquisition overdue: ${name}; inspect retained candidate evidence before retrying`);
+        await pause(25);continue;
+      }
       try{await fs.rename(candidate,lockPath);acquired=true;}
       catch(error){
         if(!['EEXIST','ENOTEMPTY','ENOTDIR'].includes(error.code))throw error;
@@ -85,7 +118,18 @@ async function lock(dir,name,fn){
     if(acquired){const current=await lockOwner(lockPath);if(current?.token!==token)throw new Error(`State lock ownership changed: ${name}; no other lock was removed`);
       // Move the entire lock away before deleting it: removing owner.json in
       // place would briefly create an empty directory another writer can replace.
-      const released=`${lockPath}.released-${token}`;await fs.rename(lockPath,released);await fs.rm(released,{recursive:true});
+      // Recovery and ordinary release retire into the SAME token-specific
+      // barrier. A delayed observer of this owner must never rename its successor.
+      await fs.rename(lockPath,`${lockPath}.stale-${token}`);
+      // Each observer publishes its candidate before reading an owner and keeps
+      // it until acquisition/failure. Capture retired barriers BEFORE checking
+      // candidates: when none remain, nobody can still act on those old owners.
+      // New candidates cannot observe an owner already retired before this scan.
+      // Unknown candidates conservatively retain barriers and block future admission;
+      // verified-dead candidates are reclaimed before acquisition, never by age.
+      const retired=(await fs.readdir(dir)).filter(entry=>entry.startsWith(`${name}.stale-`));
+      const observing=(await fs.readdir(dir)).some(entry=>entry.startsWith(`${name}.candidate-`));
+      if(!observing)for(const entry of retired)await fs.rm(path.join(dir,entry),{recursive:true,force:true});
     }else await fs.rm(candidate,{recursive:true,force:true});
   }
 }
@@ -115,24 +159,25 @@ export async function loadTasks(dir) { return loadUnlocked(dir); }
 export async function createTask(dir, { requestId, ticket, brief, projectId = null, repositoryId = null }) {
   for (const [name, value] of Object.entries({ projectId, repositoryId })) if (value !== null && (typeof value !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(value))) throw new Error(`Invalid ${name}`);
   identifier(requestId); text(ticket, 'ticket', 120); text(brief, 'brief');
-  return lock(dir, '.schedule.lock', async () => {
+  return withStateLock(dir, '.schedule.lock', async () => {
     const tasks = await loadUnlocked(dir);
     const existing = tasks.find(task => task.id === requestId);
     if (existing) {
       if (existing.ticket !== ticket || existing.brief !== brief || (existing.projectId || null) !== projectId || (existing.repositoryId || null) !== repositoryId) throw new Error('Request ID already exists with different ticket or brief');
       return existing;
     }
-    return lock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
+    return withStateLock(dir, `.${requestId}.lock`, () => save(dir, { id: requestId, ticket, brief, projectId, repositoryId, status: 'queued', revision: 1, createdAt: now(), updatedAt: now(), reports: [], attention: [], lifecycleRequests: [], answer: null }));
   });
 }
 export async function updateTask(dir, id, fn) {
   identifier(id);
-  return lock(dir, '.schedule.lock', () => lock(dir, `.${id}.lock`, async () => {
+  return withStateLock(dir, '.schedule.lock', () => withStateLock(dir, `.${id}.lock`, async () => {
     const task = await readUnlocked(dir, id);
-    const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision };
+    const identity = { id: task.id, ticket: task.ticket, brief: task.brief, projectId: task.projectId, repositoryId: task.repositoryId, createdAt: task.createdAt, revision: task.revision, workerPromptSnapshot: task.workerPromptSnapshot ? JSON.stringify(task.workerPromptSnapshot) : null };
     const returned = await fn(task);
     const next = returned === undefined ? task : returned;
     if (!next || next.id !== identity.id || next.ticket !== identity.ticket || next.brief !== identity.brief || next.projectId !== identity.projectId || next.repositoryId !== identity.repositoryId || next.createdAt !== identity.createdAt) throw new Error('Task identity is immutable');
+    if (identity.workerPromptSnapshot && JSON.stringify(next.workerPromptSnapshot) !== identity.workerPromptSnapshot) throw new Error('Worker prompt snapshot is immutable');
     if (JSON.stringify(next) === JSON.stringify(await readUnlocked(dir, id))) return next;
     next.revision = identity.revision + 1; next.updatedAt = now();
     validate(next, id);
@@ -180,22 +225,23 @@ export async function acknowledgeAttention(dir, { taskId, attentionId }) {
 
 // Requests are durable intent, not evidence that a process has stopped or restarted.
 // The controller alone performs lifecycle transitions and marks each request handled.
-export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId }) {
+export async function requestWorkerAction(dir, { taskId, actionId, action, expectedRunId, cooperative = false }) {
   identifier(taskId); identifier(actionId, 'action ID');
   if (!LIFECYCLE_ACTIONS.has(action)) throw new Error('Invalid worker action');
+  if (typeof cooperative !== 'boolean' || cooperative && action !== 'pause') throw new Error('Cooperative interruption is supported only for pause requests');
   if (expectedRunId !== undefined && expectedRunId !== null) text(expectedRunId, 'expected run ID', 160);
   return updateTask(dir, taskId, task => {
     const requests = task.lifecycleRequests ||= [];
     const existing = requests.find(request => request.id === actionId);
     if (existing) {
       // An exact retry remains valid even after the controller advances to a new run.
-      if (existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
+      if (Boolean(existing.cooperative) !== cooperative || existing.action !== action || (expectedRunId !== undefined && existing.expectedRunId !== expectedRunId)) throw new Error('Action ID reused with changed content');
       return;
     }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId) throw new Error('Stale worker run for lifecycle action');
     if (task.status === 'disposed') throw new Error('Worker has been disposed');
     if (requests.some(request => ['pending', 'processing'].includes(request.status))) throw new Error('Worker already has a pending lifecycle action');
     if (requests.length >= 1000) throw new Error('Worker lifecycle request limit reached');
-    requests.push({ id: actionId, action, expectedRunId: task.runId || null, status: 'pending', at: now() });
+    requests.push({ id: actionId, action, ...(cooperative ? { cooperative: true } : {}), expectedRunId: task.runId || null, status: 'pending', at: now() });
   });
 }

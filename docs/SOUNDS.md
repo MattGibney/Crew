@@ -16,11 +16,11 @@ Call cues deduplicate per call and actual input transition. Attention keys inclu
 
 ## Playback ownership and limits
 
-In macOS Crew, the native owner plays attention independently of the disposable manager window. The browser renderer defers attention playback to that owner. The native instance retains a private seen-event ledger alongside its desktop state; it invokes the system audio player with a bundled original WAV and never opens a microphone or model session for sound. A playback or ledger failure is reported as unavailable instead of repeatedly retrying old notifications.
+In macOS Crew, each project host plays attention independently of the disposable manager window, including unselected projects. The browser renderer defers attention playback to that owner. Each project retains its own private seen-event ledger alongside its desktop state; identical request IDs in different projects remain independent. The host invokes the system audio player with a bundled original WAV and never opens a microphone or model session for sound. A playback or ledger failure is reported as unavailable instead of repeatedly retrying old notifications.
 
 Standalone browser sessions play attention through the renderer and retain seen identities in local storage for that loopback instance. Browser autoplay restrictions can block sound until interaction. Crew displays a sound-unavailable notice and enables future cues after a click or keypress; it never queues stale sounds to play later. If storage is unavailable, deduplication remains in memory for the current window. Visual requests remain available regardless of playback, system volume or output device. Native and browser playback are separate from the manager voice player's volume/mute controls.
 
-The existing single manager SSE consumer remains unchanged. Sound neither starts a call nor captures input, creates a turn, answers a question or relays a result. Closing the window releases call audio resources while the native attention owner and independent work can continue.
+The existing single manager SSE consumer remains unchanged. Sound neither starts a call nor captures input, creates a turn, answers a question or relays a result. Closing the window or switching projects releases call audio resources while project attention owners and independent work can continue. Attention behavior lives in the editable default manager instructions and the explicit tool schema; custom full-replacement instructions remain authoritative. Saved manager instruction changes follow the existing explicit Start/Restart activation rules. Manager stop and coordinated updates retain their current lifecycle and admission guards.
 
 ## Validation
 

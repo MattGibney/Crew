@@ -13,15 +13,21 @@ const peers = new Set(), mediaPeers = new Set();
 const now = new Date().toISOString();
 const task = (id, status, extra = {}) => ({ id: `fixture-task-${id}`, runId: `fixture-run-${id}`, ticket: `AI-${140 + id}`, brief: `Review fixture area ${id}`, status, createdAt: now, updatedAt: now, progress: `Examining area ${id} with a bounded read-only check.`, repositoryId: 'fixture', projectId: 'crew-acceptance-fixture', worktree: `/tmp/crew-fixture/w${id}`, attention: [], ...extra });
 let orchestration = { maxConcurrent: 6, tasks: [
-  task(1, 'running', { harnessStarted: true, execution: { runId: 'fixture-run-1', observedAt: now, endedAt: null, startedAt: new Date(Date.now() - 125000).toISOString(), live: true }, environment: { status: 'ready', kind: 'project-execution' } }),
+  task(1, 'running', { workerPromptSnapshot: { text: 'Original fixture worker instructions. Preserve this immutable snapshot.', version: 'fixture-original-v1' }, harnessStarted: true, execution: { runId: 'fixture-run-1', observedAt: now, endedAt: null, startedAt: new Date(Date.now() - 125000).toISOString(), live: true }, environment: { status: 'ready', kind: 'project-execution' } }),
   task(2, 'awaiting_answer', { question: { id: 'question-2', runId: 'fixture-run-2', message: 'Should the audit include archived records?' }, attention: [{ id: 'question-2', kind: 'question', message: 'Should the audit include archived records?' }] }),
   task(3, 'paused'), task(4, 'queued'), task(5, 'launching'), task(6, 'running'),
   task(7, 'completed', { result: { message: 'Read-only fixture verification passed.' }, attention: [{ id: 'result-7', kind: 'completion', message: 'Read-only fixture verification passed.' }] }),
   task(8, 'failed', { failure: 'Fixture environment readiness check failed.' }), task(9, 'stopped'), task(10, 'disposed'),
 ] };
-let work = { threadId: 'fixture-manager', status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
+let work = { threadId: 'fixture-manager', managerConnected: true, status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
+let managerLifecycle = { state: 'running' };
+const fixturePrompt = 'You are the Crew fixture manager. Help the user plan work and report verified progress.';
+let settings = { projectId: 'crew-acceptance-fixture', projectName: 'Crew acceptance fixture', manager: { saved: { text: fixturePrompt, version: 'manager-1' }, activeVersion: 'manager-1', pendingRestart: false, defaultText: fixturePrompt }, worker: { saved: { text: 'Complete the agreed fixture task and report evidence.', version: 'worker-1' }, defaultText: 'Complete the agreed fixture task and report evidence.' } };
+let promptRevision = 1, promptSaveDelay = 0;
 let nativeAttentionSound = false;
 let proof = { calls: [], media: null, setup: [] };
+const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
+const settingsView = () => ({ ...settings, managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const server = http.createServer(async (req, res) => {
@@ -32,12 +38,14 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' }); res.write(': connected\n\n');
       const set = url.pathname === '/events' ? peers : mediaPeers; set.add(res); req.on('close', () => set.delete(res)); return;
     }
-    if (req.method === 'POST') {
+    if (url.pathname === '/api/settings' && req.method === 'GET') return send(settingsView());
+    if (req.method === 'POST' || req.method === 'PUT') {
       let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 100000) throw Error('Too large'); }
       const body = JSON.parse(raw || '{}');
       if (url.pathname === '/__telemetry') { proof.media = body; return send({ ok: true }); }
       if (url.pathname === '/__setup-proof') { proof.setup.push(body); return send({ ok: true }); }
       if (url.pathname === '/__control') {
+        if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
         if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
         if (body.work) { work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
         if (body.orchestration) { orchestration = body.orchestration; emit({ type: 'orchestration-state', state: orchestration }); }
@@ -48,6 +56,22 @@ const server = http.createServer(async (req, res) => {
       }
       const name = url.pathname.replace('/api/', ''); proof.calls.push({ name, body });
       if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
+      if (name === 'settings/prompts') {
+        if (promptSaveDelay) await new Promise(resolve => setTimeout(resolve, promptSaveDelay));
+        const item = settings[body.role];
+        if (!item || typeof body.text !== 'string' || !body.text.trim()) return send({ error: 'Instructions must contain text.' }, 400);
+        if (body.expectedVersion !== item.saved.version) return send({ error: 'Saved instructions changed. Your draft is kept.' }, 409);
+        item.saved = { text: body.text, version: `${body.role}-${++promptRevision}` };
+        if (body.role === 'manager') item.pendingRestart = item.activeVersion !== item.saved.version;
+        return send(settingsView());
+      }
+      if (name === 'manager/lifecycle') {
+        managerLifecycle = { state: body.action === 'stop' ? 'stopped' : 'running' };
+        if (body.action === 'restart') { settings.manager.activeVersion = settings.manager.saved.version; settings.manager.pendingRestart = false; }
+        work = { ...work, activeTurnId: null, status: 'idle' };
+        emit({ type: 'manager-lifecycle', state: lifecycleView() }); emit({ type: 'work-state', state: work });
+        return send({ managerLifecycle: lifecycleView(), state: work });
+      }
       if (name === 'config') return send({ nativeAttentionSound, project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
       if (name === 'prepare') return send({ plan: 'synthetic fixture', state: work });
       if (name === 'state') return send(work);

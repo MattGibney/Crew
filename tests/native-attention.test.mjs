@@ -47,6 +47,24 @@ test('only explicit human input sounds; malformed input, results and self-resolv
  await owner.idle(); assert.equal(f.calls.length, 1); await owner.dispose();
 });
 
+test('project owners isolate identical event identities and retain background deduplication across reopen', async t => {
+ const first = await fixture(t), second = await fixture(t);
+ const selected = first.create(), background = second.create();
+ await Promise.all([selected.ready, background.ready]);
+ selected.update(approval('same-request')); background.update(approval('same-request'));
+ await Promise.all([selected.idle(), background.idle()]);
+ assert.equal(first.calls.length, 1); assert.equal(second.calls.length, 1);
+ // Closing or switching the renderer does not replace a project's native owner.
+ background.update(approval('same-request')); await background.idle();
+ assert.equal(second.calls.length, 1);
+ await Promise.all([selected.dispose(), background.dispose()]);
+ const reopened = second.create(); await reopened.ready;
+ reopened.update(approval('same-request')); await reopened.idle();
+ assert.equal(second.calls.length, 1);
+ reopened.update(approval('new-background-request')); await reopened.idle();
+ assert.equal(second.calls.length, 2); await reopened.dispose();
+});
+
 test('corrupt ledger and failed playback fail closed with observable availability', async t => {
  const f = await fixture(t); await writeFile(f.ledgerPath, 'not json'); const owner = f.create();
  assert.equal(await owner.ready, false); owner.update(approval('request-one')); await owner.idle(); assert.equal(f.calls.length, 0); assert.equal(owner.getStatus().available, false); await owner.dispose();

@@ -5,6 +5,7 @@ import { realpath, lstat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { posix, resolve, join } from 'node:path';
 import { createHash } from 'node:crypto';
+import { discoverToolRequirements } from './managed-toolchain.mjs';
 
 const run = promisify(execFile);
 const FILE_LIMIT = 128 * 1024;
@@ -276,5 +277,12 @@ export async function discoverProjectExecutionPlan({ path, ref, environmentPath,
       queue.push(relative);
     }
   }
+  const toolSources = [...plan.instructions];
+  for (const file of ['package.json', '.nvmrc', '.node-version', '.tool-versions']) {
+    const result = await read(file, 'toolchain');
+    if (result) toolSources.push({path:file, content:result.content});
+  }
+  try { plan.toolchain = discoverToolRequirements({sources:toolSources}); }
+  catch (error) { issue('toolchain', error.message); plan.toolchainError = error.message; }
   return plan;
 }

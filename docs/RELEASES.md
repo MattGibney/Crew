@@ -1,3 +1,7 @@
+# Delivery policy
+
+Develop features/fixes on codex/ branches and open pull requests targeting main. Review and merge are separate from release publication; agents must not automatically merge or publish a release for each small change. The user chooses the set of changes and explicitly authorizes the intended grouped release. Existing releases and main history remain intact. The workflow stays manual-dispatch only; creating a branch, PR, merge or tag must not automatically publish.
+
 # Building and publishing Crew
 
 Crew releases are deliberately initiated through **Build or release Crew for macOS** in GitHub Actions. Normal pushes, pull requests and tag creation never publish installers.
@@ -29,7 +33,7 @@ Local equivalent: `npm ci && npm run desktop:build:mac`. Output is `dist/desktop
 
 ## Signed production release
 
-1. Commit the intended source and matching stable `package.json`/lockfile version to `main`. Run the required checks.
+1. After the user explicitly chooses the grouped release, review/merge its feature PRs through the agreed workflow. Prepare the matching stable `package.json`/lockfile version through a PR targeting `main`, then run the required checks. Do not push implementation directly to `main`.
 2. Create and push the matching `vMAJOR.MINOR.PATCH` tag deliberately. Tags do not trigger publishing.
 3. Run the workflow from its default branch, selecting that exact tag as `ref`, `mode: release`, and `publish: true`.
 4. The workflow validates exact version/tag identity and main ancestry, public repository status and required credentials. It builds with hardened runtime, Developer ID signing and notarization, then checks signatures, team, stapled ticket, Gatekeeper, DMG integrity and ZIP metadata.
@@ -51,3 +55,21 @@ Primary references: [electron-builder v26 updates](https://www.electron.build/v2
 The public [0.9.0](https://github.com/MattGibney/crew/releases/tag/v0.9.0) and [0.9.1](https://github.com/MattGibney/crew/releases/tag/v0.9.1) releases completed signing, notarization and publication. The [0.9.1 workflow](https://github.com/MattGibney/crew/actions/runs/39559911796) passed 200 tests and all production verification gates. Independent local verification accepted the downloaded/installed applications as Notarized Developer ID with bundle identifier `local.voice.manager`.
 
 An isolated signed 0.9.0 installation fetched 0.9.1 from the production feed, downloaded it through electron-updater and completed a native install/relaunch after explicit Restart. It retained the same configured project and byte-identical configuration, editable prompts and saved-chat files. The upgraded application again passed signature, stapled-ticket and Gatekeeper checks. No physical microphone or business worker was started; the test copy was stopped afterward and the existing user installation was preserved.
+
+## Grouped release 0.10.0
+
+The user explicitly selected PRs 4–7 and version 0.10.0 for one grouped signed release. Their complete histories are retained through the integration branch and reviewable integration PR; no squash or history rewrite is required. Combined acceptance covers shared toolchains, prompt/manager lifecycle, multi-project capacity and all-project pause/update recovery. Publication is authorized for this named release only. Later features continue through PRs and wait for another explicit release selection.
+
+### Unpublished 0.10.0 attempt provenance
+
+The first hosted attempt, [39582116047](https://github.com/MattGibney/Crew/actions/runs/39582116047), tested tag v0.10.0 at d03f7baf10188978141e3b792a9aaf07e0fc1ec1. It stopped before signing, artifact upload or publication: three HTTP tests lacked clean-runner renderer assets and a concurrent-process test exposed a stale lock-owner recovery race. GitHub reported no release and zero artifacts. Keep this run and SHA as failed-attempt evidence.
+
+Within the user's explicitly authorized exact 0.10.0 release, the failed unpublished tag may be corrected only after its release-gate fix PR merges and validation passes. Record its replacement SHA and retry run. Verify no version release/assets/feed or competing publication exists immediately before correcting it. This is not permission to rewrite a published release or unrelated tag/history.
+
+### 0.10.0 production acceptance
+
+[Signed workflow 39584823335](https://github.com/MattGibney/Crew/actions/runs/39584823335) published [0.10.0](https://github.com/MattGibney/Crew/releases/tag/v0.10.0) from 43ec70009a5c1668c4d6951d65a586a3adc7c602. All 397 hosted tests and production signing/notarization/verification gates passed. Six public assets, complete download SHA256 checks, feed ZIP SHA512, Developer ID hardened signature, stapled ticket, Gatekeeper and DMG integrity were independently verified. The failed unpublished tag was corrected from d03f7baf10188978141e3b792a9aaf07e0fc1ec1 only after PR11, full regression and independent concurrency review; no published version was rewritten.
+
+An isolated genuine signed 0.9.3 installation fetched the production update and completed native replacement/relaunch on retry. The same configured project, port and saved native chat returned Ready; configuration, editable manager/worker instructions and saved-chat files retained identical bytes. Forty-seven packaged runtime modules matched corrected source. No worker, manager turn or physical voice was started. The test copy quit normally with independently confirmed backend/process/listener shutdown.
+
+The first cold attempt hit the older 0.9.3 install deadline before native quit. Its recovery canceled the custom-project handoff; a later native quit confirmation finished replacement but opened the default project. That instance was stopped normally with zero workers and microphone off. A fresh unmodified baseline using ordinary macOS LaunchServices then completed the full native upgrade with correct project recovery. Preserve this timeout/retry boundary: payload signature validity alone is not proof that every older installer preserves custom launch identity. The 0.10.0 multi-project pause/recovery path has real controller/process coverage; physical audio and hands-on acceptance remain with the user.

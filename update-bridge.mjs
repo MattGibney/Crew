@@ -1,13 +1,13 @@
 // AI-015: bounded inherited process IPC; never expose native/Node access to a renderer.
 import {randomUUID} from 'node:crypto';
-export const updateActions=new Set(['status','check','download','restart']);
+export const updateActions=new Set(['status','check','download','restart','pause-update','cancel-pause-update','resume-paused-work','return-to-work']);
 export function unavailableUpdateStatus(version){return {phase:'unavailable',currentVersion:version,availableVersion:null,downloadPercent:null,error:null,installBlocked:true,reasons:['Open the installed desktop app to manage updates.'],supported:false,releaseUrl:'https://github.com/MattGibney/crew/releases/latest'};}
 export function createUpdateBridge({transport=process,version,onStatus=()=>{},timeoutMs=30000}={}){
  let status=unavailableUpdateStatus(version),closed=false;
  const pending=new Map();
  const accept=value=>{
   if(!value||typeof value.phase!=='string'||typeof value.supported!=='boolean'||typeof value.currentVersion!=='string'||!Array.isArray(value.reasons))throw new Error('Desktop update status is unavailable.');
-  status={phase:value.phase.slice(0,40),currentVersion:value.currentVersion.slice(0,60),availableVersion:typeof value.availableVersion==='string'?value.availableVersion.slice(0,60):null,downloadPercent:Number.isFinite(value.downloadPercent)?Math.max(0,Math.min(100,value.downloadPercent)):null,error:typeof value.error==='string'?value.error.slice(0,1000):null,installBlocked:value.installBlocked!==false,reasons:value.reasons.filter(item=>typeof item==='string').slice(0,12).map(item=>item.slice(0,600)),notices:Array.isArray(value.notices)?value.notices.filter(item=>typeof item==='string').slice(0,12).map(item=>item.slice(0,600)):[],supported:value.supported,releaseUrl:'https://github.com/MattGibney/crew/releases/latest'};onStatus(status);return status;
+  status={phase:value.phase.slice(0,40),currentVersion:value.currentVersion.slice(0,60),availableVersion:typeof value.availableVersion==='string'?value.availableVersion.slice(0,60):null,downloadPercent:Number.isFinite(value.downloadPercent)?Math.max(0,Math.min(100,value.downloadPercent)):null,error:typeof value.error==='string'?value.error.slice(0,1000):null,installBlocked:value.installBlocked!==false,reasons:value.reasons.filter(item=>typeof item==='string').slice(0,12).map(item=>item.slice(0,600)),notices:Array.isArray(value.notices)?value.notices.filter(item=>typeof item==='string').slice(0,12).map(item=>item.slice(0,600)):[],workspacePlan:value.workspacePlan&&typeof value.workspacePlan==='object'&&Buffer.byteLength(JSON.stringify(value.workspacePlan))<=131072?structuredClone(value.workspacePlan):null,supported:value.supported,releaseUrl:'https://github.com/MattGibney/crew/releases/latest'};onStatus(status);return status;
  };
  const listener=message=>{
   if(!message||typeof message!=='object')return;

@@ -15,7 +15,8 @@ export function updateActivity({work,view,setupBusy=false}={}){
  else for(const task of view.tasks){
   const label=`Worker ${String(task.id||'with unavailable identity').slice(0,100)}`;
   const evidence=task.updateEvidence;
-  if(!terminalTasks.has(task.status))reasons.push(`${label} is ${task.status||'unverified'}. Finish or explicitly stop it before updating.`);
+  const retainedWaiting=['awaiting_answer','blocked'].includes(task.status)&&evidence&&['absent','stopped'].includes(evidence.worker)&&['absent','stopped'].includes(evidence.runtime)&&Array.isArray(evidence.hooks)&&evidence.hooks.every(hook=>hook.state==='stopped');
+  if(!terminalTasks.has(task.status)&&!retainedWaiting)reasons.push(`${label} is ${task.status||'unverified'}. Finish or explicitly stop it before updating.`);
   if(evidence){
    if(evidence.worker==='live')reasons.push(`${label} has an owned process still running. Stop that worker before updating.`);
    else if(!['absent','stopped'].includes(evidence.worker))reasons.push(`${label} shutdown is unverified. Review its retained execution records; do not remove its worktree to enable updates.`);

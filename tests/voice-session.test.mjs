@@ -136,3 +136,8 @@ test('real hook stays quiet for denied and canceled unmute and cancellation befo
  const p=await h.connect();await h.voice.disconnect();p.emit();await h.flush();
  assert.deepEqual(h.sounds,['connected','ended']);
 });
+
+test('update plan immediately releases existing media and invalidates pending permission without reconnecting',async t=>{
+ const h=harness();t.after(()=>h.destroy());const peer=await connected(h),mic=peer.sender.track;h.voice.handleEvent({type:'update-plan-state',plan:{phase:'draining'}});await h.flush();assert.equal(peer.closed,true);assert.equal(mic.readyState,'ended');assert.equal(h.voice.allocated,false);assert.equal(h.voice.transmitting,false);assert.match(h.voice.status,/update/);assert.equal(h.captures.length,1);
+ const permission=deferred(),late=stream(),pending=harness({acquire:()=>permission.promise});t.after(()=>pending.destroy());const old=await connected(pending);pending.voice.handleEvent({type:'update-plan-state',plan:{phase:'draining'}});await pending.flush();permission.resolve(late);await pending.flush();assert.equal(late.audio.readyState,'ended');assert.equal(old.closed,true);assert.equal(pending.voice.allocated,false);assert.equal(pending.captures.length,1);
+});
