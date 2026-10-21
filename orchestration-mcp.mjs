@@ -2,8 +2,9 @@
 import readline from 'node:readline';
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction, requestWorkerModel, updateWorkNotes } from './orchestration-store.mjs';
+import { createTask, readTask, loadTasks, reportTask, answerQuestion, acknowledgeAttention, requestWorkerAction, updateWorkNotes } from './orchestration-store.mjs';
 import { listWorkerRequests, decideWorkerRequest } from './worker-approvals.mjs';
+import { requestWorkerModel } from './orchestration-store.mjs';
 
 const [stateDirArg, role, taskId, runId] = process.argv.slice(2);
 if (!stateDirArg || !['manager', 'worker'].includes(role) || (role === 'worker' && (!taskId || !runId))) {
