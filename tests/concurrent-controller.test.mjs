@@ -8,16 +8,16 @@ import{createTask,readTask,requestWorkerAction,answerQuestion,updateTask,reportT
 const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,description='condition'){const deadline=Date.now()+15000;while(Date.now()<deadline){const value=await fn();if(value)return value;await sleep(50);}throw new Error(`Timed out: ${description}`);}
-async function fixture(t,{environment={},mode='repository',holdResume=false,stateName='state'}={}){
+async function fixture(t,{environment={},mode='repository',holdResume=false,stateName='state',globalCapacity=null}={}){
  const dir=await mkdtemp(path.join(tmpdir(),'crew-concurrent-')),stateDir=path.join(dir,stateName),repo=path.join(dir,'repo');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'fixture');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture']);
  const binary=path.join(dir,'fake-codex');
  await writeFile(binary,`#!${process.execPath}\nimport {spawn} from 'node:child_process';\nimport {readFile,appendFile,writeFile,access} from 'node:fs/promises';\nimport {reportTask} from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration-store.mjs')).href)};\nconst args=process.argv.slice(2);const m=JSON.parse(args.find(a=>a.startsWith('mcp_servers.local_orchestration.args=')).split('=').slice(1).join('='));const [,state,,id,runId]=m;const task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8'));const resume=args.includes('resume');const thread=resume?args[args.indexOf('resume')+1]:'thread-'+id;if(resume&&${holdResume}){await writeFile(state+'/resume-waiting','held');while(!await access(state+'/resume-release').then(()=>true).catch(()=>false))await new Promise(r=>setTimeout(r,20));}console.log(JSON.stringify({type:'thread.started',thread_id:thread}));await appendFile(state+'/launches.jsonl',JSON.stringify({id,runId,pid:process.pid,thread,resume,at:Date.now()})+'\\n');await reportTask(state,id,runId,{reportId:'progress',kind:'progress',message:'Actual worker process running'});if(task.brief.includes('question')&&!resume){await reportTask(state,id,runId,{reportId:'question',kind:'question',message:'Choose an expected total'});console.log(JSON.stringify({type:'turn.completed'}));process.exit(0);}setInterval(()=>{},1000);\n`,{mode:0o700});
  const project={id:'fixture-project',name:'Fixture',mode,readiness:{ready:true},repositories:[{id:'fixture-repo',path:repo,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs:60000,maxConcurrent:2,environment}};
- let controller=await createController({stateDir,sourceDir,executable:binary,project});
+ let controller=await createController({stateDir,sourceDir,executable:binary,project,globalCapacity});
  const created=[];const add=async(id,brief='long running')=>{created.push(id);await createTask(stateDir,{requestId:id,ticket:'AI-011',brief,projectId:project.id,repositoryId:'fixture-repo'});await controller.tick();};
  const action=async(id,action)=>{await requestWorkerAction(stateDir,{taskId:id,actionId:`action-${action}-${Date.now()}-${id}`,action});await controller.tick();};
  t.after(async()=>{for(const id of created){const task=await readTask(stateDir,id).catch(()=>null);if(task&&!['disposed','completed','failed','stopped','paused'].includes(task.status)){await action(id,'stop').catch(()=>{});}}await wait(async()=>{const tasks=await Promise.all(created.map(id=>readTask(stateDir,id)));return tasks.every(task=>!task.execution?.live);},'cleanup worker exits').catch(()=>{});await controller.stop();const meta=await readFile(path.join(stateDir,'fixture.json'),'utf8').then(JSON.parse).catch(()=>null);if(meta?.base?.includes('crew-fixture-'))await rm(meta.base,{recursive:true,force:true});await rm(dir,{recursive:true,force:true});});
- return{dir,stateDir,repo,project,binary,add,action,get controller(){return controller;},restart:async()=>{await controller.stop();controller=await createController({stateDir,sourceDir,executable:binary,project});}};
+ return{dir,stateDir,repo,project,binary,add,action,get controller(){return controller;},restart:async()=>{await controller.stop();controller=await createController({stateDir,sourceDir,executable:binary,project,globalCapacity});}};
 }
 test('two real harnesses/worktrees run concurrently; question yields capacity and resumes same chat while another runs',async t=>{
  const f=await fixture(t);await f.add('worker-question','ask question');await f.add('worker-running');
@@ -59,8 +59,9 @@ test('canceled preparation restarts retained worktree; a vanished Codex binary r
 });
 test('hook supervisor survives controller SIGKILL and disposal waits for its confirmed bounded stop',async t=>{
  const f=await fixture(t,{environment:{bootstrap:{command:process.execPath,args:['-e','setTimeout(()=>{},10000)'],timeoutMs:2000}}});await f.controller.stop();await f.add('worker-crashhook');
- const script=`import{createController}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'controller.mjs')).href)};await createController(${JSON.stringify({stateDir:f.stateDir,sourceDir,executable:f.binary,project:f.project})});setInterval(()=>{},1000);`;
+ const script=`import{createController}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'controller.mjs')).href)};await createController(${JSON.stringify({stateDir:f.stateDir,sourceDir,executable:f.binary,project:f.project})});await(await import('node:fs/promises')).writeFile(${JSON.stringify(path.join(f.stateDir,'controller-ready'))},'ready');setInterval(()=>{},1000);`;
  const child=spawn(process.execPath,['--input-type=module','-e',script],{stdio:'ignore'});child.on('error',()=>{});const exited=new Promise(r=>child.once('exit',r));t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
+ await wait(async()=>readFile(path.join(f.stateDir,'controller-ready'),'utf8').catch(()=>null),'fresh child controller');await requestWorkerAction(f.stateDir,{taskId:'worker-crashhook',actionId:'explicit-crashhook-start',action:'start'});
  const before=await wait(async()=>{const n=await readTask(f.stateDir,'worker-crashhook');return n.environment?.hooks[0]?.supervisorPid?n:null;},'durable hook supervisor');const evidence=before.environment.hooks[0];await wait(async()=>readFile(path.join(evidence.runDir,'started.json'),'utf8').then(JSON.parse).catch(()=>null),'owned hook started');child.kill('SIGKILL');await exited;await f.restart();await f.action(before.id,'stop');await wait(async()=>(await readTask(f.stateDir,before.id)).status==='stopped','recovered hook stop confirmed');const exit=JSON.parse(await readFile(path.join(evidence.runDir,'exit.json'),'utf8'));assert.equal(exit.confirmed,true);assert.ok(exit.canceled||exit.timedOut);
  await f.action(before.id,'dispose');await wait(async()=>(await readTask(f.stateDir,before.id)).status==='disposed','safe disposal after hook confirmation');
 });
@@ -97,4 +98,46 @@ test('stopped questions require their own answer and a reused report ID never in
  await answerQuestion(f.stateDir,{taskId:first.id,questionId:first.question.id,answer:'zero'});await f.controller.tick();const resumed=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.runId!==first.runId&&n.execution?.runId===n.runId&&n.execution.live&&n.reports.some(r=>r.runId===n.runId&&r.kind==='progress')?n:null;},'answered stopped worker resumes');
  await reportTask(f.stateDir,first.id,resumed.runId,{reportId:first.question.id,kind:'question',message:'A new decision using the same report ID'});const next=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.question?.runId===resumed.runId&&n.status==='awaiting_answer'?n:null;},'new current-run question');assert.equal(next.answer,null);
  await f.action(first.id,'stop');await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.status==='stopped'&&n.lifecycleRequests.at(-1).status==='completed';},'second retained question stopped');await f.action(first.id,'resume');const stillRefused=await wait(async()=>{const n=await readTask(f.stateDir,first.id);return n.lifecycleRequests.at(-1).status==='failed'?n:null;},'old same-ID answer cannot bypass new question');assert.match(stillRefused.lifecycleRequests.at(-1).error,/Answer this worker/);
+});
+
+
+test('separate project controllers share one capacity ledger; restart preserves workers and holds queued backlog for explicit start', async t => {
+ const capacityDir=await mkdtemp(path.join(tmpdir(),'crew-global-capacity-'));
+ t.after(()=>rm(capacityDir,{recursive:true,force:true}));
+ const {configureGlobalCapacity}=await import('../global-capacity.mjs');
+ await configureGlobalCapacity({dir:capacityDir,limit:1});
+ const a=await fixture(t,{globalCapacity:{dir:capacityDir}}), b=await fixture(t,{globalCapacity:{dir:capacityDir}});
+ await Promise.all([a.add('project-a-worker'),b.add('project-b-worker')]);
+ const first=await wait(async()=>{const tasks=await Promise.all([readTask(a.stateDir,'project-a-worker'),readTask(b.stateDir,'project-b-worker')]);return tasks.some(n=>n.execution?.live)?tasks:null;},'one global worker');
+ await sleep(500);
+ const aLive=(await readTask(a.stateDir,'project-a-worker')).execution?.live;
+ const active=aLive?a:b,waiting=aLive?b:a,activeId=aLive?'project-a-worker':'project-b-worker',waitingId=aLive?'project-b-worker':'project-a-worker';
+ assert.equal((await readTask(waiting.stateDir,waitingId)).status,'queued');
+ assert.match((await readTask(waiting.stateDir,waitingId)).capacityWait,/shared worker capacity/);
+ const original=await readTask(active.stateDir,activeId);await active.restart();
+ assert.equal((await readTask(active.stateDir,activeId)).runId,original.runId);
+ await waiting.restart();await active.action(activeId,'stop');
+ await wait(async()=>(await readTask(active.stateDir,activeId)).status==='stopped','owned stop releases global slot');
+ await sleep(500);assert.equal((await readTask(waiting.stateDir,waitingId)).status,'queued','reopen cannot execute old backlog');
+ await configureGlobalCapacity({dir:capacityDir,admissionPaused:true});await waiting.action(waitingId,'start');await sleep(400);assert.equal((await readTask(waiting.stateDir,waitingId)).status,'queued');assert.match((await readTask(waiting.stateDir,waitingId)).capacityWait,/prepares an update/);await waiting.restart();await waiting.action(waitingId,'start');await sleep(400);assert.equal((await readTask(waiting.stateDir,waitingId)).status,'queued','global update pause survives controller restart');await configureGlobalCapacity({dir:capacityDir,admissionPaused:false});await wait(async()=>(await readTask(waiting.stateDir,waitingId)).execution?.live,'explicit start admits waiting workspace').catch(async error=>{throw new Error(error.message+' '+JSON.stringify(await waiting.controller.view())+' ledger '+await readFile(path.join(capacityDir,'capacity.json'),'utf8'));});
+ assert.equal((await readTask(active.stateDir,activeId)).runId,original.runId);
+});
+
+
+test('recovery interrupts old pending start and processing resume requests until fresh correlated manager actions',async t=>{
+ const f=await fixture(t);await f.add('worker-stored-resume');
+ const prior=await wait(async()=>{const n=await readTask(f.stateDir,'worker-stored-resume');return n.threadId&&n.execution?.live?n:null;},'initial saved session');
+ await f.action(prior.id,'stop');await wait(async()=>(await readTask(f.stateDir,prior.id)).status==='stopped','initial worker stopped');
+ await f.controller.stop();await f.add('worker-stored-start');
+ await requestWorkerAction(f.stateDir,{taskId:'worker-stored-start',actionId:'stored-start-request',action:'start',expectedRunId:null});
+ await requestWorkerAction(f.stateDir,{taskId:prior.id,actionId:'stored-resume-request',action:'resume',expectedRunId:prior.runId});
+ await updateTask(f.stateDir,prior.id,n=>{n.lifecycleRequests.find(request=>request.id==='stored-resume-request').status='processing';});
+ await f.restart();await sleep(400);
+ const queued=await readTask(f.stateDir,'worker-stored-start'),stopped=await readTask(f.stateDir,prior.id);
+ assert.equal(queued.status,'queued');assert.equal(queued.runId,undefined);assert.equal(stopped.status,'stopped');assert.equal(stopped.runId,prior.runId);
+ for(const task of [queued,stopped]){const request=task.lifecycleRequests.at(-1);assert.equal(request.status,'failed');assert.match(request.error,/Controller restarted before start\/resume completed/);assert.ok(request.handledAt);}
+ assert.equal((await readFile(path.join(f.stateDir,'launches.jsonl'),'utf8')).trim().split('\n').length,1,'no new harness from stored lifecycle intent');
+ await f.action(queued.id,'start');await f.action(prior.id,'resume');
+ await wait(async()=>{const a=await readTask(f.stateDir,queued.id),b=await readTask(f.stateDir,prior.id);return a.execution?.live&&b.runId!==prior.runId&&b.execution?.runId===b.runId&&b.execution.live;},'fresh correlated start and resume launch');
+ const resumed=await readTask(f.stateDir,prior.id);assert.equal(resumed.threadId,prior.threadId);assert.equal(resumed.worktree,prior.worktree);assert.equal(resumed.lifecycleRequests.find(r=>r.id==='stored-resume-request').status,'failed');
 });

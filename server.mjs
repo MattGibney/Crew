@@ -49,7 +49,7 @@ const broadcast = event => {
     catch { clients.delete(client); }
   }
 };
-const controller = await createController({ stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, onChange: state => broadcast({ type: 'orchestration-state', state }) });
+const controller = await createController({ stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR ? {dir:process.env.CREW_GLOBAL_CAPACITY_DIR} : null, onChange: state => broadcast({ type: 'orchestration-state', state }) });
 await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
 const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent: broadcast });

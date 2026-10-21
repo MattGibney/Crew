@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerTiming } from './worker-model.js';
+import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerTiming } from './worker-model.js';
 const at = '2026-10-21T12:00:00.000Z', now = Date.parse(at);
 const worker = overrides => ({ id: 'task-example', ticket: 'AI-014', status: 'running', runId: 'run-one', brief: 'Read-only audit', attention: [], lifecycleRequests: [], ...overrides });
 test('every task and worktree remains reachable; attention, pending actions and live processes stay active', () => {
@@ -35,4 +35,16 @@ test('worker actions target one explicit run and reuse correlation instead of di
   assert.deepEqual(workerActions(worker({ status: 'failed', execution: { live: true } })), ['pause', 'stop']);
   assert.deepEqual(workerActions(worker({ status: 'paused', question: { id: 'q', runId: 'run-one' } })), ['dispose']);
   assert.deepEqual(workerActions(worker({ status: 'paused', question: { id: 'q', runId: 'run-one' }, answer: { questionId: 'q' } })), ['resume', 'dispose']);
+});
+
+test('queued cards show the controller admission reason without inferring capacity or manager intent', () => {
+  for (const status of ['queued', 'resume_queued']) {
+    for (const capacityWait of ['Waiting for shared worker capacity', 'Waiting while Crew prepares an update', 'Waiting for the manager to start after reopening']) {
+      assert.equal(workerProgress(worker({ status, capacityWait, progress: 'Old running progress', result: { message: 'An earlier run completed' } })), capacityWait);
+    }
+  }
+  assert.equal(workerProgress(worker({ status: 'queued' })), 'Waiting to start.');
+  assert.equal(workerProgress(worker({ status: 'resume_queued', capacityWait: ' ' })), 'Waiting to resume.');
+  assert.equal(workerProgress(worker({ status: 'running', capacityWait: 'Old waiting reason', progress: 'Actual progress' })), 'Actual progress');
+  assert.equal(workerProgress(worker({ status: 'failed', failure: 'Actual failure', capacityWait: 'Old waiting reason' })), 'Actual failure');
 });

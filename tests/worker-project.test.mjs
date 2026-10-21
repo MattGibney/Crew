@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createTask, readTask, updateTask } from '../orchestration-store.mjs';
+import { createTask, readTask, updateTask, requestWorkerAction } from '../orchestration-store.mjs';
 import { createController } from '../controller.mjs';
 const exec = promisify(execFile);
 const sourceDir = fileURLToPath(new URL('../', import.meta.url));
@@ -48,6 +48,10 @@ async function waitFor(controller, observe, predicate, description='controller o
   throw new Error(`Timeout waiting for ${description}`);
 }
 async function terminal(controller, state, id) {
+  const current=await readTask(state,id);
+  if(current.status==='queued'){
+    await requestWorkerAction(state,{taskId:id,actionId:`explicit-start-${id}`,action:'start',expectedRunId:current.runId||null});
+  }
   return waitFor(controller,()=>readTask(state,id),task=>['failed','completed'].includes(task.status),`terminal task ${id}`);
 }
 test('repository worker executes in a durable isolated worktree and verification states its limits', async () => {
