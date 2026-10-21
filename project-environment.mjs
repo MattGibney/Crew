@@ -42,7 +42,7 @@ async function verifyPermissionsSource(repositoryPath,plan){
 }
 function assertOwned(args,environment){if(environment?.kind!=='project-execution'||environment.taskId!==args.taskId||!/^crew-[a-f0-9]{32}$/.test(environment.id))throw new Error('Project runtime identity does not match this task.');if(environment.runtime&&(typeof environment.runtime.id!=='string'||environment.runtime.runDir!==path.join(args.stateDir,'runs',args.taskId,'project-runtime',environment.runtime.id)))throw new Error('Runtime directory does not belong to this task.');}
 async function persist(args,environment){await save(environmentFile(args.stateDir,args.taskId),environment);await args.onEvidence?.(environment);return environment;}
-function scriptArgs(plan,action){return ['-f','-c',action.command];}
+function scriptArgs(plan,action){return ['-lc',action.command];}
 async function bounded(args,environment,phase,action,signal=args.signal){if(!action)return;await runEnvironmentHooks({stateDir:args.stateDir,taskId:args.taskId,worktree:environment.worktree,hooks:{[phase]:{command:'/bin/zsh',args:scriptArgs(environment.plan,action),timeoutMs:action.timeoutMs}},phases:[phase],existing:environment,env:applyProjectToolchain(environment.toolchain),signal,pauseBoundary:args.pauseBoundary,cooperative:args.cooperative===true,onEvidence:async value=>{Object.assign(environment,value);await args.onEvidence?.(value);}});}
 async function runtimeState(environment,processes=null){
  const runtime=environment.runtime;if(!runtime)return{kind:'absent'};const exit=await json(path.join(runtime.runDir,'exit.json'));if(exit?.id===runtime.id&&exit.environmentId===environment.id)return{kind:exit.stopConfirmed===true?'stopped':'unknown',exit};

@@ -26,3 +26,7 @@ desktop-status.json
 project-runtime.json
 
 renderer-dist/
+
+# Private observed conversation overlays and atomic-write scratch files
+*.conversation.json
+*.conversation-*.tmp

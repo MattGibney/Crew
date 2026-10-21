@@ -222,6 +222,7 @@ if(!locked)app.quit();else{
   }));
   app.on('activate',()=>attempt(()=>selected()?.openWindow()));
   app.on('window-all-closed',()=>{});
+  app.on('will-quit',()=>{for(const host of hosts.values())void host.disposeAttention();});
   app.on('before-quit',event=>{if(!quitting){event.preventDefault();attempt(quitCrew);}});
   void app.whenReady().then(async()=>{
     const release=await lease.acquire();await release();

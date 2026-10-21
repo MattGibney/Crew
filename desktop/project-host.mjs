@@ -16,6 +16,7 @@ import {UPDATE_ACTIONS,PAUSE_UPDATE_ACTIONS} from './updater.mjs';
 import { relative, sep, isAbsolute } from 'node:path';
 import { loadAppConfig } from '../config.mjs';
 import { summarizeTasks, isAppURL, isExternalHTTPS, permitsAudio, childEnvironment } from './lifecycle.mjs';
+import { createNativeAttention } from './native-attention.mjs';
 export function createProjectHost({root,storage,host}) {
 const {configPath,key,desktopData,id}=storage;
 mkdirSync(join(desktopData,'Partitions',`instance-${key}`),{recursive:true,mode:0o700});
@@ -29,6 +30,10 @@ let window, config, origin, backend, pollTimer, starting = false, quitting = fal
 
 let stoppedForUpdate=false;
 let counts = { active: null, pending: null }, lastError = null, backendReady = false;
+let attentionRevision = 0;
+// Each registered project retains its own history and background notification
+// owner, independent of which project's renderer is currently visible.
+const attentionSound = createNativeAttention({ ledgerPath:join(desktopData,'attention-sounds.json'), soundPath:join(root,'desktop/sounds/attention.wav'), onStatus:()=>{void statusFile().catch(()=>{});} });
 const env = {...childEnvironment(configPath), CREW_GLOBAL_CAPACITY_DIR:host.capacityDirectory};
   delete env.AI_MANAGER_PORT; delete env.VOICE_PORT;
 const setupURL = pathToFileURL(join(root, 'renderer-dist/setup.html')).href;
@@ -38,7 +43,7 @@ const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&':'&amp;', 
 async function statusFile() {
   if (!config) return;
   const target = join(config.dataDir, 'desktop-status.json');
-  const value = { pid: process.pid, backendPid: backend?.exitCode === null ? backend.pid : null, configPath, projectId: config.project.id, port: config.port, backendReady, windowOpen: Boolean(window && !window.isDestroyed()), windowCount: window && !window.isDestroyed() ? 1 : 0, isQuitting:quitting, pendingCount:counts.pending, activeCount:counts.active, ...counts, error: lastError, update:host.updater?.getStatus(), updatedAt: new Date().toISOString() };
+  const value = { pid: process.pid, backendPid: backend?.exitCode === null ? backend.pid : null, configPath, projectId: config.project.id, port: config.port, backendReady, windowOpen: Boolean(window && !window.isDestroyed()), windowCount: window && !window.isDestroyed() ? 1 : 0, isQuitting:quitting, pendingCount:counts.pending, activeCount:counts.active, ...counts, error: lastError, attentionSound:attentionSound.getStatus(), update:host.updater?.getStatus(), updatedAt: new Date().toISOString() };
   const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, target);
@@ -83,7 +88,14 @@ async function openWindow() {
 }
 async function poll() {
   if (!backendReady || quitting) return;
-  try { const view = await api('orchestration'); counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null; }
+  try {
+    const observedAttentionRevision = attentionRevision;
+    const [view,work,approvals] = await Promise.all([api('orchestration'),api('state'),api('worker-approvals')]);
+    counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null;
+    // IPC may resolve an approval while its older poll response is in flight.
+    // Do not let that stale response restore a request already cleared natively.
+    if (observedAttentionRevision === attentionRevision) attentionSound.update({work,orchestration:view,workerApprovals:approvals.requests});
+  }
   catch (error) { counts = { active:null, pending:null }; lastError = safe(error); }
   // Parent polls all controllers; update refresh is shared.
   updateTray(); await statusFile().catch(() => {});
@@ -117,6 +129,13 @@ async function startup({ showWindow = true } = {}) {
     finally { await log.close(); }
     const owned = backend;
     owned.on('message',message=>{
+      if(backend===owned&&!quitting&&message?.type==='crew:attention:state'){
+        attentionRevision++;
+        if(message.event?.type==='work-state')attentionSound.update({work:message.event.state});
+        if(message.event?.type==='orchestration-state')attentionSound.update({orchestration:message.event.state});
+        if(message.event?.type==='worker-approval-state')attentionSound.update({workerApprovals:message.event.requests});
+        return;
+      }
       if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action)&&!PAUSE_UPDATE_ACTIONS.has(message.action)&&!['resume-paused-work','return-to-work'].includes(message.action))return;
       void (async()=>{try{const status=await host.updater.request(message.action);sendUpdate(owned,{type:'crew:update:response',id:message.id,status});}catch(error){sendUpdate(owned,{type:'crew:update:response',id:message.id,status:host.updater?.getStatus(),error:safe(error)});}})();
     });
@@ -415,7 +434,8 @@ const handleSetup = async (event, action, input) => {
       if(setupWindow&&!setupWindow.isDestroyed())setupWindow.destroy();
       await statusFile().catch(()=>{});
     },
-    async quit(){quitting=true;discoveryController?.abort();clearInterval(pollTimer);await stopOwnedBackend();window?.destroy();setupWindow?.destroy();await statusFile().catch(()=>{});},
+    disposeAttention:()=>attentionSound.dispose(),
+    async quit(){quitting=true;discoveryController?.abort();clearInterval(pollTimer);await stopOwnedBackend();await attentionSound.dispose();window?.destroy();setupWindow?.destroy();await statusFile().catch(()=>{});},
     async cancelUpdate(){quitting=false;if(backendReady)await updateToken('update-cancel');else if(stoppedForUpdate&&!backend)await startup({showWindow:host.isSelected(id)});stoppedForUpdate=false;},
     async stopForUpdate(){stoppedForUpdate=backendReady;quitting=true;clearInterval(pollTimer);pollTimer=undefined;await stopOwnedBackend();}
   };

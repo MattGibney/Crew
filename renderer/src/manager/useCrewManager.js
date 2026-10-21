@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, endVoiceBeacon, errorText } from './api.js';
-import { chooseVoice, EMPTY_TRANSCRIPT, EMPTY_WORK, transcriptReducer } from './state.js';
+import { chooseVoice, EMPTY_WORK } from './state.js';
 import { useVoiceSession } from './useVoiceSession.js';
 import { workerActionRequest } from './worker-model.js';
+import { createSounds } from './sounds.js';
+import { createAttentionSounds } from './attention-sounds.js';
 const VOICE_KEY = 'crew.voice.v3';
 
 // Backend state and transcript events remain evidence; they never initiate work or microphone capture.
@@ -13,7 +15,17 @@ export function useCrewManager() {
   const [managerLifecycle, setManagerLifecycle] = useState({ state: 'loading' });
   const lifecycleLock = useRef(false);
   const managerEnabled = managerLifecycle.state === 'running';
-  const voice = useVoiceSession(setError);
+  const nativeAttentionSound = useRef(null);
+  const [soundUnavailable, setSoundUnavailable] = useState(false);
+  const soundRef = useRef(null);
+  if (!soundRef.current) soundRef.current = createSounds({ onUnavailable: setSoundUnavailable });
+  const sounds = soundRef.current;
+  const attentionRef = useRef(null);
+  if (!attentionRef.current) {
+    let storage; try { storage = window.localStorage; } catch { /* In-memory dedup. */ }
+    attentionRef.current = createAttentionSounds(kind => sounds.play(kind), storage);
+  }
+  const voice = useVoiceSession(setError, sounds);
   const [prepared, setPrepared] = useState(false), [eventReady, setEventReady] = useState(false);
   const [account, setAccount] = useState('Checking ChatGPT sign-in…');
   const [project, setProject] = useState('Loading this instance’s project…');
@@ -23,9 +35,16 @@ export function useCrewManager() {
   const retryRequests = useRef(new Map());
   const [work, setWork] = useState(EMPTY_WORK), [workNotice, setWorkNotice] = useState('');
   const [orchestration, setOrchestration] = useState({ tasks: [], loading: true });
-  const [transcript, dispatchTranscript] = useReducer(transcriptReducer, EMPTY_TRANSCRIPT);
+  const [workerApprovals, setWorkerApprovals] = useState([]);
   const [catalog, setCatalog] = useState(null), [selectedVoice, setSelectedVoice] = useState('');
   const [voiceLoading, setVoiceLoading] = useState(true), [voiceNotice, setVoiceNotice] = useState('Loading available Codex voices. Microphone stays off.');
+  useEffect(() => {
+    const unlock = () => sounds.unlock();
+    window.addEventListener('pointerdown', unlock, true);
+    window.addEventListener('keydown', unlock, true);
+    return () => { window.removeEventListener('pointerdown', unlock, true); window.removeEventListener('keydown', unlock, true); sounds.dispose(); };
+  }, [sounds]);
+  useEffect(() => { if (nativeAttentionSound.current === false) attentionRef.current(work, orchestration, workerApprovals); }, [work, orchestration, workerApprovals, projectInfo]);
   const showError = useCallback(value => setError(errorText(value)), []);
   const loadVoices = useCallback(async () => {
     setVoiceLoading(true); setVoiceNotice('Loading available Codex voices. Microphone stays off.');
@@ -63,8 +82,8 @@ export function useCrewManager() {
         }
         if(message.type==='update-plan-state')setUpdates(previous=>({...previous,plan:message.plan}));
         if (message.type === 'orchestration-state') setOrchestration(message.state);
+        if (message.type === 'worker-approval-state') setWorkerApprovals(message.requests);
         if (message.type === 'notice') setWorkNotice(message.message);
-        if (message.type === 'transcript-delta' || message.type === 'transcript-done') dispatchTranscript({ role: message.role, text: message.text, done: message.type === 'transcript-done' });
         voice.handleEvent(message);
       } catch (failure) { showError(`Could not read a live update: ${errorText(failure)}`); }
     };
@@ -72,7 +91,7 @@ export function useCrewManager() {
       let bootstrapRunning = false;
       try {
         const config = await api('config');
-        if (!canceled) { setProjectInfo(config.project); setProject(`${config.project.name} · ${config.project.mode === 'fixture' ? 'disposable fixture' : 'configured project'}${config.project.readiness.ready ? '' : ' · setup needed: ' + config.project.readiness.issues.join('; ')}`); }
+        if (!canceled) { nativeAttentionSound.current = config.nativeAttentionSound === true; setProjectInfo(config.project); setProject(`${config.project.name} · ${config.project.mode === 'fixture' ? 'disposable fixture' : 'configured project'}${config.project.readiness.ready ? '' : ' · setup needed: ' + config.project.readiness.issues.join('; ')}`); }
       } catch (failure) { if (!canceled) setProject(`Project configuration unavailable: ${errorText(failure)}`); }
       if (canceled) return;
       try {
@@ -99,13 +118,18 @@ export function useCrewManager() {
   }, [loadVoices, showError, voice.transportLost, voice.handleEvent, voice.dispose]);
   const connect = useCallback(() => {
     if (!managerEnabled || !prepared || !eventReady || !catalog || voice.busy || voice.allocated) return;
-    setError(''); dispatchTranscript({ type: 'reset' }); void voice.connect(selectedVoice);
+    setError(''); void voice.connect(selectedVoice);
   }, [managerEnabled, prepared, eventReady, catalog, voice.busy, voice.allocated, voice.connect, selectedVoice]);
   const reviewAttention = useCallback(async (taskId, attentionId) => {
     try { await api('discuss-attention', { taskId, attentionId }); } catch (failure) { showError(failure); throw failure; }
   }, [showError]);
   const answerApproval = useCallback(async (id, response) => {
     try { await api('approval', { id, response }); } catch (failure) { setWorkNotice(errorText(failure)); }
+  }, []);
+  const answerWorkerApproval = useCallback(async (request, response) => {
+    const { taskId, runId, approvalId, threadId, turnId, requestId } = request;
+    try { await api('worker-approval', { taskId, runId, approvalId, threadId, turnId, requestId, response }); }
+    catch (failure) { setWorkNotice(errorText(failure)); throw failure; }
   }, []);
   const interruptManager = useCallback(async () => {
     try { await api('stop-work'); } catch (failure) { setWorkNotice(errorText(failure)); }
@@ -158,5 +182,5 @@ export function useCrewManager() {
       throw failure;
     } finally { lifecycleLock.current = false; }
   }, [loadSettings, loadVoices, voice.dispose, voice.disconnect]);
-  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, transcript: transcript.items, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
+  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
 }

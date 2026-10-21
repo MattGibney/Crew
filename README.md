@@ -24,6 +24,8 @@ First-run setup guides local tools, ChatGPT sign-in, automatic project-folder se
 
 Type to your manager or choose **Connect voice**. Open microphone is the default: Connect starts the call and microphone once connected and permission allows. Input stays active when switching apps until you mute or end the call. Explicit mute is preserved on reconnect. Alternatively choose Push to talk and hold its button (or Space outside text fields); release or focus loss stops PTT input; End call releases the complete voice session. End other calls first. Closing the window also ends voice while leaving the controller running. **Quit Crew…** is separate: its confirmation accounts for every registered project, stops owned controllers, and leaves already dispatched worker supervisors alone. Reopen Crew to collect their reports. Switching projects ends the departing voice call and opens the destination with voice off. The app neither launches at login nor keeps a sleeping Mac awake.
 
+Typed messages and spoken transcripts share one conversation. Live transcripts update in place; unfinished speech is labelled partial. Reconnecting retains recent conversation history, and Connect never clears it.
+
 Open **Settings** in the header to edit the full Crew manager and worker instructions for this project. Saved manager changes apply only after explicit **Restart manager**; worker changes apply to newly launched workers. **Stop manager** releases voice and holds manager interaction while independent workers continue. **Start manager** resumes the saved conversation without starting a task or microphone. See [Settings and manager controls](docs/SETTINGS.md).
 
 ## First work session

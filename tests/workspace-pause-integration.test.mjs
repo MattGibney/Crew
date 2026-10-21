@@ -1,3 +1,4 @@
+import {workerAppServerFixture} from './helpers/worker-app-server-fixture.mjs';
 // Grouped acceptance: real subprocess workers and Git worktrees, two controllers,
 // one capacity ledger. Native installation and voice remain synthetic.
 import test from 'node:test';
@@ -31,17 +32,17 @@ async function fixture(t){
   records.push({id,name:id==='alpha'?'Selected':'Hidden',repo,stateDir,configPath,promptPath,controller:null,engine:null,ids:[],voiceStops:0});
  }
  await configureGlobalCapacity({dir:capacity,limit:2,stateDirs:records.map(record=>record.stateDir),admissionPaused:false});
- const executable=join(directory,'fake-codex.mjs');await writeFile(executable,`#!${process.execPath}
+ const executable=join(directory,'fake-codex.mjs');await writeFile(executable,workerAppServerFixture(`#!${process.execPath}
 import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(join(sourceDir,'orchestration-store.mjs')).href)};
 const args=process.argv.slice(2),raw=args.find(value=>value.startsWith('mcp_servers.local_orchestration.args=')),[,state,,id,run]=JSON.parse(raw.slice(raw.indexOf('=')+1)),task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8')),resumed=args.includes('resume'),thread=resumed?args[args.indexOf('resume')+1]:'thread-'+task.projectId+'-'+id;
-process.on('SIGINT',async()=>{await appendFile(state+'/'+id+'-signals','SIGINT\\n');process.exit(0);});process.on('SIGTERM',()=>process.exit(0));
+process.on('fixtureInterrupt',async()=>{await appendFile(state+'/'+id+'-signals','turn/interrupt\\n');process.exit(0);});process.on('SIGTERM',()=>process.exit(0));
 await appendFile(state+'/launches.jsonl',JSON.stringify({id,run,thread,resumed,cwd:process.cwd(),promptV2:args.at(-1).includes('fixture-prompt-'+task.projectId+'-v2')})+'\\n');
 console.log(JSON.stringify({type:'thread.started',thread_id:thread}));await reportTask(state,id,run,{reportId:'progress',kind:'progress',message:'Disposable project worker running'});
 // Finite queued admission probes yield their slot with a real durable question.
 // This tests global capacity without relying on per-project scheduler fairness.
 if(id==='zz-queued-worker'){await reportTask(state,id,run,{reportId:'fixture-question',kind:'question',message:'Fixture admission verified; retain this unanswered question.'});console.log(JSON.stringify({type:'turn.completed'}));process.exit(0);}
 setInterval(()=>{},1000);
-`,{mode:0o700});
+`),{mode:0o700});
  const manager={status:'completed',voiceActive:false,voiceConnecting:false,workStarting:false,activeTurnId:null,approvals:[]};
  async function start(record,version){
   const project={id:record.id,name:record.name,mode:'repository',readiness:{ready:true},repositories:[{id:'repo',path:record.repo,baseRef:'main'}],worker:{sandbox:'read-only',maxConcurrent:2,timeoutMs:60000,environment:{}}};
@@ -88,7 +89,7 @@ test('hidden project and duplicate task IDs pause under one ledger; target recov
  const pause=createPauseUpdateCoordinator({native,begin:async input=>({plan:await f.group.begin(input)}),status:async()=>({plan:f.group.status()}),cancel:async()=>({plan:await f.group.cancel()}),markInstalling:input=>f.group.markInstalling(input),markBlocked:async input=>({plan:await f.group.markBlocked(input.reason,input)})});
  await native.request('check');await native.request('download');await pause.request('pause-update');await ready(f);
  assert.equal(f.group.status().targets.filter(target=>target.taskId==='shared-worker').length,2);assert.equal(await globalAdmissionPaused(f.capacity),true);
- for(const record of f.records){assert.equal((await readTask(record.stateDir,'zz-queued-worker')).worktree,undefined);assert.equal(await readFile(join(record.stateDir,'shared-worker-signals'),'utf8'),'SIGINT\n');await writeFile(record.promptPath,`fixture-prompt-${record.id}-v2`);}
+ for(const record of f.records){assert.equal((await readTask(record.stateDir,'zz-queued-worker')).worktree,undefined);assert.equal(await readFile(join(record.stateDir,'shared-worker-signals'),'utf8'),'turn/interrupt\n');await writeFile(record.promptPath,`fixture-prompt-${record.id}-v2`);}
  await pause.advancePlan();assert.deepEqual(nativeCalls,['stop','install']);
  await f.restart('1.1.0');await until(async()=>{await f.tick();assert.notEqual(f.group.status().phase,'blocked',f.group.status().reasons.join());return f.group.status().phase==='complete';},'all-project recovery');
  assert.equal(await globalAdmissionPaused(f.capacity),false);const resumed=await Promise.all(f.records.map(record=>f.live(record)));

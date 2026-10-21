@@ -82,20 +82,10 @@ function requirementsFor(requirements, tool) {
 }
 const compatible = (v, ranges) => ranges.every(r => satisfiesToolVersion(v, r));
 const defaultRoot = () => path.join(os.homedir(), ...(process.platform === 'darwin' ? ['Library', 'Application Support', 'Crew', 'toolchains'] : ['.crew', 'toolchains']));
-const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
-async function managedShellEnvironment(cacheRoot, PATH, env, create = true) {
-  const shellDirectory = path.join(path.resolve(cacheRoot), `.shell-${crypto.createHash('sha256').update(PATH).digest('hex').slice(0, 20)}`);
-  if(create)await fs.mkdir(shellDirectory, { recursive: true, mode: 0o700 });
-  const initialization = `# Crew-owned shell environment. Personal startup files are intentionally skipped.\nunsetopt RCS\nexport PATH=${shellQuote(PATH)}\n`;
-  const target = path.join(shellDirectory, '.zshenv');
-  let existing; try { existing = await fs.readFile(target, 'utf8'); } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  if (existing !== initialization) {
-    if(!create)throw fail('TOOL_CACHE_MISSING','The Crew-managed shell environment is missing or damaged. Prepare the environment before starting work; retained setup was not replayed.');
-    const temporary = path.join(shellDirectory, `.init-${crypto.randomUUID()}`);
-    await fs.writeFile(temporary, initialization, { mode: 0o600 });
-    await fs.rename(temporary, target);
-  }
-  return { shellDirectory, env: { ...env, PATH, ZDOTDIR: shellDirectory, ...(process.platform === 'darwin' ? { SHELL: '/bin/zsh' } : {}) } };
+// Installation/version probes use a controlled environment internally; returned
+// launch defaults preserve user environment and never create shell startup files.
+function launchEnvironment(PATH, env) {
+  return { env: { ...env, PATH: [...new Set([PATH, env.PATH].filter(Boolean).flatMap(value => value.split(path.delimiter)).filter(Boolean))].join(path.delimiter) } };
 }
 const cleanEnv = env => { const out = { ...env, PATH: SYSTEM_TOOL_PATH }; delete out.NODE_OPTIONS; delete out.NODE_PATH; delete out.NPM_CONFIG_PREFIX; delete out.npm_config_prefix; return out; };
 
@@ -156,11 +146,11 @@ export async function resolveManagedToolchain({ requirements = {}, cacheRoot = d
   for (const r of [...ranges.node, ...ranges.npm]) satisfiesToolVersion('22.0.0', r);
   const baseEnv = cleanEnv(env);
   if (!ranges.node.length && requirements.nodeProject) throw fail('TOOL_REQUIREMENT_MISSING', 'This Node project does not declare its Node version. Add the intended version to its existing configuration or instructions.');
-  if (!ranges.node.length && !ranges.npm.length) return { ...(await managedShellEnvironment(cacheRoot, baseEnv.PATH, baseEnv, install)), PATH: baseEnv.PATH, nodeVersion: null, npmVersion: null, requirements, cacheRoot };
+  if (!ranges.node.length && !ranges.npm.length) return { ...launchEnvironment(baseEnv.PATH, env), PATH: baseEnv.PATH, nodeVersion: null, npmVersion: null, requirements, cacheRoot };
   if (!ranges.node.length) throw fail('TOOL_REQUIREMENT_MISSING', 'This project specifies npm but no Node version. Add the intended Node requirement to the existing project configuration.');
   if (!['darwin', 'linux'].includes(platform) || !['arm64', 'x64'].includes(arch)) throw fail('TOOL_PLATFORM_UNSUPPORTED', `Crew managed Node is not supported on ${platform}/${arch}.`);
   cacheRoot = path.resolve(cacheRoot);
-  const finish = async selected => { const PATH = `${path.join(selected.directory, 'bin')}:${SYSTEM_TOOL_PATH}`; return { ...selected, PATH, ...(await managedShellEnvironment(cacheRoot, PATH, baseEnv, install)), cacheRoot, requirements }; };
+  const finish = async selected => { const PATH = `${path.join(selected.directory, 'bin')}:${SYSTEM_TOOL_PATH}`; return { ...selected, PATH, ...launchEnvironment(PATH, env), cacheRoot, requirements }; };
   let selected = await cached(cacheRoot, ranges, platform, arch);
   if (selected) return finish(selected);
   if (!install) throw fail('TOOL_CACHE_MISSING', 'The required Crew-managed Node/npm version is missing or damaged. Run environment preparation to install it; retained setup was not replayed.');

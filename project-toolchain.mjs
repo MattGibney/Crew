@@ -9,12 +9,10 @@ const exec=promisify(execFile);
 const systemPath='/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin';
 export function applyProjectToolchain(toolchain,env=process.env){
  if(!toolchain)return {...env};
- const next={...env,PATH:toolchain.PATH};
- delete next.ZDOTDIR;
- if(toolchain.shellDirectory){next.ZDOTDIR=toolchain.shellDirectory;if(process.platform==='darwin')next.SHELL='/bin/zsh';}
- // Shell startup/config and package-manager prefixes must not select personal tools.
- for(const key of ['BASH_ENV','ENV','NODE_OPTIONS','NODE_PATH','NPM_CONFIG_PREFIX','npm_config_prefix'])delete next[key];
- return next;
+ // Managed tools are launch defaults. Codex configuration and ordinary shell
+ // startup may deliberately replace them; never suppress the user's environment.
+ const PATH=[...new Set([toolchain.PATH,env.PATH].filter(Boolean).flatMap(value=>value.split(path.delimiter)).filter(Boolean))].join(path.delimiter);
+ return {...env,PATH};
 }
 export async function resolveProjectToolchain({worktree,baseCommit,plan,retained,cacheRoot,env=process.env,install=true}){
  const sources=[];
@@ -36,6 +34,6 @@ export async function resolveProjectToolchain({worktree,baseCommit,plan,retained
  const selected=retained?await validateManagedToolchain(retained,{env}):await resolveManagedToolchain({requirements,cacheRoot,env,install});
  if(retained&&(selected.nodeVersion!==retained.nodeVersion||selected.npmVersion!==retained.npmVersion||selected.PATH!==retained.PATH))throw new Error('Retained toolchain changed or is unavailable. Restore the retained managed tools; no setup was replayed.');
  // Persist tool paths/versions only; never store the inherited application environment.
- const {PATH,nodeVersion,npmVersion,nodePath,npmPath,shellDirectory,cacheRoot:root}=selected;
- return {PATH,nodeVersion,npmVersion,nodePath,npmPath,shellDirectory,cacheRoot:root,requirements};
+ const {PATH,nodeVersion,npmVersion,nodePath,npmPath,cacheRoot:root}=selected;
+ return {PATH,nodeVersion,npmVersion,nodePath,npmPath,cacheRoot:root,requirements};
 }

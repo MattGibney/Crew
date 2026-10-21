@@ -9,10 +9,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createTask, updateTask, readTask } from '../orchestration-store.mjs';
+import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../worker-approvals.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() { const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port; }
-async function fixture(t) {
+async function fixture(t, { nativeAttention = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'crew-settings-http-')), dataDir = join(directory, 'state'), stateDir = join(dataDir, 'orchestration');
   const executable = join(directory, 'synthetic-codex.mjs'), callsFile = join(directory, 'calls.jsonl'), configPath = join(directory, 'config.json');
   const port = await freePort(), origin = `http://127.0.0.1:${port}`;
@@ -33,7 +34,9 @@ createInterface({ input: process.stdin }).on('line', line => {
   const reply = result => send({ id, result });
   if (method === 'initialize') return reply({});
   if (method === 'account/read') return reply({ account: { type: 'chatgpt', planType: 'synthetic' } });
+  if (method === 'config/read') return reply({ config: {} });
   if (method === 'thread/start' || method === 'thread/resume') return reply({ thread: { id: 'http-retained-chat' } });
+  if (method === 'thread/timeline/list') return send({ id, error: { code: -32601, message: 'Method not found' } });
   if (method === 'thread/turns/list') return reply({ data: [{ id: 'historic-turn', status: 'completed', items: [{ id: 'historic-message', type: 'agentMessage', text: 'Preserved HTTP history.' }] }] });
   if (method === 'mcpServerStatus/list') return reply({ data: [] });
   if (method === 'turn/start') { const turn = { id: 'http-turn', status: 'completed', items: [] }; send({ method: 'turn/completed', params: { threadId: 'http-retained-chat', turn } }); return reply({ turn }); }
@@ -41,6 +44,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 });
 `, { mode: 0o700 });
   let child = null, diagnostics = '';
+  const nativeEvents = [];
   const streams = new Set();
   async function request(route, { method = 'POST', body = {}, requestOrigin = origin } = {}) {
     const headers = { Origin: requestOrigin, 'Content-Type': 'application/json' };
@@ -54,8 +58,9 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   async function start() {
     diagnostics = '';
-    child = spawn(process.execPath, [join(root, 'server.mjs')], { cwd: root, env: { ...process.env, AI_MANAGER_CONFIG: configPath, AI_MANAGER_PORT: String(port), AI_MANAGER_CODEX_BINARY: executable, CODEX_BINARY: executable }, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(process.execPath, [join(root, 'server.mjs')], { cwd: root, env: { ...process.env, AI_MANAGER_CONFIG: configPath, AI_MANAGER_PORT: String(port), AI_MANAGER_CODEX_BINARY: executable, CODEX_BINARY: executable, ...(nativeAttention ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }, stdio: ['ignore', 'pipe', 'pipe', ...(nativeAttention ? ['ipc'] : [])] });
     child.stdout.on('data', data => { diagnostics += data; }); child.stderr.on('data', data => { diagnostics += data; });
+    if (nativeAttention) child.on('message', message => nativeEvents.push(message));
     const deadline = Date.now() + 12000;
     while (Date.now() < deadline) {
       if (child.exitCode !== null) throw new Error(`Synthetic HTTP server exited: ${diagnostics}`);
@@ -67,9 +72,43 @@ createInterface({ input: process.stdin }).on('line', line => {
   async function events() { const abort = new AbortController(); streams.add(abort); const response = await fetch(origin + '/events', { headers: { Origin: origin }, signal: abort.signal }); assert.equal(response.status, 200); const reader = response.body.getReader(); await reader.read(); return abort; }
   const calls = async () => (await readFile(callsFile, 'utf8')).split('\n').filter(Boolean).map(line => JSON.parse(line));
   t.after(async () => { await stop(); await rm(directory, { recursive: true, force: true }); });
-  return { directory, dataDir, stateDir, request, start, stop, calls, events };
+  return { directory, dataDir, stateDir, request, start, stop, calls, events, nativeEvents };
 }
 const instructions = calls => calls.filter(c => ['thread/start', 'thread/resume', 'thread/fork'].includes(c.method));
+
+test('worker approval HTTP endpoint rejects cross-origin and stale correlation, persists an actual decision without starting manager work', async t => {
+  const f = await fixture(t, { nativeAttention: true });
+  const taskId = 'http-approval-task', runId = 'http-approval-run', threadId = 'native-http-thread', turnId = 'native-http-turn';
+  await createTask(f.stateDir, { requestId: taskId, ticket: 'GH-13', brief: 'Read-only synthetic request', projectId: 'http-settings-fixture' });
+  await updateTask(f.stateDir, taskId, task => { task.status = 'running'; task.runId = runId; });
+  // Publish the retained synthetic run before controller startup. A live
+  // controller may legitimately admit a newly created queued task between writes.
+  await f.start();
+  const native = await recordWorkerRequest({ stateDir: f.stateDir, taskId, runId, threadId, turnId, requestId: 5, method: 'item/commandExecution/requestApproval', params: { threadId, turnId, command: 'docker version', availableDecisions: ['accept', 'decline', 'cancel'] } });
+  const { approvalId, requestId } = native;
+  const snapshot = await f.request('/api/worker-approvals');
+  assert.equal(snapshot.status, 200); assert.equal(snapshot.value.requests[0].approvalId, approvalId);
+  assert.equal((await f.request('/api/config')).value.nativeAttentionSound, true, 'the renderer defers playback to the native project owner');
+  const forwarded = () => f.nativeEvents.filter(message => message.type === 'crew:attention:state' && message.event?.type === 'worker-approval-state');
+  const ipcDeadline = Date.now() + 3000;
+  while (!forwarded().some(message => message.event.requests.some(request => request.approvalId === approvalId)) && Date.now() < ipcDeadline) await delay(10);
+  const pendingEvent = forwarded().find(message => message.event.requests.some(request => request.approvalId === approvalId));
+  assert.ok(pendingEvent, 'pending worker approval reaches the native owner without a browser SSE consumer');
+  assert.equal(pendingEvent.event.requests[0].status, 'pending'); assert.equal(pendingEvent.event.requests[0].requestId, 5);
+  const body = { taskId, runId, threadId, turnId, approvalId, requestId, response: { decision: 'decline' } };
+  assert.equal((await f.request('/api/worker-approval', { body, requestOrigin: 'https://untrusted.example' })).status, 403);
+  const stale = await f.request('/api/worker-approval', { body: { ...body, runId: 'stale-http-run' } });
+  assert.equal(stale.status, 400); assert.match(stale.value.error, /correlation mismatch/);
+  assert.deepEqual(await workerRequestDecisions({ stateDir: f.stateDir, taskId, runId }), []);
+  const result = await f.request('/api/worker-approval', { body });
+  assert.equal(result.status, 200, JSON.stringify(result.value)); assert.equal(result.value.status, 'decided');
+  assert.equal((await workerRequestDecisions({ stateDir: f.stateDir, taskId, runId }))[0].response.decision, 'decline');
+  assert.equal((await f.request('/api/worker-approval', { body })).status, 200);
+  assert.equal((await f.request('/api/worker-approval', { body: { ...body, response: { decision: 'accept' } } })).status, 400);
+  assert.equal((await listWorkerRequests({ stateDir: f.stateDir, pendingOnly: true })).length, 0);
+  assert.deepEqual((await f.request('/api/worker-approvals')).value.requests, []);
+  assert.equal((await f.calls()).some(call => call.method === 'turn/start'), false);
+});
 
 test('real HTTP save, explicit restart, durable stop and Start preserve conversation, worker settings and task history', async t => {
   const f = await fixture(t);
@@ -138,4 +177,23 @@ test('HTTP origin checks, stale writes and invalid saves preserve the prior proj
   assert.equal(empty.status, 400);
   assert.deepEqual((await f.request('/api/settings', { method: 'GET' })).value.worker.saved, current.worker.saved);
   assert.equal((await f.calls()).length, 0);
+});
+
+test('worker detail HTTP is read-only, same-origin and project scoped', async t => {
+  const f = await fixture(t);
+  await createTask(f.stateDir, { requestId: 'http-detail-task', ticket: 'AI-004', brief: 'Read-only detail fixture, never execute.', projectId: 'http-settings-fixture' });
+  await updateTask(f.stateDir, 'http-detail-task', task => { task.status = 'completed'; });
+  await f.start();
+  const before = await readTask(f.stateDir, 'http-detail-task');
+  const response = await f.request('/api/workers/http-detail-task', { method: 'GET' });
+  assert.equal(response.status, 200);
+  assert.equal(response.value.taskId, 'http-detail-task');
+  assert.equal(response.value.conversation[0].message, before.brief);
+  assert.equal((await f.request('/api/workers/http-detail-task', { method: 'GET', requestOrigin: 'https://untrusted.invalid' })).status, 403);
+  assert.equal((await f.request('/api/workers/http-detail-task', { body: { markdown: 'not authorized' } })).status, 404);
+  assert.equal((await readTask(f.stateDir, 'http-detail-task')).revision, before.revision);
+  await createTask(f.stateDir, { requestId: 'http-other-project', ticket: 'AI-004', brief: 'Different project', projectId: 'other-project' });
+  const other = await f.request('/api/workers/http-other-project', { method: 'GET' });
+  assert.equal(other.status, 400); assert.match(other.value.error, /another project/);
+  assert.equal((await f.calls()).some(call => call.method === 'turn/start'), false);
 });

@@ -35,3 +35,11 @@ Custom configurations are not moved. A closed legacy desktop profile for that ex
 - Codex manages its own shared sign-in and conversation storage. Crew does not move, copy or reset authentication credentials or shared Codex history. Instance files retain only their normal manager-chat reference.
 
 The release remains unsigned/unnotarized arm64/macOS13+ with manual updates. Quit the relevant previous instance before replacement; preserve configuration and state. No microphone, voice conversation, account reset or new business task starts for naming/migration.
+
+## Observed manager conversation overlay (GitHub #15)
+
+A private `*.conversation.json` file beside the manager chat reference holds a bounded projection of observed typed and spoken messages, scoped to the exact native thread ID. Atomic private temporary files and a coalesced serial writer prevent concurrent snapshots from replacing newer history. This is presentation state, not an execution journal or an audio recording. It is excluded from Git and publication.
+
+Native canonical timeline history, when supported, takes precedence by message identity and rollout position. Uncommitted observed partials survive as visibly partial overlays, anchored to surviving messages. Older app-servers use recent native turns and the observed journal together because their flat transcript events cannot supply stable native utterance identity. No text-equality deduplication is performed. Corrupt/unavailable overlay files are retained and reported; they never reset the manager chat reference. Conversation projection is never evidence that a worker stopped or that spoken audio was heard.
+
+Native writer-conflict recovery retains the immediate previous chat ID and the verified journal source ID in the saved reference. Only that lineage can supply speech to the fork. Successful hydration rebinds the journal; failed hydration, retry or process recreation leaves the source available. Promotion identity is retained with displayed native messages so replay cannot move a previously displayed reply past later speech.

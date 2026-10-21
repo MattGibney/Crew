@@ -23,14 +23,16 @@ test('discovers existing Node/npm instructions and intersects all sources', () =
   assert.throws(() => satisfiesToolVersion('22.0.0', '22 || unsupported'), { code: 'TOOL_REQUIREMENT_UNSUPPORTED' });
   assert.throws(() => discoverToolRequirements({ sources: [source('package.json', JSON.stringify({ packageManager: 'pnpm@10.0.0' }))] }), { code: 'TOOL_REQUIREMENT_UNSUPPORTED' });
 });
-test('non-Node projects have explicit system PATH without personal shell paths', async t => {
+test('non-Node projects retain inherited environment alongside system launch defaults', async t => {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'crew-system-tool-test-'));
   t.after(() => fs.rm(temporary, { recursive: true, force: true }));
   const result = await resolveManagedToolchain({ cacheRoot: temporary, env: { PATH: '/personal/nvm', NODE_OPTIONS: '--require secret', OTHER: 'kept' } });
   assert.equal(result.PATH, SYSTEM_TOOL_PATH);
   assert.equal(result.nodeVersion, null);
   assert.equal(result.env.OTHER, 'kept');
-  assert.equal(result.env.NODE_OPTIONS, undefined);
+  assert.equal(result.env.NODE_OPTIONS, '--require secret');
+  assert.equal(result.env.PATH.endsWith('/personal/nvm'), true);
+  assert.equal(result.env.ZDOTDIR, undefined);
   await assert.rejects(resolveManagedToolchain({ requirements: { npm: ['11'] } }), { code: 'TOOL_REQUIREMENT_MISSING' });
 });
 async function fixture(t) {
@@ -105,19 +107,19 @@ test('Node package without a declared version fails honestly', async () => {
   const requirements = discoverToolRequirements({ sources: [source('package.json', '{}')] });
   await assert.rejects(resolveManagedToolchain({ requirements }), { code: 'TOOL_REQUIREMENT_MISSING' });
 });
-test('login zsh retains managed PATH and skips hostile personal startup', { skip: process.platform !== 'darwin' }, async t => {
+test('login zsh respects explicit personal startup choices over managed defaults', { skip: process.platform !== 'darwin' }, async t => {
   const f = await fixture(t); const resolved = await resolveManagedToolchain(f.options);
   const marker = path.join(f.root, 'personal-startup-ran');
   await fs.writeFile(path.join(f.root, '.zprofile'), `export PATH=/personal/nvm\n/usr/bin/touch '${marker}'\n`);
-  await fs.writeFile(path.join(f.root, '.zshrc'), `export PATH=/personal/nvm\n/usr/bin/touch '${marker}'\n`);
-  const child = await run('/bin/zsh', ['-lc', 'printf "%s\\n" "$PATH"; node --version; npm --version'], { env: resolved.env });
-  assert.deepEqual(child.stdout.trim().split('\n'), [resolved.PATH, 'v22.20.0', '11.11.0']);
-  await assert.rejects(fs.access(marker), { code: 'ENOENT' });
-  assert.equal(resolved.env.ZDOTDIR, resolved.shellDirectory);
+  const child = await run('/bin/zsh', ['-lc', 'printf "%s" "$PATH"'], { env: { ...resolved.env, ZDOTDIR: f.root } });
+  assert.equal(child.stdout, '/personal/nvm');
+  await fs.access(marker);
+  assert.equal(resolved.env.ZDOTDIR, undefined);
+  assert.equal(resolved.shellDirectory, undefined);
 });
 
 test('non-installing preflight never creates shell/cache state', async t => {
  const temporary=await fs.mkdtemp(path.join(os.tmpdir(),'crew-preflight-readonly-'));t.after(()=>fs.rm(temporary,{recursive:true,force:true}));const cacheRoot=path.join(temporary,'missing');
- await assert.rejects(resolveManagedToolchain({cacheRoot,requirements:{},install:false}),{code:'TOOL_CACHE_MISSING'});
+ const result=await resolveManagedToolchain({cacheRoot,requirements:{},install:false});assert.equal(result.nodeVersion,null);assert.equal(result.shellDirectory,undefined);
  await assert.rejects(fs.stat(cacheRoot),{code:'ENOENT'});
 });

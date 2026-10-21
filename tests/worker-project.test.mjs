@@ -1,3 +1,4 @@
+import {workerAppServerFixture} from './helpers/worker-app-server-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, chmod, realpath, readdir } from 'node:fs/promises';
@@ -22,7 +23,7 @@ async function repository(base) {
 function profile(repo) { return { id: 'example', name: 'Example', mode: 'repository', context: 'Example context', repositories: [{ id: 'app', path: repo, baseRef: 'main' }], linear: { teamKey: 'EX' }, worker: { sandbox: 'read-only', timeoutMs: 10000 }, readiness: { ready: true, issues: [] } }; }
 async function mockedCodex(base, fixture = false, edit = false, {finalMessage=true,durableResult=true} = {}) {
   const file = path.join(base, 'codex-mock.mjs');
-  await writeFile(file, `#!/usr/bin/env node
+  await writeFile(file, workerAppServerFixture(`#!/usr/bin/env node
 import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
 import {reportTask} from ${JSON.stringify(new URL('../orchestration-store.mjs', import.meta.url).href)};
@@ -35,7 +36,7 @@ if (${fixture}) console.log(JSON.stringify({type:'item.completed',item:{type:'co
 if(${durableResult})await reportTask(state,task,run,{reportId:'result',kind:'result',message:'Audit complete',evidence:${fixture ? JSON.stringify([JSON.stringify({emptyActual:1,sumActual:7,emptyExpected:0,sumExpected:6,finding:'initial_value_one'})]) : JSON.stringify(['Actual git status command succeeded; no semantic tests performed.'])}});
 if(${finalMessage})console.log(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Audit complete'}}));
 console.log(JSON.stringify({type:'turn.completed'}));
-`); await chmod(file, 0o700); return file;
+`)); await chmod(file, 0o700); return file;
 }
 // tick schedules launches independently so unrelated workers are never held behind one startup.
 // Wait for the observed durable outcome, preserving the original failure/safety assertions.
@@ -157,7 +158,7 @@ test('durable MCP result completes without assistant text, while assistant text 
 test('worker launch receives replacement prompt and immutable snapshots survive answer/resume and later edits', async () => {
   const base=await mkdtemp(path.join(os.tmpdir(),'crew-prompt-workers-')),repo=await repository(base),state=path.join(base,'state');
   const executable=path.join(base,'prompt-codex.mjs');
-  await writeFile(executable,`#!/usr/bin/env node
+  await writeFile(executable,workerAppServerFixture(`#!/usr/bin/env node
 import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
 import path from 'node:path';
@@ -169,7 +170,7 @@ console.log(JSON.stringify({type:'thread.started',thread_id:'snapshot-thread'}))
 console.log(JSON.stringify({type:'item.completed',item:{type:'command_execution',command:'git status --porcelain',exit_code:0,aggregated_output:execFileSync('git',['status','--porcelain'],{encoding:'utf8'})}}));
 await reportTask(state,task,run,{reportId:'report',kind:args.includes('resume')?'result':'question',message:args.includes('resume')?'Complete':'Which option?',evidence:[]});
 console.log(JSON.stringify({type:'turn.completed'}));
-`);await chmod(executable,0o700);
+`));await chmod(executable,0o700);
   let current='ORIGINAL_CUSTOM_WORKER',reads=0;
   const controller=await createController({stateDir:state,sourceDir,executable,project:profile(repo),getWorkerPrompt:async()=>{reads++;return promptSnapshot(current);}});
   try {

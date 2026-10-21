@@ -16,3 +16,15 @@ test('late completed native user item precedes its assistant without reordering 
   const items=[{id:'a1',turnId:'1'},{id:'u1',turnId:'1',role:'user'},{id:'a2',turnId:'2'},{id:'u2',turnId:'2',role:'user'}];
   assert.deepEqual(orderedMessages(items).map(x=>x.id),['u1','a1','u2','a2']);
 });
+test('canonical voice interruptions retain their place between messages from one native turn', () => {
+  const messages = [
+    { id: 'a1', turnId: 't', role: 'assistant', position: 1 },
+    { id: 'speech', role: 'user', source: 'voice', position: 2 },
+    { id: 'a2', turnId: 't', role: 'assistant', position: 3 },
+  ];
+  assert.deepEqual(orderedMessages(messages).map(message => message.id), ['a1', 'speech', 'a2']);
+});
+test('identical speech and typed messages remain distinct without explicit correlation', () => {
+  const messages = [{ id: 'typed', role: 'user', text: 'Yes' }, { id: 'voice', role: 'user', source: 'voice', text: 'Yes' }];
+  assert.equal(orderedMessages(messages).length, 2);
+});
