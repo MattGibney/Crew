@@ -11,3 +11,5 @@
 The renderer calls only same-origin `/api/*` and `/events`; authentication and orchestration stay in the backend. Stop manager work interrupts the current manager turn, not workers. Voice/browser closure never cancels controller work. Errors retain unavailable states rather than reporting successful sign-in, healthy tools or completed work without backend evidence.
 
 Tests for this foundation should check no microphone request on mount; stored voice migration; explicit connect and selected voice signaling; once-per-call greeting; mute/disconnect; pending permission cancellation; SSE loss; approval payloads and retained input across state refreshes; worker review and manager stop. Real audible voice remains a separate human acceptance check.
+
+Sound ownership and the explicit action-required attention protocol are documented in [docs/SOUNDS.md](../../../docs/SOUNDS.md). Call tones belong to the voice resource lifecycle; notification tones use explicit evidence and stable identities, never generic message or failure events.

@@ -2,8 +2,8 @@
 // Never requests physical microphone permission or connects to a remote service.
 (() => {
   const nativeFetch = window.fetch.bind(window);
-  const proof = window.__crewMedia = { calls: 0, stopped: 0, tracks: [], peers: [], pending: [], delayed: false, denyNext: false, silentTracks: [], contexts: [] };
-  const report = () => void nativeFetch('/__telemetry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ calls: proof.calls, stopped: proof.stopped, tracks: proof.tracks.map(({ enabled, readyState }) => ({ enabled, readyState })), silentTracks: proof.silentTracks.map(({ readyState }) => ({ readyState })), contexts: proof.contexts.map(context => ({ state: context.state })), peers: proof.peers.map(peer => ({ state: peer.connectionState, attached: Boolean(peer.sender.track), source: peer.sender.track?.source || null, enabled: peer.sender.track?.enabled ?? null })) }) });
+  const proof = window.__crewMedia = { calls: 0, stopped: 0, tracks: [], peers: [], pending: [], delayed: false, denyNext: false, silentTracks: [], contexts: [], tones: [] };
+  const report = () => void nativeFetch('/__telemetry', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tones: proof.tones, calls: proof.calls, stopped: proof.stopped, tracks: proof.tracks.map(({ enabled, readyState }) => ({ enabled, readyState })), silentTracks: proof.silentTracks.map(({ readyState }) => ({ readyState })), contexts: proof.contexts.map(context => ({ state: context.state })), peers: proof.peers.map(peer => ({ state: peer.connectionState, attached: Boolean(peer.sender.track), source: peer.sender.track?.source || null, enabled: peer.sender.track?.enabled ?? null })) }) });
   Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async () => {
     proof.calls++;
     if (proof.denyNext) { proof.denyNext = false; report(); throw new DOMException('Synthetic permission denied', 'NotAllowedError'); }
@@ -15,7 +15,12 @@
     return stream;
   } } });
   window.AudioContext = class {
-    constructor() { this.state = 'suspended'; proof.contexts.push(this); report(); }
+    constructor() { this.state = 'suspended'; this.currentTime = 0; this.destination = {}; proof.contexts.push(this); report(); }
+    createOscillator() {
+      const tone = { frequency: { value: 0 }, connect() {}, disconnect() {}, start(at) { proof.tones.push({ frequency: this.frequency.value, at }); report(); }, stop() { queueMicrotask(() => this.onended?.()); } };
+      return tone;
+    }
+    createGain() { return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} }; }
     createMediaStreamDestination() {
       const track = { source: 'generated-silence', kind: 'audio', enabled: true, readyState: 'live', stop() { this.readyState = 'ended'; report(); } };
       proof.silentTracks.push(track);

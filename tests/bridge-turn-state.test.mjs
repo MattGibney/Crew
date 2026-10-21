@@ -44,9 +44,21 @@ createInterface({input:process.stdin}).on('line',line=>{
  await writeFile(executable,program,{mode:0o700});await chmod(executable,0o700);
  const events=[],bridge=createBridge({cwd:directory,statePath,executable,onEvent:event=>events.push(event)});
  t.after(async()=>{await bridge.shutdown();await rm(directory,{recursive:true,force:true});});
- return {bridge,events,notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
+ return {bridge,events,request:async(id,method,params)=>appendFile(control,JSON.stringify({id,method,params:{threadId:'manager-thread',...params}})+'\n'),notify:async(method,params)=>appendFile(control,JSON.stringify({method,params:{threadId:'manager-thread',...params}})+'\n'),calls:async()=>((await readFile(calls,'utf8')).split('\n').filter(Boolean).map(line=>JSON.parse(line)))};
 }
 const canUpdate=bridge=>updateActivity({work:bridge.state(),view:{tasks:[]}}).safe;
+
+test('bridge publishes validated conversational attention only after native tool success and preserves retry identity',async t=>{
+ const {bridge,notify}=await fixture(t);await bridge.startWork('remain','request-attention');
+ const args={requestId:'choose-account',message:'Which account should I use?'},item={id:'attention-call',type:'mcpToolCall',server:'local_orchestration',tool:'request_attention',arguments:args,status:'inProgress',result:null};
+ await notify('item/started',{turnId:'turn-1',item});await until(()=>bridge.state().items.some(value=>value.id===item.id));
+ assert.equal(bridge.state().items.find(value=>value.id===item.id).attention,null);
+ const completed={...item,status:'completed',result:{content:[{type:'text',text:JSON.stringify({ok:true,attention:args})}]}};
+ await notify('item/completed',{turnId:'turn-1',item:completed});await until(()=>bridge.state().items.find(value=>value.id===item.id)?.attention);
+ assert.deepEqual(bridge.state().items.find(value=>value.id===item.id).attention,{id:args.requestId,message:args.message});
+ await notify('item/completed',{turnId:'turn-1',item:{...completed,id:'retried-attention-call'}});await until(()=>bridge.state().items.some(value=>value.id==='retried-attention-call'));
+ assert.deepEqual(bridge.state().items.filter(value=>value.attention).map(value=>value.attention.id),[args.requestId,args.requestId]);
+});
 
 test('actual turn/start → completed leaves native terminal state positively idle for updates',async t=>{
  const {bridge,events,calls}=await fixture(t);await bridge.startWork('complete','request-complete');await until(()=>bridge.state().status==='completed');
@@ -86,4 +98,18 @@ test('interrupted native terminal state becomes idle only after matching complet
  const {bridge}=await fixture(t);await bridge.startWork('remain','request-interrupt');assert.equal(canUpdate(bridge),false);
  await bridge.interrupt();await until(()=>bridge.state().status==='interrupted');
  assert.equal(bridge.state().activeTurnId,null);assert.equal(bridge.state().workStarting,false);assert.equal(canUpdate(bridge),true);
+});
+
+test('native approval identity survives replay but distinguishes reused transport IDs in a new turn',async t=>{
+ const {bridge,notify,request}=await fixture(t);await bridge.startWork('remain','request-approval-identity');
+ const method='item/tool/requestUserInput',params={turnId:'turn-1',questions:[{id:'q',question:'Choose scope'}]};
+ await request(9000,method,params);await until(()=>bridge.state().approvals.length===1);
+ const first=bridge.state().approvals[0].attentionId;
+ await request(9000,method,params);
+ await notify('item/completed',{turnId:'turn-1',item:{id:'approval-fence',type:'agentMessage',text:'fence'}});
+ await until(()=>bridge.state().messages.some(message=>message.id==='approval-fence'));
+ assert.equal(bridge.state().approvals[0].attentionId,first);
+ await notify('serverRequest/resolved',{requestId:9000});await until(()=>bridge.state().approvals.length===0);
+ await request(9000,method,{...params,turnId:'turn-2'});await until(()=>bridge.state().approvals.length===1);
+ assert.notEqual(bridge.state().approvals[0].attentionId,first);
 });

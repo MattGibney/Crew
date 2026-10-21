@@ -27,3 +27,7 @@ Renderer API/origin/preload boundaries and controller/worker ownership remain un
 ## Acceptance boundaries
 
 See `tickets/AI-014.md` for the public capability summary. Browser fixtures cover synthetic media permission/race cleanup, targeted cards, approvals, saved setup values and responsive presentation. Real checks cover subscription preparation, saved native text conversation and voice transport/greeting without microphone capture. Existing controller concurrency/lifecycle regression tests remain required; this UI stage does not reprovision applications or modify any configured business repository. Native observation was unavailable during that acceptance run. Native accessibility and physical microphone/speaker/interruption acceptance remain separate human checks.
+
+## Audible feedback
+
+See [Voice and attention sounds](SOUNDS.md) for call connection, hang-up and mute/unmute cues, action-required notifications, deduplication and playback ownership. Routine completion and self-resolved failures stay quiet.

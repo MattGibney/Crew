@@ -18,6 +18,7 @@ import { relative, sep, isAbsolute } from 'node:path';
 import { prepareCrewStorage } from './storage.mjs';
 import { loadAppConfig } from '../config.mjs';
 import { instanceKey, summarizeTasks, isAppURL, isExternalHTTPS, permitsAudio, childEnvironment } from './lifecycle.mjs';
+import { createNativeAttention } from './native-attention.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const args = process.argv.slice(app.isPackaged ? 1 : 2);
 const flag = args.indexOf('--config');
@@ -50,10 +51,11 @@ const setupURL = pathToFileURL(join(root, 'renderer-dist/setup.html')).href;
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const safe = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1400);
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));
+const attentionSound = createNativeAttention({ ledgerPath: join(desktopData, 'attention-sounds.json'), soundPath: join(root, 'desktop/sounds/attention.wav'), onStatus: () => { void statusFile().catch(() => {}); } });
 async function statusFile() {
   if (!config) return;
   const target = join(config.dataDir, 'desktop-status.json');
-  const value = { pid: process.pid, backendPid: backend?.exitCode === null ? backend.pid : null, configPath, projectId: config.project.id, port: config.port, backendReady, windowOpen: Boolean(window && !window.isDestroyed()), windowCount: window && !window.isDestroyed() ? 1 : 0, isQuitting:quitting, pendingCount:counts.pending, activeCount:counts.active, ...counts, error: lastError, update:updateCoordinator?.getStatus(), updatedAt: new Date().toISOString() };
+  const value = { pid: process.pid, backendPid: backend?.exitCode === null ? backend.pid : null, configPath, projectId: config.project.id, port: config.port, backendReady, windowOpen: Boolean(window && !window.isDestroyed()), windowCount: window && !window.isDestroyed() ? 1 : 0, isQuitting:quitting, pendingCount:counts.pending, activeCount:counts.active, ...counts, error: lastError, attentionSound: attentionSound.getStatus(), update:updateCoordinator?.getStatus(), updatedAt: new Date().toISOString() };
   const temporary = `${target}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   await rename(temporary, target);
@@ -130,7 +132,11 @@ async function openWindow() {
 }
 async function poll() {
   if (!backendReady || quitting) return;
-  try { const view = await api('orchestration'); counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null; }
+  try {
+    const [view, work] = await Promise.all([api('orchestration'), api('state')]);
+    counts = summarizeTasks(view); lastError = view.error ? safe(view.error) : null;
+    attentionSound.update({ work, orchestration: view });
+  }
   catch (error) { counts = { active:null, pending:null }; lastError = safe(error); }
   await updateCoordinator?.refresh();
   updateTray(); await statusFile().catch(() => {});
@@ -162,6 +168,11 @@ async function startup({ showWindow = true } = {}) {
     finally { await log.close(); }
     const owned = backend;
     owned.on('message',message=>{
+      if (backend === owned && !quitting && message?.type === 'crew:attention:state') {
+        if (message.event?.type === 'work-state') attentionSound.update({ work: message.event.state });
+        if (message.event?.type === 'orchestration-state') attentionSound.update({ orchestration: message.event.state });
+        return;
+      }
       if(backend!==owned||message?.type!=='crew:update:request'||typeof message.id!=='string'||!/^[a-zA-Z0-9_-]{1,80}$/.test(message.id)||!UPDATE_ACTIONS.has(message.action))return;
       void (async()=>{try{const status=await updateCoordinator.request(message.action);sendUpdate(owned,{type:'crew:update:response',id:message.id,status});}catch(error){sendUpdate(owned,{type:'crew:update:response',id:message.id,status:updateCoordinator?.getStatus(),error:safe(error)});}})();
     });
@@ -226,6 +237,7 @@ async function quitInstance() {
   quitting = true; discoveryController?.abort(); clearInterval(pollTimer);
   try {
     await stopOwnedBackend();
+    await attentionSound.dispose();
     if (window && !window.isDestroyed()) window.destroy();
     if (setupWindow && !setupWindow.isDestroyed()) setupWindow.destroy();
     await statusFile().catch(() => {}); tray?.destroy(); app.quit();
@@ -495,6 +507,7 @@ else {
   app.on('second-instance', () => void openWindow());
   app.on('activate', () => { if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.show(); setupWindow.focus(); } else void openWindow(); });
   app.on('window-all-closed', () => { /* Tray and backend intentionally keep running. */ });
+  app.on('will-quit', () => { void attentionSound.dispose(); });
   app.on('before-quit', event => { if (!quitting) { event.preventDefault(); void quitInstance(); } });
   // Do not hold ESM entry evaluation open waiting for Electron's ready event.
   // Electron can defer ready until the entry module finishes evaluating.

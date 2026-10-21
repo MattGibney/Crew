@@ -20,6 +20,7 @@ let orchestration = { maxConcurrent: 6, tasks: [
   task(8, 'failed', { failure: 'Fixture environment readiness check failed.' }), task(9, 'stopped'), task(10, 'disposed'),
 ] };
 let work = { threadId: 'fixture-manager', status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
+let nativeAttentionSound = false;
 let proof = { calls: [], media: null, setup: [] };
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
@@ -37,6 +38,7 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/__telemetry') { proof.media = body; return send({ ok: true }); }
       if (url.pathname === '/__setup-proof') { proof.setup.push(body); return send({ ok: true }); }
       if (url.pathname === '/__control') {
+        if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
         if (body.work) { work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
         if (body.orchestration) { orchestration = body.orchestration; emit({ type: 'orchestration-state', state: orchestration }); }
         if (body.event) emit(body.event);
@@ -45,7 +47,8 @@ const server = http.createServer(async (req, res) => {
         return send({ ok: true });
       }
       const name = url.pathname.replace('/api/', ''); proof.calls.push({ name, body });
-      if (name === 'config') return send({ project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
+      if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
+      if (name === 'config') return send({ nativeAttentionSound, project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
       if (name === 'prepare') return send({ plan: 'synthetic fixture', state: work });
       if (name === 'state') return send(work);
       if (name === 'orchestration') return send(orchestration);
@@ -57,6 +60,7 @@ const server = http.createServer(async (req, res) => {
       if (['voice-ready', 'voice-status', 'disconnect', 'approval', 'stop-work', 'discuss-attention'].includes(name)) return send({ ok: true });
       return send({ error: `Unknown fixture endpoint ${name}` }, 404);
     }
+    if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (url.pathname === '/__proof') return send(proof);
     if (url.pathname === '/__state') return send({ work, orchestration });
     if (url.pathname === '/__media.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(await readFile(path.join(root, 'tests/fixtures/browser-media.js'))); }

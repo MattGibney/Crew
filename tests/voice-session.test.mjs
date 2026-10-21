@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
 import {createVoiceInput,voiceActivityEvent} from '../renderer/src/manager/voice-input.js';
+import {createCallCues} from '../renderer/src/manager/sounds.js';
 import {createSilentAudio} from '../renderer/src/manager/voice-silence.js';
 const source=(await readFile(new URL('../renderer/src/manager/useVoiceSession.js',import.meta.url),'utf8')).replace(/^import .*;\s*$/gm,'').replace('export function useVoiceSession','function useVoiceSession');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
@@ -17,7 +18,7 @@ class Events{
  count(){return [...this.listeners.values()].reduce((sum,handlers)=>sum+handlers.size,0);}
 }
 function harness({acquire,replaceTrack}={}){
- const cells=[],effects=[],connections=[],captures=[],audioContexts=[],requests=[],errors=[],timers=new Map();
+ const cells=[],effects=[],connections=[],captures=[],audioContexts=[],requests=[],errors=[],sounds=[],timers=new Map();
  const window=new Events(),document=new Events();let cursor=0,dirty=false,disposed=false,current,timerId=0;
  const depsSame=(a,b)=>Boolean(a&&b&&a.length===b.length&&a.every((value,index)=>Object.is(value,b[index])));
  const useRef=initial=>{const index=cursor++;return cells[index]??(cells[index]={current:initial});};
@@ -45,12 +46,13 @@ function harness({acquire,replaceTrack}={}){
   emit(state='connected'){this.connectionState=state;this.onconnectionstatechange?.();}
   close(){this.closed=true;this.connectionState='closed';}
  }
- const context=vm.createContext({useRef,useState,useCallback,useEffect,createVoiceInput,voiceActivityEvent,createSilentAudio:()=>createSilentAudio(AudioContext),navigator:{mediaDevices:{getUserMedia:async constraints=>{captures.push(constraints);return acquire?acquire(captures.length):stream();}}},RTCPeerConnection:Peer,window,document,api:async(route,input)=>{requests.push({route,input});return route==='connect'?{sessionToken:'synthetic-session',sdp:'v=0\r\nsynthetic-answer'}:{};},errorText:error=>String(error?.message||error),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},setInterval:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id),clearInterval:id=>timers.delete(id)});
+ const context=vm.createContext({useRef,useState,useCallback,useEffect,createVoiceInput,voiceActivityEvent,createCallCues,createSilentAudio:()=>createSilentAudio(AudioContext),navigator:{mediaDevices:{getUserMedia:async constraints=>{captures.push(constraints);return acquire?acquire(captures.length):stream();}}},RTCPeerConnection:Peer,window,document,api:async(route,input)=>{requests.push({route,input});return route==='connect'?{sessionToken:'synthetic-session',sdp:'v=0\r\nsynthetic-answer'}:{};},errorText:error=>String(error?.message||error),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},setInterval:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id),clearInterval:id=>timers.delete(id)});
  vm.runInContext(source+'\nglobalThis.voiceHook=useVoiceSession;',context,{filename:'useVoiceSession.js'});
- function render(){cursor=0;dirty=false;current=context.voiceHook(error=>errors.push(error));while(effects.length)effects.shift()();return current;}
+ const soundPlayer={play:kind=>sounds.push(kind),unlock(){}};
+ function render(){cursor=0;dirty=false;current=context.voiceHook(error=>errors.push(error),soundPlayer);while(effects.length)effects.shift()();return current;}
  render();
  async function flush(){for(let round=0;round<12;round++){await Promise.resolve();if(dirty)render();}}
- return {get voice(){if(dirty)render();return current;},window,document,connections,captures,audioContexts,requests,errors,timers,flush,
+ return {get voice(){if(dirty)render();return current;},window,document,connections,captures,audioContexts,requests,errors,sounds,timers,flush,
   async connect(){await this.voice.connect('synthetic-voice');await flush();return connections.at(-1);},
   destroy(){for(const cell of cells)cell?.cleanup?.();disposed=true;timers.clear();},
  };
@@ -114,4 +116,23 @@ test('device-ended input cannot be recaptured by transport events, and an error 
  h.voice.toggleMute();await h.flush();assert.equal(h.captures.length,2);h.voice.toggleMute();await h.flush();
  h.voice.handleEvent({type:'error',message:'synthetic transport failure'});await h.flush();await connected(h);
  assert.equal(h.captures.length,2);assert.equal(h.voice.openMicMuted,true);assert.equal(h.voice.transmitting,false);
+});
+
+// Integration assertions exercise cue timing in the actual voice hook.
+test('real hook cues deduplicate connection/end and wait for successful explicit unmute',async t=>{
+ const h=harness();t.after(()=>h.destroy());const peer=await connected(h);
+ peer.emit();await h.flush();assert.deepEqual(h.sounds,['connected']);
+ h.voice.toggleMute();await h.flush();assert.deepEqual(h.sounds,['connected','muted']);
+ h.voice.toggleMute();await h.flush();assert.deepEqual(h.sounds,['connected','muted','unmuted']);
+ await h.voice.disconnect();await h.flush();h.voice.handleEvent({type:'closed'});await h.flush();
+ assert.deepEqual(h.sounds,['connected','muted','unmuted','ended']);
+});
+test('real hook stays quiet for denied and canceled unmute and cancellation before connection',async t=>{
+ const denied=deferred(),h=harness({acquire:()=>denied.promise});t.after(()=>h.destroy());
+ await connected(h);h.voice.toggleMute();await h.flush();
+ h.voice.toggleMute();await h.flush();denied.reject(new Error('denied'));await h.flush();
+ assert.deepEqual(h.sounds,['connected']);
+ await h.voice.disconnect();await h.flush();
+ const p=await h.connect();await h.voice.disconnect();p.emit();await h.flush();
+ assert.deepEqual(h.sounds,['connected','ended']);
 });
