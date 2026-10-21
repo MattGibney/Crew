@@ -1,24 +1,33 @@
 const HISTORY = new Set(['completed', 'failed', 'stopped', 'disposed', 'canceled', 'cancelled']);
 const LABELS = { queued: 'Queued', launching: 'Preparing', running: 'Working', resume_queued: 'Resume queued', awaiting_answer: 'Needs your answer', blocked: 'Blocked', verifying: 'Checking result', pausing: 'Pausing', stopping: 'Stopping', paused: 'Paused', stopped: 'Stopped', completed: 'Completed', failed: 'Needs attention', disposed: 'Removed', canceled: 'Canceled', cancelled: 'Canceled' };
+export const currentAssignment = task => (task.assignments || []).find(item => item.id === task.currentAssignmentId) || { id: 'initial', ticket: task.ticket, brief: task.brief, status: task.status, result: task.result };
+export const queuedAssignments = task => (task.assignments || []).filter(item => item.status === 'queued' && item.id !== task.currentAssignmentId);
+export const canDiscussFollowup = task => Boolean(task.worktree) && task.status !== 'disposed' && !task.retirement;
+export function workerFollowupRequest(task) {
+  if (!canDiscussFollowup(task)) throw new Error('This worker has no retained worktree available for follow-up.');
+  return `CREW_WORKER_FOLLOWUP_REVIEW\nI want to discuss another assignment for this retained worker: ${JSON.stringify({ taskId: task.id, expectedRunId: task.runId || null, expectedAssignmentId: currentAssignment(task).id })}. Read its current status first, then ask me for the new brief and explicit scope authorization. This message requests discussion only and does not authorize execution. After I authorize the specific work, use the manager follow-up assignment operation for this same worker, preserving its conversation, worktree, prior results and normal approvals. Queue direction if it is busy. Do not start a different worker, reinterpret a lifecycle resume as a new brief, or widen the previous assignment automatically.`;
+}
 export const pendingAttention = task => (task.attention || []).filter(item => !item.ackedAt);
 export const pendingLifecycle = task => (task.lifecycleRequests || []).find(item => ['pending', 'processing'].includes(item.status));
 export function groupWorkers(tasks) {
   const active = [], history = [];
   for (const task of tasks) {
     // Pending reviews, retained paused workers and observed live processes must never disappear into history.
-    (HISTORY.has(task.status) && !pendingAttention(task).length && !pendingLifecycle(task) && task.execution?.live !== true ? history : active).push(task);
+    (HISTORY.has(task.status) && !pendingAttention(task).length && !pendingLifecycle(task) && !queuedAssignments(task).length && task.execution?.live !== true ? history : active).push(task);
   }
   return { active, history: history.sort((a, b) => (Date.parse(b.updatedAt) || 0) - (Date.parse(a.updatedAt) || 0)), retained: tasks.filter(task => task.worktree && task.status !== 'disposed').length };
 }
 export function workerStatus(task) { return task.retirement?.reason === 'worktree-already-missing' ? 'Retired' : LABELS[task.status] || 'Status unavailable'; }
 export function workerProgress(task) {
   if(task.retirement?.reason === 'worktree-already-missing') return 'Worktree already missing. History retained; resource cleanup unverified.';
+  if (queuedAssignments(task).length && typeof task.followupWait === 'string' && task.followupWait.trim()) return task.followupWait;
   if (['queued', 'resume_queued'].includes(task.status)) {
     // Only the controller knows whether capacity, an update or explicit manager start is blocking admission.
     if (typeof task.capacityWait === 'string' && task.capacityWait.trim()) return task.capacityWait;
     return task.status === 'resume_queued' ? 'Waiting to resume.' : 'Waiting to start.';
   }
-  return task.failure || task.result?.message || task.progress || (task.status === 'launching' ? 'Preparing the project environment.' : 'Waiting for the next progress report.');
+  const assignment = currentAssignment(task);
+  return task.failure || assignment.result?.message || task.progress || (task.status === 'launching' ? 'Preparing the project environment.' : 'Waiting for the next progress report.');
 }
 export function workerTiming(task, now = Date.now()) {
   const execution = task.execution;
@@ -40,7 +49,7 @@ export function workerActions(task) {
   if (task.execution?.live === true) return ['pause', 'stop'];
   if (['running', 'queued', 'launching', 'resume_queued', 'verifying', 'awaiting_answer'].includes(task.status)) return ['pause', 'stop'];
   if (['paused', 'stopped', 'failed', 'blocked'].includes(task.status)) return [...(task.question?.runId === task.runId && task.answer?.questionId !== task.question.id ? [] : ['resume']), 'dispose'];
-  return task.status === 'completed' ? ['dispose'] : [];
+  return task.status === 'completed' ? [...(queuedAssignments(task).length ? ['resume'] : []), 'dispose'] : [];
 }
 export function workerActionRequest(task, action, id = `worker-${crypto.randomUUID()}`) {
   if (!workerActions(task).includes(action)) throw new Error('This worker action is no longer available. Refresh its status.');

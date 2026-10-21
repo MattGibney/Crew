@@ -56,3 +56,45 @@ test('missing worktree retirement is honest history and review requests never au
  const request=workerRecoveryReviewRequest(worker({status:'failed',worktree:'/fixture/worker'}));assert.match(request,/"taskId":"task-example"/);assert.match(request,/"expectedRunId":"run-one"/);assert.match(request,/review only/);assert.match(request,/explicitly approve/);
  assert.throws(()=>workerRecoveryReviewRequest(worker({status:'running',worktree:'/fixture/worker'})));
 });
+
+test('follow-up cards show current assignment, keep pending direction visible and do not reuse an earlier result', async () => {
+  const { currentAssignment, queuedAssignments, workerFollowupRequest, canDiscussFollowup } = await import('./worker-model.js');
+  const task = worker({ worktree: '/retained/worker', result: { message: 'Old research result' }, progress: 'Implementing approved changes', currentAssignmentId: 'implementation', assignments: [
+    { id: 'initial', status: 'completed', ticket: 'GH-42', brief: 'Research only', result: { message: 'Old research result' } },
+    { id: 'implementation', status: 'active', ticket: 'GH-42', brief: 'Implement approved changes' },
+    { id: 'documentation', status: 'queued', ticket: 'GH-42', brief: 'Document approved behavior' },
+  ] });
+  assert.equal(currentAssignment(task).brief, 'Implement approved changes');
+  assert.equal(workerProgress(task), 'Implementing approved changes');
+  assert.deepEqual(queuedAssignments(task).map(item => item.id), ['documentation']);
+  assert.equal(groupWorkers([{ ...task, status: 'completed' }]).active.length, 1);
+  const discussion = workerFollowupRequest(task);
+  assert.match(discussion, /"expectedAssignmentId":"implementation"/);
+  assert.match(discussion, /"expectedRunId":"run-one"/);
+  assert.match(discussion, /does not authorize execution/);
+  assert.match(discussion, /ask me for the new brief and explicit scope authorization/);
+  assert.equal(canDiscussFollowup({ ...task, status: 'disposed' }), false);
+  assert.throws(() => workerFollowupRequest({ ...task, worktree: null }));
+  assert.equal(currentAssignment(worker({})).brief, 'Read-only audit');
+});
+
+test('legacy follow-up selection uses initial identity; held completed follow-ups surface recovery and explicit resume', async () => {
+  const { currentAssignment, workerFollowupRequest } = await import('./worker-model.js');
+  const legacy = worker({ worktree: '/retained/worker', status: 'completed', result: { message: 'Research complete' } });
+  assert.equal(currentAssignment(legacy).id, 'initial');
+  assert.match(workerFollowupRequest(legacy), /"expectedAssignmentId":"initial"/);
+  assert.deepEqual(workerActions(legacy), ['dispose']);
+  const queued = { ...legacy, currentAssignmentId: 'initial', assignments: [
+    { id: 'initial', status: 'completed', result: legacy.result },
+    { id: 'implementation', status: 'queued' },
+  ] };
+  for (const followupWait of ['Waiting for explicit resume after reopening', 'Retained worktree has unreviewed changes', 'Retained worktree is missing; review recovery']) {
+    const task = { ...queued, followupWait };
+    assert.equal(workerProgress(task), followupWait);
+    assert.deepEqual(workerActions(task), ['resume', 'dispose']);
+    assert.match(workerActionRequest(task, 'resume', 'resume-followup-action').text, /"expectedRunId":"run-one"/);
+  }
+  assert.equal(workerProgress({ ...legacy, followupWait: 'Stale wait without a pending assignment' }), 'Research complete');
+  assert.deepEqual(workerActions({ ...queued, lifecycleRequests: [{ status: 'processing' }] }), []);
+  assert.deepEqual(workerActions({ ...queued, execution: { live: true } }), ['pause', 'stop']);
+});

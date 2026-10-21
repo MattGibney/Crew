@@ -110,7 +110,7 @@ function WorkDetails({ row, profile }) {
       <span className="inline-flex items-center gap-2"><Wrench className="size-3.5" aria-hidden="true" />Work details{hasResponse && <span className="text-xs">· Written response</span>}</span>
     </summary>
     <div className="mt-4 space-y-5" aria-label="Backing work exchange">
-      {row.messages.map(message => <Message key={message.id} message={message} label={message.role === 'user' ? 'Voice work request' : message.phase === 'commentary' ? 'Work progress' : 'Written response'} copyable />)}
+      {row.messages.map(message => <Message key={message.id} message={message} profile={profile} label={message.role === 'user' ? 'Voice work request' : message.phase === 'commentary' ? 'Work progress' : 'Written response'} copyable />)}
     </div>
   </details>;
 }
