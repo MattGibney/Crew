@@ -7,12 +7,12 @@ const exec=promisify(execFile),root=process.cwd(),runtimeRoot=path.join(root,'ru
 console.log('Disposable acceptance directory:',dir);
 const acceptanceExecutable=process.env.CREW_ACCEPTANCE_EXECUTABLE||path.join(root,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 const binary=path.join(dir,'fake-codex');
-const {createTask,readTask,requestWorkerAction,reportTask}=await import(pathToFileURL(path.join(runtimeRoot,'orchestration-store.mjs')));
+const {createTask,readTask,requestWorkerAction,reportTask}=await import(pathToFileURL(path.join(runtimeRoot,'orchestration/store.mjs')));
 async function until(fn,label){const deadline=Date.now()+30000;while(Date.now()<deadline){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out '+label);}
 
 await writeFile(binary,`#!${process.execPath}
 import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';
-import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(runtimeRoot,'orchestration-store.mjs')).href)};
+import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(runtimeRoot,'orchestration/store.mjs')).href)};
 if(process.argv.includes('--version')){console.log('codex-cli synthetic');process.exit(0);}
 const binding=process.argv.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));
 const [,state,role,taskId,runId]=binding?JSON.parse(binding.slice(binding.indexOf('=')+1)):[];

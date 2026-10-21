@@ -2,21 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {createConversationTimeline} from '../runtime/conversation-timeline.mjs';
+import {createConversationTimeline} from '../runtime/manager/conversation/timeline.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
-import {createController} from '../controller.mjs';
-import {createTask,readTask,updateTask,requestWorkerAction,requestWorkerModel} from '../orchestration-store.mjs';
-import {prepareProjectEnvironment} from '../project-environment.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction,requestWorkerModel} from '../runtime/orchestration/store.mjs';
+import {prepareProjectEnvironment} from '../runtime/projects/environment.mjs';
 const exec=promisify(execFile);
 async function wait(fn,predicate,label){const end=Date.now()+30000;let value;while(Date.now()<end){value=await fn();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out ${label}: ${JSON.stringify(value)}`);}
 test('GH-20/24/22 explicitly provisioned legacy plan recovery, model continuation and restored handoff preserve one context',async t=>{
  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'crew-grouped-012-'))),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');await mkdir(repo);await exec('git',['init','-b','main',repo]);const script=`import fs from 'node:fs';const phase=process.argv[2],file='.fixture/state.json';fs.mkdirSync('.fixture',{recursive:true});const data=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};if(phase==='setup')data.seeds=(data.seeds||0)+1;if(phase==='teardown')data.disposed=true;fs.writeFileSync(file,JSON.stringify(data));`;
  await writeFile(path.join(repo,'action.mjs'),script);await writeFile(path.join(repo,'.gitignore'),'.fixture/\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
  await writeFile(binary,`#!${process.execPath}
-import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration-store.mjs',import.meta.url).href)};
+import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration/store.mjs',import.meta.url).href)};
 const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 // Exclusive ownership makes accidental overlap a real child-process failure.
 const lock=${JSON.stringify(path.join(dir,'active'))};closeSync(openSync(lock,'wx'));const log=${JSON.stringify(log)},threadId='retained-model-thread',turnId='turn-'+run,send=m=>process.stdout.write(JSON.stringify(m)+'\\n');

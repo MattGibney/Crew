@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {createTask,readTask} from '../orchestration-store.mjs';
+import {createTask,readTask} from '../runtime/orchestration/store.mjs';
 const {_electron}=await import(process.env.CREW_PLAYWRIGHT_MODULE||'playwright-core');
 const exec=promisify(execFile),root=process.cwd(),executable=process.env.CREW_ACCEPTANCE_EXECUTABLE;
 if(!executable||!path.isAbsolute(executable)||!executable.includes('.app/Contents/MacOS/'))throw Error('Supply the built package executable through CREW_ACCEPTANCE_EXECUTABLE.');
@@ -51,7 +51,7 @@ if(m.method==='turn/start'){
  send({method:'item/completed',params:{threadId,turnId,item:{id:'smoke-reply-'+sequence,type:'agentMessage',text}}});send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
 }}
 `,{mode:0o700});
- await exec(process.execPath,[path.join(root,'cli.mjs'),'init','--template','fixture','--config',configPath]);
+ await exec(process.execPath,[path.join(root,'runtime/cli.mjs'),'init','--template','fixture','--config',configPath]);
  const raw=JSON.parse(await readFile(configPath,'utf8'));raw.runtime.port=port;raw.runtime.codexBinary=binary;raw.project.name='GH50 packaged smoke';await writeFile(configPath,JSON.stringify(raw,null,2)+'\n');
  stateDir=path.resolve(path.dirname(configPath),raw.runtime.dataDir,'orchestration');await mkdir(path.dirname(stateDir),{recursive:true});await writeFile(path.join(path.dirname(stateDir),'manager-chat.json'),JSON.stringify({threadId:'packaged-native-manager'}));
  const env={...process.env,CREW_APP_DATA:path.join(dir,'app-data'),AI_MANAGER_CONFIG:configPath,AI_MANAGER_CODEX_BINARY:binary};for(const key of ['ELECTRON_RUN_AS_NODE','AI_MANAGER_PORT','VOICE_PORT'])delete env[key];

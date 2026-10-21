@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {requireWorkerModel} from '../runtime/worker-model-selection.mjs';
-import {createTask,readTask,updateTask,requestWorkerModel,requestWorkerAction} from '../runtime/orchestration-store.mjs';
+import {requireWorkerModel} from '../runtime/workers/model-selection.mjs';
+import {createTask,readTask,updateTask,requestWorkerModel,requestWorkerAction} from '../runtime/orchestration/store.mjs';
 
 test('catalog uses exact native model IDs, follows pages and rejects unavailable aliases and malformed pagination',async()=>{
  const calls=[];const rpc=async(method,args)=>{calls.push({method,args});return args.cursor?{data:[{model:'fixture-astra',id:'astra-display'}],nextCursor:null}:{data:[{model:'fixture-sol'}],nextCursor:'second'};};

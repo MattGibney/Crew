@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, stat, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createPromptSettings, promptVersion, buildManagerInstructions, buildWorkerInstructions } from '../runtime/prompt-settings.mjs';
+import { createPromptSettings, promptVersion, buildManagerInstructions, buildWorkerInstructions } from '../runtime/manager/instructions/settings.mjs';
 const settings = async (options = {}) => createPromptSettings({ stateDir: await mkdtemp(path.join(os.tmpdir(), 'crew-prompts-')), projectId: 'example', ...options });
 test('initial editors show complete defaults and save replaces them durably without rewriting configured files', async () => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), 'crew-prompts-'));
@@ -111,7 +111,7 @@ test('default manager owns ordinary delegation and supervision while cleanup and
 });
 
 test('persisted v0.14 defaults upgrade per role without changing active manager or historical worker context',async()=>{
- const {createManagerLifecycle}=await import('../runtime/manager-lifecycle.mjs');
+ const {createManagerLifecycle}=await import('../runtime/manager/lifecycle.mjs');
  const old=JSON.parse(await readFile(new URL('./fixtures/prompts-v0.14.0.json',import.meta.url),'utf8'));
  assert.equal(promptVersion(old.manager),'4104031ce2d5130424cc649c52ae5d10347ae1e200fa534c6fff325ab4a14f7a');
  assert.equal(promptVersion(old.worker),'ee36c566b334978c7a21d72e401d373afe510087fb589a13d045847ce0cc2dd8');

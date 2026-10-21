@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseApiInput} from '../runtime/backend/http-input.mjs';
-import {parseWorkerApproval} from '../runtime/backend/approval-input.mjs';
+import {parseApiInput} from '../runtime/http/input.mjs';
+import {parseWorkerApproval} from '../runtime/http/approval-input.mjs';
 test('worker approval decoder preserves numeric native identity and null startup turn',()=>{
  const input={taskId:'worker-0001',runId:'run-0001',approvalId:'approval-0001',threadId:'thread-0001',turnId:null,requestId:12,response:{action:'cancel'}};
  assert.deepEqual(parseWorkerApproval(input),input);

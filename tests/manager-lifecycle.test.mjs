@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { createBridge } from '../runtime/codex-bridge.mjs';
-import { createManagerLifecycle } from '../runtime/manager-lifecycle.mjs';
-import { createPromptSettings } from '../runtime/prompt-settings.mjs';
+import { createBridge } from '../runtime/manager/bridge/index.mjs';
+import { createManagerLifecycle } from '../runtime/manager/lifecycle.mjs';
+import { createPromptSettings } from '../runtime/manager/instructions/settings.mjs';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate) {
   const deadline = Date.now() + 4000;

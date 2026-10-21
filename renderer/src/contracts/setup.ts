@@ -1,7 +1,7 @@
 import type {
   ExecutionPlan,
   ScriptAction,
-} from "../../../execution/contracts.mjs";
+} from "../../../src/workers/contracts.mjs";
 export type { ExecutionPlan };
 export type ExecutionCommand = ScriptAction;
 export interface Repository {

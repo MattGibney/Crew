@@ -3,7 +3,7 @@ import {
   isArchivedTask,
   activeTasks,
   archivedTasks,
-} from "../../../worker-archive.mjs";
+} from "../../../src/shared/worker-archive.mjs";
 const HISTORY = new Set([
   "completed",
   "failed",

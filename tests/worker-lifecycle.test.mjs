@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, readTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../runtime/orchestration-store.mjs';
+import { createTask, readTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../runtime/orchestration/store.mjs';
 const roots=[];
 test.after(async()=>Promise.all(roots.map(root=>rm(root,{recursive:true,force:true}))));
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'crew-lifecycle-test-'));roots.push(dir);return dir;}

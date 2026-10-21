@@ -9,9 +9,9 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ManagerReview, MANAGER_REVIEW_INTERVAL_MS } from '../manager-review.mjs';
+import { ManagerReview, MANAGER_REVIEW_INTERVAL_MS } from '../runtime/manager/reviews/scheduler.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = fileURLToPath(new URL('../runtime/', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function temporary(t, cleanup = true) {
   const directory = await mkdtemp(path.join(tmpdir(), 'crew-scratchpad-integration-'));

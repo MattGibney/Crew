@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink, chmod, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { discoverProject, inventoryProject, runDiscoveryWorker } from '../runtime/project-discovery.mjs';
-import { loadAppConfig } from '../runtime/config.mjs';
+import { discoverProject, inventoryProject, runDiscoveryWorker } from '../runtime/projects/discovery.mjs';
+import { loadAppConfig } from '../runtime/config/index.mjs';
 const roots = [];
 test.after(async () => { await Promise.all(roots.map(p => rm(p, { recursive: true, force: true }))); });
 async function fixture() {

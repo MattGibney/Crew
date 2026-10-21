@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 
 import { api, errorText } from "../api.js";
 import { archivedWorkers } from "../worker-model.js";
-import { archiveTime } from "../../../../worker-archive.mjs";
+import { archiveTime } from "../../../../src/shared/worker-archive.mjs";
 export function ArchivedWorkers({ manager }: ManagerProps) {
   const [confirmation, setConfirmation] = useState<ArchiveRequest | null>(null);
   const [busy, setBusy] = useState<string | null>(null),

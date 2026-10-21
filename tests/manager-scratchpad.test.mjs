@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, rm, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ManagerScratchpad } from '../manager-scratchpad.mjs';
+import { ManagerScratchpad } from '../runtime/manager/scratchpad.mjs';
 
 async function fixture(t, options = {}) {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'crew-scratchpad-'));

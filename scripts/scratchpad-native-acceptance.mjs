@@ -7,7 +7,7 @@ import path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import net from 'node:net';
-import { ManagerScratchpad } from '../manager-scratchpad.mjs';
+import { ManagerScratchpad } from '../runtime/manager/scratchpad.mjs';
 const { _electron } = await import(process.env.CREW_PLAYWRIGHT_MODULE || 'playwright-core');
 const exec = promisify(execFile), root = process.cwd();
 const dir = await mkdtemp(path.join(tmpdir(), 'crew-scratchpad-native-'));
@@ -27,7 +27,7 @@ if(m.method==='thread/realtime/listVoices')result={voices:{v3:['cove'],defaultV1
 console.log(JSON.stringify({id:m.id,result}));}
 `, { mode: 0o700 });
 const configPath = path.join(dir, 'project', 'project.json');
-await exec(process.execPath, [path.join(root, 'cli.mjs'), 'init', '--template', 'fixture', '--config', configPath]);
+await exec(process.execPath, [path.join(root, 'runtime/cli.mjs'), 'init', '--template', 'fixture', '--config', configPath]);
 const raw = JSON.parse(await readFile(configPath, 'utf8'));
 raw.runtime.port = port; raw.runtime.codexBinary = binary; raw.project.name = 'Scratchpad native acceptance';
 await writeFile(configPath, JSON.stringify(raw, null, 2));
@@ -44,7 +44,7 @@ let electron, nativeProcess;
 const until = async (fn, label) => { const deadline = Date.now() + 30000; while (Date.now() < deadline) { const value = await fn(); if (value) return value; await new Promise(resolve => setTimeout(resolve, 100)); } throw Error(`Timed out: ${label}`); };
 const quit = async () => { if (!electron || nativeProcess.exitCode !== null) return; await electron.evaluate(({ dialog, Menu }) => { dialog.showMessageBox = async () => ({ response: 1 }); Menu.getApplicationMenu().items[0].submenu.items.find(item => item.label === 'Quit Crew…').click(); }); await until(() => nativeProcess.exitCode !== null, 'owned source Electron exits'); };
 const launch = async () => { electron = await _electron.launch({ executablePath, args: [root, '--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'], env, timeout: 30000 }); nativeProcess = electron.process(); const page = await electron.firstWindow(); await page.waitForURL(`http://127.0.0.1:${port}/**`); return page; };
-const callMcp = input => new Promise((resolve, reject) => { const child = spawn(process.execPath, [path.join(root, 'orchestration-mcp.mjs'), stateDir, 'manager'], { stdio: ['pipe', 'pipe', 'pipe'] }); let out = '', error = ''; child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => error += chunk); child.on('error', reject); child.on('exit', code => { if (code) return reject(Error(error)); try { const response = JSON.parse(out.trim()); assert.equal(response.result.isError, undefined, response.result.content?.[0]?.text); resolve(JSON.parse(response.result.content[0].text)); } catch (failure) { reject(failure); } }); child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'update_manager_scratchpad', arguments: { patchJson: JSON.stringify(input) } } }) + '\n'); });
+const callMcp = input => new Promise((resolve, reject) => { const child = spawn(process.execPath, [path.join(root, 'runtime/orchestration-mcp.mjs'), stateDir, 'manager'], { stdio: ['pipe', 'pipe', 'pipe'] }); let out = '', error = ''; child.stdout.on('data', chunk => out += chunk); child.stderr.on('data', chunk => error += chunk); child.on('error', reject); child.on('exit', code => { if (code) return reject(Error(error)); try { const response = JSON.parse(out.trim()); assert.equal(response.result.isError, undefined, response.result.content?.[0]?.text); resolve(JSON.parse(response.result.content[0].text)); } catch (failure) { reject(failure); } }); child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'update_manager_scratchpad', arguments: { patchJson: JSON.stringify(input) } } }) + '\n'); });
 // Cleanup is in place before observing native startup; only this profile is owned.
 try {
   let page = await launch(); const errors = []; page.on('pageerror', error => errors.push(error.message));

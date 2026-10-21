@@ -10,11 +10,11 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
-import {createController} from '../runtime/controller.mjs';
-import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration-store.mjs';
-import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/update-plan.mjs';
-import {inspectUpdateEvidence} from '../runtime/update-evidence.mjs';
-import {updateActivity} from '../runtime/update-activity.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration/store.mjs';
+import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/updates/plan.mjs';
+import {inspectUpdateEvidence} from '../runtime/updates/evidence.mjs';
+import {updateActivity} from '../runtime/updates/activity.mjs';
 import {createUpdateCoordinator,createPauseUpdateCoordinator} from '../runtime/desktop/updater.mjs';
 const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -25,7 +25,7 @@ async function fixture(t,{timeoutMs=20000}={}){
  await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture']);
  const executable=path.join(directory,'fake-codex.mjs');await writeFile(executable,workerAppServerFixture(`#!${process.execPath}
 import{readFile,appendFile}from'node:fs/promises';
-import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration-store.mjs')).href)};
+import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration/store.mjs')).href)};
 const args=process.argv.slice(2),raw=args.find(a=>a.startsWith('mcp_servers.local_orchestration.args=')),[,state,,id,run]=JSON.parse(raw.slice(raw.indexOf('=')+1)),task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8'));
 const resumed=args.includes('resume'),thread=resumed?args[args.indexOf('resume')+1]:'fixture-thread-'+id;
 process.on('fixtureInterrupt',async()=>{await appendFile(state+'/'+id+'-signals','turn/interrupt\\n');if(!task.brief.includes('refuse interrupt'))process.exit(0);});

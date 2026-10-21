@@ -5,17 +5,17 @@ import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
-import {createController} from '../controller.mjs';
-import {createTask,readTask,updateTask,requestWorkerAction,requestWorkerFollowup} from '../orchestration-store.mjs';
-import {listWorkerRequests,decideWorkerRequest} from '../worker-approvals.mjs';
-import {snapshotProcesses} from '../process-ownership.mjs';
-const exec=promisify(execFile),sourceDir=path.resolve('.');
+import {createController} from '../runtime/workers/controller.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction,requestWorkerFollowup} from '../runtime/orchestration/store.mjs';
+import {listWorkerRequests,decideWorkerRequest} from '../runtime/workers/approval-store.mjs';
+import {snapshotProcesses} from '../runtime/processes/ownership.mjs';
+const exec=promisify(execFile),sourceDir=path.resolve('runtime');
 async function wait(observe,predicate,ms=30000){const end=Date.now()+ms;let value;while(Date.now()<end){value=await observe();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw new Error('Native worker outcome timed out: '+JSON.stringify(value));}
 async function fixture(t){
  const dir=await mkdtemp(path.join(os.tmpdir(),'crew-native-worker-')),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'Read-only native protocol acceptance\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
  const serviceProgram="process.on('SIGTERM',()=>{require('node:fs').appendFileSync(process.argv[1],'SIGTERM\\n');process.exit(0)});require('node:fs').writeFileSync(process.argv[1]+'.ready','ready');setInterval(()=>{},1000)";
  await writeFile(binary,`#!${process.execPath}
-import{createInterface}from'node:readline';import{appendFileSync,writeFileSync}from'node:fs';import{execFileSync,spawn}from'node:child_process';import{reportTask}from${JSON.stringify(new URL('../orchestration-store.mjs',import.meta.url).href)};
+import{createInterface}from'node:readline';import{appendFileSync,writeFileSync}from'node:fs';import{execFileSync,spawn}from'node:child_process';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration/store.mjs',import.meta.url).href)};
 const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 const threadId='native-'+task,turnId='turn-'+run,send=x=>process.stdout.write(JSON.stringify(x)+'\\n');
 process.on('unhandledRejection',error=>{appendFileSync(state+'/'+task+'-fixture-error.txt',String(error.stack));process.exit(1);});const lines=createInterface({input:process.stdin});lines.on('close',()=>process.exit(0));

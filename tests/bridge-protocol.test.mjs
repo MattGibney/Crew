@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeEnvelope, decodeNotification, decodeRpc, decodeApprovalParams, rpcErrorCode } from '../runtime/bridge/protocol.mjs';
+import { decodeEnvelope, decodeNotification, decodeRpc, decodeApprovalParams, rpcErrorCode } from '../runtime/manager/bridge/protocol.mjs';
 
 test('native protocol validates consumed identity and history before projection', () => {
  assert.throws(() => decodeRpc('thread/start', { thread: { id: 19 } }), /Invalid native thread\/start/);

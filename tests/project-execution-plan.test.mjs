@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { discoverProjectExecutionPlan, parseProjectEnvironmentToml, parseProjectNetworkAccess } from '../runtime/project-execution-plan.mjs';
+import { discoverProjectExecutionPlan, parseProjectEnvironmentToml, parseProjectNetworkAccess } from '../runtime/projects/execution-plan.mjs';
 
 const run = promisify(execFile);
 const environment = `# shared developer tooling\nversion = 1\nname = "Example"\n[setup]\nscript = "./tools/dev up --skip-tests"\n[[actions]]\nname = "Start"\nicon = "run"\ncommand = '''\n./tools/dev up --force --deps-only\n\nNX_TUI=false npx nx run-many -t serve -p api web -- --host=0.0.0.0\n'''\n`;

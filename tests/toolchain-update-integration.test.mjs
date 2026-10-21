@@ -7,8 +7,8 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
-import {resolveProjectToolchain,applyProjectToolchain} from '../runtime/project-toolchain.mjs';
-import {runEnvironmentHooks,environmentFile} from '../runtime/worker-environment.mjs';
+import {resolveProjectToolchain,applyProjectToolchain} from '../runtime/toolchains/project.mjs';
+import {runEnvironmentHooks,environmentFile} from '../runtime/projects/worker-environment.mjs';
 
 const exec=promisify(execFile),root=path.resolve('runtime');
 const quote=value=>`'${String(value).replaceAll("'","'\\''")}'`;
@@ -38,7 +38,7 @@ async function fixture(t,{failSetup=false,declareTools=true}={}){
  const args={stateDir,taskId:'toolchain-test',repositoryPath:repo,worktree,baseCommit,plan,toolchainCacheRoot:cache};
  const env={HOME:home,PATH:'/usr/bin:/bin',ZDOTDIR:home,BASH_ENV:path.join(home,'.zshenv')};
  const driver=path.join(temporary,'driver.mjs');
- const run=async script=>{await writeFile(driver,`import{prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment}from ${JSON.stringify(pathToFileURL(path.join(root,'project-environment.mjs')).href)};import fs from'node:fs/promises';import{execFile}from'node:child_process';import{promisify}from'node:util';const exec=promisify(execFile),args=${JSON.stringify(args)};${script}`);return exec(process.execPath,[driver],{env,timeout:60000,maxBuffer:1000000});};
+ const run=async script=>{await writeFile(driver,`import{prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment}from ${JSON.stringify(pathToFileURL(path.join(root,'projects/environment.mjs')).href)};import fs from'node:fs/promises';import{execFile}from'node:child_process';import{promisify}from'node:util';const exec=promisify(execFile),args=${JSON.stringify(args)};${script}`);return exec(process.execPath,[driver],{env,timeout:60000,maxBuffer:1000000});};
  t.after(()=>rm(temporary,{recursive:true,force:true}));
  return{temporary,args,cache,home,startup,env,run,rows:async()=>JSON.parse(await readFile(path.join(worktree,'.evidence/phases.json'),'utf8'))};
 }

@@ -9,7 +9,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 const {_electron}=await import(process.env.CREW_PLAYWRIGHT_MODULE||'playwright-core');
 const exec=promisify(execFile),root=process.cwd(),dir=await mkdtemp(path.join(tmpdir(),'crew-archive-native-'));
-const {createTask,readTask,requestWorkerAction}=await import(pathToFileURL(path.join(root,'orchestration-store.mjs')));
+const {createTask,readTask,requestWorkerAction}=await import(pathToFileURL(path.join(root,'orchestration/store.mjs')));
 const configPath=path.join(dir,'project','project.json'),binary=path.join(dir,'fake-codex');
 const executable=process.env.CREW_ACCEPTANCE_EXECUTABLE||path.join(root,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 console.log('Disposable native archive acceptance:',dir);
@@ -21,7 +21,7 @@ async function quit(){if(nativeProcess?.exitCode===null){await electron.evaluate
 try{
  await writeFile(binary,`#!${process.execPath}
 import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';import{execFileSync}from'node:child_process';
-import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'orchestration-store.mjs')).href)};
+import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'orchestration/store.mjs')).href)};
 if(process.argv.includes('--version')){console.log('codex synthetic acceptance');process.exit(0);}
 const binding=process.argv.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));const[,state,role,taskId,runId]=binding?JSON.parse(binding.slice(binding.indexOf('=')+1)):[];
 let threadId='synthetic-'+process.pid;const turnId='archive-turn-'+process.pid;const send=m=>console.log(JSON.stringify(m));
@@ -42,7 +42,7 @@ await reportTask(state,taskId,runId,{reportId:'archive-result',kind:'result',mes
 send({method:'item/completed',params:{threadId,turnId,item:{id:'native-reply',type:'agentMessage',text:'Native archive fixture result retained.'}}});send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'completed'}}});
 }}
 `,{mode:0o700});
- await exec(process.execPath,[path.join(root,'cli.mjs'),'init','--template','fixture','--config',configPath]);
+ await exec(process.execPath,[path.join(root,'runtime/cli.mjs'),'init','--template','fixture','--config',configPath]);
  const raw=JSON.parse(await readFile(configPath,'utf8'));raw.runtime.port=port;raw.runtime.codexBinary=binary;raw.project.name='Native archive acceptance';await writeFile(configPath,JSON.stringify(raw,null,2)+'\n');stateDir=path.resolve(path.dirname(configPath),raw.runtime.dataDir,'orchestration');
  await mkdir(path.dirname(stateDir),{recursive:true});await writeFile(path.join(path.dirname(stateDir),'manager-chat.json'),JSON.stringify({threadId:'archive-manager'}));
  const env={...process.env,CREW_APP_DATA:path.join(dir,'app-data'),AI_MANAGER_CONFIG:configPath,AI_MANAGER_CODEX_BINARY:binary};delete env.ELECTRON_RUN_AS_NODE;

@@ -4,8 +4,8 @@ import type {
   OrchestrationState,
   WorkerApproval,
 } from "../contracts/manager.js";
-import { attentionKeys } from "../../../attention-keys.mjs";
-export { attentionKeys } from "../../../attention-keys.mjs";
+import { attentionKeys } from "../../../src/shared/attention-keys.mjs";
+export { attentionKeys } from "../../../src/shared/attention-keys.mjs";
 
 // Survives SSE reconnect and reload and window reopening. Storage is scoped to this
 // loopback origin (one configured project); unavailable storage falls back safely.

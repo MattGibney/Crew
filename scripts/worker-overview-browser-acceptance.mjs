@@ -162,12 +162,12 @@ try {
   await page.getByRole('button', { name: /Workers/ }).first().click();
   await page.locator('[data-worker-id="fixture-task-2"]').click();
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
-  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
   await page.getByRole('tab', { name: 'Text', exact: true }).click();
   await page.getByRole('textbox', { name: 'Message your manager', exact: true }).waitFor();
   const actionProof = (await (await context.request.get(`${origin}/__proof`)).json()).calls;
   const lifecycleRequest = actionProof.find(c => c.name === 'work' && c.body.text.includes('CREW_WORKER_ACTION'));
-  assert.ok(lifecycleRequest?.body.text.includes('fixture-task-2') && lifecycleRequest.body.text.includes('fixture-run-2') && lifecycleRequest.body.text.includes('"action":"stop"'), 'Detail action routes exact task/run identity through manager');
+  assert.ok(lifecycleRequest?.body.text.includes('fixture-task-2') && lifecycleRequest.body.text.includes('fixture-run-2') && lifecycleRequest.body.text.includes('"action":"resume"'), 'Detail action routes exact task/run identity through manager');
   assert.ok(!actionProof.some(c => c.name.includes('worker-action')), 'Detail never uses a direct worker lifecycle endpoint');
   assert.equal(errors.length, 0, errors.join('\n'));
   console.log(JSON.stringify({ pass: true, output, syntheticMediaOnly: true, multipleWorkers: 9, liveDetail: true, liveNotes: true, navigationCallPersistence: true, mutedSettingsPersistence: true, compactInputPersistence: true, openMicBlurPreservation: true }));

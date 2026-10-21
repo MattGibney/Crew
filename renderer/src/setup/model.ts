@@ -1,5 +1,5 @@
 import type { ProjectConfig, SetupSnapshot } from "../contracts/setup.js";
-import { selectExecutionPlan } from "../../../desktop/execution-selection.mjs";
+import { selectExecutionPlan } from "../../../src/desktop/execution-selection.mjs";
 
 export const steps = [
   "Welcome",

@@ -6,8 +6,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createTask, updateTask, requestWorkerAction } from '../runtime/orchestration-store.mjs';
-import { recordWorkerRequest, listWorkerRequests, decideWorkerRequest, workerRequestDecisions, deliverWorkerRequest, markWorkerRequestDelivered, markWorkerRequestResolved, invalidateWorkerRequests, workerApprovalResponse } from '../runtime/worker-approvals.mjs';
+import { createTask, updateTask, requestWorkerAction } from '../runtime/orchestration/store.mjs';
+import { recordWorkerRequest, listWorkerRequests, decideWorkerRequest, workerRequestDecisions, deliverWorkerRequest, markWorkerRequestDelivered, markWorkerRequestResolved, invalidateWorkerRequests, workerApprovalResponse } from '../runtime/workers/approval-store.mjs';
 
 async function fixture(t) {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'crew-approvals-'));

@@ -8,7 +8,7 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "rootDir": ".",
+    "rootDir": "src",
     "outDir": "runtime",
     "sourceMap": true,
     "types": [
@@ -21,14 +21,8 @@
     }
   },
   "include": [
-    "*.mts",
-    "backend/**/*.mts",
-    "bridge/**/*.mts",
-    "config/**/*.mts",
-    "execution/**/*.mts",
-    "desktop/**/*.mts",
-    "desktop/**/*.cts",
-    "shared/**/*.mts"
+    "src/**/*.mts",
+    "src/**/*.cts"
   ],
   "exclude": [
     "runtime",

@@ -38,7 +38,7 @@ for await(const line of createInterface({input:process.stdin})){
  console.log(JSON.stringify({id:m.id,result}));
 }
 `, { mode: 0o700 });
-await exec(process.execPath, [path.join(root, 'cli.mjs'), 'init', '--template', 'fixture', '--config', configPath]);
+await exec(process.execPath, [path.join(root, 'runtime/cli.mjs'), 'init', '--template', 'fixture', '--config', configPath]);
 const config = JSON.parse(await readFile(configPath, 'utf8'));
 config.runtime.port = 59235; config.runtime.codexBinary = binary; config.project.name = 'Profile acceptance one';
 await writeFile(configPath, JSON.stringify(config, null, 2));
@@ -165,7 +165,7 @@ try {
  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), 'narrow conversation does not overflow');
  await quit();
  const secondPath = path.join(dir, 'second/project.json');
- await exec(process.execPath, [path.join(root, 'cli.mjs'), 'init', '--template', 'fixture', '--config', secondPath]);
+ await exec(process.execPath, [path.join(root, 'runtime/cli.mjs'), 'init', '--template', 'fixture', '--config', secondPath]);
  const second = JSON.parse(await readFile(secondPath, 'utf8'));
  second.runtime.port = 59236; second.runtime.codexBinary = binary; second.project.id = 'profile-two'; second.project.name = 'Profile acceptance two';
  await writeFile(secondPath, JSON.stringify(second));

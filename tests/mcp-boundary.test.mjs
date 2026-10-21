@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {toolArguments} from '../runtime/backend/mcp-contracts.mjs';
-import {orchestrationTools} from '../runtime/backend/mcp-tools.mjs';
+import {toolArguments} from '../runtime/orchestration/mcp-contracts.mjs';
+import {orchestrationTools} from '../runtime/orchestration/mcp-tools.mjs';
 
 test('nullable native run identity preserves null but rejects blank and overlong strings',()=>{
  const tool=orchestrationTools('manager',true).find(tool=>tool.name==='request_worker_recovery');

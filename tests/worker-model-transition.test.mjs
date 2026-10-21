@@ -5,14 +5,14 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
-import {createController} from '../runtime/controller.mjs';
-import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../runtime/orchestration-store.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../runtime/orchestration/store.mjs';
 const exec=promisify(execFile);
 async function wait(fn,predicate,label){const end=Date.now()+30000;let value;while(Date.now()<end){value=await fn();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out ${label}: ${JSON.stringify(value)}`);}
 test('real detached runner safely resumes the same context with exact validated model and refuses substitution',async t=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'crew-model-native-')),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'Synthetic model transition fixture\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
  await writeFile(binary,`#!${process.execPath}
-import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration-store.mjs',import.meta.url).href)};
+import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration/store.mjs',import.meta.url).href)};
 const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 // Exclusive ownership makes accidental overlap a real child-process failure.
 const lock=${JSON.stringify(path.join(dir,'active'))};closeSync(openSync(lock,'wx'));const log=${JSON.stringify(log)},threadId='retained-model-thread',turnId='turn-'+run,send=m=>process.stdout.write(JSON.stringify(m)+'\\n');

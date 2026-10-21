@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../runtime/orchestration-store.mjs';
-import { readWorkerDetail } from '../runtime/worker-detail.mjs';
+import { createTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../runtime/orchestration/store.mjs';
+import { readWorkerDetail } from '../runtime/workers/detail.mjs';
 const project = { id: 'project-one', mode: 'repository' };
 async function fixture(t) {
   const dir = await mkdtemp(path.join(tmpdir(), 'crew-detail-'));
@@ -170,4 +170,8 @@ test('repeated assignments retain their briefs, results and run correlation in w
   assert.equal(detail.conversation.find(item => item.reportId === 'implementation-result' || item.message === 'Implementation result retained').assignmentId, 'followup-one');
   assert.equal(detail.conversation.find(item => item.message === 'Documenting the change').assignmentId, 'followup-two');
   assert.ok(detail.links.some(item => item.url === 'https://github.com/example/repo/issues/42'));
+  await rm(path.join(runDir, 'events.jsonl'));
+  await writeFile(path.join(runDir, 'exit.json'), JSON.stringify({ runId: 'documentation-run-123', finalMessage: 'Legacy final reply' }));
+  const legacyDetail = await readWorkerDetail(dir, id, project);
+  assert.equal(legacyDetail.conversation.find(item => item.message === 'Legacy final reply').assignmentId, 'followup-two');
 });

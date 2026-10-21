@@ -23,7 +23,7 @@ const top = new Set([
   "AGENTS.md",
 ]);
 const source =
-  /^(?:(?:backend|bridge|shared|execution|desktop|renderer|scripts|tests|docs|tickets)\/|\.github\/workflows\/).*\.(?:mts|cts|ts|tsx|mjs|js|jsx|md|json|yml|css|html)$/;
+  /^(?:(?:src|desktop|renderer|scripts|tests|docs|tickets)\/|\.github\/workflows\/).*\.(?:mts|cts|ts|tsx|mjs|js|jsx|md|json|yml|css|html)$/;
 const assets = new Set([
   "config/fixture.example.json",
   "config/set1.example.json",

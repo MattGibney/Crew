@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
-import {createUpdateBridge,unavailableUpdateStatus} from '../runtime/update-bridge.mjs';
+import {createUpdateBridge,unavailableUpdateStatus} from '../runtime/updates/bridge.mjs';
 class Transport extends EventEmitter{connected=true;sent=[];send(message,done){this.sent.push(message);done?.();}}
 const state={...unavailableUpdateStatus('0.9.0'),supported:true,phase:'available',availableVersion:'0.9.1',installBlocked:false,reasons:[]};
 test('CLI has no native capability and rejects update mutations',async t=>{const transport=new EventEmitter(),bridge=createUpdateBridge({transport,version:'0.9.0'});t.after(()=>bridge.close());assert.equal((await bridge.request()).supported,false);await assert.rejects(bridge.request('restart'),/installed desktop/);await assert.rejects(bridge.request('arbitrary'),/Unknown/);});

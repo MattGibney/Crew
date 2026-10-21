@@ -10,13 +10,13 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
-import {createController} from '../runtime/controller.mjs';
-import {promptSnapshot} from '../runtime/prompt-settings.mjs';
-import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration-store.mjs';
-import {configureGlobalCapacity,globalAdmissionPaused} from '../runtime/global-capacity.mjs';
-import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/update-plan.mjs';
-import {inspectUpdateEvidence} from '../runtime/update-evidence.mjs';
-import {updateActivity} from '../runtime/update-activity.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import {promptSnapshot} from '../runtime/manager/instructions/settings.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration/store.mjs';
+import {configureGlobalCapacity,globalAdmissionPaused} from '../runtime/orchestration/capacity.mjs';
+import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/updates/plan.mjs';
+import {inspectUpdateEvidence} from '../runtime/updates/evidence.mjs';
+import {updateActivity} from '../runtime/updates/activity.mjs';
 import {workspaceUpdateActivity,reserveWorkspaceUpdate} from '../runtime/desktop/workspace-update.mjs';
 import {createWorkspacePauseUpdate} from '../runtime/desktop/workspace-pause-update.mjs';
 import {createUpdateCoordinator,createPauseUpdateCoordinator} from '../runtime/desktop/updater.mjs';
@@ -33,7 +33,7 @@ async function fixture(t){
  }
  await configureGlobalCapacity({dir:capacity,limit:2,stateDirs:records.map(record=>record.stateDir),admissionPaused:false});
  const executable=join(directory,'fake-codex.mjs');await writeFile(executable,workerAppServerFixture(`#!${process.execPath}
-import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(join(sourceDir,'orchestration-store.mjs')).href)};
+import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(join(sourceDir,'orchestration/store.mjs')).href)};
 const args=process.argv.slice(2),raw=args.find(value=>value.startsWith('mcp_servers.local_orchestration.args=')),[,state,,id,run]=JSON.parse(raw.slice(raw.indexOf('=')+1)),task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8')),resumed=args.includes('resume'),thread=resumed?args[args.indexOf('resume')+1]:'thread-'+task.projectId+'-'+id;
 process.on('fixtureInterrupt',async()=>{await appendFile(state+'/'+id+'-signals','turn/interrupt\\n');process.exit(0);});process.on('SIGTERM',()=>process.exit(0));
 await appendFile(state+'/launches.jsonl',JSON.stringify({id,run,thread,resumed,cwd:process.cwd(),promptV2:args.at(-1).includes('fixture-prompt-'+task.projectId+'-v2')})+'\\n');

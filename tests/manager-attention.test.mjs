@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { managerAttention } from '../runtime/manager-attention.mjs';
+import { managerAttention } from '../runtime/manager/attention.mjs';
 
 const request = { requestId: 'attention-decision', message: 'Which account should I use?' };
 const result = { ok: true, attention: request };

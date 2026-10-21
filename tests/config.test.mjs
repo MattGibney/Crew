@@ -7,7 +7,7 @@ import { join,resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { appRoot, configurationRoot, loadAppConfig } from '../runtime/config.mjs';
+import { appRoot, configurationRoot, loadAppConfig } from '../runtime/config/index.mjs';
 const exec = promisify(execFile);
 const environments = [];
 async function setup() {
@@ -101,11 +101,11 @@ test('source package contains only allowlisted code/templates; excludes live sta
   const entries = stdout.trim().split('\n');
   const manifest=JSON.parse(await readFile(join(configurationRoot,'scripts/source-manifest.json'),'utf8'));
   assert.deepEqual([...entries].sort(),[...manifest.files].sort());
-  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mts'));
-  for(const file of ['worker-approvals.mts','tests/worker-app-server.test.mjs','tests/worker-approvals.test.mjs','tests/worker-app-server.test.mjs','tests/worker-bootstrap.test.mjs','tests/helpers/worker-app-server-fixture.mjs'])assert.ok(entries.includes(file),`Missing worker protocol source: ${file}`);
+  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('src/http/server.mts'));
+  for(const file of ['src/workers/approval-store.mts','tests/worker-app-server.test.mjs','tests/worker-approvals.test.mjs','tests/worker-app-server.test.mjs','tests/worker-bootstrap.test.mjs','tests/helpers/worker-app-server-fixture.mjs'])assert.ok(entries.includes(file),`Missing worker protocol source: ${file}`);
 
-  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mts')); assert.ok(entries.includes('conversation-timeline.mts')); assert.ok(entries.includes('renderer/src/manager/Message.tsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
-  for(const file of ['manager-profile.mts','worker-worktree-evidence.mts','renderer/src/manager/ManagerAvatar.tsx','renderer/src/manager/profile.ts','scripts/manager-profile-native-acceptance.mjs','tests/worker-followup.test.mjs']) assert.ok(entries.includes(file), `Missing integrated feature source: ${file}`);
+  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('src/http/server.mts')); assert.ok(entries.includes('src/manager/conversation/timeline.mts')); assert.ok(entries.includes('renderer/src/manager/Message.tsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
+  for(const file of ['src/manager/profile.mts','src/workers/worktree-evidence.mts','renderer/src/manager/ManagerAvatar.tsx','renderer/src/manager/profile.ts','scripts/manager-profile-native-acceptance.mjs','tests/worker-followup.test.mjs']) assert.ok(entries.includes(file), `Missing integrated feature source: ${file}`);
   assert.equal(entries.some(path => /(^|\/)(\.orchestration|\.data|\.git|local.json|\.voice-chat.json|server.json)(\/|$)/.test(path)), false);
   assert.ok(entries.includes('docs/MACOS.md')); assert.ok(entries.includes('tests/config.test.mjs'));
 });

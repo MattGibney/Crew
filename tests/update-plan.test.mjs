@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createUpdatePlan, readUpdatePlan, isUpdatePlanHolding } from '../runtime/update-plan.mjs';
+import { createUpdatePlan, readUpdatePlan, isUpdatePlanHolding } from '../runtime/updates/plan.mjs';
 async function fixture(t, overrides = {}) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'crew-update-plan-'));
   t.after(() => fs.rm(stateDir, { recursive: true, force: true }));

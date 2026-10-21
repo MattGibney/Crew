@@ -2,10 +2,10 @@
 // Usage: npm run renderer:build; node tests/browser-fixture.mjs [port=4342]
 // This never loads Codex, project configuration, credentials or business repositories.
 import http from 'node:http';
-import { isArchivedTask } from '../worker-archive.mjs';
-import {validateWorkerEnvironment} from '../config.mjs';
-import { conversationMessage } from '../conversation.mjs';
-import { createConversationTimeline } from '../conversation-timeline.mjs';
+import { isArchivedTask } from '../runtime/shared/worker-archive.mjs';
+import {validateWorkerEnvironment} from '../runtime/config/index.mjs';
+import { conversationMessage } from '../runtime/manager/conversation/message.mjs';
+import { createConversationTimeline } from '../runtime/manager/conversation/timeline.mjs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

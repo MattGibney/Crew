@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp, writeFile, readFile, rm, symlink, rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createEnvironmentSettings} from '../environment-settings.mjs';
-import {validateWorkerEnvironment} from '../config.mjs';
+import {createEnvironmentSettings} from '../runtime/projects/environment-settings.mjs';
+import {validateWorkerEnvironment} from '../runtime/config/index.mjs';
 
 const source = {path: 'AGENTS.md', sha256: 'a'.repeat(64)};
 const hook = {command: '/usr/bin/printf', args: ['a b', '"quoted"', '$(never-execute)', ''], timeoutMs: 1234};

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { conversationMessage } from '../../../conversation.mts';
+import { conversationMessage } from '../../../runtime/manager/conversation/message.mjs';
 import { orderedMessages } from './conversation.ts';
 
 test('recovery-review control shows readable human intent without internal instructions',()=>{
