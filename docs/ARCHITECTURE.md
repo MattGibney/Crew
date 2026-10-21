@@ -48,3 +48,7 @@ Optional project analysis uses one cancelable subscription Codex setup job over 
 ## Concurrent execution and environments (AI-011)
 
 Executing capacity is configurable (default two), with a durable queue and independent per-task provisioning/cleanup. Question-yielded runs release capacity; target/run-correlated lifecycle requests support stop/pause/resume/start/dispose and idempotent retries. Supervisors own their Codex process groups, record actual exits and support durable stop controls. Restart reconciles surviving runs without duplicate launch; execution timing excludes waiting. Disposable fixtures cover concurrent workers and optional shell-free bounded environment hooks. See [worker lifecycle](WORKERS.md) for contracts and Set1 limitations.
+
+## React renderer foundation (AI-013)
+
+Both manager and native setup are compiled React JavaScript entry points. Vite produces local static assets; no dev server or runtime npm dependencies are shipped. Official shadcn/ui Base UI components and Lucide share one semantic Tailwind 4 stylesheet. See [theme and component workflow](UI-FOUNDATION.md). The loopback server discovers an exact bounded asset allowlist, rejects linked/replaced files, and exposes only manager HTML plus built assets. Native setup is loaded from its exact compiled local-file URL and remains the only page with the bounded setup preload. Native UI and actual audible acceptance of this migration await user unlock; browser, simulated lifecycle, actual subscription preparation and bundled-runtime checks passed.

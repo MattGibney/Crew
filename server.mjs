@@ -8,7 +8,11 @@ import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
 import { readTask } from './orchestration-store.mjs';
 import { createHash, randomUUID } from 'node:crypto';
+import { createRendererAssets } from './renderer-assets.mjs';
 const root = fileURLToPath(new URL('.', import.meta.url));
+let renderer;
+try { renderer = await createRendererAssets(path.join(root, 'renderer-dist')); }
+catch (error) { console.error(`Crew could not start: ${safeError(error)}`); process.exit(1); }
 let configuration;
 try { configuration = await loadAppConfig({ root }); }
 catch (error) { console.error(`Crew could not start: ${safeError(error)}`); process.exit(1); }
@@ -45,18 +49,22 @@ const controller = await createController({ stateDir: orchestrationDir, sourceDi
 await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
 const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, onEvent: broadcast });
-const assets = new Map([['/crew-mark.png', ['build/crew-mark.png','image/png']],['/', ['index.html', 'text/html']], ['/app.js', ['app.js', 'text/javascript']]]);
 const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' blob:; frame-ancestors 'none'");
   res.setHeader('Permissions-Policy', 'microphone=(self), camera=()');
   const send = (code, value) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(value)); };
   if (req.headers.host !== `127.0.0.1:${port}`) return send(403, { error: 'Use the loopback URL printed by the bridge.' });
   if (req.headers.origin && req.headers.origin !== origin) return send(403, { error: 'Cross-origin requests are not allowed.' });
   try {
     if (req.method === 'GET' && req.url === '/favicon.ico') { res.writeHead(204); return res.end(); }
-    if (req.method === 'GET' && assets.has(req.url)) {
-      const [name, type] = assets.get(req.url); res.writeHead(200, { 'Content-Type': `${type}; charset=utf-8` }); return res.end(await readFile(new URL(name, import.meta.url)));
+    if (req.method === 'GET') {
+      const asset = await renderer.read(req.url);
+      if (asset) { res.writeHead(200, { 'Content-Type': asset.type }); return res.end(asset.body); }
+      if (req.url === '/crew-mark.png') {
+        const body = await readFile(new URL('build/crew-mark.png', import.meta.url));
+        res.writeHead(200, { 'Content-Type': 'image/png' }); return res.end(body);
+      }
     }
     if (req.method === 'GET' && req.url === '/events') {
       if (clients.size) return send(409, { error: 'Only one browser tab can control this chat.' });

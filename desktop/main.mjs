@@ -37,7 +37,7 @@ let setupWindow, setupChecks = {}, setupRevision, setupInputs, setupOperation = 
 let window, tray, config, origin, backend, pollTimer, starting = false, quitting = false, closing = false;
 let counts = { active: null, pending: null }, lastError = null, backendReady = false;
 const env = childEnvironment(configPath);
-const setupURL = pathToFileURL(join(root, 'desktop/setup.html')).href;
+const setupURL = pathToFileURL(join(root, 'renderer-dist/setup.html')).href;
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const safe = error => String(error?.message || error).replace(/Bearer\s+\S+/gi, 'Bearer [redacted]').replace(/sk-[\w-]+/g, '[redacted]').slice(0, 1400);
 const escape = text => String(text).replace(/[&<>"']/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[char]));

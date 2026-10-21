@@ -6,8 +6,7 @@ directories:
   buildResources: build
 files:
   - '*.mjs'
-  - app.js
-  - index.html
+  - renderer-dist/**
   - package.json
   - desktop/**
   - build/crew-mark.png

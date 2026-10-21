@@ -1,0 +1,20 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'vite';
+test('unmodified official shadcn global CSS builds both real React entries without token translation', async t => {
+  const output = await mkdtemp(path.join(tmpdir(), 'crew-official-theme-'));
+  t.after(() => rm(output, { recursive: true, force: true }));
+  const official = await readFile(new URL('./fixtures/shadcn-neutral-theme.css', import.meta.url), 'utf8');
+  const canonical = await readFile(new URL('../renderer/src/styles/theme.css', import.meta.url), 'utf8');
+  await build({ configFile: fileURLToPath(new URL('../vite.config.js', import.meta.url)), logLevel: 'silent', plugins: [{ name: 'official-theme-paste-proof', enforce: 'pre', load(id) { if (id.endsWith('/renderer/src/styles/theme.css')) return official; } }], build: { outDir: output } });
+  const files = await readdir(path.join(output, 'assets'));
+  const css = (await Promise.all(files.filter(file => file.endsWith('.css')).map(file => readFile(path.join(output, 'assets', file), 'utf8')))).join('');
+  assert.match(css, /--primary:oklch\(/);
+  assert.doesNotMatch(css, /#0c58fc/i);
+  for (const html of ['index.html', 'setup.html']) assert.match(await readFile(path.join(output, html), 'utf8'), /assets\/.*\.js/);
+  assert.equal(await readFile(new URL('../renderer/src/styles/theme.css', import.meta.url), 'utf8'), canonical);
+});

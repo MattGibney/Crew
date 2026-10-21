@@ -8,6 +8,9 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   throw new Error('This release command builds the tested Apple Silicon macOS artifact. Run on an arm64 Mac.');
 }
+const renderer = spawnSync(process.execPath, [path.join(root, 'node_modules/vite/bin/vite.js'), 'build'], { cwd: root, stdio: 'inherit' });
+if (renderer.error) throw renderer.error;
+if (renderer.status !== 0) process.exit(renderer.status ?? 1);
 const result = spawnSync(process.execPath, [
   path.join(root, 'node_modules/electron-builder/out/cli/cli.js'),
   '--config', 'electron-builder.yml', '--mac', '--arm64', '--publish', 'never',

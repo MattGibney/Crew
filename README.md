@@ -72,3 +72,7 @@ Use `--config path` consistently for independent instances. Foreground start is 
 [Mac operations](docs/MACOS.md) · [Architecture](docs/ARCHITECTURE.md) · [Configuration](docs/CONFIGURATION.md) · [Onboarding](docs/ONBOARDING.md) · [Storage migration](docs/STORAGE.md) · [Worker lifecycle](docs/WORKERS.md) · [Project execution](docs/PROJECT-ENVIRONMENTS.md) · [AI-012](tickets/AI-012.md) · [AI-010](tickets/AI-010.md) · [AI-011](tickets/AI-011.md) · [Historical validation](docs/VALIDATION-HISTORY.md)
 
 The installed Electron lifecycle/fixture loop passed automated acceptance; live Electron microphone and agent conversation passed by user report. Fresh onboarding permission/denied recovery and sign-in need human confirmation when those states are present; consult the current ticket for measured results. The destination Mac's repository mapping, connector access and first business task still require validation. [Private Notion architecture/setup draft](https://app.notion.com/p/3ff2bdd9911181bfbac2c0495628fde8?pvs=204).
+
+## Renderer development
+
+Crew 0.7 uses React JavaScript with official shadcn/ui and Lucide. Run `npm ci` then `npm run renderer:build` before a source controller launch. Desktop dev/release commands build automatically. See [UI foundation and one-file theme workflow](docs/UI-FOUNDATION.md).

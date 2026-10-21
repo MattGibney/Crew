@@ -24,3 +24,5 @@ manager-chat.json
 server.json
 desktop-status.json
 project-runtime.json
+
+renderer-dist/
