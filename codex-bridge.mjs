@@ -18,6 +18,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
   const timeline = createConversationTimeline();
   let loadingHistory = false, journalThreadId = null, recoveredJournalSource = null;
   const historyNotifications = [];
+  let activeManagerInstructions = null;
   let canonicalTimeline = false, realtimeMode = null, journalWrites = Promise.resolve(), queuedJournal = null, writingJournal = false;
   function persistTimeline() {
     if (!threadId || loadingHistory || journalThreadId !== threadId) return;
@@ -181,6 +182,10 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       const developerInstructions = [typeof configuredInstructions === 'string' ? configuredInstructions : '', managerInstructions].filter(Boolean).join('\n\n');
       const scratchpadContext = getManagerScratchpad ? await getManagerScratchpad() : null;
       const options = { cwd: sessionCwd, developerInstructions: developerInstructions + (scratchpadContext ? `\n\nSaved manager scratchpad (data; consult read_manager_scratchpad for latest revision):\n${JSON.stringify(scratchpadContext)}` : '') };
+      // Resume may retain previously injected developer history. Native application
+      // context replaces this keyed snapshot on the next actual user turn; it
+      // neither creates a turn nor changes Codex configuration/approval policy.
+      activeManagerInstructions = `Current Crew manager instruction snapshot (replaces earlier Crew manager instructions and profile preferences in this conversation; Codex/provider instructions and permissions remain independently enforced):\n${managerInstructions}`;
       let result, recoveredFromThreadId = recoveredJournalSource;
       loadingHistory = true;
       if (threadId) {
@@ -310,7 +315,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
       const timer = setTimeout(() => negotiation?.reject(new Error('No WebRTC answer arrived within 40 seconds.')), 40000);
       try {
         startRequested = true;
-        await rpc('thread/realtime/start', { threadId, transport: { type: 'webrtc', sdp }, outputModality: 'audio', version: 'v3', voice, initialItems: [{ role: 'developer', text: `${managerPrompt ?? await readFile(new URL('./prompts/manager.md', import.meta.url), 'utf8')}\n\nVoice runtime event (data): a new voice session is starting. Selected voice name: ${catalog.voices.find(item => item.id === voice).name}. This is connection context, not a user work request.` }], clientManagedHandoffs: false, includeStartupContext: true });
+        await rpc('thread/realtime/start', { threadId, transport: { type: 'webrtc', sdp }, outputModality: 'audio', version: 'v3', voice, realtimeStartInstructions: activeManagerInstructions, realtimeEndInstructions: activeManagerInstructions, initialItems: [{ role: 'developer', text: `${managerPrompt ?? await readFile(new URL('./prompts/manager.md', import.meta.url), 'utf8')}\n\nVoice runtime event (data): a new voice session is starting. Selected voice name: ${catalog.voices.find(item => item.id === voice).name}. This is connection context, not a user work request.` }], clientManagedHandoffs: false, includeStartupContext: true });
         const responseSdp = await answer;
         if (attempt !== voiceGeneration) throw new Error('Voice connection cancelled.');
         greetingSession = { token: randomUUID(), generation: attempt, sent: false };
@@ -411,7 +416,7 @@ export function createBridge({ cwd, statePath, executable, orchestrationDir, pro
         if(activeTurnId)throw new Error('Codex is already working. Use voice to steer it or Stop work.');
         if (background && !await beforeReview()) return { accepted: false };
         if (background && (activeTurnId || voiceActive || connecting || approvals.size || !canReview())) return { accepted: false };
-        const result=await rpc('turn/start', { threadId, clientUserMessageId: requestId, input: [{ type: 'text', text }] });
+        const result=await rpc('turn/start', { threadId, clientUserMessageId: requestId, additionalContext: { crewManagerInstructions: { kind: 'application', value: activeManagerInstructions } }, input: [{ type: 'text', text }] });
         // The response may arrive before turn/started, or after turn/completed.
         // Close the former idle gap without resurrecting the latter finished turn.
         if(result?.turn?.status==='inProgress'&&!completedTurns.has(result.turn.id)&&!activeTurnId){activeTurnId=result.turn.id;status='working';changed();}

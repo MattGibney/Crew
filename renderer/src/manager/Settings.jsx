@@ -6,6 +6,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
+import { ManagerAvatar } from './ManagerAvatar.jsx';
+import { managerDisplayName, readProfilePicture, PROFILE_NAME_MAX_LENGTH, PROFILE_PERSONALITY_MAX_LENGTH } from './profile.js';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
 function SettingsToast({ message, onDismiss }) {
@@ -79,6 +81,64 @@ function GlobalSettings({ workspace, onNotify }) {
   </section>;
 }
 
+function ManagerIdentity({ manager, onNotify }) {
+  const profile = manager.settings?.managerProfile;
+  const [draft, setDraft] = useState(null), [baseVersion, setBaseVersion] = useState(null), [saving, setSaving] = useState(false), [reading, setReading] = useState(false), [error, setError] = useState('');
+  const selection = useRef(0);
+  useEffect(() => () => { selection.current++; }, []);
+  const edit = () => { setDraft({ name: profile?.name || '', picture: profile?.picture || null }); setBaseVersion(profile?.version); setError(''); };
+  const cancel = () => { selection.current++; setReading(false); setDraft(null); setError(''); };
+  const stale = draft && baseVersion !== profile?.version;
+  const choosePicture = async event => {
+    const file = event.target.files?.[0]; event.target.value = '';
+    if (!file) return;
+    const request = ++selection.current; setReading(true); setError('');
+    try { const picture = await readProfilePicture(file); if (request === selection.current) setDraft(current => current && { ...current, picture }); }
+    catch (error) { if (request === selection.current) setError(error.message); }
+    finally { if (request === selection.current) setReading(false); }
+  };
+  const save = async event => {
+    event.preventDefault();
+    if (!draft || saving || reading || stale) return;
+    setSaving(true); setError('');
+    try { await manager.saveManagerProfile(draft, baseVersion); setDraft(null); onNotify('Manager name and picture saved.'); }
+    catch (error) { setError(error.message); }
+    finally { setSaving(false); }
+  };
+  return <section aria-labelledby="manager-identity-heading" className="border-t py-6">
+    <form onSubmit={save} className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+      <h3 id="manager-identity-heading" className="text-sm font-medium">Name and picture</h3>
+      <div className="min-w-0">
+        {draft ? <div className="space-y-4"><div><Label htmlFor="manager-profile-name" className="sr-only">Manager name</Label><Input id="manager-profile-name" value={draft.name} maxLength={PROFILE_NAME_MAX_LENGTH} placeholder="Manager" disabled={saving} onChange={event => setDraft({ ...draft, name: event.target.value })} /><p className="mt-2 text-xs text-muted-foreground">Leave the name empty to use Manager.</p></div><div className="flex flex-wrap items-center gap-3"><ManagerAvatar profile={draft} className="size-12" /><Label htmlFor="manager-profile-picture" className="cursor-pointer text-xs text-primary">Choose picture</Label><input id="manager-profile-picture" type="file" accept="image/png,image/jpeg,image/webp" className="max-w-full text-xs" aria-label="Manager picture" disabled={saving || reading} onChange={event => void choosePicture(event)} />{draft.picture && <Button type="button" variant="link" size="sm" disabled={saving} onClick={() => { selection.current++; setReading(false); setDraft({ ...draft, picture: null }); }}>Remove picture</Button>}</div><p className="text-xs leading-5 text-muted-foreground">PNG, JPEG or WebP, up to 512 KB and 2048 × 2048 pixels. The picture stays in this project on this Mac.</p>{reading && <p role="status" className="text-xs text-muted-foreground">Checking picture…</p>}</div> : <div className="flex items-center gap-3"><ManagerAvatar profile={profile} className="size-10" /><p className="min-w-0 break-words text-sm leading-6">{managerDisplayName(profile)} <span className="text-xs text-muted-foreground">· AI manager</span></p></div>}
+        <p className="mt-3 text-xs leading-5 text-muted-foreground">Name and picture update here and in your conversation immediately. Start or restart the manager in Sessions to apply the name to its instructions and default greeting. The audio voice stays unchanged.</p>
+        {stale && <p role="alert" className="mt-2 text-xs text-destructive">The saved profile changed while you were editing. Your draft is kept; copy your name before cancelling to load the latest profile.</p>}
+        {error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}
+      </div>
+      <div className="flex items-center gap-3">{draft ? <><Button type="button" variant="link" className="h-auto p-0 text-xs text-muted-foreground" disabled={saving} onClick={cancel}>Cancel</Button><Button type="submit" size="sm" disabled={saving || reading || stale || !manager.eventReady}>{saving ? 'Saving…' : 'Save'}</Button></> : <Button type="button" variant="link" aria-label="Update manager name and picture" className="h-auto p-0 text-sm font-semibold" disabled={!profile} onClick={edit}>Update</Button>}</div>
+    </form>
+  </section>;
+}
+
+function ManagerPersonality({ manager, onNotify }) {
+  const profile = manager.settings?.managerProfile;
+  const [draft, setDraft] = useState(null), [baseVersion, setBaseVersion] = useState(null), [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const stale = draft !== null && baseVersion !== profile?.version;
+  const save = async event => {
+    event.preventDefault(); if (saving || draft === null || stale) return;
+    setSaving(true); setError('');
+    try { await manager.saveManagerProfile({ personality: draft }, baseVersion); setDraft(null); onNotify('Manager personality saved. Start or restart in Sessions to apply it.'); }
+    catch (error) { setError(error.message); }
+    finally { setSaving(false); }
+  };
+  return <section aria-labelledby="manager-personality-heading" className="border-t py-6"><form onSubmit={save} className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+    <h3 id="manager-personality-heading" className="text-sm font-medium">Personality</h3>
+    <div className="min-w-0">{draft !== null ? <><Label htmlFor="manager-profile-personality" className="sr-only">Manager personality</Label><Textarea id="manager-profile-personality" value={draft} maxLength={PROFILE_PERSONALITY_MAX_LENGTH} disabled={saving} className="min-h-36 resize-y text-sm leading-6" placeholder="For example: calm and direct, curious about alternatives, with concise updates." onChange={event => setDraft(event.target.value)} /><details className="mt-3 text-xs leading-6 text-muted-foreground"><summary className="cursor-pointer font-medium">How personality is used</summary><p className="mt-2">Describe tone, communication style and preferences. Leave this empty to use your manager instructions alone. Saved personality is added as explicit profile preferences alongside your existing instructions for typed and voice conversations after an explicit Start or Restart in Sessions. It does not replace your instructions, change the selected audio voice or change Codex permissions.</p><p className="mt-2">Keep task requirements in the conversation. Don’t include passwords, API keys or other secrets.</p></details></> : <p className="whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">{profile?.personality || 'No additional personality. Your manager instructions define its style.'}</p>}
+    <p className="mt-3 text-xs leading-5 text-muted-foreground">Applies to this project after Start or Restart in Sessions.</p>
+    {stale && <p role="alert" className="mt-2 text-xs text-destructive">The saved profile changed while you were editing. Your draft is kept; copy it before cancelling to load the latest profile.</p>}{error && <p role="alert" className="mt-2 text-xs text-destructive">{error}</p>}</div>
+    <div className="flex items-center gap-3">{draft !== null ? <><Button type="button" variant="link" className="h-auto p-0 text-xs text-muted-foreground" disabled={saving} onClick={() => { setDraft(null); setError(''); }}>Cancel</Button><Button type="submit" size="sm" disabled={saving || stale || draft === (profile?.personality || '') || !manager.eventReady}>{saving ? 'Saving…' : 'Save'}</Button></> : <Button type="button" variant="link" aria-label="Update manager personality" className="h-auto p-0 text-sm font-semibold" disabled={!profile} onClick={() => { setDraft(profile.personality || ''); setBaseVersion(profile.version); setError(''); }}>Update</Button>}</div>
+  </form></section>;
+}
+
 function ManagerProfile({ manager, onNotify }) {
   const profile = manager.settings?.managerProfile;
   const [draft, setDraft] = useState(null), [editing, setEditing] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
@@ -150,7 +210,7 @@ function PromptEditor({ role, data, manager, onNotify }) {
       <div><h2 id={`${role}-instructions-heading`} className="font-semibold tracking-tight">{managerRole ? 'Manager instructions' : 'Worker instructions'}</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">{managerRole ? 'Set how your manager communicates, plans work and helps you make decisions.' : 'Set how workers approach agreed tasks and report their findings.'}</p></div>
       <div className="flex items-center gap-3">{dirty && <Badge variant="secondary">Unsaved changes</Badge>}{!editing && <Button variant="link" className="h-auto p-0 text-sm font-semibold" aria-label={`Update ${role} instructions`} onClick={() => setEditing(true)}>Update</Button>}</div>
     </div>
-    {managerRole && data.pendingRestart && <Alert role="status" className="mt-4"><AlertDescription>{manager.managerLifecycle.state === 'stopped' ? 'Start' : 'Restart'} your manager in Sessions to apply these saved instructions.</AlertDescription></Alert>}
+    {managerRole && data.pendingRestart && <Alert role="status" className="mt-4"><AlertDescription>{manager.managerLifecycle.state === 'stopped' ? 'Start' : 'Restart'} your manager in Sessions to apply the saved manager instructions and profile.</AlertDescription></Alert>}
     {editing ? <><Label htmlFor={`${role}-prompt`} className="sr-only">{managerRole ? 'Manager' : 'Worker'} prompt</Label>
     <Textarea id={`${role}-prompt`} value={text} onChange={event => edit(event.target.value)} aria-describedby={`${role}-prompt-hint`} className="mt-6 min-h-64 resize-y font-mono text-xs leading-6" spellCheck={false} /></> : <div className="mt-6 border-y py-6"><p className="line-clamp-5 whitespace-pre-wrap text-sm leading-7 text-muted-foreground">{data.saved.text}</p></div>}
     {editing && <p id={`${role}-prompt-hint`} className="mt-2 text-xs leading-5 text-muted-foreground">Applies only to this project. Don’t include passwords, API keys or other secrets.</p>}
@@ -167,7 +227,7 @@ function PromptEditor({ role, data, manager, onNotify }) {
           'When to raise a question or blocker with the manager.',
         ]).map(item => <li key={item}>{item}</li>)}</ul><p className="mt-2">Keep these instructions reusable. Put individual tasks and changing requirements in the manager conversation.</p></div>
         <div><h3 className="font-medium text-foreground">Example</h3><blockquote className="mt-2 border-l-2 border-primary/30 pl-3 text-foreground">{managerRole ? 'Keep updates concise and use plain language. Explain the options before recommending a direction. Ask me about unclear priorities, and distinguish verified results from assumptions.' : 'Follow the project’s existing conventions. Check the agreed behaviour, record what was verified and describe any remaining limitations. Raise unclear requirements with the manager before changing scope.'}</blockquote></div>
-        <div><h3 className="font-medium text-foreground">How it’s used</h3><p className="mt-1">{managerRole ? 'This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately.' : 'This text replaces Crew’s default worker instructions for this project. Saved changes apply to newly launched workers; existing workers keep the instructions they started with.'}</p><p className="mt-2">Crew still supplies project and task context. These instructions don’t change Codex permissions or approval requirements.</p></div>
+        <div><h3 className="font-medium text-foreground">How it’s used</h3><p className="mt-1">{managerRole ? 'This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately.' : 'This text replaces Crew’s default worker instructions for this project. Saved changes apply to newly launched workers; existing workers keep the instructions they started with.'}</p><p className="mt-2">Crew still supplies project and task context. These instructions don’t change Codex permissions or approval requirements.</p></div>
       </div>
     </details>
     {stale && <Alert className="mt-3" role="alert"><AlertDescription>The saved version changed while you were editing. Your draft is preserved. Copy it before cancelling to load the latest saved instructions.</AlertDescription></Alert>}
@@ -192,7 +252,7 @@ export function Settings({ manager }) {
     { id: 'global', label: 'General', icon: SlidersHorizontal, description: 'Preferences shared across every project on this Mac.' },
     { id: 'project', label: 'General', icon: SlidersHorizontal, description: 'Manage the details for this project.' },
     { id: 'sessions', label: 'Sessions', icon: Radio, description: 'Manage the live manager session for this project.' },
-    { id: 'manager', label: 'Manager profile', icon: UserRound, description: 'Configure your manager’s voice and instructions.' },
+    { id: 'manager', label: 'Manager profile', icon: UserRound, description: 'Customize your AI manager’s name, picture, personality, voice and instructions.' },
     { id: 'worker', label: 'Worker profile', icon: Users, description: 'Set the instructions for newly launched workers.' },
   ];
   const current = pages.find(item => item.id === page);
@@ -211,7 +271,7 @@ export function Settings({ manager }) {
         <div hidden={page !== 'project'} aria-label="Project general settings"><ProjectGeneral key={selectedProject?.id || 'loading'} workspace={workspace} onNotify={notify} /></div>
         {page !== 'global' && manager.settingsError && <Alert variant="destructive" role="alert"><AlertDescription>{manager.settingsError}<Button className="ml-2" variant="outline" onClick={() => void manager.loadSettings().catch(() => {})}>Reload settings</Button></AlertDescription></Alert>}
         <div hidden={page !== 'sessions'} aria-label="Session settings"><section aria-labelledby="manager-lifecycle-heading" className="border-t pt-6"><h3 id="manager-lifecycle-heading" className="mb-4 font-semibold">Manager session</h3><ManagerLifecycle manager={manager} /></section></div>
-        <div hidden={page !== 'manager'} aria-label="Manager profile settings" className="space-y-12"><ManagerProfile key={manager.settings?.projectId || 'loading'} manager={manager} onNotify={notify} />{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:manager`} role="manager" data={manager.settings.manager} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading manager instructions…</p>}</div>
+        <div hidden={page !== 'manager'} aria-label="Manager profile settings" className="space-y-12"><div key={manager.settings?.projectId || 'loading'}><ManagerIdentity manager={manager} onNotify={notify} /><ManagerPersonality manager={manager} onNotify={notify} /><ManagerProfile key={manager.settings?.projectId || 'loading'} manager={manager} onNotify={notify} /></div>{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:manager`} role="manager" data={manager.settings.manager} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading manager instructions…</p>}</div>
         <div hidden={page !== 'worker'} aria-label="Worker profile settings">{manager.settings ? <PromptEditor key={`${manager.settings.projectId}:worker`} role="worker" data={manager.settings.worker} manager={manager} onNotify={notify} /> : <p role="status" className="text-sm text-muted-foreground">Loading worker instructions…</p>}</div>
     </div>
     </div>

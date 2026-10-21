@@ -7,7 +7,7 @@ import path from 'node:path';
 import { loadAppConfig } from './config.mjs';
 import { fileURLToPath } from 'node:url';
 import { createPromptSettings } from './prompt-settings.mjs';
-import { createManagerProfile } from './manager-profile.mjs';
+import { createManagerProfile, managerProfileSnapshot } from './manager-profile.mjs';
 import { createManagerLifecycle } from './manager-lifecycle.mjs';
 import { createBridge, safeError } from './codex-bridge.mjs';
 import { createController } from './controller.mjs';
@@ -87,18 +87,20 @@ const refreshScratchpad = async () => {
     if (message !== scratchpadReadError) { scratchpadReadError = message; broadcast({ type: 'work-state', state: bridge.state() }); }
   } finally { scratchpadPolling = false; }
 };
+let settingsSave = Promise.resolve();
+const serializeSettings = work => { const result = settingsSave.then(work); settingsSave = result.catch(() => {}); return result; };
 const prompts = await createPromptSettings({ stateDir: orchestrationDir, sourceDir: root, projectId: project.id, managerPrompt, workerPrompt });
 const managerProfile = createManagerProfile({ stateDir: orchestrationDir, projectId: project.id });
 const controller = await createController({ admissionHeld:async()=>await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)||drainHeld||isUpdatePlanHolding(await readUpdatePlan(orchestrationDir)), stateDir: orchestrationDir, sourceDir: root, executable, project, workerPrompt, getWorkerPrompt: () => prompts.snapshot('worker'), globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR ? {dir:process.env.CREW_GLOBAL_CAPACITY_DIR} : null, onChange: state => broadcast({ type: 'orchestration-state', state }) });
 await writeFile(`${runtimeProjectPath}.tmp`, JSON.stringify({ project, workerPrompt }) + '\n', { mode: 0o600 });
 await rename(`${runtimeProjectPath}.tmp`, runtimeProjectPath);
 const bridge = createBridge({ cwd: root, statePath: managerStatePath, executable, orchestrationDir, project, managerPrompt, runtimeProjectPath, getManagerScratchpad: () => scratchpad.snapshot(), onEvent: broadcast });
-const manager = await createManagerLifecycle({ stateDir: orchestrationDir, projectId: project.id, bridge, prompts, onChange: state => broadcast({ type: 'manager-lifecycle', state }) });
+const manager = await createManagerLifecycle({ stateDir: orchestrationDir, projectId: project.id, bridge, prompts: { snapshot: async () => managerProfileSnapshot((await prompts.snapshot('manager')).text, await managerProfile.read()) }, onChange: state => broadcast({ type: 'manager-lifecycle', state }) });
 const scratchpadTimer = setInterval(() => void refreshScratchpad().catch(error => broadcast({ type: 'notice', message: safeError(error) })), 1000);
 const settingsView = async () => {
   const saved = await prompts.read(), lifecycle = manager.view();
   const profile = await managerProfile.read();
-  return { projectId: project.id, projectName: project.name, managerProfile: profile, managerLifecycle: lifecycle, manager: { saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: saved.manager.version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
+  return { projectId: project.id, projectName: project.name, managerProfile: profile, managerLifecycle: lifecycle, manager: { savedBehaviorVersion: managerProfileSnapshot(saved.manager.text, profile).version, saved: { text: saved.manager.text, version: saved.manager.version }, defaultText: saved.manager.defaultText, activeVersion: lifecycle.activeVersion, retainedVersion: lifecycle.retainedVersion, pendingRestart: managerProfileSnapshot(saved.manager.text, profile).version !== (lifecycle.activeVersion || lifecycle.retainedVersion) }, worker: { saved: { text: saved.worker.text, version: saved.worker.version }, defaultText: saved.worker.defaultText } };
 };
 const version = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8')).version;
 const updates = createUpdateBridge({version,onStatus:status=>broadcast({type:'update-state',status:{...status,plan:updatePlan?.status()||null}})});
@@ -138,7 +140,7 @@ const managerReview = new ManagerReview({
 managerReview.start();
 const server = http.createServer(async (req, res) => {
   res.setHeader('Cache-Control', 'no-store'); res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' https:; media-src 'self' blob:; frame-ancestors 'none'");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; media-src 'self' blob:; frame-ancestors 'none'");
   res.setHeader('Permissions-Policy', 'microphone=(self), camera=()');
   const send = (code, value) => {
     if (value?.state && typeof value.state === 'object') value = { ...value, state: { ...value.state, managerScratchpad: scratchpadSnapshot, managerScratchpadError: scratchpadReadError } };
@@ -173,13 +175,17 @@ const server = http.createServer(async (req, res) => {
     if (!['POST', 'PUT'].includes(req.method) || !req.url?.startsWith('/api/')) return send(404, { error: 'Not found.' });
     if (req.headers.origin !== origin || !req.headers['content-type']?.startsWith('application/json')) return send(403, { error: 'Same-origin JSON requests only.' });
     let body = '';
-    for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
+    for await (const chunk of req) { body += chunk; if (Buffer.byteLength(body) > (req.url === '/api/settings/manager-profile' ? 750000 : req.url === '/api/settings/prompts' ? 400000 : 70000)) return send(413, { error: 'Request too large.' }); }
     const input = JSON.parse(body || '{}');
     if (['/api/work','/api/connect','/api/prepare','/api/voices','/api/voice-ready','/api/discuss-attention','/api/manager/lifecycle','/api/settings/prompts','/api/settings/manager-profile'].includes(req.url) && await globalAdmissionPaused(process.env.CREW_GLOBAL_CAPACITY_DIR)) return send(409,{error:'Crew is preparing an update across projects. Work admission is paused until you resume or return to work.'});
     if (req.method === 'PUT') {
-      if (req.url === '/api/settings/manager-profile') { await managerProfile.save(input); return send(200, await settingsView()); }
+      if (req.url === '/api/settings/manager-profile') { await serializeSettings(() => managerProfile.save(input, async profile => managerProfileSnapshot((await prompts.snapshot('manager')).text, profile))); return send(200, await settingsView()); }
       if (req.url !== '/api/settings/prompts') return send(404, { error: 'Not found.' });
-      await prompts.save(input); return send(200, await settingsView());
+      await serializeSettings(async () => {
+        const text = input.role === 'manager' ? input.text : !Object.hasOwn(input, 'role') ? input.manager : null;
+        if (text !== null) managerProfileSnapshot(text, await managerProfile.read());
+        await prompts.save(input);
+      }); return send(200, await settingsView());
     }
     if (req.url === '/api/manager/lifecycle') return send(200, await updateAdmission.run(() => manager.request(input.action)));
     if(req.url==='/api/updates'){if(typeof process.send==='function'&&['resume-paused-work','return-to-work'].includes(input.action))return send(200,await updates.request(input.action));if(input.action==='return-to-work'){await updatePlan.releaseForReview();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}if(input.action==='resume-paused-work'){await updatePlan.resumeAfterCancel();return send(200,{...updates.getStatus(),plan:updatePlan.status()});}return send(200,{...await updates.request(input.action||'status'),plan:updatePlan.status()});}
