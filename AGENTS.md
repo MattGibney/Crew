@@ -197,3 +197,7 @@
 
 - The user explicitly authorized merging the reviewed UI work and deploying a new version. Integrate current main, preserve 0.12.0 transcript/recovery/model continuity, validate the combined source, merge through a reviewable PR, and publish one signed/notarized 0.13.0 release through the existing workflow. This does not authorize unrelated issue #26, rewriting published history/assets, changing installed profiles or bypassing the known portable-profile updater boundary.
 - Native acceptance providers must implement the currently used canonical-history and app-server worker-turn contracts. Log manager/worker role separately: authorized synthetic worker turns are expected, while navigation must never start a manager turn. An obsolete exec-only fixture cannot establish current native-worker acceptance.
+
+## Chat scroll correction (GitHub #32)
+
+- The user's bottom-follow preference supersedes turn anchoring: open at the bottom, follow appended/streamed output only while at the bottom, and preserve the reader's position through state refreshes and new messages while scrolled back. Do not mark user rows as scroll anchors or reapply opening position on updates. Jump to latest explicitly resumes following. Verify repeated refresh, near-bottom reading, new user/assistant rows, streaming, completion and composer resizing in the real compiled renderer.
