@@ -12,6 +12,7 @@
     "ai-manager": "./cli.mjs"
   },
   "scripts": {
+    "pretest": "npm run renderer:build",
     "init": "node cli.mjs init",
     "doctor": "node cli.mjs doctor",
     "start": "node cli.mjs start",

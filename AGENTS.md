@@ -82,3 +82,9 @@
 - Verify combined all-project admission, toolchain environments, immutable prompt snapshots and explicit manager lifecycle together. A selected project's idle state cannot approve a shared installation replacement. Hold every project before draining; mark every exact child plan installing before stopping any controller; preserve the global hold on partial/unknown rollback.
 
 - Combined process/ownership suites run with test-file concurrency two so their many real subprocess/ps observations do not invalidate fixture lifetimes through self-imposed load. Retain strict no-force/ownership assertions and meaningful original-timeout tests.
+
+- Full npm test must build its required renderer first so HTTP tests run from a clean checkout; a locally retained renderer is not clean-runner evidence. A failed release workflow before signing/publication is not a published release. Preserve its run/tag provenance and never bypass failed checks or overwrite published assets.
+
+- State-lock recovery and normal release use the same token barrier. A waiting candidate is a registered observer: publish it before reading an owner and retain it throughout recovery. Reclaim only barrier names captured before a separate scan confirms no matching candidates; never expire unknown candidates/barriers by age. This prevents a delayed dead-owner observation from stealing a live successor while avoiding normal poll-related file growth.
+
+- A successful process snapshot omitting a lock owner does not prove it dead when kill(pid, 0) succeeded. Preserve the lock on unavailable liveness. Reclaim candidate evidence only for an exact verified-dead owner. An unknown or overdue observer blocks new admission within the existing acquisition budget; its deadline never authorizes deleting live/unknown evidence. Avoid full process-table scans for every fresh contender, which can make normal contention exceed its own budget.
