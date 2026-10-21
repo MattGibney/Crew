@@ -6,8 +6,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { createTask, updateTask, requestWorkerAction } from '../orchestration-store.mjs';
-import { recordWorkerRequest, listWorkerRequests, decideWorkerRequest, workerRequestDecisions, deliverWorkerRequest, markWorkerRequestDelivered, markWorkerRequestResolved, invalidateWorkerRequests, workerApprovalResponse } from '../worker-approvals.mjs';
+import { createTask, updateTask, requestWorkerAction } from '../runtime/orchestration-store.mjs';
+import { recordWorkerRequest, listWorkerRequests, decideWorkerRequest, workerRequestDecisions, deliverWorkerRequest, markWorkerRequestDelivered, markWorkerRequestResolved, invalidateWorkerRequests, workerApprovalResponse } from '../runtime/worker-approvals.mjs';
 
 async function fixture(t) {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'crew-approvals-'));
@@ -126,7 +126,7 @@ test('native session and exact offered policy amendments are preserved', () => {
 test('manager MCP status and explicit decision route preserve the same native request identity', async t => {
   const { input, stateDir } = await fixture(t);
   const request = await recordWorkerRequest(input);
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../orchestration-mcp.mjs', import.meta.url)), stateDir, 'manager'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../runtime/orchestration-mcp.mjs', import.meta.url)), stateDir, 'manager'], { stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); });
   let output = '', stderr = '';
   child.stdout.on('data', value => { output += value; }); child.stderr.on('data', value => { stderr += value; });
@@ -157,7 +157,7 @@ test('startup connector elicitation preserves a genuine null turn through store 
     { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'answer_worker_approval', arguments: { ...args, turnId: 'invented-turn' } } },
     { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'answer_worker_approval', arguments: args } },
   ];
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../orchestration-mcp.mjs', import.meta.url)), stateDir, 'manager'], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../runtime/orchestration-mcp.mjs', import.meta.url)), stateDir, 'manager'], { stdio: ['pipe', 'pipe', 'pipe'] });
   t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); });
   let output = ''; child.stdout.on('data', value => { output += value; });
   const exited = once(child, 'exit'); child.stdin.end(messages.map(message => JSON.stringify(message)).join('\n') + '\n');

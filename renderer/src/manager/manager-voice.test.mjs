@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveManagerVoice } from './manager-voice.js';
+import { resolveManagerVoice } from './manager-voice.ts';
 const catalog = { voices: [{ id: 'cove' }, { id: 'maple' }], defaultVoice: 'cove' };
 test('legacy project partition preference migrates once without overriding an explicit default profile', async () => {
   const values = new Map([['crew.voice.v3', 'maple']]), calls = [];

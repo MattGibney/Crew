@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createManagerProfile } from '../manager-profile.mjs';
+import { createManagerProfile } from '../runtime/manager-profile.mjs';
 
 test('manager voices persist per project, reject stale writes and retain corrupt evidence', async t => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'crew-profile-'));

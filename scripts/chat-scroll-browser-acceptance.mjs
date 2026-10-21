@@ -8,7 +8,7 @@ import path from 'node:path';
 const { chromium } = await import(process.env.CREW_PLAYWRIGHT_MODULE || 'playwright-core');
 const port = Number(process.env.CREW_ACCEPTANCE_PORT || 4348), origin = `http://127.0.0.1:${port}`;
 const output = await mkdtemp(path.join(tmpdir(), 'crew-chat-scroll-'));
-const fixture = spawn(process.execPath, ['tests/browser-fixture.mjs', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
+const fixture = spawn(process.execPath, ['tests/browser-fixture.mjs', String(port), process.env.CREW_RENDERER_ASSETS || path.resolve('runtime/renderer-dist')], { stdio: ['ignore', 'pipe', 'pipe'] });
 let browser;
 // Register disposal before observing the fixture; only this test's processes are owned.
 const cleanup = async () => { await browser?.close(); if (fixture.exitCode === null) { fixture.kill('SIGTERM'); await once(fixture, 'exit'); } };

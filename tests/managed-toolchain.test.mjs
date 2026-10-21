@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { discoverToolRequirements, resolveManagedToolchain, validateManagedToolchain, satisfiesToolVersion, SYSTEM_TOOL_PATH } from '../managed-toolchain.mjs';
+import { discoverToolRequirements, resolveManagedToolchain, validateManagedToolchain, satisfiesToolVersion, SYSTEM_TOOL_PATH } from '../runtime/managed-toolchain.mjs';
 const run = promisify(execFile);
 
 const source = (path, content) => ({ path, content });

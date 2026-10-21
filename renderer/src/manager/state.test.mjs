@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chooseVoice, connectorVerificationURL } from './state.js';
+import { chooseVoice, connectorVerificationURL } from './state.ts';
 
 test('saved voice is used only while advertised; unavailable and absent choices resolve to actual catalog default', () => {
   const catalog = { defaultVoice: 'cove', voices: [{ id: 'cove' }, { id: 'juniper' }] };

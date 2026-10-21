@@ -8,8 +8,8 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { configureGlobalCapacity } from '../global-capacity.mjs';
-const root=fileURLToPath(new URL('../',import.meta.url));
+import { configureGlobalCapacity } from '../runtime/global-capacity.mjs';
+const root=fileURLToPath(new URL('../runtime/',import.meta.url));
 test('global admission hold rejects project manager admissions before local plan begin',async t=>{
  const directory=await mkdtemp(join(tmpdir(),'crew-global-http-')),capacity=join(directory,'capacity'),configPath=join(directory,'config.json'),executable=join(directory,'synthetic-codex.mjs');
  const socket=createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(resolve=>socket.close(resolve));

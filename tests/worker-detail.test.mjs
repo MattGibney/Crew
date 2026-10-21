@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../orchestration-store.mjs';
-import { readWorkerDetail } from '../worker-detail.mjs';
+import { createTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../runtime/orchestration-store.mjs';
+import { readWorkerDetail } from '../runtime/worker-detail.mjs';
 const project = { id: 'project-one', mode: 'repository' };
 async function fixture(t) {
   const dir = await mkdtemp(path.join(tmpdir(), 'crew-detail-'));
@@ -96,7 +96,7 @@ test('MCP shared notes are bound to exact worker run and manager project', async
   const { dir, id } = await fixture(t);
   await updateTask(dir, id, task => { task.runId = 'notes-mcp-run'; task.status = 'running'; });
   async function call(roleArgs, args) {
-    const child = spawn(process.execPath, [fileURLToPath(new URL('../orchestration-mcp.mjs', import.meta.url)), dir, ...roleArgs], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../runtime/orchestration-mcp.mjs', import.meta.url)), dir, ...roleArgs], { stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', stderr = ''; child.stdout.on('data', value => output += value); child.stderr.on('data', value => stderr += value);
     const closed = new Promise(resolve => child.on('close', resolve));
     child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'update_work_notes', arguments: args } }) + '\n');

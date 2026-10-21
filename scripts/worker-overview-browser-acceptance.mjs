@@ -12,7 +12,7 @@ const output = await mkdtemp(path.join(tmpdir(), 'crew-worker-overview-'));
 const port = Number(process.env.CREW_ACCEPTANCE_PORT || 4347);
 const origin = `http://127.0.0.1:${port}`;
 let browser;
-const fixture = spawn(process.execPath, ['tests/browser-fixture.mjs', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
+const fixture = spawn(process.execPath, ['tests/browser-fixture.mjs', String(port), process.env.CREW_RENDERER_ASSETS || path.resolve('runtime/renderer-dist')], { stdio: ['ignore', 'pipe', 'pipe'] });
 // Cleanup is registered before the first wait; this owns only its disposable fixture.
 const cleanup = async () => { await browser?.close(); if (fixture.exitCode === null) { fixture.kill('SIGTERM'); await once(fixture, 'exit'); } };
 try {

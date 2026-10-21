@@ -10,13 +10,13 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
-import {createController} from '../controller.mjs';
-import {createTask,readTask,updateTask,requestWorkerAction} from '../orchestration-store.mjs';
-import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../update-plan.mjs';
-import {inspectUpdateEvidence} from '../update-evidence.mjs';
-import {updateActivity} from '../update-activity.mjs';
-import {createUpdateCoordinator,createPauseUpdateCoordinator} from '../desktop/updater.mjs';
-const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+import {createController} from '../runtime/controller.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration-store.mjs';
+import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/update-plan.mjs';
+import {inspectUpdateEvidence} from '../runtime/update-evidence.mjs';
+import {updateActivity} from '../runtime/update-activity.mjs';
+import {createUpdateCoordinator,createPauseUpdateCoordinator} from '../runtime/desktop/updater.mjs';
+const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){const deadline=Date.now()+20000;while(Date.now()<deadline){const value=await check();if(value)return value;await sleep(40);}throw new Error(`Timed out: ${label}`);}
 async function fixture(t,{timeoutMs=20000}={}){

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, symlink, rm, readFile, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { assertWorkspaceIsolation } from '../desktop/workspace-isolation.mjs';
+import { assertWorkspaceIsolation } from '../runtime/desktop/workspace-isolation.mjs';
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'crew-isolation-')));
   t.after(() => rm(root, { recursive:true, force:true }));

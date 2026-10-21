@@ -10,17 +10,17 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {EventEmitter} from 'node:events';
-import {createController} from '../controller.mjs';
-import {promptSnapshot} from '../prompt-settings.mjs';
-import {createTask,readTask,updateTask,requestWorkerAction} from '../orchestration-store.mjs';
-import {configureGlobalCapacity,globalAdmissionPaused} from '../global-capacity.mjs';
-import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../update-plan.mjs';
-import {inspectUpdateEvidence} from '../update-evidence.mjs';
-import {updateActivity} from '../update-activity.mjs';
-import {workspaceUpdateActivity,reserveWorkspaceUpdate} from '../desktop/workspace-update.mjs';
-import {createWorkspacePauseUpdate} from '../desktop/workspace-pause-update.mjs';
-import {createUpdateCoordinator,createPauseUpdateCoordinator} from '../desktop/updater.mjs';
-const exec=promisify(execFile),sourceDir=resolve(dirname(fileURLToPath(import.meta.url)),'..');
+import {createController} from '../runtime/controller.mjs';
+import {promptSnapshot} from '../runtime/prompt-settings.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration-store.mjs';
+import {configureGlobalCapacity,globalAdmissionPaused} from '../runtime/global-capacity.mjs';
+import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/update-plan.mjs';
+import {inspectUpdateEvidence} from '../runtime/update-evidence.mjs';
+import {updateActivity} from '../runtime/update-activity.mjs';
+import {workspaceUpdateActivity,reserveWorkspaceUpdate} from '../runtime/desktop/workspace-update.mjs';
+import {createWorkspacePauseUpdate} from '../runtime/desktop/workspace-pause-update.mjs';
+import {createUpdateCoordinator,createPauseUpdateCoordinator} from '../runtime/desktop/updater.mjs';
+const exec=promisify(execFile),sourceDir=resolve(dirname(fileURLToPath(import.meta.url)),'../runtime');
 const sleep=ms=>new Promise(done=>setTimeout(done,ms));
 async function until(check,label){const deadline=Date.now()+25000;while(Date.now()<deadline){const value=await check();if(value)return value;await sleep(40);}throw Error('Timed out '+label);}
 async function fixture(t){

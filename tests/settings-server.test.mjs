@@ -8,9 +8,9 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, updateTask, readTask } from '../orchestration-store.mjs';
-import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../worker-approvals.mjs';
-const root = fileURLToPath(new URL('../', import.meta.url));
+import { createTask, updateTask, readTask } from '../runtime/orchestration-store.mjs';
+import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../runtime/worker-approvals.mjs';
+const root = fileURLToPath(new URL('../runtime/', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() { const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port; }
 async function fixture(t, { nativeAttention = false } = {}) {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { conversationMessage } from '../../../conversation.mjs';
-import { orderedMessages } from './conversation.js';
+import { orderedMessages } from './conversation.ts';
 
 test('recovery-review control shows readable human intent without internal instructions',()=>{
  const message=conversationMessage({id:'review',type:'userMessage',content:[{type:'text',text:'CREW_WORKER_RECOVERY_REVIEW\nInternal selected task/run review protocol'}]},'turn');

@@ -4,9 +4,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile,spawn}from'node:child_process';import{promisify}from'node:util';
-import{createController}from'../controller.mjs';
-import{createTask,readTask,requestWorkerAction,answerQuestion,updateTask,reportTask}from'../orchestration-store.mjs';
-const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+import{createController}from'../runtime/controller.mjs';
+import{createTask,readTask,requestWorkerAction,answerQuestion,updateTask,reportTask}from'../runtime/orchestration-store.mjs';
+const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,description='condition'){const deadline=Date.now()+15000;while(Date.now()<deadline){const value=await fn();if(value)return value;await sleep(50);}throw new Error(`Timed out: ${description}`);}
 async function fixture(t,{environment={},mode='repository',holdResume=false,stateName='state',globalCapacity=null}={}){
@@ -105,7 +105,7 @@ test('stopped questions require their own answer and a reused report ID never in
 test('separate project controllers share one capacity ledger; restart preserves workers and holds queued backlog for explicit start', async t => {
  const capacityDir=await mkdtemp(path.join(tmpdir(),'crew-global-capacity-'));
  const fixtures=[];t.after(async()=>{for(const f of fixtures)await f.cleanup();await rm(capacityDir,{recursive:true,force:true});});
- const {configureGlobalCapacity}=await import('../global-capacity.mjs');
+ const {configureGlobalCapacity}=await import('../runtime/global-capacity.mjs');
  await configureGlobalCapacity({dir:capacityDir,limit:1});
  const a=await fixture(t,{globalCapacity:{dir:capacityDir}});fixtures.push(a);const b=await fixture(t,{globalCapacity:{dir:capacityDir}});fixtures.push(b);
  await Promise.all([a.add('project-a-worker'),b.add('project-b-worker')]);

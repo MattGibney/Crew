@@ -1,8 +1,8 @@
 import {workerAppServerFixture} from './helpers/worker-app-server-fixture.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';import path from 'node:path';import {tmpdir} from 'node:os';import {fileURLToPath,pathToFileURL} from 'node:url';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
-import {createController} from '../controller.mjs';import {createTask,readTask,updateTask,requestWorkerAction} from '../orchestration-store.mjs';
-const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+import {createController} from '../runtime/controller.mjs';import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration-store.mjs';
+const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,label){const until=Date.now()+15000;while(Date.now()<until){const result=await fn();if(result)return result;await sleep(40);}throw new Error('Timed out '+label);}
 async function fixture(t,{environment={},timeoutMs=30000}={}){
  const dir=await mkdtemp(path.join(tmpdir(),'crew-cooperative-')),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'disposable fixture');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture']);

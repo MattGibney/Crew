@@ -4,7 +4,7 @@ import {mkdtemp,writeFile,readFile,rm,stat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
-import {createWorkspacePauseUpdate} from '../desktop/workspace-pause-update.mjs';
+import {createWorkspacePauseUpdate} from '../runtime/desktop/workspace-pause-update.mjs';
 const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return {promise,resolve};};
 async function fixture(t,{childPhase='ready'}={}){
  const directory=await mkdtemp(join(tmpdir(),'crew-group-update-')),path=join(directory,'group.json');t.after(()=>rm(directory,{recursive:true,force:true}));

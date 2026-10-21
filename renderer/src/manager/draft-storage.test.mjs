@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readDraft, writeDraft } from './draft-storage.js';
+import { readDraft, writeDraft } from './draft-storage.ts';
 const storage = () => {
   const values = new Map();
   return { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value), removeItem: key => values.delete(key) };

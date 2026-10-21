@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { decodeEnvelope, decodeNotification, decodeRpc, decodeApprovalParams, rpcErrorCode } from '../runtime/bridge/protocol.mjs';
+
+test('native protocol validates consumed identity and history before projection', () => {
+ assert.throws(() => decodeRpc('thread/start', { thread: { id: 19 } }), /Invalid native thread\/start/);
+ assert.throws(() => decodeRpc('thread/timeline/list', { data: [{ type: 'item', position: 0, turnId: 'turn', item: { type: 'agentMessage' } }] }), /Invalid native thread\/timeline\/list/);
+ const result = { thread: { id: 'native-thread', providerMetadata: { capability: true } } };
+ assert.equal(decodeRpc('thread/resume', result), result);
+ assert.equal(rpcErrorCode({ code: -32601 }), -32601);
+ assert.equal(rpcErrorCode({ code: 'ENOENT' }), 'ENOENT');
+});
+
+test('native method-bearing requests retain their namespace and nullable startup turn', () => {
+ const request = { id: 1, method: 'mcpServer/elicitation/request', params: { threadId: 'startup-thread', turnId: null, mode: 'form', requestedSchema: { type: 'object', properties: {} } } };
+ assert.equal(decodeEnvelope(request), request);
+ assert.equal(decodeApprovalParams(request.params), request.params);
+ assert.equal(decodeNotification(request), null);
+ assert.throws(() => decodeApprovalParams({ threadId: 1 }), /Invalid native approval/);
+ assert.equal(decodeNotification({ method: 'unknown/future', params: {} }), null);
+ assert.throws(() => decodeNotification({ method: 'item/agentMessage/delta', params: { threadId: 'thread', itemId: 'item', delta: 1 } }), /Invalid native notification/);
+});

@@ -5,7 +5,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { createNativeAttention } from '../desktop/native-attention.mjs';
+import { createNativeAttention } from '../runtime/desktop/native-attention.mjs';
 const soundPath = fileURLToPath(new URL('../desktop/sounds/attention.wav', import.meta.url));
 const approval = id => ({ work: { threadId: 'manager-one', approvals: [{ id }] } });
 async function fixture(t, options = {}) {

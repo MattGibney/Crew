@@ -202,3 +202,22 @@
 
 - The user's bottom-follow preference supersedes turn anchoring: open at the bottom, follow appended/streamed output only while at the bottom, and preserve the reader's position through state refreshes and new messages while scrolled back. Do not mark user rows as scroll anchors or reapply opening position on updates. Jump to latest explicitly resumes following. Verify repeated refresh, near-bottom reading, new user/assistant rows, streaming, completion and composer resizing in the real compiled renderer.
 - The user explicitly authorized releasing the chat-scroll fix in PR #33 as patch 0.13.1. Merge through that PR, preserve published 0.13.0, and use the existing signed/notarized workflow and public artifact verification. This authorization covers this patch only.
+
+
+## TypeScript and modular source (GitHub #37)
+
+- Production implementations use strict TypeScript (.mts Node/Electron, .cts preloads, .ts/.tsx renderer). Keep emitted .mjs/.cjs import names for NodeNext; runtime entry points live under runtime/. Types never replace runtime boundary validation, ownership checks, native approvals or scope authorization. Do not bypass errors with blanket any, ignores or unvalidated casts.
+- Run npm run build before launching a source controller or packaging; npm test builds first. Builds clear stale runtime modules, so never rebuild runtime while tests/controllers use it. Keep build tools, tests and developer-only preview separate from shipped code; source archives carry typed source and clean build instructions.
+- Preserve complete concurrent scratchpad (#36), profile/instruction propagation (#35) and chat reconciliation (#38) changes through explicit integration/rebase. A main-based structural migration is not proof those pending fixes are included. No automatic merge, release or version bump.
+
+- Browser validators must work under the existing strict script-src self policy; never add unsafe-eval for schema compilation. Mirror production CSP in synthetic browser fixtures, and preserve legitimate null/unavailable wire states in decoders. A permissive fixture is not native acceptance.
+
+- Source archives use the exact committed scripts/source-manifest.json, including after extraction without Git. After staging added/removed code, refresh and review it with npm run source:manifest. Never recursively sweep local JSON/Markdown/evidence into distributable sources. Raw legacy configuration ports still normalize after explicit environment override selection.
+
+- Retained-worker follow-up assignments (issue #42) remain a separate feature dependency; port its append-only assignment/run contracts explicitly after review. The structural migration preserves completion semantics and does not implement new assignments.
+
+- Fixture cleanup must await owned runtime and journal shutdown before removing its directory, using one registered cleanup handler. A failed earlier Node after-hook can skip later hooks and leave disposable children alive; directory removal is not process-exit evidence. Keep generous fixture lifetimes separate from product timeout tests.
+
+## Paused TypeScript migration (GitHub #37)
+
+- The human paused this migration pending completion, approved merges and main integration of the five functional changes: PRs #36, #40, #41 and issues #42, #43. Preserve the checkpoint and do not resume refinement or integration until explicit resumption. On resumption, merge the complete updated main history and resolve typed/runtime integration; do not silently omit or preemptively implement those features. See docs/TYPESCRIPT-CHECKPOINT.md for baseline, rename/build contracts, failed and passing evidence, and outstanding native-package acceptance.

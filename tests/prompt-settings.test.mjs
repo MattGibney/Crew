@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, stat, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createPromptSettings, promptVersion, buildManagerInstructions, buildWorkerInstructions } from '../prompt-settings.mjs';
+import { createPromptSettings, promptVersion, buildManagerInstructions, buildWorkerInstructions } from '../runtime/prompt-settings.mjs';
 const settings = async (options = {}) => createPromptSettings({ stateDir: await mkdtemp(path.join(os.tmpdir(), 'crew-prompts-')), projectId: 'example', ...options });
 test('initial editors show complete defaults and save replaces them durably without rewriting configured files', async () => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), 'crew-prompts-'));

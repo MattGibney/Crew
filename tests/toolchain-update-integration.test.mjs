@@ -7,10 +7,10 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
-import {resolveProjectToolchain,applyProjectToolchain} from '../project-toolchain.mjs';
-import {runEnvironmentHooks,environmentFile} from '../worker-environment.mjs';
+import {resolveProjectToolchain,applyProjectToolchain} from '../runtime/project-toolchain.mjs';
+import {runEnvironmentHooks,environmentFile} from '../runtime/worker-environment.mjs';
 
-const exec=promisify(execFile),root=path.resolve('.');
+const exec=promisify(execFile),root=path.resolve('runtime');
 const quote=value=>`'${String(value).replaceAll("'","'\\''")}'`;
 // These are simulated cache entries, not evidence of a real downloaded Node release.
 // Commands run through the selected entry, forwarding script execution to test Node.

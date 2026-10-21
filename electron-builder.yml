@@ -5,10 +5,8 @@ directories:
   output: dist/desktop
   buildResources: build
 files:
-  - '*.mjs'
-  - renderer-dist/**
+  - runtime/**
   - package.json
-  - desktop/**
   - build/crew-mark.png
   - config/*.example.json
   - prompts/**

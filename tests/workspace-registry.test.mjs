@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat, symlink, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openWorkspaceRegistry } from '../desktop/workspace-registry.mjs';
+import { openWorkspaceRegistry } from '../runtime/desktop/workspace-registry.mjs';
 
 async function fixture(t) {
   const dir = await mkdtemp(join(tmpdir(), 'crew-workspaces-'));

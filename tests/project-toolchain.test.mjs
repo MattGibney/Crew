@@ -8,10 +8,10 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createHash} from 'node:crypto';
-import {resolveProjectToolchain,applyProjectToolchain} from '../project-toolchain.mjs';
-import {runEnvironmentHooks,environmentFile} from '../worker-environment.mjs';
+import {resolveProjectToolchain,applyProjectToolchain} from '../runtime/project-toolchain.mjs';
+import {runEnvironmentHooks,environmentFile} from '../runtime/worker-environment.mjs';
 
-const exec=promisify(execFile),root=path.resolve('.');
+const exec=promisify(execFile),root=path.resolve('runtime');
 const quote=value=>`'${String(value).replaceAll("'","'\\''")}'`;
 // These are simulated cache entries, not evidence of a real downloaded Node release.
 // Commands run through the selected entry, forwarding script execution to test Node.
@@ -48,7 +48,7 @@ test('minimal GUI environment uses the same managed Node/npm in setup, Start, re
  const f=await fixture(t),selected=await cacheEntry(f.cache);
  const worker=path.join(f.temporary,'fake-codex');await writeFile(worker,workerAppServerFixture(`#!${process.execPath}\nimport{execFileSync}from'node:child_process';execFileSync('/bin/zsh',['-lc','node action.mjs worker'],{stdio:'inherit'});console.log(JSON.stringify({type:'thread.started',thread_id:'toolchain-fixture'}));console.log(JSON.stringify({type:'turn.completed'}));`),{mode:0o700});
  const runDir=path.join(f.temporary,'worker-run');await mkdir(runDir);
- await f.run(`let environment;try{environment=await prepareProjectEnvironment(args);await stopProjectEnvironment(args);await prepareProjectEnvironment({...args,resume:true});const config={taskId:args.taskId,runId:'toolchain-run',ticket:'GH-1',brief:'Disposable environment propagation check',stateDir:args.stateDir,worktree:args.worktree,executable:${JSON.stringify(worker)},mcpScript:${JSON.stringify(path.join(root,'orchestration-mcp.mjs'))},sandbox:'read-only',timeoutMs:10000,environment,project:{mode:'repository'}};const configPath=${JSON.stringify(path.join(runDir,'config.json'))};await fs.writeFile(configPath,JSON.stringify(config));await exec(process.execPath,[${JSON.stringify(path.join(root,'worker-runner.mjs'))},configPath],{timeout:15000});}finally{await stopProjectEnvironment(args);}await disposeProjectEnvironment(args);`);
+ await f.run(`let environment;try{environment=await prepareProjectEnvironment(args);await stopProjectEnvironment(args);await prepareProjectEnvironment({...args,resume:true});const config={taskId:args.taskId,runId:'toolchain-run',ticket:'GH-1',brief:'Disposable environment propagation check',stateDir:args.stateDir,worktree:args.worktree,executable:${JSON.stringify(worker)},mcpScript:${JSON.stringify(path.join(root,'orchestration-mcp.mjs'))},workerPrompt:'Read-only disposable fixture.',sandbox:'read-only',timeoutMs:10000,environment,project:{mode:'repository'}};const configPath=${JSON.stringify(path.join(runDir,'config.json'))};await fs.writeFile(configPath,JSON.stringify(config));await exec(process.execPath,[${JSON.stringify(path.join(root,'worker-runner.mjs'))},configPath],{timeout:15000});}finally{await stopProjectEnvironment(args);}await disposeProjectEnvironment(args);`);
  const rows=await f.rows();assert.deepEqual(rows.map(r=>r.phase),['setup','start','ready','stop','resume','ready','worker','stop','teardown']);
  for(const row of rows){assert.equal(row.node,'v22.14.0',row.phase);assert.equal(row.npm,'11.11.0',row.phase);assert.ok(row.PATH.startsWith(`${selected}/bin:`),row.phase);assert.ok(row.PATH.includes('personal-bin'),row.phase);assert.equal(row.ZDOTDIR,f.home,row.phase);assert.equal(row.BASH_ENV,path.join(f.home,'.zshenv'),row.phase);}
  assert.match(await readFile(f.startup,'utf8'),/startup/);

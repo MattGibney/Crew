@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.js';
+import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.ts';
 const at = '2026-10-21T12:00:00.000Z', now = Date.parse(at);
 const worker = overrides => ({ id: 'task-example', ticket: 'AI-014', status: 'running', runId: 'run-one', brief: 'Read-only audit', attention: [], lifecycleRequests: [], ...overrides });
 test('every task and worktree remains reachable; attention, pending actions and live processes stay active', () => {

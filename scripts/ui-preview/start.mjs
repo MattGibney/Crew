@@ -31,7 +31,7 @@ await reset(scenarios[0]);
 vite = await createServer({ configFile: `${root}vite.config.js`, server: { host: '127.0.0.1', port, strictPort: true, proxy: Object.fromEntries(['/api', '/events', '/__control', '/__telemetry', '/__media-events', '/__proof', '/__state'].map(route => [route, { target: origin }])) }, plugins: [{ name: 'crew-local-design-preview',
   async transformIndexHtml(html) {
     const media = await readFile(`${root}tests/fixtures/browser-media.js`, 'utf8');
-    return html.replace('<head>', `<head><script>${media}\nHTMLMediaElement.prototype.play = async function() {}; window.Audio = class { async play() {} pause() {} }; window.open = () => null;</script>`).replace('/src/manager/main.jsx', '/src/preview/main.jsx');
+    return html.replace('<head>', `<head><script>${media}\nHTMLMediaElement.prototype.play = async function() {}; window.Audio = class { async play() {} pause() {} }; window.open = () => null;</script>`).replace('/src/manager/main.tsx', '/src/preview/main.jsx');
   },
   configureServer(server) {
     server.middlewares.use((req, res, next) => { res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws://127.0.0.1:${port}; media-src 'none'; object-src 'none'; frame-src 'none'`); res.setHeader('Permissions-Policy', 'microphone=(), camera=(), geolocation=()'); next(); });

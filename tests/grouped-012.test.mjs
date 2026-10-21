@@ -2,20 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {createConversationTimeline} from '../conversation-timeline.mjs';
+import {createConversationTimeline} from '../runtime/conversation-timeline.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
-import {createController} from '../controller.mjs';
-import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../orchestration-store.mjs';
+import {createController} from '../runtime/controller.mjs';
+import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../runtime/orchestration-store.mjs';
 const exec=promisify(execFile);
 async function wait(fn,predicate,label){const end=Date.now()+30000;let value;while(Date.now()<end){value=await fn();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out ${label}: ${JSON.stringify(value)}`);}
 test('GH-20/24/22 reviewed retained plan, cooperative model continuation and restored handoff presentation preserve one context',async t=>{
  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'crew-grouped-012-'))),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');await mkdir(repo);await exec('git',['init','-b','main',repo]);const script=`import fs from 'node:fs';const phase=process.argv[2],file='.fixture/state.json';fs.mkdirSync('.fixture',{recursive:true});const data=fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{};if(phase==='setup')data.seeds=(data.seeds||0)+1;if(phase==='teardown')data.disposed=true;fs.writeFileSync(file,JSON.stringify(data));`;
  await writeFile(path.join(repo,'action.mjs'),script);await writeFile(path.join(repo,'.gitignore'),'.fixture/\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
  await writeFile(binary,`#!${process.execPath}
-import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../orchestration-store.mjs',import.meta.url).href)};
+import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration-store.mjs',import.meta.url).href)};
 const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 // Exclusive ownership makes accidental overlap a real child-process failure.
 const lock=${JSON.stringify(path.join(dir,'active'))};closeSync(openSync(lock,'wx'));const log=${JSON.stringify(log)},threadId='retained-model-thread',turnId='turn-'+run,send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
@@ -35,7 +35,7 @@ if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,tu
 `,{mode:0o700});
  const source={path:'action.mjs',sha256:createHash('sha256').update(script).digest('hex')},hook=phase=>({command:`${JSON.stringify(process.execPath)} action.mjs ${phase}`,source,timeoutMs:10000}),originalPlan={schemaVersion:1,sources:[source],setup:hook('setup'),start:null,resume:null,ready:null,stop:null,teardown:null};
  const project={id:'model-fixture',name:'Model fixture',mode:'repository',readiness:{ready:true},repositories:[{id:'repo',path:repo,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs:60000,maxConcurrent:1,environment:{executionPlan:originalPlan}}},taskId='model-native-worker';
- let controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ let controller=await createController({stateDir:state,sourceDir:path.resolve('runtime'),executable:binary,project});
  const action=async(action,extra={})=>{const task=await readTask(state,taskId);await requestWorkerAction(state,{taskId,actionId:action+'-'+Date.now(),action,expectedRunId:task.runId||null,...extra});};
  t.after(async()=>{try{const task=await readTask(state,taskId);if(!['paused','stopped','failed','completed','disposed'].includes(task.status)){await action('pause',{cooperative:true});await wait(()=>readTask(state,taskId),x=>['paused','stopped','failed'].includes(x.status),'cleanup pause');}}finally{await controller.stop();await rm(dir,{recursive:true,force:true});}});
  await createTask(state,{requestId:taskId,ticket:'GH-22',brief:'Use Astra to inspect this fixture. Read-only; no other scope.',projectId:project.id,repositoryId:'repo'});await action('start');
@@ -48,8 +48,8 @@ if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,tu
  // Add teardown to current settings only after the retained worker has exited.
  await controller.stop();const currentPlan={...originalPlan,teardown:hook('teardown')};project.worker.environment.executionPlan=currentPlan;
  const runtime=path.join(dir,'manager-runtime.json');await writeFile(runtime,JSON.stringify({project}));
- const managerTool=async(name,args)=>{const {spawn}=await import('node:child_process');const child=spawn(process.execPath,[path.resolve('orchestration-mcp.mjs'),state,'manager',runtime]);let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})+'\n');const code=await new Promise(resolve=>child.once('close',resolve));assert.equal(code,0,errors);const result=JSON.parse(output.trim()).result;assert.equal(result.isError,undefined,result.content[0].text);return JSON.parse(result.content[0].text);};
- controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ const managerTool=async(name,args)=>{const {spawn}=await import('node:child_process');const child=spawn(process.execPath,[path.resolve('runtime/orchestration-mcp.mjs'),state,'manager',runtime]);let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})+'\n');const code=await new Promise(resolve=>child.once('close',resolve));assert.equal(code,0,errors);const result=JSON.parse(output.trim()).result;assert.equal(result.isError,undefined,result.content[0].text);return JSON.parse(result.content[0].text);};
+ controller=await createController({stateDir:state,sourceDir:path.resolve('runtime'),executable:binary,project});
 
  const viewed=await managerTool('review_worker_recovery',{taskId,action:'reconcile_plan'});assert.equal(viewed.allowed,true,JSON.stringify(viewed));assert.deepEqual(viewed.differences.map(d=>d.field),['teardown']);
  assert.equal((await readTask(state,taskId)).environment.plan.teardown,null,'review executes no command or metadata adoption');
@@ -57,7 +57,7 @@ if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,tu
  await managerTool('request_worker_recovery',{taskId,actionId:'grouped-reviewed-recovery',action:'reconcile_plan',expectedRunId:paused.runId,reviewHash:viewed.reviewHash,decision});
  const recovered=await wait(()=>readTask(state,taskId),x=>x.lifecycleRequests.some(r=>r.id==='grouped-reviewed-recovery'&&r.status==='completed'),'reviewed adoption');
  // Recovery adoption and pending model intent survive another controller reload without replay.
- await controller.stop();controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ await controller.stop();controller=await createController({stateDir:state,sourceDir:path.resolve('runtime'),executable:binary,project});
  const reloaded=await readTask(state,taskId);assert.equal(reloaded.environment.recoveryHistory.length,1);assert.equal(reloaded.modelRequests[0].userDecision,request.userDecision);assert.equal(reloaded.runId,initial.runId);
  assert.deepEqual(recovered.environment.recoveryHistory[0].previousPlan,originalPlan);assert.equal(recovered.environment.plan.teardown.command,currentPlan.teardown.command);assert.equal(recovered.runId,initial.runId);assert.equal(recovered.modelSelection.status,'pending');
  const readData=async()=>JSON.parse(await readFile(path.join(initial.worktree,'.fixture/state.json'),'utf8'));assert.deepEqual(await readData(),{seeds:1},'adoption never replays setup or executes teardown');

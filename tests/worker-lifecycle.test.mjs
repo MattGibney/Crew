@@ -5,7 +5,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, readTask, updateTask, reportTask, answerQuestion, requestWorkerAction } from '../orchestration-store.mjs';
+import { createTask, readTask, updateTask, reportTask, answerQuestion, requestWorkerAction } from '../runtime/orchestration-store.mjs';
 const roots=[];
 test.after(async()=>Promise.all(roots.map(root=>rm(root,{recursive:true,force:true}))));
 async function fixture(){const dir=await mkdtemp(join(tmpdir(),'crew-lifecycle-test-'));roots.push(dir);return dir;}
@@ -62,7 +62,7 @@ test('manager lifecycle MCP is project-scoped; bound worker exposes reports and 
  const dir=await fixture();await running(dir,'worker-alpha','run-worker-alpha');
  const runtime=join(dir,'runtime.json');await writeFile(runtime,JSON.stringify({project:{id:'crew',mode:'repository'}}));
  async function rpc(role,extra,method,params){
-  const child=spawn(process.execPath,[fileURLToPath(new URL('../orchestration-mcp.mjs',import.meta.url)),dir,role,...extra]);
+  const child=spawn(process.execPath,[fileURLToPath(new URL('../runtime/orchestration-mcp.mjs',import.meta.url)),dir,role,...extra]);
   let output='',errors='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>errors+=d);
   child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method,params})+'\n');
   const code=await new Promise(resolve=>child.on('close',resolve));assert.equal(code,0,errors);return JSON.parse(output.trim()).result;

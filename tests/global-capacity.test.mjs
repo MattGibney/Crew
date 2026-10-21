@@ -5,12 +5,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { createTask, updateTask } from '../orchestration-store.mjs';
-import { configureGlobalCapacity, createGlobalCapacity, globalAdmissionPaused } from '../global-capacity.mjs';
+import { createTask, updateTask } from '../runtime/orchestration-store.mjs';
+import { configureGlobalCapacity, createGlobalCapacity, globalAdmissionPaused } from '../runtime/global-capacity.mjs';
 async function fixture(t) { const dir=await mkdtemp(path.join(os.tmpdir(),'crew-capacity-test-'));t.after(()=>rm(dir,{recursive:true,force:true}));return {dir,stateA:path.join(dir,'project-a'),stateB:path.join(dir,'project-b'),capacity:path.join(dir,'capacity')}; }
 test('independent OS processes cannot over-admit and changing the limit never preempts claims',async t=>{
  const f=await fixture(t);await configureGlobalCapacity({dir:f.capacity,limit:2,stateDirs:[f.stateA,f.stateB]});
- const module=pathToFileURL(path.resolve('global-capacity.mjs')).href;
+ const module=pathToFileURL(path.resolve('runtime/global-capacity.mjs')).href;
  const jobs=Array.from({length:8},(_,i)=>new Promise((resolve,reject)=>{
   const args={dir:f.capacity,stateDir:i%2?f.stateA:f.stateB};
   const script=`import{createGlobalCapacity}from ${JSON.stringify(module)};const c=await createGlobalCapacity(${JSON.stringify(args)});console.log(JSON.stringify(await c.acquire({taskId:'worker-${i}',runId:'run-${i}'})));`;

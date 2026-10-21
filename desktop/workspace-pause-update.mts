@@ -1,0 +1,716 @@
+import {
+  readWorkspacePauseJournal,
+  writeWorkspacePauseJournal,
+  ID,
+  VERSION,
+  type PauseJournal,
+  type SavedProject,
+} from "./workspace-pause-store.mjs";
+import type {
+  UpdateProject,
+  AdmissionControl,
+  PausePlan,
+} from "./update-contracts.mjs";
+// One durable native-owner plan coordinates all registered project controllers.
+// Project execution remains in the existing per-project update-plan engines.
+import { realpath } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
+import { workspaceUpdateActivity } from "./workspace-update.mjs";
+const clone = <T,>(value: T): T =>
+  value == null ? value : structuredClone(value);
+const terminal = (plan: { phase: string } | null) => plan?.phase === "complete";
+const approved = (
+  child: PausePlan | null | undefined,
+  target: string,
+): child is PausePlan =>
+  Boolean(child) &&
+  child != null &&
+  ID.test(child.id || "") &&
+  child.kind === "pause-update" &&
+  child.consent === true &&
+  child.targetVersion === target;
+export function createWorkspacePauseUpdate({
+  path,
+  currentVersion,
+  projects,
+  setAdmissionPaused,
+  onChange = () => {},
+}: {
+  path: string;
+  currentVersion: string;
+  projects: () => UpdateProject[] | Promise<UpdateProject[]>;
+  setAdmissionPaused: AdmissionControl;
+  onChange?: (status: PausePlan | null) => void;
+}) {
+  if (
+    !isAbsolute(path || "") ||
+    !VERSION.test(currentVersion || "") ||
+    typeof projects !== "function" ||
+    typeof setAdmissionPaused !== "function"
+  )
+    throw new Error("Workspace update configuration is invalid.");
+  let journal: PauseJournal | null = null,
+    initialized = false,
+    beginning = false,
+    initialError: unknown = null,
+    tail: Promise<unknown> = Promise.resolve();
+  const active = (): PauseJournal => {
+    if (!journal) throw new Error("No grouped update is active.");
+    return journal;
+  };
+  const publicStatus = (): PausePlan | null => {
+    if (!journal)
+      return initialError
+        ? {
+            kind: "pause-update",
+            consent: false,
+            id: "unavailable",
+            phase: "blocked",
+            targetVersion: null,
+            targets: [],
+            reasons: [
+              "The grouped update journal is unreadable. Preserve the global admission hold for review.",
+            ],
+            manager: { interrupted: false },
+          }
+        : null;
+    return {
+      kind: "pause-update",
+      consent: true,
+      id: active().id,
+      targetVersion: active().targetVersion,
+      fromVersion: active().fromVersion,
+      phase: active().phase,
+      createdAt: active().createdAt,
+      updatedAt: active().updatedAt,
+      targets: active().projects.flatMap((project) =>
+        (project.targets || []).map((target) => ({
+          taskId: target.taskId,
+          projectId: project.id,
+          projectName: project.name,
+          progress: target.progress || "captured",
+        })),
+      ),
+      projects: active().projects.map((project) => ({
+        id: project.id,
+        name: project.name,
+        phase: project.phase || "pending",
+        ready: project.phase === "ready",
+      })),
+      reasons: [...active().reasons],
+      manager: {
+        interrupted: active().projects.some(
+          (project) => project.managerInterrupted === true,
+        ),
+      },
+    };
+  };
+  async function save() {
+    active().updatedAt = new Date().toISOString();
+    await writeWorkspacePauseJournal(path, active());
+    try {
+      onChange(publicStatus());
+    } catch {
+      /* Observers cannot undo a durable barrier. */
+    }
+  }
+  const ready = (async () => {
+    try {
+      const value = await readWorkspacePauseJournal(path);
+      journal = value;
+      if (journal && !terminal(journal)) await setAdmissionPaused(true);
+      initialized = true;
+    } catch (error) {
+      initialError = error;
+      try {
+        await setAdmissionPaused(true);
+      } catch {}
+      throw new Error(
+        "The grouped update journal cannot be verified. Global admission must remain paused.",
+      );
+    }
+  })();
+  const enqueue = <T,>(fn: () => Promise<T>): Promise<T> => {
+    const result = tail.then(() => ready).then(fn);
+    tail = result.catch(() => {});
+    return result;
+  };
+  async function current() {
+    const values = await projects();
+    if (!Array.isArray(values) || !values.length || values.length > 64)
+      throw new Error("Registered projects are unavailable.");
+    const result: UpdateProject[] = [];
+    for (const project of values) {
+      if (
+        !ID.test(project?.id || "") ||
+        !isAbsolute(project?.configPath || "") ||
+        typeof project.host?.api !== "function" ||
+        typeof project.host?.updateToken !== "function"
+      )
+        throw new Error(
+          "A registered project controller or identity is unavailable.",
+        );
+      result.push({
+        ...project,
+        name:
+          typeof project.name === "string" && project.name.trim()
+            ? project.name.trim().slice(0, 160)
+            : project.id,
+        configPath: await realpath(resolve(project.configPath)),
+      });
+    }
+    if (
+      new Set(result.map((project) => project.id)).size !== result.length ||
+      new Set(result.map((project) => project.configPath)).size !==
+        result.length
+    )
+      throw new Error("Registered project identities overlap.");
+    return result;
+  }
+  async function matchingProjects() {
+    const values = await current();
+    if (
+      !active().captureComplete ||
+      values.length !== active().projects.length ||
+      values.some(
+        (project) =>
+          !active().projects.some(
+            (saved) =>
+              saved.id === project.id &&
+              saved.configPath === project.configPath,
+          ),
+      )
+    )
+      throw new Error(
+        "The registered project set changed or its capture is incomplete. Review the grouped update before continuing.",
+      );
+    return values;
+  }
+  const hostFor = (values: UpdateProject[], project: SavedProject) => {
+    const value = values.find((value) => value.id === project.id);
+    if (!value) throw new Error("Project is unavailable.");
+    return value.host;
+  };
+  function remember(project: SavedProject, child: PausePlan) {
+    project.phase = child.phase;
+    project.targets = (child.targets || [])
+      .slice(0, 4096)
+      .filter((target) => typeof target.taskId === "string")
+      .map((target) => ({
+        taskId: target.taskId,
+        progress:
+          typeof target.progress === "string"
+            ? target.progress.slice(0, 160)
+            : "captured",
+      }));
+    project.managerInterrupted = child.manager?.interrupted === true;
+  }
+  async function childStatus(
+    values: UpdateProject[],
+    project: SavedProject,
+    { adopt = false } = {},
+  ) {
+    const result = await hostFor(values, project).api("update-plan-status"),
+      child = result?.plan ?? null;
+    if (
+      !project.childPlanId &&
+      adopt &&
+      project.beginRequested &&
+      approved(child, active().targetVersion) &&
+      child.id !== project.previousPlanId
+    ) {
+      project.childPlanId = child.id;
+      remember(project, child);
+      await save();
+    }
+    if (
+      !approved(child, active().targetVersion) ||
+      child.id !== project.childPlanId
+    )
+      throw new Error(
+        `Project ${project.name} has an unavailable or changed update plan.`,
+      );
+    remember(project, child);
+    return child;
+  }
+  async function block(reason: string) {
+    active().phase = "blocked";
+    active().reasons = [reason];
+    await save();
+    await setAdmissionPaused(true);
+    return publicStatus();
+  }
+  async function blockChildren(values: UpdateProject[], reason: string) {
+    const failures = [];
+    for (const project of active().projects) {
+      if (!project.childPlanId) continue;
+      try {
+        await hostFor(values, project).updateToken("update-plan-blocked", {
+          planId: project.childPlanId,
+          targetVersion: active().targetVersion,
+          reason,
+        });
+      } catch {
+        failures.push(project.name);
+      }
+    }
+    return block(
+      reason +
+        (failures.length
+          ? ` Child recovery could not be confirmed for ${failures.join(", ")}.`
+          : ""),
+    );
+  }
+  async function untouched(values: UpdateProject[], project: SavedProject) {
+    const child =
+      (await hostFor(values, project).api("update-plan-status"))?.plan ?? null;
+    if (
+      (child?.id ?? null) !== project.previousPlanId ||
+      (child && child.phase !== "complete")
+    )
+      throw new Error("An uncaptured child plan changed.");
+    project.phase = "complete";
+  }
+  async function refresh(values: UpdateProject[]) {
+    for (const project of active().projects) {
+      if (project.beginRequested)
+        await childStatus(values, project, { adopt: true });
+      else await untouched(values, project);
+    }
+    await save();
+  }
+  async function recoveryChild(
+    values: UpdateProject[],
+    project: SavedProject,
+    { resume = false } = {},
+  ) {
+    let child = await childStatus(values, project, { adopt: true });
+    if (child.phase === "complete" || (resume && child.phase === "resuming"))
+      return child;
+    if (!["canceled", "blocked"].includes(child.phase)) {
+      const result = await hostFor(values, project).updateToken(
+        "update-plan-blocked",
+        {
+          planId: project.childPlanId,
+          targetVersion: active().targetVersion,
+          reason: "The user explicitly chose grouped retained-work recovery.",
+        },
+      );
+      const updated = result?.plan;
+      if (
+        !approved(updated, active().targetVersion) ||
+        updated.id !== project.childPlanId ||
+        !["blocked", "canceled", "complete"].includes(updated.phase)
+      )
+        throw new Error("Child recovery hold was not confirmed.");
+      child = updated;
+      remember(project, child);
+    }
+    return child;
+  }
+  async function complete() {
+    await matchingProjects();
+    await setAdmissionPaused(false);
+    active().phase = "complete";
+    active().reasons = [];
+    await save();
+    return publicStatus();
+  }
+  async function tickInternal() {
+    if (
+      !journal ||
+      terminal(journal) ||
+      ["blocked", "canceled", "marking", "installing"].includes(active().phase)
+    )
+      return publicStatus();
+    try {
+      const values = await matchingProjects();
+      await refresh(values);
+      const bad = active().projects.find((project) =>
+        ["blocked", "canceled"].includes(project.phase || ""),
+      );
+      if (bad)
+        return block(
+          `Project ${bad.name} requires review before the grouped update can continue.`,
+        );
+      if (active().phase === "resuming") {
+        if (active().projects.every((project) => project.phase === "complete"))
+          return complete();
+        if (
+          active().projects.some(
+            (project) =>
+              !["resuming", "complete"].includes(project.phase || ""),
+          )
+        )
+          return block(
+            "A project did not recover the expected installed update plan. Paused work is retained.",
+          );
+        active().reasons = [
+          "Waiting for every project to confirm retained-work recovery.",
+        ];
+        await save();
+        return publicStatus();
+      }
+      if (
+        active().projects.some(
+          (project) => !["draining", "ready"].includes(project.phase || ""),
+        )
+      )
+        return block("A project update plan changed while pausing work.");
+      const activity = await workspaceUpdateActivity(values);
+      active().reasons = [...activity.reasons];
+      if (
+        active().projects.every((project) => project.phase === "ready") &&
+        activity.safe
+      ) {
+        active().phase = "ready";
+        active().reasons = [];
+      } else {
+        active().phase = "draining";
+        if (!active().reasons.length)
+          active().reasons = [
+            "Waiting for every project to finish its controlled pause.",
+          ];
+      }
+      await save();
+      return publicStatus();
+    } catch {
+      return block(
+        "Registered project activity or child plan identity is unavailable. Global admission remains paused.",
+      );
+    }
+  }
+  return {
+    ready,
+    status: () => clone(publicStatus()),
+    isHolding: () =>
+      !initialized || beginning || Boolean(journal && !terminal(journal)),
+    begin(input: { targetVersion: string }) {
+      beginning = true;
+      return enqueue(async () => {
+        try {
+          const targetVersion = input?.targetVersion;
+          if (
+            !VERSION.test(targetVersion || "") ||
+            targetVersion === currentVersion
+          )
+            throw new Error("A different valid target version is required.");
+          if (journal && !terminal(journal)) {
+            if (active().targetVersion === targetVersion) return publicStatus();
+            throw new Error(
+              "Resolve the current grouped update before starting another.",
+            );
+          }
+          journal = {
+            schema: 1,
+            kind: "pause-update",
+            consent: true,
+            id: randomUUID(),
+            fromVersion: currentVersion,
+            targetVersion,
+            phase: "draining",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            captureComplete: false,
+            projects: [],
+            reasons: [],
+          };
+          await save();
+          await setAdmissionPaused(true);
+          try {
+            const values = await current();
+            active().projects = values.map((project) => ({
+              id: project.id,
+              name: project.name || project.id,
+              configPath: project.configPath,
+              childPlanId: null,
+              previousPlanId: null,
+              beginRequested: false,
+              phase: null,
+              targets: [],
+            }));
+            active().captureComplete = true;
+            await save();
+            // Inspect all projects before creating a child plan in any of them.
+            for (const project of active().projects) {
+              const prior = (
+                await hostFor(values, project).api("update-plan-status")
+              )?.plan;
+              if (prior && prior.phase !== "complete")
+                throw new Error("A project already holds an update plan.");
+              project.previousPlanId = prior?.id ?? null;
+            }
+            await save();
+            for (const project of active().projects) {
+              project.beginRequested = true;
+              await save();
+              const result = await hostFor(values, project).updateToken(
+                "update-plan-begin",
+                { targetVersion },
+              );
+              if (!approved(result?.plan, targetVersion))
+                throw new Error("Child plan was not confirmed.");
+              project.childPlanId = result.plan.id;
+              remember(project, result.plan);
+              await save();
+            }
+            return tickInternal();
+          } catch {
+            return block(
+              "Pausing could not be confirmed for every registered project. Global admission remains paused; review or cancel the retained group.",
+            );
+          }
+        } finally {
+          beginning = false;
+        }
+      });
+    },
+    tick: () => enqueue(tickInternal),
+    cancel: () =>
+      enqueue(async () => {
+        if (!journal || terminal(journal)) return publicStatus();
+        if (["installing", "marking"].includes(active().phase))
+          throw new Error(
+            "Installation has begun. Preserve paused work for recovery.",
+          );
+        try {
+          const values = await matchingProjects();
+          for (const project of active().projects) {
+            if (!project.beginRequested) continue;
+            const child = await childStatus(values, project, { adopt: true });
+            if (child.phase === "complete") continue;
+            const result = await hostFor(values, project).updateToken(
+              "update-plan-cancel",
+              {
+                planId: project.childPlanId,
+                targetVersion: active().targetVersion,
+              },
+            );
+            if (
+              !approved(result?.plan, active().targetVersion) ||
+              result.plan.id !== project.childPlanId ||
+              result.plan.phase !== "canceled"
+            )
+              throw new Error("Child cancellation was not confirmed.");
+            remember(project, result.plan);
+          }
+          active().phase = "canceled";
+          active().reasons = [
+            "Update canceled. Choose Resume paused work or Return to work for all projects.",
+          ];
+          await save();
+          return publicStatus();
+        } catch {
+          return block(
+            "Cancellation could not be confirmed for every project. Global admission remains paused.",
+          );
+        }
+      }),
+    resumeAfterCancel: () =>
+      enqueue(async () => {
+        if (!journal || !["canceled", "blocked"].includes(active().phase))
+          throw new Error(
+            "No canceled or blocked grouped update is available.",
+          );
+        try {
+          const values = await matchingProjects();
+          for (const project of active().projects) {
+            if (!project.beginRequested) {
+              await untouched(values, project);
+              continue;
+            }
+            const child = await recoveryChild(values, project, {
+              resume: true,
+            });
+            if (["complete", "resuming"].includes(child.phase)) continue;
+            const result = await hostFor(values, project).updateToken(
+              "update-plan-resume",
+              {
+                planId: project.childPlanId,
+                targetVersion: active().targetVersion,
+              },
+            );
+            if (
+              !approved(result?.plan, active().targetVersion) ||
+              result.plan.id !== project.childPlanId ||
+              !["resuming", "complete"].includes(result.plan.phase)
+            )
+              throw new Error("Child resume was not confirmed.");
+            remember(project, result.plan);
+          }
+          active().phase = "resuming";
+          active().resumeMode = "explicit";
+          active().reasons = [];
+          await save();
+          return tickInternal();
+        } catch {
+          return block(
+            "Retained-work resume could not be confirmed for every project. Global admission remains paused.",
+          );
+        }
+      }),
+    releaseForReview: () =>
+      enqueue(async () => {
+        if (!journal || !["canceled", "blocked"].includes(active().phase))
+          throw new Error(
+            "No canceled or blocked grouped update is available.",
+          );
+        try {
+          const values = await matchingProjects();
+          for (const project of active().projects) {
+            if (!project.beginRequested) {
+              await untouched(values, project);
+              continue;
+            }
+            const child = await recoveryChild(values, project);
+            if (child.phase === "complete") continue;
+            const result = await hostFor(values, project).updateToken(
+              "update-plan-review",
+              {
+                planId: project.childPlanId,
+                targetVersion: active().targetVersion,
+              },
+            );
+            if (
+              !approved(result?.plan, active().targetVersion) ||
+              result.plan.id !== project.childPlanId ||
+              result.plan.phase !== "complete"
+            )
+              throw new Error("Child return was not confirmed.");
+            remember(project, result.plan);
+          }
+          return complete();
+        } catch {
+          return block(
+            "Return to work could not be confirmed for every project. Global admission remains paused.",
+          );
+        }
+      }),
+    markInstalling: (input: { planId: string; targetVersion: string | null }) =>
+      enqueue(async () => {
+        if (
+          !journal ||
+          active().phase !== "ready" ||
+          input?.planId !== active().id ||
+          input.targetVersion !== active().targetVersion
+        )
+          return { marked: false, plan: publicStatus() };
+        let values: UpdateProject[] | undefined;
+        try {
+          values = await matchingProjects();
+          await refresh(values);
+          if (
+            !active().projects.every((project) => project.phase === "ready") ||
+            !(await workspaceUpdateActivity(values)).safe
+          )
+            throw new Error("Fresh readiness changed.");
+          active().phase = "marking";
+          await save();
+          for (const project of active().projects) {
+            const result = await hostFor(values, project).updateToken(
+              "update-plan-installing",
+              {
+                planId: project.childPlanId,
+                targetVersion: active().targetVersion,
+              },
+            );
+            if (result?.marked !== true)
+              throw new Error("Child install was not confirmed.");
+            project.phase = "installing";
+            await save();
+          }
+          await matchingProjects();
+          active().phase = "installing";
+          active().reasons = [];
+          await save();
+          return { marked: true, plan: publicStatus() };
+        } catch {
+          if (values)
+            await blockChildren(
+              values,
+              "Installation could not be committed for every project. No controller may be stopped; global admission remains paused.",
+            );
+          else
+            await block(
+              "The registered project set changed before installation. Global admission remains paused.",
+            );
+          return { marked: false, plan: publicStatus() };
+        }
+      }),
+    markBlocked: (
+      reason: string,
+      input: { planId?: string; targetVersion?: string | null } = {},
+    ) =>
+      enqueue(async () => {
+        if (
+          !journal ||
+          terminal(journal) ||
+          active().phase === "canceled" ||
+          input.planId !== active().id ||
+          input.targetVersion !== active().targetVersion
+        )
+          return publicStatus();
+        const message =
+          typeof reason === "string"
+            ? reason.slice(0, 600)
+            : "Native installation did not finish. Retained work requires review.";
+        try {
+          return await blockChildren(await matchingProjects(), message);
+        } catch {
+          return block(
+            "Installation failed and registered project recovery is unavailable. Global admission remains paused.",
+          );
+        }
+      }),
+    recover: () =>
+      enqueue(async () => {
+        if (!journal || terminal(journal)) return publicStatus();
+        await setAdmissionPaused(true);
+        try {
+          const values = await matchingProjects();
+          if (active().phase === "marking")
+            return blockChildren(
+              values,
+              "Installation was interrupted before every project committed. Review retained work before continuing.",
+            );
+          if (active().phase === "installing") {
+            if (currentVersion !== active().targetVersion)
+              return blockChildren(
+                values,
+                "The approved target version was not installed. Paused work is retained.",
+              );
+            await refresh(values);
+            if (
+              active().projects.some(
+                (project) =>
+                  !["resuming", "complete"].includes(project.phase || ""),
+              )
+            )
+              return blockChildren(
+                values,
+                "A project did not recover the approved target version. Paused work is retained.",
+              );
+            active().phase = "resuming";
+            active().resumeMode = "installed";
+            await save();
+            return tickInternal();
+          }
+          if (
+            active().phase === "resuming" &&
+            active().resumeMode !== "explicit" &&
+            currentVersion !== active().targetVersion
+          )
+            return blockChildren(
+              values,
+              "The target version is unavailable during grouped recovery.",
+            );
+          return tickInternal();
+        } catch {
+          return block(
+            "The grouped update cannot verify its registered projects. Global admission remains paused.",
+          );
+        }
+      }),
+  };
+}
