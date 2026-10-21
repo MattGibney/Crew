@@ -27,3 +27,31 @@ Sound ownership and the explicit action-required attention protocol are document
 ## One conversation for typed and spoken messages (GitHub #15)
 
 `WorkChat` consumes `work.messages` only. `Message` renders spoken and typed messages identically, with a small Live or Partial transcript status when speech is unfinished. The browser has no second transcript buffer and Connect does not reset history. Native canonical timeline entries restore mixed history and identify promoted execution items without repeating them; the bounded private bridge journal also preserves unfinished observed speech. Unsupported canonical history uses recent native turns plus the journal; schema advertisement alone does not prove method support. No transcript event starts a model turn or replays a handoff.
+
+## Project manager profile
+
+Settings owns the manager voice preference. `GET /api/settings` returns `managerProfile` with nullable `voice` (null means the advertised Codex default) and a version. `PUT /api/settings/manager-profile` saves `{voice, expectedVersion}` using serialized atomic replacement in the project state directory, `manager-profiles/<projectId>.json`. Stale updates and unreadable/invalid retained profiles fail without replacing existing data. The choice is independent of prompt activation/restart and applies on the next explicit call. Old browser-wide voice values are retained but no longer read; they are not copied between projects.
+
+The composer has no voice selector or microphone mode. Calls retain open-microphone/mute intent and explicit connection semantics; the previous independent push-to-talk mode/shortcut is removed. A future mute-based hold interaction is intentionally not implemented.
+
+### Chat reading and tool activity
+
+The main chat composes the shadcn Base Nova Message Scroller with `@shadcn/react/message-scroller`. Each canonical message is a separately keyed row; user rows anchor turns. Saved conversations open at the last anchor, with 40 px of preceding context. Follow-output releases on wheel, touch and keyboard scrolling; the explicit Jump to latest button resumes it. Keep the composer outside the viewport so its height does not determine the jump-button position. The primitive handles layout observation and prepended-history position preservation; do not restore the former message-array effect that always scrolls to the bottom.
+
+Tool activity uses the shadcn Trace/Collapsible parts and only existing backend work items, retaining supplied status and exit codes. This is a separate recorded-activity disclosure, not inferred reasoning or a guessed chronological tool timeline. Transcript announcements are quiet; busy state and actionable approvals retain their existing accessibility roles. Message copying uses plain source text and reports clipboard failures. Text drafts retain project-partition persistence and async submission protection.
+
+Source references: https://ui.shadcn.com/docs/components/base/message-scroller and https://ui.shadcn.com/docs/components/base/trace. Registry components are adapted to JavaScript and the project's existing Button/Lucide imports.
+
+Rich assistant output uses `MessageContent.jsx`: fenced/indented code has an independent copy action (including exact whitespace), inline code stays compact, and Markdown images use responsive lazy-loaded images with no-referrer and a broken-image fallback. The controller CSP permits same-origin and HTTPS image sources without expanding scripts, connections or arbitrary local-file serving. Local file paths still need an explicitly supported asset transport; Markdown does not grant file access.
+
+The native macOS project window uses `desktop/window-chrome.mjs` for hidden-inset chrome and native traffic lights at `(16,12)` in the integrated application header. The workspace preload exposes only a read-only `crewWindow.integratedTitlebar` flag; the renderer reserves 28 px above the branding, retains its normal left padding and marks header whitespace draggable, excluding interactive elements/popovers. Browser and other-platform layouts retain their standard header spacing and window chrome. Existing native close/minimize/fullscreen and project-host cleanup handlers remain authoritative.
+
+Native header Updates and connection status occupy the top-right inset opposite the OS controls. Settings stays on the main branding row; the browser retains its ordinary inline layout.
+
+### Native integration acceptance
+
+Native clipboard writes use the bounded `crewWindow.copyText` preload capability and main-process selected-window/main-frame/origin validation. Browser permission policy remains restricted; no clipboard read API is exposed. Both code and complete-message copy use this transport in Electron and the browser Clipboard API in the ordinary preview.
+
+Legacy voice preferences migrate once from the project's existing Chromium partition into its manager profile after the catalog is available. Explicit profile selections, including the default voice, win over retained legacy values. Failed writes preserve the old preference. Blocked audio playback exposes an explicit Enable audio action; successful recovery or disconnect clears it, including late failure callbacks.
+
+Combined acceptance uses an unsigned packaged candidate with separate portable state, two registered projects, the real local controllers and a synthetic stdio provider. It checks persisted rename/capacity/profile/instructions, explicit Restart, restored history, rich message rendering and native copy, worker detail/navigation, update-popout dismissal and call-failure cleanup. No physical microphone, real model turn, external ticket or actual repository worker is needed for these UI checks. Acoustic preference and a signed production update are distinct acceptance steps; candidate packaging does not publish or replace the installed app.

@@ -17,6 +17,7 @@ import { relative, sep, isAbsolute } from 'node:path';
 import { loadAppConfig } from '../config.mjs';
 import { summarizeTasks, isAppURL, isExternalHTTPS, permitsAudio, childEnvironment } from './lifecycle.mjs';
 import { createNativeAttention } from './native-attention.mjs';
+import { projectWindowChrome } from './window-chrome.mjs';
 export function createProjectHost({root,storage,host}) {
 const {configPath,key,desktopData,id}=storage;
 mkdirSync(join(desktopData,'Partitions',`instance-${key}`),{recursive:true,mode:0o700});
@@ -59,7 +60,7 @@ async function openWindow() {
   if (!host.isSelected(id)) return;
   if (!backendReady) return openSetup();
   if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
-  const next = new BrowserWindow({ width:1050, height:850, minWidth:540, minHeight:500, title:`${config?.project.name || 'Setup'} — Crew`, show:false,
+  const next = new BrowserWindow({ ...projectWindowChrome(), width:1050, height:850, minWidth:540, minHeight:500, title:`${config?.project.name || 'Setup'} — Crew`, show:false,
     webPreferences:{ nodeIntegration:false, contextIsolation:true, sandbox:true, webSecurity:true, allowRunningInsecureContent:false, preload:join(root, 'desktop/workspace-preload.cjs'), session:session.fromPath(join(desktopData,'Partitions',`instance-${key}`)) }
   });
   window = next;

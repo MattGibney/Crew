@@ -33,17 +33,22 @@ const workerDetails = new Map(orchestration.tasks.map(item => [item.id, {
 }]));
 let work = { threadId: 'fixture-manager', managerConnected: true, status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
 let workerApprovals = [];
-const conversation = createConversationTimeline();
+let conversation = createConversationTimeline();
 const conversationChanged = () => { work = { ...work, messages: conversation.snapshot() }; emit({ type: 'work-state', state: work }); };
 let managerLifecycle = { state: 'running' };
 const fixturePrompt = 'You are the Crew fixture manager. Help the user plan work and report verified progress.';
 let settings = { projectId: 'crew-acceptance-fixture', projectName: 'Crew acceptance fixture', manager: { saved: { text: fixturePrompt, version: 'manager-1' }, activeVersion: 'manager-1', pendingRestart: false, defaultText: fixturePrompt }, worker: { saved: { text: 'Complete the agreed fixture task and report evidence.', version: 'worker-1' }, defaultText: 'Complete the agreed fixture task and report evidence.' } };
 let promptRevision = 1, promptSaveDelay = 0;
+const initialSettings = structuredClone(settings);
+let fixtureProjectName = 'Crew acceptance fixture';
+let designPreview = false;
+const managerProfiles = new Map();
+const profileView = () => managerProfiles.get(fixtureProjectName) || { voice: null, version: 'profile-0' };
 let nativeAttentionSound = false;
 
 let proof = { calls: [], media: null, setup: [], sseConnections: 0 };
 const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
-const settingsView = () => ({ ...settings, managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
+const settingsView = () => ({ ...settings, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const server = http.createServer(async (req, res) => {
@@ -63,6 +68,9 @@ const server = http.createServer(async (req, res) => {
       if (url.pathname === '/__telemetry') { proof.media = body; return send({ ok: true }); }
       if (url.pathname === '/__setup-proof') { proof.setup.push(body); return send({ ok: true }); }
       if (url.pathname === '/__control') {
+        // Explicit design-preview reset affects this disposable fixture only.
+        if (body.resetPreview) { designPreview = true; conversation = createConversationTimeline(); settings = structuredClone(initialSettings); promptRevision = 1; }
+        if (typeof body.projectName === 'string') { fixtureProjectName = body.projectName; settings.projectName = body.projectName; }
         if (Number.isFinite(body.promptSaveDelay)) promptSaveDelay = Math.min(5000, Math.max(0, body.promptSaveDelay));
         if (typeof body.nativeAttentionSound === 'boolean') nativeAttentionSound = body.nativeAttentionSound;
 
@@ -93,6 +101,11 @@ const server = http.createServer(async (req, res) => {
       }
       const name = url.pathname.replace('/api/', ''); proof.calls.push({ name, body });
       if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
+      if (name === 'settings/manager-profile') {
+        if (body.expectedVersion !== profileView().version) return send({ error: 'Manager profile changed elsewhere.' }, 409);
+        managerProfiles.set(fixtureProjectName, { voice: body.voice, version: `profile-${++promptRevision}` });
+        return send(settingsView());
+      }
       if (name === 'settings/prompts') {
         if (promptSaveDelay) await new Promise(resolve => setTimeout(resolve, promptSaveDelay));
         const item = settings[body.role];
@@ -109,7 +122,7 @@ const server = http.createServer(async (req, res) => {
         emit({ type: 'manager-lifecycle', state: lifecycleView() }); emit({ type: 'work-state', state: work });
         return send({ managerLifecycle: lifecycleView(), state: work });
       }
-      if (name === 'config') return send({ nativeAttentionSound, project: { name: 'Crew acceptance fixture', mode: 'fixture', readiness: { ready: true } } });
+      if (name === 'config') return send({ nativeAttentionSound, project: { name: fixtureProjectName, mode: 'fixture', readiness: { ready: true } } });
       if (name === 'prepare') return send({ plan: 'synthetic fixture', state: work });
       if (name === 'state') return send(work);
       if (name === 'orchestration') return send(orchestration);
@@ -117,13 +130,27 @@ const server = http.createServer(async (req, res) => {
       if (name === 'connect') return send({ sessionToken: 'synthetic-session', sdp: 'synthetic-answer' });
       if (name === 'work') {
         const id = proof.calls.length, turnId = `fixture-turn-${id}`;
+        if (designPreview && body.text.startsWith('CREW_WORKER_ACTION')) {
+          const selected = body.text.match(/selected worker only: (\{[^\n]+?\})\./);
+          const action = selected ? JSON.parse(selected[1]) : null;
+          const target = orchestration.tasks.find(task => task.id === action?.taskId && task.runId === action.expectedRunId);
+          if (target) {
+            target.status = ({ pause: 'paused', stop: 'stopped', resume: 'running', dispose: 'disposed' })[action.action] || target.status;
+            if (target.execution) target.execution = { ...target.execution, live: action.action === 'resume', observedAt: new Date().toISOString(), endedAt: action.action === 'resume' ? null : new Date().toISOString() };
+            emit({ type: 'orchestration-state', state: orchestration });
+          }
+        }
         conversation.record({ id: `fixture-user-${id}`, type: 'userMessage', content: [{ type: 'text', text: body.text }] }, turnId);
-        conversation.record({ id: `fixture-${id}`, type: 'agentMessage', text: body.text.startsWith('CREW_WORKER_ACTION') ? 'I received the selected worker action. The controller will report its confirmed outcome here.' : `Fixture manager received: ${body.text}` }, turnId);
+        conversation.record({ id: `fixture-${id}`, type: 'agentMessage', text: body.text.startsWith('CREW_WORKER_ACTION') ? designPreview ? 'Preview only: the selected worker state has been simulated. No process or worktree was changed.' : 'I received the selected worker action. The controller will report its confirmed outcome here.' : `Fixture manager received: ${body.text}` }, turnId);
         work = { ...work, status: 'idle' }; conversationChanged(); return send({ accepted: true });
       }
       if (name === 'approval') { work = { ...work, approvals: work.approvals.filter(item => item.id !== body.id) }; emit({ type: 'work-state', state: work }); }
       if (name === 'worker-approval') { workerApprovals = workerApprovals.filter(item => item.approvalId !== body.approvalId); emit({ type: 'worker-approval-state', requests: workerApprovals }); return send({ status: 'decided' }); }
       if (name === 'stop-work') { work = { ...work, activeTurnId: null, status: 'idle' }; emit({ type: 'work-state', state: work }); }
+      if (name === 'discuss-attention' && designPreview) {
+        const item = orchestration.tasks.find(task => task.id === body.taskId)?.attention.find(item => item.id === body.attentionId);
+        if (item) { conversation.record({ id: `preview-question-${body.attentionId}`, type: 'agentMessage', text: `Preview worker question: ${item.message}` }, 'preview-review'); conversationChanged(); }
+      }
       if (['voice-ready', 'voice-status', 'disconnect', 'approval', 'stop-work', 'discuss-attention'].includes(name)) return send({ ok: true });
       return send({ error: `Unknown fixture endpoint ${name}` }, 404);
     }

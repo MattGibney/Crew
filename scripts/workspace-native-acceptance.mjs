@@ -7,12 +7,37 @@ const exec=promisify(execFile),root=process.cwd(),dir=await mkdtemp(path.join(tm
 console.log('Disposable acceptance directory:',dir);
 const acceptanceExecutable=process.env.CREW_ACCEPTANCE_EXECUTABLE||path.join(root,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 const binary=path.join(dir,'fake-codex');
-const workerPath=path.join(dir,'synthetic-worker.mjs');
-await writeFile(workerPath,`import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'orchestration-store.mjs')).href)};const args=process.argv.slice(2);const config=args.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));const [,state,,id,runId]=JSON.parse(config.split('=').slice(1).join('='));console.log(JSON.stringify({type:'thread.started',thread_id:'native-'+id}));await appendFile(${JSON.stringify(path.join(dir,'workers.jsonl'))},JSON.stringify({id,runId,state,pid:process.pid})+'\\n');await reportTask(state,id,runId,{reportId:'progress',kind:'progress',message:'Actual native fixture worker running'});await new Promise(()=>setInterval(()=>{},1000));`);
 const {createTask,readTask,requestWorkerAction,reportTask}=await import(pathToFileURL(path.join(root,'orchestration-store.mjs')));
 async function until(fn,label){const deadline=Date.now()+30000;while(Date.now()<deadline){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out '+label);}
 
-await writeFile(binary,`#!${process.execPath}\nimport{createInterface}from'node:readline';import{appendFileSync}from'node:fs';if(process.argv.includes('--version')){console.log('codex-cli synthetic');process.exit(0);}if(process.argv.includes('exec')){await import(${JSON.stringify(pathToFileURL(workerPath).href)});process.exit(0);}for await(const line of createInterface({input:process.stdin})){const m=JSON.parse(line);appendFileSync(${JSON.stringify(path.join(dir,'protocol.jsonl'))},JSON.stringify({cwd:process.cwd(),...m})+'\\n');if(m.id===undefined)continue;let result={};if(m.method==='account/read')result={account:{type:'chatgpt',planType:'synthetic'}};if(m.method==='thread/start'||m.method==='thread/resume')result={thread:{id:m.params.threadId||'synthetic-'+process.pid}};if(['thread/turns/list','mcpServerStatus/list'].includes(m.method))result={data:[],nextCursor:null};if(m.method==='thread/realtime/start'){console.log(JSON.stringify({method:'thread/realtime/started',params:{threadId:m.params.threadId}}));console.log(JSON.stringify({method:'thread/realtime/sdp',params:{threadId:m.params.threadId,sdp:'v=0 synthetic-answer'}}));}if(m.method==='thread/realtime/listVoices')result={voices:{v3:['cove'],defaultV1:'cove'}};console.log(JSON.stringify({id:m.id,result}));}\n`,{mode:0o700});
+await writeFile(binary,`#!${process.execPath}
+import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';
+import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'orchestration-store.mjs')).href)};
+if(process.argv.includes('--version')){console.log('codex-cli synthetic');process.exit(0);}
+const binding=process.argv.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));
+const [,state,role,taskId,runId]=binding?JSON.parse(binding.slice(binding.indexOf('=')+1)):[];
+for await(const line of createInterface({input:process.stdin})){
+ const m=JSON.parse(line);appendFileSync(${JSON.stringify(path.join(dir,'protocol.jsonl'))},JSON.stringify({cwd:process.cwd(),role,...m})+'\\n');
+ if(m.id===undefined)continue;let result={};
+ if(m.method==='account/read')result={account:{type:'chatgpt',planType:'synthetic'}};
+ if(m.method==='thread/start'||m.method==='thread/resume')result={thread:{id:m.params.threadId||'synthetic-'+process.pid}};
+ if(['thread/turns/list','thread/timeline/list','mcpServerStatus/list'].includes(m.method))result={data:[],nextCursor:null};
+ if(m.method==='turn/start'){
+  result={turn:{id:'synthetic-turn-'+process.pid,status:'inProgress'}};
+  if(role==='worker'){
+   appendFileSync(${JSON.stringify(path.join(dir,'workers.jsonl'))},JSON.stringify({id:taskId,runId,state,pid:process.pid})+'\\n');
+   await reportTask(state,taskId,runId,{reportId:'progress',kind:'progress',message:'Actual native fixture worker running'});
+  }
+ }
+ if(m.method==='turn/interrupt')console.log(JSON.stringify({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:m.params.turnId,status:'interrupted'}}}));
+ if(m.method==='thread/realtime/start'){
+  console.log(JSON.stringify({method:'thread/realtime/started',params:{threadId:m.params.threadId}}));
+  console.log(JSON.stringify({method:'thread/realtime/sdp',params:{threadId:m.params.threadId,sdp:'v=0 synthetic-answer'}}));
+ }
+ if(m.method==='thread/realtime/listVoices')result={voices:{v3:['cove'],defaultV1:'cove'}};
+ console.log(JSON.stringify({id:m.id,result}));
+}
+`,{mode:0o700});
 const configPath=path.join(dir,'first','project.json');
 await exec(process.execPath,[path.join(root,'cli.mjs'),'init','--template','fixture','--config',configPath]);
 const raw=JSON.parse(await readFile(configPath,'utf8'));raw.runtime.port=59164;raw.runtime.codexBinary=binary;raw.project.name='Native project one';await writeFile(configPath,JSON.stringify(raw,null,2)+'\n');await mkdir(path.join(dir,'first','.data'),{recursive:true});await writeFile(path.join(dir,'first','.data','manager-chat.json'),JSON.stringify({threadId:'retained-manager-one'}));
@@ -25,9 +50,10 @@ try{
  let page=await electron.firstWindow({timeout:30000});await page.waitForURL('http://127.0.0.1:59164/**',{timeout:30000});
  await page.getByLabel('Project: Native project one. Manage projects').waitFor();
  const a=await page.evaluate(()=>window.crewWorkspaces.snapshot());assert.equal(a.projects.length,1);assert.equal(before,await readFile(configPath,'utf8'));
+ await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).fill('Unsent native project one draft');
- await page.waitForFunction(()=>!document.querySelector('button[aria-label="Connect voice"]')?.disabled);
  await page.evaluate(await readFile(path.join(root,'tests/fixtures/browser-media.js'),'utf8'));
+ await page.getByRole('tab',{name:'Voice',exact:true}).click();
  await page.getByRole('button',{name:'Connect voice',exact:true}).click();
  await page.getByText('Voice connected',{exact:true}).first().waitFor();
  assert.equal(await page.evaluate(()=>window.__crewMedia.calls),1);
@@ -44,6 +70,7 @@ try{
  await setup.evaluate(input=>window.crewSetup.save(input),{revision:setupBefore.revision,config:secondRaw});
  await setup.evaluate(()=>window.crewSetup.launch()).catch(error=>{if(!String(error).includes('closed'))throw error;});
  for(let i=0;i<100;i++){page=electron.windows().find(p=>p.url().startsWith('http://127.0.0.1:')&&!p.isClosed());if(page)break;await new Promise(r=>setTimeout(r,100));}
+ await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).waitFor({timeout:30000});
  const b=await page.evaluate(()=>window.crewWorkspaces.snapshot());assert.equal(b.selectedId,second.id);assert.equal(b.projects.length,2);assert.equal(b.projects.find(p=>p.id===second.id).name,'Native project two');
  const ordinaryEnv={...env};delete ordinaryEnv.AI_MANAGER_CONFIG;
@@ -67,10 +94,12 @@ try{
 
  await page.evaluate(id=>window.crewWorkspaces.rename({id,name:'Renamed project two'}),second.id);
  await page.getByLabel('Project: Renamed project two. Manage projects').waitFor();
+ await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).fill('Unsent native project two draft');
  const old=page;
  await page.evaluate(id=>{void window.crewWorkspaces.select(id)},a.selectedId).catch(()=>{});
  for(let i=0;i<100;i++){page=electron.windows().find(p=>p!==old&&p.url().startsWith('http://127.0.0.1:59164'));if(page)break;await new Promise(r=>setTimeout(r,100));}
+ await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).waitFor({timeout:30000});assert.equal(await page.getByRole('textbox',{name:'Message your manager',exact:true}).inputValue(),'Unsent native project one draft');
  const stillRunning=await Promise.all([readTask(stateA,taskId),readTask(stateB,taskId)]);assert.deepEqual(stillRunning.map(t=>t.runId),running.map(t=>t.runId));assert.ok(stillRunning.every(t=>t.execution?.live));
  assert.equal((await readFile(path.join(dir,'workers.jsonl'),'utf8')).trim().split('\n').length,2);
@@ -84,7 +113,7 @@ try{
  await page.evaluate(()=>window.crewWorkspaces.setWorkerLimit(1));
  reg=JSON.parse(await readFile(registryFile,'utf8'));assert.equal(reg.workerLimit,1);
  const cap=JSON.parse(await readFile(path.join(dir,'app-data','Crew','capacity','capacity.json'),'utf8'));assert.equal(cap.limit,1);assert.equal(cap.stateDirs.length,2);
- const proof=(await readFile(path.join(dir,'protocol.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);assert.ok(!proof.some(m=>m.method==='turn/start'));assert.equal(proof.filter(m=>m.method==='thread/realtime/start').length,1);assert.ok(proof.some(m=>m.method==='thread/realtime/stop'));
+ const proof=(await readFile(path.join(dir,'protocol.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);assert.ok(!proof.some(m=>m.role==='manager'&&m.method==='turn/start'),'Navigation never starts a manager turn');assert.equal(proof.filter(m=>m.role==='worker'&&m.method==='turn/start').length,2);assert.equal(proof.filter(m=>m.method==='thread/realtime/start').length,1);assert.ok(proof.some(m=>m.method==='thread/realtime/stop'));
  const afterVoice=await page.evaluate(()=>fetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()));assert.equal(afterVoice.voiceActive,false);
  await electron.evaluate(({BrowserWindow})=>{for(const w of BrowserWindow.getAllWindows())w.close();});
  await new Promise(r=>setTimeout(r,600));assert.equal(electron.windows().length,0);
@@ -99,6 +128,7 @@ try{
  electron=await _electron.launch({executablePath:acceptanceExecutable,args:[root,'--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream'],env:reopenEnv,timeout:30000});
  nativeProcess=electron.process();nativeProcess.stderr.on('data',data=>process.stderr.write(data));console.log('Native check: reopened process launched');
  page=await electron.firstWindow({timeout:30000});await page.waitForURL('http://127.0.0.1:59164/**',{timeout:30000});
+ await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'Message your manager',exact:true}).inputValue(),'Unsent native project one draft');
  console.log('Native check: reopened draft restored');
  const reopened=await page.evaluate(()=>window.crewWorkspaces.snapshot());assert.equal(reopened.selectedId,reg.selectedId);assert.equal(reopened.workerLimit,1);assert.equal(reopened.projects.length,2);

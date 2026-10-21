@@ -14,6 +14,7 @@ export function UpdateControls({liveStatus}){
  };
  useEffect(()=>{void request();},[]);
  useEffect(()=>{if(!open)return;void request();const timer=setInterval(()=>void request(),10000);const close=event=>{if(event.key==='Escape')setOpen(false);};window.addEventListener('keydown',close);return()=>{clearInterval(timer);window.removeEventListener('keydown',close);};},[open]);
+ useEffect(()=>{if(!open)return;const outside=event=>{if(panel.current&&!panel.current.contains(event.target))setOpen(false);};document.addEventListener('pointerdown',outside,true);return()=>document.removeEventListener('pointerdown',outside,true);},[open]);
  const plan=status?.workspacePlan||status?.plan,planActive=plan&&!['complete'].includes(plan.phase);
  const planTitles={draining:'Pausing work for the update…',ready:'Work is paused. Preparing to restart…',marking:'Confirming every project before installation…',installing:'Restarting to install the update…',resuming:'Restoring work paused for this update…',blocked:'The update needs your review.',canceled:'Update canceled. Paused work is retained.',complete:'Update coordination finished.'};
  const phase=status?.phase,available=['available','downloading','downloaded'].includes(phase);

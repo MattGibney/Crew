@@ -10,10 +10,9 @@ export function useVoiceSession(onError, sounds) {
   const cues = useRef(null);
   if (!cues.current) cues.current = createCallCues(kind => sounds.play(kind));
   const resource = useRef({ generation: 0, pc: null, stream: null, channel: null, busy: false, disconnecting: false });
-  const [mode, setMode] = useState('open-mic');
   // User mute intent survives call teardown; track availability is not intent.
   const openMicWanted = useRef(true);
-  const [view, setView] = useState({ busy: false, allocated: false, active: false, disconnecting: false, muted: true, transmitting: false, inputPending: false, inputError: '', activity: 'ready', status: 'Ready when you are. Microphone off.' });
+  const [view, setView] = useState({ busy: false, allocated: false, active: false, disconnecting: false, muted: true, transmitting: false, inputPending: false, inputError: '', playbackBlocked: false, activity: 'ready', status: 'Ready when you are. Microphone off.' });
   const onErrorRef = useRef(onError); onErrorRef.current = onError;
   const patch = useCallback(value => setView(previous => ({ ...previous, ...value })), []);
   const reportError = useCallback(error => onErrorRef.current(errorText(error)), []);
@@ -44,24 +43,14 @@ export function useVoiceSession(onError, sounds) {
     state.silence?.dispose(); state.silence = null;
     state.pc = null; state.stream = null; state.channel = null; state.sender = null;
     if (audioRef.current) audioRef.current.srcObject = null;
-    patch({ allocated: false, active: false, muted: true, activity: 'ready' });
+    state.playbackError = null;
+    patch({ allocated: false, active: false, muted: true, playbackBlocked: false, activity: 'ready' });
   }, [patch]);
   const dispose = useCallback(() => {
     const state = resource.current;
     state.generation++; state.busy = state.disconnecting; release(); patch({ busy: state.disconnecting });
   }, [release, patch]);
   useEffect(() => () => { dispose(); }, [dispose]);
-  useEffect(() => {
-    const loseFocus = () => { if (mode === 'push-to-talk') stopInput(); };
-    const hidden = () => { if (document.visibilityState === 'hidden') loseFocus(); };
-    window.addEventListener('blur', loseFocus);
-    document.addEventListener('visibilitychange', hidden);
-    return () => { window.removeEventListener('blur', loseFocus); document.removeEventListener('visibilitychange', hidden); };
-  }, [mode, stopInput]);
-  const changeMode = useCallback(value => {
-    if (resource.current.pc || resource.current.busy || !['open-mic', 'push-to-talk'].includes(value)) return;
-    stopInput(); setMode(value);
-  }, [stopInput]);
   const disconnect = useCallback(async (message = 'Disconnected. Microphone off.') => {
     const state = resource.current;
     if (state.disconnecting) return;
@@ -81,17 +70,29 @@ export function useVoiceSession(onError, sounds) {
     if (message.type === 'error') { reportError(message.message); void disconnect('Voice error. Microphone off.'); }
     if (message.type === 'closed') void disconnect('Voice session ended. Microphone off.');
   }, [disconnect, reportError, dispose, patch]);
+  const resumePlayback = useCallback(async () => {
+    const state = resource.current, generation = state.generation, audio = audioRef.current;
+    if (!state.pc || !audio) return;
+    try {
+      await audio.play();
+      if (state.generation !== generation || !state.pc) return;
+      state.playbackError = null; patch({ playbackBlocked: false });
+    } catch (error) {
+      if (state.generation !== generation || !state.pc) return;
+      state.playbackError = error.name || 'Playback failed'; patch({ playbackBlocked: true });
+    }
+  }, [patch]);
   const connect = useCallback(async selectedVoice => {
     const state = resource.current;
     if (state.busy || state.disconnecting || state.pc || !selectedVoice) return;
     sounds.unlock();
     state.busy = true; state.playbackError = null;
     const attempt = ++state.generation;
-    patch({ busy: true, inputError: '', status: mode === 'open-mic' && openMicWanted.current ? 'Connecting voice and microphone…' : 'Connecting voice. Microphone muted…' });
+    patch({ busy: true, inputError: '', status: openMicWanted.current ? 'Connecting voice and microphone…' : 'Connecting voice. Microphone muted…' });
     try {
       // Start a real audio transport with locally generated silence, not a mic.
       // A trackless offer connects but native voice may wait for incoming RTP.
-      // Connect authorizes open-mic capture after connection; PTT waits for a hold.
+      // Connect authorizes open-mic capture after connection unless explicitly muted.
       const connection = new RTCPeerConnection(); state.pc = connection;
       state.silence = createSilentAudio();
       state.sender = connection.addTransceiver(state.silence.track, { direction: 'sendrecv', streams: [state.silence.stream] }).sender;
@@ -121,10 +122,7 @@ export function useVoiceSession(onError, sounds) {
         if (!current() || !audioRef.current) return;
         const audio = audioRef.current;
         audio.srcObject = event.streams[0] || new MediaStream([event.track]);
-        audio.play().catch(error => {
-          if (!current()) return;
-          state.playbackError = error.name || 'Playback failed'; reportError('Press Play in the audio player to hear Codex.');
-        });
+        void resumePlayback();
       };
       connection.onconnectionstatechange = () => {
         if (!current()) return;
@@ -136,7 +134,7 @@ export function useVoiceSession(onError, sounds) {
           // override a mute, or recapture a disconnected device.
           if (!inputAttempted) {
             inputAttempted = true;
-            if (mode === 'open-mic' && openMicWanted.current) startInput();
+            if (openMicWanted.current) startInput();
           }
           if (!greetingRequested && sessionToken) {
             greetingRequested = true;
@@ -165,12 +163,12 @@ export function useVoiceSession(onError, sounds) {
     } catch (error) {
       if (attempt === state.generation) { reportError(error); await disconnect('Could not connect. Microphone off.'); }
     }
-  }, [mode, patch, disconnect, reportError, startInput, sounds]);
+  }, [patch, disconnect, reportError, startInput, sounds, resumePlayback]);
   const toggleMute = useCallback(() => {
     if (resource.current.pc?.connectionState !== 'connected' || resource.current.disconnecting) return;
     sounds.unlock(); cues.current.requestInput();
     if (input.current.stream || input.current.pending) { openMicWanted.current = false; stopInput(); }
     else { openMicWanted.current = true; startInput(); }
   }, [startInput, stopInput, sounds]);
-  return { ...view, mode, openMicMuted: !openMicWanted.current, changeMode, startInput, stopInput, audioRef, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
+  return { ...view, openMicMuted: !openMicWanted.current, startInput, stopInput, audioRef, resumePlayback, connect, disconnect, toggleMute, transportLost, handleEvent, dispose };
 }

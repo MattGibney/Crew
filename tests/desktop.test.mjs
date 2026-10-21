@@ -32,3 +32,10 @@ test('connector links can open HTTPS in system browser without credentials or un
   assert.equal(isExternalHTTPS('https://example.com/verify?code=test'), true);
   for (const url of ['http://example.com', 'https://user:password@example.com', 'javascript:alert(1)', 'file:///tmp/test', 'codex://anything', 'bad url']) assert.equal(isExternalHTTPS(url), false);
 });
+
+
+test('native clipboard writes accept plain bounded text only', async () => {
+ const {clipboardText}=await import('../desktop/clipboard.mjs');
+ assert.equal(clipboardText('const value = 1;\n'),'const value = 1;\n');
+ for(const value of [null,42,{},'x'.repeat(1000001)])assert.throws(()=>clipboardText(value));
+});

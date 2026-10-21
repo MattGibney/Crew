@@ -23,7 +23,7 @@ The Electron package supplies Chromium and Node; Node need not be installed sepa
 
 See [guided onboarding and optional project discovery](ONBOARDING.md) for checks, permission recovery and review/apply semantics.
 
-Preparation must show the configured project, ChatGPT sign-in and an enabled Connect button. A catalog response alone does not prove manager readiness. Choose a voice; end other calls before connecting. macOS may request microphone permission when you explicitly connect. The app does not request a camera. Disconnect before changing voice.
+Preparation must show the configured project, ChatGPT sign-in and an enabled Connect button. A catalog response alone does not prove manager readiness. Choose the next call’s voice in Settings → Project settings → Manager profile; end other calls before connecting. macOS may request microphone permission when you explicitly connect. The app does not request a camera. Saving a different voice applies on the next call.
 
 ## Window, attention and Quit
 
@@ -81,3 +81,7 @@ Signed public releases use the GitHub native update feed: check and download thr
 Before business edits, verify on the destination Mac: manager preparation; audible greeting, response and interruption; harmless scoped Linear read; bounded read-only worker using an isolated worktree; close-window continuation; pending question and manager-only answer; reopen and review verified completion. User speech and device audio must be checked by a person. Prior browser/Node acceptance does not automatically establish Electron microphone or lifecycle acceptance. Keep screenshots outside the repository.
 
 No installation on the work Mac has been performed by preparing these artifacts. Its exact repository locations, base refs, account access and Linear mapping remain local setup requirements.
+
+## Integrated window header
+
+The main macOS window keeps the native close/minimize/fullscreen controls in the top-left application header. The Crew logo and project picker keep their usual left alignment beneath them. Updates and controller/call status occupy the top-right inset; Settings stays on the main row. Header whitespace drags the window, while controls and popouts remain clickable.

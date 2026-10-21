@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, endVoiceBeacon, errorText } from './api.js';
 import { chooseVoice, EMPTY_WORK } from './state.js';
+import { resolveManagerVoice } from './manager-voice.js';
 import { useVoiceSession } from './useVoiceSession.js';
 import { workerActionRequest } from './worker-model.js';
 import { createSounds } from './sounds.js';
 import { createAttentionSounds } from './attention-sounds.js';
-const VOICE_KEY = 'crew.voice.v3';
 
 // Backend state and transcript events remain evidence; they never initiate work or microphone capture.
 export function useCrewManager() {
@@ -49,21 +49,24 @@ export function useCrewManager() {
   const loadVoices = useCallback(async () => {
     setVoiceLoading(true); setVoiceNotice('Loading available Codex voices. Microphone stays off.');
     try {
-      const next = await api('voices');
-      let saved;
-      try { saved = localStorage.getItem(VOICE_KEY) || localStorage.getItem('relay.voice.v3') || localStorage.getItem('ai-manager.voice.v3'); } catch { /* Storage can be unavailable. */ }
-      const selected = chooseVoice(next, saved);
-      setCatalog(next); setSelectedVoice(selected);
-      try { if (saved) localStorage.setItem(VOICE_KEY, selected); } catch { /* Selection still applies to this call. */ }
-      setVoiceNotice(saved && saved !== selected ? 'Your saved voice is no longer available. Codex default selected for the next call.' : '');
+      const [next, projectSettings] = await Promise.all([api('voices'), api('settings', {}, { method: 'GET' })]);
+      let storage; try { storage = window.localStorage; } catch { /* Disabled storage does not block the saved profile. */ }
+      const resolved = await resolveManagerVoice({ catalog: next, profile: projectSettings.managerProfile, storage, save: async input => {
+        const result = await api('settings/manager-profile', input, { method: 'PUT' });
+        setSettings(result); return result.managerProfile;
+      } });
+      setCatalog(next); setSelectedVoice(resolved.selected);
+      setVoiceNotice(resolved.unavailable ? 'Your saved voice is no longer available. Codex default selected for the next call.' : '');
     } catch (failure) { setCatalog(null); setVoiceNotice(`Could not load Codex voices: ${errorText(failure)} Retry before connecting.`); }
     finally { setVoiceLoading(false); }
   }, []);
-  const changeVoice = useCallback(value => {
-    setSelectedVoice(value);
-    try { localStorage.setItem(VOICE_KEY, value); setVoiceNotice(''); }
-    catch { setVoiceNotice('Selected for your next call. Browser storage is unavailable, so this choice will not survive a refresh.'); }
-  }, []);
+  const saveManagerProfile = useCallback(async (voiceId, expectedVersion) => {
+    const result = await api('settings/manager-profile', { voice: voiceId, expectedVersion }, { method: 'PUT' });
+    setSettings(result);
+    if (catalog) setSelectedVoice(chooseVoice(catalog, result.managerProfile.voice));
+    setVoiceNotice('');
+    return result;
+  }, [catalog]);
   useEffect(() => {
     let canceled = false;
     const events = new EventSource('/events');
@@ -182,5 +185,5 @@ export function useCrewManager() {
       throw failure;
     } finally { lifecycleLock.current = false; }
   }, [loadSettings, loadVoices, voice.dispose, voice.disconnect]);
-  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, changeVoice, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
+  return { settings, settingsError, loadSettings, savePrompt, managerLifecycle, managerEnabled, changeManagerLifecycle, error, soundUnavailable, updates, project, projectInfo, account, prepared, eventReady, work, workNotice, orchestration, workerApprovals, answerWorkerApproval, catalog, selectedVoice, voiceLoading, voiceNotice, saveManagerProfile, loadVoices, voice, connect, reviewAttention, answerApproval, interruptManager, sending, sendMessage, workerAction, retryConnection };
 }

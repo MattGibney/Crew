@@ -1,10 +1,9 @@
-import { useState } from 'react';
-import { AudioLines, Circle, GitBranch, MessageSquare, Layers, Radio, Settings2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { AudioLines, Circle, GitBranch, MessageSquare, Layers, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useCrewManager } from './useCrewManager.js';
 import { WorkerAttention } from './WorkerAttention.jsx';
-import { VoiceControls } from './VoiceControls.jsx';
 import {UpdateControls} from './UpdateControls.jsx';
 import { Settings } from './Settings.jsx';
 import { WorkChat } from './WorkChat.jsx';
@@ -18,7 +17,20 @@ export function App() {
   const [pane, setPane] = useState('conversation');
   const [selectedWorker, setSelectedWorker] = useState(null);
   const [settingsReturn, setSettingsReturn] = useState('conversation');
-  const openPane = next => { if (manager.voice.mode === 'push-to-talk') manager.voice.stopInput(); setPane(next); };
+  const workspace = useRef(null), resizing = useRef(false);
+  const [workerWidth, setWorkerWidth] = useState(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(1200);
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => { if (entry.contentRect.width > 0) setWorkspaceWidth(entry.contentRect.width); });
+    observer.observe(workspace.current);
+    return () => observer.disconnect();
+  }, []);
+  const maximumWorkerWidth = Math.round(Math.min(720, workspaceWidth * 0.6));
+  const resizeWorkers = width => {
+    const available = workspace.current?.getBoundingClientRect().width || 1024;
+    setWorkerWidth(Math.round(Math.max(280, Math.min(width, 720, available * 0.6))));
+  };
+  const openPane = next => { setPane(next); };
   const showWorker = id => { setSelectedWorker(id); openPane('detail'); };
   const tasks = (manager.orchestration.tasks || []).map(task => ({ ...task, pendingApprovalCount: (manager.workerApprovals || []).filter(request => request.taskId === task.id && request.runId === task.runId).length }));
   const selectedTask = tasks.find(task => task.id === selectedWorker);
@@ -26,18 +38,25 @@ export function App() {
   const workerView = { ...manager.orchestration, tasks };
   const pending = tasks.reduce((count, task) => count + (task.attention || []).filter(item => !item.ackedAt).length, 0);
   return <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
-    <a href={pane === 'conversation' ? '#message-input' : '#workspace-content'} className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-md focus:bg-background focus:p-3">Skip to message</a>
-    <header className="flex min-h-18 shrink-0 items-center justify-between gap-4 border-b px-5 sm:px-7">
+    <a href={pane === 'conversation' ? '#manager-composer' : '#workspace-content'} className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-md focus:bg-background focus:p-3">Skip to message</a>
+    <header className={`flex min-h-18 shrink-0 items-center justify-between gap-4 border-b px-5 sm:px-7 ${window.crewWindow?.integratedTitlebar ? 'crew-window-header' : ''}`}>
       <div className="flex min-w-0 items-center gap-4"><div className="flex items-center gap-2.5"><img src={crewMark} alt="" width="34" height="34" className="size-8" /><span className="text-xl font-semibold tracking-tight">Crew</span></div><span className="h-6 border-l" aria-hidden="true" /><div className="min-w-0"><ProjectSwitcher fallbackName={manager.projectInfo?.name} /><p className="flex items-center gap-1.5 text-xs text-muted-foreground"><GitBranch className="size-3" aria-hidden="true" />{manager.projectInfo?.mode === 'fixture' ? 'Acceptance workspace' : 'Local workspace'}</p></div></div>
-      <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><Button variant={pane === 'settings' ? 'secondary' : 'ghost'} aria-pressed={pane === 'settings'} onClick={() => { if (pane !== 'settings') setSettingsReturn(pane); openPane(pane === 'settings' ? settingsReturn : 'settings'); }}><Settings2 aria-hidden="true" /><span className="hidden sm:inline">Settings</span><span className="sr-only sm:hidden">Settings</span></Button><UpdateControls liveStatus={manager.updates}/><Circle className={`size-2 ${manager.eventReady ? 'fill-primary text-primary' : ''}`} aria-hidden="true" /><span className="hidden sm:inline">{manager.eventReady ? 'Controller connected' : 'Reconnecting…'}</span>{pane !== 'settings' && manager.voice.active && <Badge variant="secondary"><AudioLines className="size-3" aria-hidden="true" />Voice connected</Badge>}</div>
+      <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground"><Button variant={pane === 'settings' ? 'secondary' : 'ghost'} aria-pressed={pane === 'settings'} onClick={() => { if (pane !== 'settings') setSettingsReturn(pane); openPane(pane === 'settings' ? settingsReturn : 'settings'); }}><Settings2 aria-hidden="true" /><span className="hidden sm:inline">Settings</span><span className="sr-only sm:hidden">Settings</span></Button><div className="crew-window-status flex items-center gap-2"><UpdateControls liveStatus={manager.updates}/><Circle className={`size-2 ${manager.eventReady ? 'fill-primary text-primary' : ''}`} aria-hidden="true" /><span className="hidden sm:inline">{manager.eventReady ? 'Controller connected' : 'Reconnecting…'}</span>{pane !== 'settings' && manager.voice.active && <Badge variant="secondary"><AudioLines className="size-3" aria-hidden="true" />Voice connected</Badge>}</div></div>
     </header>
-    <nav aria-label="Workspace views" className={`${pane === 'settings' ? 'hidden' : 'flex'} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}><Button variant={pane === 'conversation' ? 'secondary' : 'ghost'} aria-pressed={pane === 'conversation'} className="h-8 text-xs" onClick={() => openPane('conversation')}><MessageSquare />Conversation {approvalCount > 0 && <Badge>{approvalCount} approval{approvalCount === 1 ? '' : 's'}</Badge>}</Button><Button variant={pane === 'workers' ? 'secondary' : 'ghost'} aria-pressed={pane === 'workers'} className="h-8 text-xs" onClick={() => openPane('workers')}><Layers />Workers {pending > 0 && <Badge>{pending}</Badge>}</Button></nav>
-    <main id="workspace-content" className={`${pane === 'conversation' || pane === 'workers' ? 'grid' : 'hidden'} min-h-0 flex-1 ${pane === 'conversation' ? 'lg:grid-cols-[minmax(0,1fr)_340px] xl:grid-cols-[minmax(0,1fr)_560px]' : ''}`}>
+    <nav aria-label="Workspace views" className={`${pane === 'conversation' || pane === 'workers' ? 'flex' : 'hidden'} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}><Button variant={pane === 'conversation' ? 'secondary' : 'ghost'} aria-pressed={pane === 'conversation'} className="h-8 text-xs" onClick={() => openPane('conversation')}><MessageSquare />Conversation {approvalCount > 0 && <Badge>{approvalCount} approval{approvalCount === 1 ? '' : 's'}</Badge>}</Button><Button variant={pane === 'workers' ? 'secondary' : 'ghost'} aria-pressed={pane === 'workers'} className="h-8 text-xs" onClick={() => openPane('workers')}><Layers />Workers {pending > 0 && <Badge>{pending}</Badge>}</Button></nav>
+    <main ref={workspace} id="workspace-content" style={workerWidth === null ? undefined : { '--crew-worker-width': `${workerWidth}px` }} className={`${pane === 'conversation' || pane === 'workers' ? 'grid' : 'hidden'} min-h-0 flex-1 ${pane === 'conversation' ? 'manager-split' : ''}`}>
       <section aria-label="Manager workspace" className={`min-h-0 min-w-0 overflow-y-auto flex-col ${pane === 'conversation' ? 'flex' : 'hidden'}`}>
-        <div className="flex items-center justify-between gap-3 px-5 py-4 sm:px-7"><div><h1 className="text-base font-semibold tracking-tight">Your manager</h1><p className="mt-0.5 text-xs text-muted-foreground">One conversation. A whole crew behind it.</p></div><Badge variant="outline" className="gap-1.5"><Radio className="size-3" aria-hidden="true" />{manager.managerLifecycle.state !== 'running' ? ({ stopped: 'Stopped', stopping: 'Stopping…', starting: 'Starting…', restarting: 'Restarting…', error: 'Needs attention' }[manager.managerLifecycle.state] || 'Connecting') : manager.work.activeTurnId ? 'Working' : manager.prepared && manager.work.managerConnected !== false ? 'Ready' : 'Connecting'}</Badge></div>
-        <WorkChat manager={manager}><VoiceControls manager={manager} visible={pane === 'conversation'} /></WorkChat>
+        <WorkChat manager={manager} />
       </section>
-      <aside aria-label="Project workers" className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${pane === 'conversation' ? 'hidden lg:block lg:border-l' : pane === 'workers' ? 'block' : 'hidden'}`}>
+      <div role="separator" aria-label="Resize worker panel" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={maximumWorkerWidth} aria-valuenow={Math.min(workerWidth || 560, maximumWorkerWidth)} tabIndex={pane === 'conversation' ? 0 : -1}
+        className={`${pane === 'conversation' ? 'hidden lg:block' : 'hidden'} relative z-10 cursor-col-resize touch-none bg-border outline-none before:absolute before:inset-y-0 before:-left-1.5 before:w-3 hover:bg-primary focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring`}
+        onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); resizing.current = true; event.currentTarget.setPointerCapture(event.pointerId); }}
+        onPointerMove={event => { if (resizing.current) { event.preventDefault(); resizeWorkers(workspace.current.getBoundingClientRect().right - event.clientX); } }}
+        onPointerUp={event => { if (resizing.current) resizeWorkers(workspace.current.getBoundingClientRect().right - event.clientX); resizing.current = false; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }}
+        onPointerCancel={() => { resizing.current = false; }} onLostPointerCapture={() => { resizing.current = false; }}
+        onDoubleClick={() => setWorkerWidth(null)}
+        onKeyDown={event => { const current = workspace.current?.querySelector('aside')?.getBoundingClientRect().width || 560; if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); resizeWorkers(event.key === 'Home' ? 280 : event.key === 'End' ? 720 : current + (event.key === 'ArrowLeft' ? 32 : -32)); } }} />
+      <aside aria-label="Project workers" className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${pane === 'conversation' ? 'hidden lg:block' : pane === 'workers' ? 'block' : 'hidden'}`}>
         <WorkerAttention compact={pane === 'conversation'} view={workerView} onSelect={showWorker} />
       </aside>
     </main>

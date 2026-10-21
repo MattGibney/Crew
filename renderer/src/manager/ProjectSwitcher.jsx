@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown, Plus, FolderOpen, Users } from 'lucide-react';
+import { ChevronDown, Plus, FolderOpen } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
 
 export function ProjectSwitcher({ fallbackName }) {
@@ -9,8 +8,6 @@ export function ProjectSwitcher({ fallbackName }) {
   const [snapshot, setSnapshot] = useState(null);
   const [error, setError] = useState('');
   const [working, setWorking] = useState(false);
-  const [nameDraft, setNameDraft] = useState(null);
-  const [limitDraft, setLimitDraft] = useState(null);
   const menu = useRef(null);
   const selected = snapshot?.projects.find(project => project.id === snapshot.selectedId);
 
@@ -56,28 +53,13 @@ export function ProjectSwitcher({ fallbackName }) {
       <label htmlFor="workspace-select" className="mb-1.5 block text-xs font-medium">Current project</label>
       <NativeSelect className="w-full" id="workspace-select" value={snapshot?.selectedId || ''} disabled={working || !snapshot} onChange={event => {
         const nextId = event.target.value;
-        if (nextId !== snapshot.selectedId) run(() => bridge.select(nextId), () => { menu.current.open = false; setNameDraft(null); });
+        if (nextId !== snapshot.selectedId) run(() => bridge.select(nextId), () => { menu.current.open = false; });
       }}>
         {!snapshot && <option value="">Loading projects…</option>}
         {snapshot?.projects.map(project => <option key={project.id} value={project.id}>{project.name}{project.pending ? ` · ${project.pending} need attention` : project.error || project.ready === false ? ' · Needs setup' : project.active ? ' · Working' : ''}</option>)}
       </NativeSelect>
       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">Work continues in other projects. Switching disconnects voice; connect again when you’re ready.</p>
       <Button variant="outline" className="mt-3 w-full" disabled={working || !snapshot} onClick={() => run(() => bridge.add(), () => { menu.current.open = false; })}><Plus aria-hidden="true" />Add project</Button>
-      <form className="mt-4 border-t pt-4" onSubmit={event => {
-        event.preventDefault();
-        run(() => bridge.rename({ id: snapshot.selectedId, name: nameDraft ?? selected?.name ?? '' }), () => setNameDraft(null));
-      }}>
-        <label htmlFor="workspace-name" className="mb-1.5 block text-xs font-medium">Project name</label>
-        <div className="flex gap-2"><Input id="workspace-name" maxLength={100} required value={nameDraft ?? selected?.name ?? ''} disabled={working || !selected} onChange={event => setNameDraft(event.target.value)} /><Button type="submit" variant="secondary" disabled={working || !selected || !(nameDraft ?? '').trim() || nameDraft.trim() === selected.name}>Rename</Button></div>
-      </form>
-      <form className="mt-4 border-t pt-4" onSubmit={event => {
-        event.preventDefault();
-        run(() => bridge.setWorkerLimit(Number(limitDraft ?? snapshot.workerLimit)), () => setLimitDraft(null));
-      }}>
-        <label htmlFor="workspace-capacity" className="mb-1.5 flex items-center gap-1.5 text-xs font-medium"><Users className="size-3.5" aria-hidden="true" />Workers across all projects</label>
-        <div className="flex gap-2"><Input id="workspace-capacity" type="number" min={1} max={64} step={1} required value={limitDraft ?? snapshot?.workerLimit ?? ''} disabled={working || !snapshot} onChange={event => setLimitDraft(event.target.value)} /><Button type="submit" variant="secondary" disabled={working || !snapshot || limitDraft === null || Number(limitDraft) === snapshot.workerLimit}>Save</Button></div>
-        <p className="mt-2 text-xs leading-relaxed text-muted-foreground">One shared limit for this Mac. Waiting jobs stay in their project; running work is never interrupted.</p>
-      </form>
       {error && <p role="alert" className="mt-3 text-xs text-destructive">{error}</p>}
       {working && <p role="status" className="mt-3 text-xs text-muted-foreground">Saving…</p>}
     </div>

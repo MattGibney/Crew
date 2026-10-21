@@ -4,17 +4,17 @@ import vm from 'node:vm';
 import fs from 'node:fs';
 
 function loadBridge() {
-  let bridge;
+  let bridge, nativeWindow;
   const calls = [];
   const listeners = new Map();
-  const contextBridge = { exposeInMainWorld(name, value) { assert.equal(name, 'crewWorkspaces'); bridge = value; } };
+  const contextBridge = { exposeInMainWorld(name, value) { if(name === 'crewWorkspaces') bridge = value; else { assert.equal(name, 'crewWindow'); nativeWindow = value; } } };
   const ipcRenderer = {
     async invoke(...args) { calls.push(args); return { selectedId: 'project-one' }; },
     on(channel, listener) { listeners.set(channel, listener); },
     removeListener(channel, listener) { if (listeners.get(channel) === listener) listeners.delete(channel); }
   };
-  vm.runInNewContext(fs.readFileSync(new URL('../desktop/workspace-preload.cjs', import.meta.url), 'utf8'), { require(name) { assert.equal(name, 'electron'); return { contextBridge, ipcRenderer }; } });
-  return { bridge, calls, listeners, ipcRenderer };
+  vm.runInNewContext(fs.readFileSync(new URL('../desktop/workspace-preload.cjs', import.meta.url), 'utf8'), { process: { platform: 'darwin' }, require(name) { assert.equal(name, 'electron'); return { contextBridge, ipcRenderer }; } });
+  return { bridge, nativeWindow, calls, listeners, ipcRenderer };
 }
 
 test('workspace bridge exposes only scoped operations and validates mutations before IPC', async () => {
@@ -48,4 +48,16 @@ test('workspace bridge returns readable main-process errors', async () => {
   const { bridge, ipcRenderer } = loadBridge();
   ipcRenderer.invoke = async () => { throw new Error("Error invoking remote method 'crew:workspaces': Error: Project is unavailable."); };
   await assert.rejects(bridge.select('one'), /Project is unavailable\./);
+});
+
+
+test('native window capability is write-only and rejects unbounded or structured clipboard input before IPC', async () => {
+ const {nativeWindow,calls}=loadBridge();
+ assert.equal(nativeWindow.integratedTitlebar,true);
+ assert.deepEqual(Object.keys(nativeWindow).sort(),['copyText','integratedTitlebar']);
+ assert.equal(Object.isFrozen(nativeWindow),true);
+ for(const value of [null,42,{text:'private'},'x'.repeat(1000001)])assert.throws(()=>nativeWindow.copyText(value));
+ assert.equal(calls.length,0);
+ await nativeWindow.copyText('const value = 1;\n');
+ assert.deepEqual(calls,[['crew:clipboard-write','const value = 1;\n']]);
 });
