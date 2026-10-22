@@ -494,3 +494,72 @@ walkthrough, the model returned the current saved-profile marker after reading t
 Crew tools. That proves saved-profile access and successful tool work; it neither contradicts nor
 resolves the private instruction-only resume control. Preserve both evidence sets and scope the
 remaining limitation to the tested native instruction paths.
+
+### Explicit native context refresh control
+
+A final bounded diagnostic established a supported same-chat option for the tested retained-profile
+problem: cold `thread/resume` with the new direct `developerInstructions`, followed by explicit
+`thread/compact/start`. The compact request returned acknowledgement, then a real native turn and
+a matching `contextCompaction` item completed successfully. A fresh thread read confirmed idle.
+The next plain arithmetic input used the new instruction-only prefix. Before/after native reads
+preserved all five existing turns and ten existing item IDs under the same thread ID.
+
+This is native context maintenance with a real turn lifecycle, not an idle or zero-work restart.
+It may use model allowance; the diagnostic did not capture an exact token count. Inspectable native
+history remained intact, while the active model context was summarized. Do not describe that
+summary as lossless. Neither this probe nor the direct startup fix adds automatic compaction to
+production.
+
+The smallest implementation candidate is an explicitly authorized changed-profile Restart that
+retains the thread, supplies the current profile, runs native compaction, and acknowledges the
+applied revision only after the exact compaction item and successful turn complete and native
+policy/idle state is rechecked. RPC acknowledgement or a turn ending alone is insufficient; errors,
+timeouts and missing item completion remain failures/uncertainty. New idle Start must not silently
+run this operation. This policy requires deliberate product integration because earlier startup
+guidance promises no automatic model work.
+
+### Compaction completion, history and cost evidence
+
+The private evidence records the exact thread, compaction turn and item IDs. Completion was
+verified by all of these observations, in order:
+
+1. `thread/compact/start` acknowledged submission. This alone does not establish success.
+2. `turn/started` identified the native compaction turn.
+3. `item/completed` identified a `contextCompaction` item on that exact turn.
+4. `turn/completed` reported `completed` for the same turn.
+5. `thread/read` returned the same thread ID with idle state.
+
+A later read-only native process verified all five prior turns and all ten prior item IDs again.
+Their item counts were unchanged, and each original user/assistant message text matched the
+recorded pre-compaction test inputs and outputs. The native compaction turn/item and the subsequent
+arithmetic turn are additional history. This establishes retained inspectable message history for
+this fixture; it does not claim byte-identical hidden storage or lossless active model context.
+
+The diagnostic recorded an actual native compaction turn, so it must be treated as work in
+activity/preparation/reservation handling. No per-compaction token usage was captured. Token count,
+monetary cost and allowance impact are unavailable, not zero; no cost estimate is inferred from
+its duration. The final history verification sent no model input and confirmed its reader exited.
+
+The owner is choosing between context refresh during an explicit changed-instructions Restart and
+a separate Apply instructions action. Implementation of that dependent policy is on hold. An
+unchanged restart is intended to remain idle, and no compaction behavior has been added to Start.
+
+### Proposed narrow treatment for missing voice provenance
+
+The inspected legacy `thread/realtime/itemAdded` payload contains `handoff_request`, a realtime
+`handoff_id`/`item_id`, and transcript text. It has no coding turn/item ID. The retained coding user
+item uses a different ID, and no typed promotion supplied a link. These observations are insufficient
+to publish the coding turn as owner voice or attach it to a public user message.
+
+The narrow proposed presentation is a fixed transient status such as “Voice handoff requested;
+its conversation link is unavailable.” It may acknowledge only a validated request on the exact
+active voice/thread binding. Do not forward the opaque payload, save its transcript as another
+conversation, or imply a correlated execution/completion. Generic native agent activity remains
+separately observable, and the actual coding history remains native-owned with unknown visibility.
+
+Continue to block public disclosure/steering that requires missing provenance. Preserve generic
+turn lifecycle, preparation invalidation, exact Stop and native history. Do not replay the handoff,
+create another chat, or infer provenance from timing, transcript wording, a missing client ID or
+voice being active. A future native event supplying the exact realtime/turn/item relationship can
+resolve the association. This transient-status treatment is a proposal, not an implemented fallback
+or a claim that public voice history acceptance is complete.
