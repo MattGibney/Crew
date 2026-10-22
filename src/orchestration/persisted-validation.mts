@@ -106,7 +106,16 @@ export function validatePersistedTask(input: unknown, expectedId: string) {
           !["manager", "worker"].includes(event.actor) ||
           typeof event.value !== "string" ||
           !event.value.trim() ||
-          !Number.isFinite(Date.parse(event.at)),
+          !Number.isFinite(Date.parse(event.at)) ||
+          [event.progressPercent, event.reportedProgressPercent].some(
+            (value) =>
+              value !== undefined &&
+              value !== null &&
+              (typeof value !== "number" ||
+                !Number.isFinite(value) ||
+                value < 0 ||
+                value > 100),
+          ),
       ))
   )
     throw new Error("Malformed workflow history");

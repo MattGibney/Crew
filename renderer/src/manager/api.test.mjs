@@ -202,3 +202,17 @@ test("retained worker assignment/workflow state and exact native approval identi
   };
   assert.equal(decodeManagerEvent(event), event);
 });
+
+test('reported progress validates identically in HTTP and SSE projections', () => {
+  for (const progressPercent of [undefined, null, 0, 35.5, 100]) {
+    const state = { tasks: [{ id: 'worker', status: 'running', workflowState: { value: 'Investigating', ...(progressPercent === undefined ? {} : { progressPercent }) } }] };
+    assert.equal(decodeApi('orchestration', state), state);
+    const event = { type: 'orchestration-state', state };
+    assert.deepEqual(decodeManagerEvent(event), event);
+  }
+  for (const progressPercent of [-1, 101, Infinity, '35', true]) {
+    const state = { tasks: [{ id: 'worker', status: 'running', workflowState: { value: 'Investigating', progressPercent } }] };
+    assert.throws(() => decodeApi('orchestration', state), /Invalid orchestration response/);
+    assert.throws(() => decodeManagerEvent({ type: 'orchestration-state', state }), /Invalid/);
+  }
+});

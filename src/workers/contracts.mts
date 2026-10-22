@@ -353,6 +353,8 @@ export interface WorkerAssignment {
   adoptions?: AssignmentAdoption[];
 }
 export interface WorkflowEvent {
+  progressPercent?: number | null;
+  reportedProgressPercent?: number | null;
   value: string;
   requestId: string;
   actor: string;

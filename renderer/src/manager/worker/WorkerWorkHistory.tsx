@@ -25,6 +25,16 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
               {task.workflowHistory?.map((item, index) => (
                 <li key={item.requestId || index} className="break-words">
                   <p className="font-medium">{item.value}</p>
+                  {typeof item.progressPercent === "number" && (
+                    <p className="mt-1 text-muted-foreground">
+                      Reported estimate: {item.progressPercent}%
+                    </p>
+                  )}
+                  {item.progressPercent === null && (
+                    <p className="mt-1 text-muted-foreground">
+                      Progress estimate unset
+                    </p>
+                  )}
                   <p className="mt-1 text-muted-foreground">
                     {item.actor === "worker" ? "Worker" : "Manager"}
                     {item.at && (

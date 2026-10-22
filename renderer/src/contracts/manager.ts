@@ -107,8 +107,9 @@ export interface WorkerTask {
   currentAssignmentId?: string;
   assignments?: WorkerAssignment[];
   followupWait?: string;
-  workflowState?: { value?: string };
+  workflowState?: { value?: string; progressPercent?: number | null };
   workflowHistory?: {
+    progressPercent?: number | null;
     requestId?: string;
     value: string;
     actor?: string;

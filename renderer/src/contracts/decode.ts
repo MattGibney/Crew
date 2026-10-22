@@ -154,11 +154,25 @@ const taskSchema = object(
         ["id"],
       ),
     ),
-    workflowState: object({ value: string }),
+    workflowState: object({
+      value: string,
+      progressPercent: { type: ["number", "null"], minimum: 0, maximum: 100 },
+    }),
     workflowHistory: array(
-      object({ requestId: string, value: string, actor: string, at: string }, [
-        "value",
-      ]),
+      object(
+        {
+          requestId: string,
+          value: string,
+          actor: string,
+          at: string,
+          progressPercent: {
+            type: ["number", "null"],
+            minimum: 0,
+            maximum: 100,
+          },
+        },
+        ["value"],
+      ),
     ),
     archiveRestoration: object({ requiresRecovery: { type: "boolean" } }),
     followupWait: string,

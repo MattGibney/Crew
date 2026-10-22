@@ -294,3 +294,9 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Native process liveness and native thread identity arrive independently. Tests comparing retained conversation identity must wait for a correlated live run and a nonempty thread ID before snapshotting; process liveness alone is insufficient. Release run 39731464344 stopped before signing/publication on this observation race. Preserve its v0.16.0 tag and ship corrected release source as 0.16.1 rather than rewriting provenance.
 - Resumed fixture readiness must use current-run execution identity and current-run reports. Historical thread IDs/reports are retained intentionally and cannot prove that a new subprocess reached its launch/report boundary. Hosted run 39732488415 exposed this in multi-project pause acceptance before signing/publication; retain v0.16.1 provenance and deliver the corrected test source as 0.16.2.
+
+## Worker-reported status and progress (GitHub #65)
+
+- Show one main agent-set worker status; execution/process facts belong in operational detail and never imply workflow state. Optional progressPercent is an explicitly reported, persisted estimate; omit to retain, null to clear, allow decreases. Never infer completion, set automatic 0/100 or gate permissions by progress. Preserve task/run correlation and reporting history.
+- Suggested five-to-ten-minute progress reporting is editable default worker guidance only. No new timer, heartbeat, scheduled run or forced review. Saved manager/worker instructions remain full replacements; runtime appendices describe data/tool contracts, not hidden behavioral overrides. Preserve custom prompts and activation snapshots.
+- This scope does not change explicit updater restart-readiness semantics or manager scheduling (#62–64), and authorizes a PR only, no merge/release. Use disposable state and synthetic audio; preserve user workers/install/profile and all Set1 sources.

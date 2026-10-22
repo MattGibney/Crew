@@ -11,6 +11,8 @@ export interface Schema {
   anyOf?: Schema[];
   enum?: unknown[];
   const?: unknown;
+  minimum?: number;
+  maximum?: number;
 }
 export interface SchemaGuard<T> {
   (value: unknown): value is T;
@@ -52,6 +54,14 @@ function inspect(
     )
   ) {
     errors.push(`${path} has an invalid type`);
+    return false;
+  }
+  if (
+    typeof value === "number" &&
+    ((schema.minimum !== undefined && value < schema.minimum) ||
+      (schema.maximum !== undefined && value > schema.maximum))
+  ) {
+    errors.push(`${path} is outside the allowed range`);
     return false;
   }
   if ("const" in schema && value !== schema.const) {
