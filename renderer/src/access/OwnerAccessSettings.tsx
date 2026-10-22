@@ -97,6 +97,7 @@ export function OwnerAccessSettings({
         {...common}
         presets={snapshot.presets}
         creationDefaults={snapshot.creationDefaults}
+        runtimeDefaults={snapshot.runtimeDefaults}
         agents={snapshot.agents}
         groups={snapshot.groups}
         connections={snapshot.connections}

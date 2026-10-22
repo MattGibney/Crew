@@ -18,6 +18,7 @@ import {
   OwnerRequired,
   useAccessAction,
 } from "./shared";
+import type { OwnerRuntimeDefaults } from "../../../src/access/owner-contracts.mjs";
 import type { OwnerPanelProps } from "./types";
 
 type PresetDraft = Omit<AgentCreationPreset, "id" | "projectId" | "revision">;
@@ -25,6 +26,7 @@ export interface CreationPresetsPanelProps extends OwnerPanelProps {
   presets: AgentCreationPreset[];
   creationDefaults: { revision: number; presetId: string | null };
   agents: Agent[];
+  runtimeDefaults: OwnerRuntimeDefaults | null;
   groups: PermissionGroup[];
   connections: ServiceConnectionView[];
   onSave(change: {
@@ -51,7 +53,9 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
       action={
         <Button
           variant="outline"
-          disabled={editing !== null || !props.agents.length}
+          disabled={
+            editing !== null || (!props.agents.length && !props.runtimeDefaults)
+          }
           onClick={() => setEditing("new")}
         >
           Create preset
@@ -60,8 +64,9 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
     >
       {!props.agents.length && (
         <p className="text-sm text-muted-foreground">
-          Create the primary agent first. Its supported runtime and skills can
-          then be used as the starting point for a preset.
+          {props.runtimeDefaults
+            ? "Create a preset to choose the first agent's profile and access. It will use the configured project runtime."
+            : "Configure project model access before creating the first preset."}
         </p>
       )}
       <div className="space-y-2">
@@ -167,10 +172,20 @@ function PresetEditor({
       : {
           name: "",
           enabled: true,
-          profile: { ...first.profile },
-          skills: structuredClone(first.skills),
-          modelAccessId: first.runtime.modelAccessId,
-          configRef: first.runtime.configRef,
+          profile: first
+            ? {
+                name: first.profile.name,
+                pictureRef: first.profile.pictureRef,
+                personality: first.profile.personality,
+                systemPrompt: first.profile.systemPrompt,
+              }
+            : { name: "", pictureRef: null, personality: "", systemPrompt: "" },
+          skills: first ? structuredClone(first.skills) : [],
+          modelAccessId:
+            first?.runtime.modelAccessId ??
+            props.runtimeDefaults!.modelAccessId,
+          configRef:
+            first?.runtime.configRef ?? props.runtimeDefaults!.configRef,
           permissionGroupIds: [],
           serviceConnectionIds: [],
         },
@@ -234,7 +249,7 @@ function PresetEditor({
             }
           />
         </div>
-        {!preset && (
+        {!preset && first && (
           <div>
             <Label htmlFor={`${id}-template`}>
               Start from an existing agent

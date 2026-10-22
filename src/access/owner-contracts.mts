@@ -19,9 +19,15 @@ export interface OwnerConnectionSetupChoice {
   transport: ServiceConnection["transport"];
   authenticationMethods: ServiceConnection["authentication"]["method"][];
 }
+export interface OwnerRuntimeDefaults {
+  modelAccessId: string;
+  configRef: string;
+}
 export interface AccessOwnerView {
   projectId: string;
   agents: Agent[];
+  /** Trusted host configuration, not a model credential or an agent-supplied reference. */
+  runtimeDefaults: OwnerRuntimeDefaults | null;
   groups: PermissionGroup[];
   presets: AgentCreationPreset[];
   creationDefaults: { revision: number; presetId: string | null };
