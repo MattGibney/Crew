@@ -30,6 +30,9 @@ import {
   type CodexLaunch,
 } from "../agents/codex-peer.mjs";
 import type { CodexLaunchResolution } from "../agents/codex-runtime.mjs";
+import { readCodexSubscriptionUsage } from "../agents/codex-usage-reader.mjs";
+import type { SubscriptionUsageSnapshot } from "../agents/codex-usage.mjs";
+import type { RuntimeResult } from "../agents/contracts.mjs";
 import { boundedProcess, openModelEgress } from "./native-boundary.mjs";
 
 export interface NativeGatewayBinding {
@@ -717,6 +720,28 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
           this.stoppingPeers.size || unconfirmedNativePeers.get(this.root)?.size
             ? pendingExitMessage
             : "Crew could not verify its isolated native subscription configuration.",
+      };
+    }
+  }
+  /** Read-only owner account operation. Uses the existing isolated sign-in;
+   * it never starts/resumes a conversation or alters a pending login/reset. */
+  async subscriptionUsage(): Promise<RuntimeResult<SubscriptionUsageSnapshot>> {
+    try {
+      const peer = await this.peer(await this.launch("owner-usage", null, []));
+      try {
+        await this.verifyConfiguration(peer, null);
+        return await readCodexSubscriptionUsage(peer);
+      } finally {
+        await this.stopPeer(peer);
+      }
+    } catch {
+      return {
+        state: "failed",
+        error: {
+          code: "disconnected",
+          message:
+            "Crew could not read its isolated subscription allowance. Check the connection and refresh.",
+        },
       };
     }
   }

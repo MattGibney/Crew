@@ -36,6 +36,12 @@ import {
   type CodexSenderLookup,
 } from "./codex-history.mjs";
 import {
+  mergeCodexUsageUpdate,
+  projectCodexUsageRead,
+  type SubscriptionUsageSnapshot,
+} from "./codex-usage.mjs";
+import { readCodexSubscriptionUsage } from "./codex-usage-reader.mjs";
+import {
   codexApprovalChoices,
   projectCodexApproval,
 } from "./codex-approvals.mjs";
@@ -91,6 +97,11 @@ export interface CodexRuntimeOptions {
     binding: RuntimeBinding,
   ) => Promise<CodexHistoryLaunchResolution>;
   lookupSender?: CodexSenderLookup;
+  /** Trusted owner-account reader when no existing native session is connected.
+   * It must not create/resume a thread, sign in, or redeem a reset. */
+  readSubscriptionUsage?: () => Promise<
+    RuntimeResult<SubscriptionUsageSnapshot>
+  >;
   /** Resolve an authorized artifact reference; no implicit arbitrary local-file access. */
   resolveAttachment?: (
     binding: RuntimeBinding,
@@ -306,7 +317,70 @@ export class CodexAgentRuntime
   >();
   private openingAgents = new Set<string>();
   private realtimeListeners = new Set<(event: CodexRealtimeEvent) => void>();
+  private usage: SubscriptionUsageSnapshot | null = null;
+  private usageRead: Promise<RuntimeResult<SubscriptionUsageSnapshot>> | null =
+    null;
+  private usageListeners = new Set<
+    (snapshot: SubscriptionUsageSnapshot) => void
+  >();
   constructor(private options: CodexRuntimeOptions) {}
+
+  private publishSubscriptionUsage(snapshot: SubscriptionUsageSnapshot) {
+    this.usage = structuredClone(snapshot);
+    for (const listener of this.usageListeners) {
+      try {
+        listener(structuredClone(snapshot));
+      } catch {
+        /* Presentation only. */
+      }
+    }
+  }
+
+  subscribeSubscriptionUsage(
+    listener: (snapshot: SubscriptionUsageSnapshot) => void,
+  ) {
+    this.usageListeners.add(listener);
+    return () => {
+      this.usageListeners.delete(listener);
+    };
+  }
+
+  /** One account-wide read shared by callers; never starts an agent or model turn. */
+  readSubscriptionUsage(): Promise<RuntimeResult<SubscriptionUsageSnapshot>> {
+    if (this.usageRead) return this.usageRead;
+    const operation = (async (): Promise<
+      RuntimeResult<SubscriptionUsageSnapshot>
+    > => {
+      const session = [...this.sessions.values()].find(
+        (row) => row.acknowledgement && row.peer.connected && !row.stopping,
+      );
+      const result = session
+        ? await readCodexSubscriptionUsage(session.peer)
+        : this.options.readSubscriptionUsage
+          ? await this.options.readSubscriptionUsage()
+          : {
+              state: "failed" as const,
+              error: failure(
+                "disconnected",
+                "Connect a Crew subscription session to read account allowance.",
+              ),
+            };
+      if (result.state === "acknowledged")
+        this.publishSubscriptionUsage(result.value);
+      return result;
+    })().catch(() => ({
+      state: "failed" as const,
+      error: failure(
+        "runtime_error",
+        "Subscription allowance could not be refreshed. The last successful snapshot may be stale.",
+      ),
+    }));
+    this.usageRead = operation;
+    void operation.finally(() => {
+      if (this.usageRead === operation) this.usageRead = null;
+    });
+    return operation;
+  }
 
   async start(input: RuntimeStartInput): Promise<RuntimeStartResult> {
     const identity = key(input.caller);
@@ -1270,6 +1344,23 @@ export class CodexAgentRuntime
 
   private receive(session: Session, envelope: CodexEnvelope) {
     const { method, params } = envelope;
+    if (
+      envelope.id === undefined &&
+      method === "account/rateLimits/updated" &&
+      session.acknowledgement
+    ) {
+      try {
+        this.publishSubscriptionUsage(
+          this.usage
+            ? mergeCodexUsageUpdate(this.usage, params)
+            : projectCodexUsageRead(params),
+        );
+      } catch {
+        // A sparse update with ambiguous identity needs an authoritative read.
+        void this.readSubscriptionUsage();
+      }
+      return;
+    }
     if (
       method === "thread/started" &&
       object(params.thread) &&

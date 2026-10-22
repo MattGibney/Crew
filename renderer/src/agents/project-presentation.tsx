@@ -5,7 +5,6 @@ import {
   FolderOpen,
   LogIn,
   ShieldCheck,
-  Volume2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,11 +25,12 @@ import {
   type AgentSchedulesClient,
 } from "./AgentSchedulesPanel";
 import { PrimaryAgentVoice } from "./voice/PrimaryAgentVoice";
+import { SubscriptionUsagePanel } from "./SubscriptionUsagePanel";
 import type {
-  PrimaryVoiceCatalog,
-  PrimaryVoiceClient,
-  PrimaryVoiceEvent,
-} from "./voice/client";
+  SubscriptionUsageClient,
+  SubscriptionUsageState,
+} from "../../../src/application/subscription-usage-contracts.mjs";
+import type { PrimaryVoiceClient, PrimaryVoiceEvent } from "./voice/client";
 import type { ProjectPresentation } from "./DesktopApplication";
 import type { AgentsSnapshot } from "./client";
 import {
@@ -119,6 +119,23 @@ export function createProjectPresentation(
           listener(event.event);
       }),
   };
+  const usage: SubscriptionUsageClient = {
+    read: () => command("subscription.usage", {}),
+    subscribe: (listener) =>
+      subscribe((input) => {
+        const event = input as {
+          type?: string;
+          projectId?: string;
+          state?: SubscriptionUsageState;
+        };
+        if (
+          event.type === "subscription-usage" &&
+          event.projectId === projectId &&
+          event.state
+        )
+          listener(event.state);
+      }),
+  };
   const signIn = (visible: boolean, onStatus: (signedIn: boolean) => void) => (
     <SubscriptionSettings
       command={command}
@@ -134,10 +151,11 @@ export function createProjectPresentation(
   return {
     settingsPanels: [
       {
-        id: "agent-setup",
-        label: "Agent setup",
+        id: "agents",
+        label: "Agents",
         icon: ShieldCheck,
-        description: "Create an agent or update its access with guided setup.",
+        description:
+          "Configure your agents and choose which one acts as your manager.",
         render: ({ snapshot, refresh, visible }) => (
           <AgentSetupWizard
             snapshot={snapshot}
@@ -152,16 +170,20 @@ export function createProjectPresentation(
       },
       {
         id: "subscription",
-        label: "Model access",
+        label: "Subscription & usage",
         icon: LogIn,
-        description: "Use your ChatGPT subscription for this project's agents.",
+        description:
+          "Sign-in and account-wide Codex allowance shared with your other clients.",
         render: ({ visible }) => (
-          <SubscriptionSettings
-            command={command}
-            subscribe={onOwnerChange}
-            visible={visible}
-            openLink={openLink}
-          />
+          <div className="space-y-8">
+            <SubscriptionSettings
+              command={command}
+              subscribe={onOwnerChange}
+              visible={visible}
+              openLink={openLink}
+            />
+            <SubscriptionUsagePanel client={usage} visible={visible} />
+          </div>
         ),
       },
       {
@@ -194,20 +216,6 @@ export function createProjectPresentation(
             subscribe={onOwnerChange}
             visible={visible}
             refreshProject={refresh}
-          />
-        ),
-      },
-      {
-        id: "voice",
-        label: "Voice",
-        icon: Volume2,
-        description: "Choose the voice for your primary agent's next call.",
-        render: ({ snapshot, visible }) => (
-          <VoiceSettings
-            command={command}
-            client={voice}
-            snapshot={snapshot}
-            visible={visible}
           />
         ),
       },
@@ -409,12 +417,6 @@ function AccessSettings({
           </Button>
         </div>
       )}
-      <PrimarySelection
-        snapshot={snapshot}
-        command={command}
-        refresh={refreshProject}
-        onNotify={notify}
-      />
       {access ? (
         <OwnerAccessSettings
           snapshot={access}
@@ -426,6 +428,7 @@ function AccessSettings({
               : "Read files only",
           }))}
           isOwner
+          showAgentAssignments={false}
           onNotify={notify}
           onCommand={async (name, args) => {
             await command(`access.${name}`, args);
@@ -453,123 +456,6 @@ function AccessSettings({
         />
       )}
     </div>
-  );
-}
-
-function PrimarySelection({
-  snapshot,
-  command,
-  refresh,
-  onNotify,
-}: {
-  snapshot: AgentsSnapshot;
-  command: Command;
-  refresh(): Promise<void>;
-  onNotify(message: string): void;
-}) {
-  const savedId = primaryAgentId(snapshot);
-  const revision = snapshot.projectSettings?.revision;
-  const [draft, setDraft] = useState<{
-    id: string;
-    revision: number | undefined;
-  } | null>(null);
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const selectedId = draft?.id ?? savedId ?? "";
-  const stale = draft !== null && draft.revision !== revision;
-  const agents = snapshot.agents.filter((agent) => !agent.archivedAt);
-  const save = async () => {
-    if (busy || !draft || !revision || stale) return;
-    const submitted = draft;
-    setBusy(true);
-    setError("");
-    try {
-      await command("setPrimaryAgent", {
-        agentId: submitted.id,
-        expectedRevision: submitted.revision,
-      });
-      setDraft((current) => (current === submitted ? null : current));
-      await refresh();
-      onNotify("Primary agent saved. Existing sessions are unchanged.");
-    } catch {
-      setError(
-        "The primary agent could not be selected. Refresh to check the saved choice before trying again.",
-      );
-      await refresh().catch(() => {});
-    } finally {
-      setBusy(false);
-    }
-  };
-  return (
-    <section className="space-y-4 border-b py-6">
-      <div>
-        <h2 className="font-semibold tracking-tight">Primary agent</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          The agent you talk to as your manager. Changing this choice does not
-          start or stop a session.
-        </p>
-      </div>
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="min-w-0 flex-1 space-y-2">
-          <Label htmlFor="primary-agent-setting">Agent</Label>
-          <NativeSelect
-            id="primary-agent-setting"
-            value={selectedId}
-            disabled={busy || !agents.length}
-            onChange={(event) =>
-              setDraft(
-                event.target.value === savedId
-                  ? null
-                  : { id: event.target.value, revision },
-              )
-            }
-          >
-            <option value="">Choose an agent</option>
-            {agents.map((agent) => (
-              <option
-                key={agent.id}
-                value={agent.id}
-                disabled={provisioningProblem(snapshot, agent.id)}
-              >
-                {agent.profile.name}
-                {provisioningProblem(snapshot, agent.id)
-                  ? " (setup needs attention)"
-                  : ""}
-              </option>
-            ))}
-          </NativeSelect>
-        </div>
-        <Button
-          disabled={busy || !draft || !selectedId || stale || !revision}
-          onClick={() => void save()}
-        >
-          {busy ? "Saving…" : "Save choice"}
-        </Button>
-      </div>
-      {!agents.length && (
-        <p className="text-sm text-muted-foreground">
-          Use Agent setup to create your manager with guided access choices.
-        </p>
-      )}
-      {stale && (
-        <p role="alert" className="text-sm text-destructive">
-          The primary-agent choice changed elsewhere.{" "}
-          <button
-            type="button"
-            className="underline"
-            onClick={() => setDraft(null)}
-          >
-            Reload the saved choice
-          </button>{" "}
-          before saving.
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-    </section>
   );
 }
 
@@ -843,267 +729,6 @@ function WorkspaceSettings({
         />
       )}
     </section>
-  );
-}
-
-function VoiceSettings({
-  command,
-  client,
-  snapshot,
-  visible,
-}: {
-  command: Command;
-  client: PrimaryVoiceClient;
-  snapshot: AgentsSnapshot;
-  visible: boolean;
-}) {
-  const primary = snapshot.agents.find(
-    (agent) => agent.id === primaryAgentId(snapshot) && !agent.archivedAt,
-  );
-  const session = primary?.runtime.session;
-  const binding: RuntimeBinding | null =
-    primary &&
-    session?.observedState === "started" &&
-    session.sessionId &&
-    primary.runtime.threadId
-      ? {
-          projectId: primary.projectId,
-          agentId: primary.id,
-          sessionId: session.sessionId,
-          threadId: primary.runtime.threadId,
-        }
-      : null;
-  const key = binding ? JSON.stringify(binding) : "";
-  const [result, setResult] = useState<{
-    key: string;
-    catalog: PrimaryVoiceCatalog;
-  } | null>(null);
-  const [draft, setDraft] = useState<{
-    key: string;
-    voice: string;
-    baseChoice: string | null;
-  } | null>(null);
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const [toast, setToast] = useState<{ id: string; message: string } | null>(
-    null,
-  );
-  const sequence = useRef(0),
-    alive = useRef(true),
-    action = useRef(false);
-  const catalog = result?.key === key ? result.catalog : null;
-  const selected = catalog?.selectedVoice ?? catalog?.defaultVoice;
-  const stale =
-    draft !== null &&
-    (draft.key !== key ||
-      (catalog !== null && draft.baseChoice !== catalog.selectedVoice));
-  const supported = catalog?.voices.some((voice) => voice.id === selected);
-  const reload = useCallback(async () => {
-    const request = ++sequence.current;
-    if (!key) return;
-    try {
-      const next = await client.listVoices(JSON.parse(key) as RuntimeBinding);
-      if (!validVoiceCatalog(next)) throw new Error("Invalid voice catalog");
-      if (alive.current && request === sequence.current) {
-        setResult({ key, catalog: next });
-        setError("");
-      }
-    } catch {
-      if (alive.current && request === sequence.current)
-        setError(
-          "Voices could not be loaded for the current primary-agent session. Retry when it is connected.",
-        );
-    }
-  }, [client, key]);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-      sequence.current++;
-    };
-  }, []);
-  useEffect(() => {
-    sequence.current++;
-    if (visible) void reload();
-  }, [visible, reload]);
-  useEffect(
-    () =>
-      client.subscribeCatalog?.(() => {
-        if (visible) void reload();
-      }),
-    [client, visible, reload],
-  );
-  async function save() {
-    if (
-      !draft ||
-      !catalog ||
-      stale ||
-      !binding ||
-      action.current ||
-      !catalog.voices.some((voice) => voice.id === draft.voice)
-    )
-      return;
-    const submitted = draft;
-    action.current = true;
-    setBusy(true);
-    setError("");
-    try {
-      await command("voice.select", { binding, voice: submitted.voice });
-      if (alive.current) {
-        setDraft((current) => (current === submitted ? null : current));
-        setToast({
-          id: crypto.randomUUID(),
-          message: "Voice saved for your next call.",
-        });
-      }
-      await reload();
-    } catch {
-      if (alive.current)
-        setError(
-          "The voice could not be saved. Refresh the available voices and try again.",
-        );
-    } finally {
-      action.current = false;
-      if (alive.current) setBusy(false);
-    }
-  }
-  return (
-    <section className="space-y-5 py-6">
-      <div>
-        <h2 className="font-semibold tracking-tight">Primary agent voice</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          Your saved choice applies to the next call. Changing it does not
-          connect voice or start microphone capture.
-        </p>
-      </div>
-      <div className="grid items-start gap-3 border-y py-6 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
-        <h3 className="text-sm font-medium">Voice</h3>
-        <div className="min-w-0 space-y-4">
-          {draft ? (
-            <>
-              <Label htmlFor="primary-voice-choice" className="sr-only">
-                Primary agent voice
-              </Label>
-              <NativeSelect
-                id="primary-voice-choice"
-                value={draft.voice}
-                disabled={busy || !catalog || stale}
-                onChange={(event) =>
-                  setDraft({ ...draft, voice: event.target.value })
-                }
-              >
-                {!catalog?.voices.some((voice) => voice.id === draft.voice) && (
-                  <option value={draft.voice} disabled>
-                    Saved voice unavailable
-                  </option>
-                )}
-                {catalog?.voices.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.name}
-                  </option>
-                ))}
-              </NativeSelect>
-              <p className="text-xs text-muted-foreground">
-                Available voices come from your current native session.
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  disabled={
-                    busy ||
-                    stale ||
-                    !catalog?.voices.some((voice) => voice.id === draft.voice)
-                  }
-                  onClick={() => void save()}
-                >
-                  {busy ? "Saving…" : "Save"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => {
-                    setDraft(null);
-                    setError("");
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              {!binding
-                ? "Start your primary agent in Sessions to load its available voices."
-                : !catalog
-                  ? "Loading voices…"
-                  : supported
-                    ? catalog.voices.find((voice) => voice.id === selected)
-                        ?.name
-                    : "Your saved voice is unavailable. Choose an available voice."}
-            </p>
-          )}
-          {stale && (
-            <p role="alert" className="text-sm text-destructive">
-              The session or saved voice changed elsewhere.{" "}
-              <button className="underline" onClick={() => setDraft(null)}>
-                Reload the saved choice
-              </button>{" "}
-              before editing.
-            </p>
-          )}
-        </div>
-        {!draft && (
-          <Button
-            variant="link"
-            className="h-auto p-0 text-sm font-semibold"
-            disabled={!binding || !catalog?.voices.length}
-            onClick={() =>
-              catalog &&
-              setDraft({
-                key,
-                voice: supported ? selected! : "",
-                baseChoice: catalog.selectedVoice,
-              })
-            }
-          >
-            Update
-          </Button>
-        )}
-      </div>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      {binding && (
-        <Button variant="ghost" disabled={busy} onClick={() => void reload()}>
-          Refresh voices
-        </Button>
-      )}
-      {toast && visible && (
-        <SettingsToast
-          key={toast.id}
-          message={toast.message}
-          onDismiss={() => setToast(null)}
-        />
-      )}
-    </section>
-  );
-}
-
-function validVoiceCatalog(value: PrimaryVoiceCatalog): boolean {
-  return Boolean(
-    value &&
-    Array.isArray(value.voices) &&
-    value.voices.length <= 1000 &&
-    value.voices.every(
-      (voice) =>
-        voice &&
-        typeof voice.id === "string" &&
-        voice.id.length > 0 &&
-        typeof voice.name === "string",
-    ) &&
-    typeof value.defaultVoice === "string" &&
-    (value.selectedVoice === null || typeof value.selectedVoice === "string"),
   );
 }
 
@@ -1422,14 +1047,4 @@ function validSignInStatus(value: unknown): boolean {
     ].includes(String(signIn.stage)) &&
     (signIn.code === null || Number.isSafeInteger(signIn.code))
   );
-}
-
-function provisioningProblem(snapshot: AgentsSnapshot, agentId: string) {
-  const rows = (
-    snapshot as AgentsSnapshot & {
-      provisioning?: { agentId: string; state: string }[];
-    }
-  ).provisioning;
-  const entry = rows?.find((item) => item.agentId === agentId);
-  return Boolean(entry && entry.state !== "ready");
 }

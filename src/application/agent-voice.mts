@@ -5,7 +5,7 @@ import type { PrimaryAgentVoice } from "../agents/voice-composition.mjs";
  * cancellation, public history, handoffs and lifecycle settlement. */
 export function createVoiceOwnerCommands(
   voice: PrimaryAgentVoice,
-  selectedVoice: () => string | null,
+  selectedVoice: (binding: RuntimeBinding) => string | null,
 ) {
   return async (command: string, value: unknown): Promise<unknown> => {
     if (!value || typeof value !== "object" || Array.isArray(value))
@@ -43,7 +43,7 @@ export function createVoiceOwnerCommands(
     if (command === "voice.list")
       return {
         ...(await voice.listVoices(binding)),
-        selectedVoice: selectedVoice(),
+        selectedVoice: selectedVoice(binding),
       };
     if (!identity(args.callId))
       throw new Error("A bounded voice call identity is required.");
@@ -61,6 +61,11 @@ export function createVoiceOwnerCommands(
       args.sdp.length > 1_000_000
     )
       throw new Error("A bounded offer and supported voice are required.");
+    const savedVoice = selectedVoice(binding);
+    if (savedVoice !== null && args.voice !== savedVoice)
+      throw new Error(
+        "This agent's saved voice changed. Refresh before connecting.",
+      );
     return voice.start({ ...call, sdp: args.sdp, voice: args.voice });
   };
 }

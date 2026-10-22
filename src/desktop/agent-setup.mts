@@ -44,17 +44,23 @@ interface Checkpoint {
   agentId: string | null;
   assignmentAttempted: boolean;
   assignmentRevision: number | null;
+  profileAttempted: boolean;
+  profileResult: { profile: Agent["profile"]; skills: Agent["skills"] } | null;
   primaryAttempted: boolean;
   primaryRevision: number | null;
 }
-interface Journal {
-  schema: 1;
-  projectId: string;
+interface RetainedSetup {
   record: AgentSetupRecord;
   runtime: AccessOwnerView["runtimeDefaults"];
   /** Captured before editing; old drafts cannot restore a later revocation. */
   assignmentBaseline: number | null;
+  profileBaseline: number | null;
   checkpoint: Checkpoint;
+}
+interface Journal extends RetainedSetup {
+  schema: 1;
+  projectId: string;
+  retained: RetainedSetup[];
 }
 const clone = <T,>(value: T): T => structuredClone(value);
 const same = isDeepStrictEqual;
@@ -103,6 +109,10 @@ function draftInput(value: unknown): AgentSetupDraft {
     "agentId",
     "name",
     "instructions",
+    "personality",
+    "pictureRef",
+    "voice",
+    "skills",
     "folderAccess",
     "groupMode",
     "groupName",
@@ -124,6 +134,25 @@ function draftInput(value: unknown): AgentSetupDraft {
     throw new AgentSetupError("Invalid setup choices.");
   string(row.name, 1000);
   string(row.instructions, 100_000);
+  string(row.personality, 100_000);
+  for (const value of [row.pictureRef, row.voice])
+    if (value !== null) {
+      string(value, 256);
+      if (!value || /[\u0000-\u001f\u007f]/.test(value))
+        throw new AgentSetupError("Invalid profile choice.");
+    }
+  if (!Array.isArray(row.skills) || row.skills.length > 256)
+    throw new AgentSetupError("Invalid skill selections.");
+  const skillIds: string[] = [];
+  for (const selection of row.skills) {
+    const skill = object(selection, ["skillId", "enabled"]);
+    string(skill.skillId, 256);
+    if (!skill.skillId || typeof skill.enabled !== "boolean")
+      throw new AgentSetupError("Invalid skill selection.");
+    skillIds.push(skill.skillId);
+  }
+  if (unique(skillIds).length !== skillIds.length)
+    throw new AgentSetupError("Choose each skill once.");
   string(row.groupName, 1000);
   if (row.agentId !== null) {
     string(row.agentId);
@@ -164,9 +193,33 @@ const checkpoint = (): Checkpoint => ({
   agentId: null,
   assignmentAttempted: false,
   assignmentRevision: null,
+  profileAttempted: false,
+  profileResult: null,
   primaryAttempted: false,
   primaryRevision: null,
 });
+const draftKey = (draft: AgentSetupDraft) =>
+  draft.mode === "create" ? "create" : `repair:${draft.agentId}`;
+const selectedProfile = (
+  draft: AgentSetupDraft,
+): Omit<Agent["profile"], "revision"> => ({
+  name: draft.name,
+  pictureRef: draft.pictureRef,
+  personality: draft.personality,
+  systemPrompt: draft.instructions,
+  voice: draft.voice,
+});
+const profileMatches = (agent: Agent, draft: AgentSetupDraft) =>
+  same(
+    {
+      name: agent.profile.name,
+      pictureRef: agent.profile.pictureRef ?? null,
+      personality: agent.profile.personality ?? "",
+      systemPrompt: agent.profile.systemPrompt,
+      voice: agent.profile.voice ?? null,
+    },
+    selectedProfile(draft),
+  ) && same(agent.skills ?? [], draft.skills);
 
 /** A private intent journal coordinates existing authorities. It never grants
  * access, starts an agent, stores credentials, or replaces native history. */
@@ -207,23 +260,123 @@ export async function openAgentSetup(options: Options) {
       !journal.checkpoint
     )
       throw new AgentSetupError("Guided setup state needs recovery.");
-    draftInput(journal.record.draft);
-    if (
-      !["draft", "reviewed", "applying", "complete"].includes(
-        journal.record.phase,
+    journal.retained ??= [];
+    if (!Array.isArray(journal.retained) || journal.retained.length > 100)
+      throw new AgentSetupError("Retained setup drafts need recovery.");
+    let legacyAgents: Agent[] | undefined;
+    for (const saved of [journal, ...journal.retained]) {
+      if (
+        !saved?.record ||
+        !saved.checkpoint ||
+        !Number.isSafeInteger(saved.record.revision) ||
+        saved.record.revision < 1 ||
+        !["draft", "reviewed", "applying", "complete"].includes(
+          saved.record.phase,
+        )
       )
+        throw new AgentSetupError("Retained setup state is invalid.");
+      const draft = saved.record.draft;
+      const legacy = ["personality", "pictureRef", "voice", "skills"].some(
+        (field) => !Object.hasOwn(draft, field),
+      );
+      if (legacy) {
+        if (draft.mode === "repair" && !legacyAgents)
+          legacyAgents = (await options.application.ownerApi.snapshot()).agents;
+        const agent = legacyAgents?.find(
+          (row) => row.id === draft.agentId && !row.archivedAt,
+        );
+        saved.record.draft = Object.assign(
+          {
+            personality: agent?.profile.personality ?? "",
+            pictureRef: agent?.profile.pictureRef ?? null,
+            voice: agent?.profile.voice ?? null,
+            skills: clone(agent?.skills ?? []),
+          },
+          draft,
+        );
+      }
+      // Old unreviewed edit drafts have no trustworthy profile baseline. They
+      // remain visible but require explicit reload before any profile write.
+      if (!Object.hasOwn(saved, "profileBaseline"))
+        saved.profileBaseline = saved.record.review?.revisions.profile ?? null;
+      saved.checkpoint.profileAttempted ??= false;
+      saved.checkpoint.profileResult ??= null;
+      if (legacy && saved.record.phase === "reviewed") {
+        saved.record.phase = "draft";
+        saved.record.review = null;
+        saved.record.revision++;
+      }
+      saved.record.draft = draftInput(saved.record.draft);
+      for (const revision of [saved.assignmentBaseline, saved.profileBaseline])
+        if (
+          revision !== null &&
+          (!Number.isSafeInteger(revision) || revision < 1)
+        )
+          throw new AgentSetupError("Setup baseline is invalid.");
+      for (const id of [
+        saved.record.id,
+        saved.checkpoint.groupId,
+        saved.checkpoint.presetId,
+      ])
+        string(id);
+      for (const flag of [
+        saved.checkpoint.creationAttempted,
+        saved.checkpoint.assignmentAttempted,
+        saved.checkpoint.profileAttempted,
+        saved.checkpoint.primaryAttempted,
+      ])
+        if (typeof flag !== "boolean")
+          throw new AgentSetupError("Setup recovery checkpoint is invalid.");
+    }
+    if (
+      journal.retained.some((saved) => saved.record.phase === "applying") ||
+      unique(
+        [journal, ...journal.retained].map((saved) =>
+          draftKey(saved.record.draft),
+        ),
+      ).length !==
+        journal.retained.length + 1
     )
-      throw new AgentSetupError("Guided setup phase is invalid.");
+      throw new AgentSetupError("Retained setup targets need recovery.");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   let tail: Promise<unknown> = Promise.resolve();
   const view = () => (journal ? clone(journal.record) : null);
+  const retainedFor = (draft: AgentSetupDraft) => {
+    if (!journal) return [];
+    const key = draftKey(draft),
+      retained = journal.retained.filter(
+        (saved) => draftKey(saved.record.draft) !== key,
+      );
+    if (
+      draftKey(journal.record.draft) !== key &&
+      journal.record.phase !== "complete"
+    ) {
+      const {
+        schema: _schema,
+        projectId: _projectId,
+        retained: _retained,
+        ...active
+      } = journal;
+      retained.push(clone(active));
+    }
+    if (retained.length > 100)
+      throw new AgentSetupError(
+        "Too many retained setup drafts. Complete an existing draft before opening another.",
+      );
+    return clone(retained);
+  };
   const save = async (next: Journal) => {
+    const bytes = `${JSON.stringify(next)}\n`;
+    if (Buffer.byteLength(bytes) > 2_000_000)
+      throw new AgentSetupError(
+        "Saved setup drafts are too large. Complete or explicitly reload an existing draft before adding more content.",
+      );
     const temp = join(root, `.agent-setup-${randomUUID()}.tmp`);
     const file = await open(temp, "wx", 0o600);
     try {
-      await file.writeFile(`${JSON.stringify(next)}\n`);
+      await file.writeFile(bytes);
       await file.sync();
     } finally {
       await file.close();
@@ -302,13 +455,17 @@ export async function openAgentSetup(options: Options) {
         workspace.workspace.path === options.project.directory,
     );
     const draft: AgentSetupDraft = {
-      step: 0,
+      step: mode === "repair" ? 2 : 0,
       mode,
       agentId: agent?.id ?? null,
       name:
         agent?.profile.name ??
         (snapshot.owner.projectSettings.primaryAgentId ? "Agent" : "Manager"),
       instructions: agent?.profile.systemPrompt ?? "",
+      personality: agent?.profile.personality ?? "",
+      pictureRef: agent?.profile.pictureRef ?? null,
+      voice: agent?.profile.voice ?? null,
+      skills: clone(agent?.skills ?? []),
       folderAccess: workspaces.length
         ? workspaces.some((row) => row.writable)
           ? "read_write"
@@ -320,7 +477,9 @@ export async function openAgentSetup(options: Options) {
       crewActions: [],
       serviceConnectionIds: [...(assignment?.serviceConnectionIds ?? [])],
       serviceCapabilities: [],
-      makePrimary: !snapshot.owner.projectSettings.primaryAgentId,
+      makePrimary:
+        !snapshot.owner.projectSettings.primaryAgentId ||
+        snapshot.owner.projectSettings.primaryAgentId === agent?.id,
     };
     return draft;
   };
@@ -346,6 +505,20 @@ export async function openAgentSetup(options: Options) {
       ? (snapshot.access.assignments.find((row) => row.agentId === agent.id)
           ?.revision ?? null)
       : null;
+    if (fresh && agent) {
+      const assignment = snapshot.access.assignments.find(
+        (row) => row.agentId === agent.id,
+      );
+      if (
+        !profileMatches(agent, draft) ||
+        !idsEqual(draft.groupIds, assignment?.permissionGroupIds ?? []) ||
+        !idsEqual(
+          draft.serviceConnectionIds,
+          assignment?.serviceConnectionIds ?? [],
+        )
+      )
+        throw stale();
+    }
     if (
       !fresh &&
       journal &&
@@ -356,12 +529,13 @@ export async function openAgentSetup(options: Options) {
         "This agent's access changed while you were editing. Reload its current access before saving; previous choices have not been restored.",
       );
     if (
+      !fresh &&
+      journal &&
       agent &&
-      (agent.profile.name !== draft.name ||
-        agent.profile.systemPrompt !== draft.instructions)
+      agent.profile.revision !== journal.profileBaseline
     )
       throw new AgentSetupError(
-        "Access repair preserves the saved agent profile. Change instructions in the profile editor separately.",
+        "This agent's profile changed while you were editing. Reload its current settings before saving; previous choices have not been restored.",
       );
     const next: Journal = {
       schema: 1,
@@ -378,7 +552,12 @@ export async function openAgentSetup(options: Options) {
       runtime: null,
       assignmentBaseline:
         fresh || !journal ? assignmentRevision : journal.assignmentBaseline,
+      profileBaseline:
+        fresh || !journal
+          ? (agent?.profile.revision ?? null)
+          : journal.profileBaseline,
       checkpoint: fresh || !journal ? checkpoint() : journal.checkpoint,
+      retained: fresh || !journal ? retainedFor(draft) : journal.retained,
     };
     await save(next);
   };
@@ -425,12 +604,20 @@ export async function openAgentSetup(options: Options) {
       throw new AgentSetupError(
         "This agent's access changed while you were editing. Reload its current access before reviewing; previous choices have not been restored.",
       );
-    if (
-      agent &&
-      (agent.profile.name !== draft.name ||
-        agent.profile.systemPrompt !== draft.instructions)
-    )
-      throw stale();
+    if (agent && agent.profile.revision !== journal!.profileBaseline)
+      throw new AgentSetupError(
+        "This agent's profile changed while you were editing. Reload its current settings before reviewing; previous choices have not been restored.",
+      );
+    const selectedSkills = draft.skills.map((selection) => {
+      const skill = snapshot.owner.skills.find(
+        (row) => row.id === selection.skillId,
+      );
+      if (!skill)
+        throw new AgentSetupError(
+          "A selected skill is unavailable. Review current project skills before saving.",
+        );
+      return { id: skill.id, revision: skill.revision };
+    });
     if (
       draft.crewActions.some(
         (action) =>
@@ -612,6 +799,7 @@ export async function openAgentSetup(options: Options) {
           : null,
         projectSettings: snapshot.owner.projectSettings.revision,
         profile: agent?.profile.revision ?? null,
+        skills: selectedSkills,
       },
     };
   };
@@ -655,9 +843,32 @@ export async function openAgentSetup(options: Options) {
       !same(access.runtimeDefaults, current.runtime)
     )
       throw stale();
+    for (const skill of review.revisions.skills ?? [])
+      if (
+        !owner.skills.some(
+          (row) => row.id === skill.id && row.revision === skill.revision,
+        )
+      )
+        throw stale();
     if (current.record.draft.mode === "repair") {
       const agent = target(snapshot, current.record.draft)!;
-      if (agent.profile.revision !== review.revisions.profile) throw stale();
+      if (
+        agent.profile.revision !== review.revisions.profile &&
+        !(
+          current.checkpoint.profileAttempted &&
+          agent.profile.revision === (review.revisions.profile ?? 0) + 1 &&
+          profileMatches(agent, current.record.draft)
+        )
+      )
+        throw stale();
+      if (
+        current.checkpoint.profileResult &&
+        !same(current.checkpoint.profileResult, {
+          profile: agent.profile,
+          skills: agent.skills ?? [],
+        })
+      )
+        throw stale();
       const assignment = access.assignments.find(
         (row) => row.agentId === agent.id,
       );
@@ -741,6 +952,16 @@ export async function openAgentSetup(options: Options) {
       throw new AgentSetupError("Review the current setup before applying it.");
     if (journal.record.phase === "complete") return;
     const draft = journal.record.draft;
+    if (
+      journal.record.phase === "reviewed" &&
+      Buffer.byteLength(JSON.stringify(journal)) +
+        3 * Buffer.byteLength(JSON.stringify(draft)) +
+        65_536 >
+        2_000_000
+    )
+      throw new AgentSetupError(
+        "Retained drafts leave too little room for safe completion receipts. Complete or explicitly reload another saved draft before applying this one.",
+      );
     await assertCurrent();
     if (
       draft.mode === "create" &&
@@ -864,6 +1085,42 @@ export async function openAgentSetup(options: Options) {
           )
         )
           throw stale();
+        const profileSnapshot = await assertCurrent();
+        let agent = target(profileSnapshot, draft)!;
+        if (!profileMatches(agent, draft)) {
+          if (!journal!.checkpoint.profileAttempted)
+            await update((next) => {
+              next.checkpoint.profileAttempted = true;
+            });
+          try {
+            await options.application.ownerApi.command("saveProfile", {
+              agentId: draft.agentId,
+              input: {
+                expectedRevision: journal!.record.review!.revisions.profile,
+                profile: selectedProfile(draft),
+                skills: draft.skills,
+              },
+            });
+          } catch {
+            // A reply may fail after the revision-checked profile commit. Only
+            // exact current fields and its next revision establish recovery.
+          }
+          agent = target(await assertCurrent(), draft)!;
+          if (
+            agent.profile.revision !==
+              (journal!.record.review!.revisions.profile ?? 0) + 1 ||
+            !profileMatches(agent, draft)
+          )
+            throw new AgentSetupError(
+              "The profile save is incomplete. Its exact reviewed revision is retained for retry; external changes will not be overwritten.",
+            );
+        }
+        await update((next) => {
+          next.checkpoint.profileResult = {
+            profile: clone(agent.profile),
+            skills: clone(agent.skills ?? []),
+          };
+        });
       } else {
         if (!journal!.checkpoint.preset) {
           const snapshot = await assertCurrent();
@@ -874,13 +1131,8 @@ export async function openAgentSetup(options: Options) {
           const presetDraft = {
             name: `${draft.name} setup`,
             enabled: true,
-            profile: {
-              name: draft.name,
-              personality: "",
-              systemPrompt: draft.instructions,
-              pictureRef: null,
-            },
-            skills: [],
+            profile: selectedProfile(draft),
+            skills: clone(draft.skills),
             ...journal!.runtime,
             permissionGroupIds: selectedIds(),
             serviceConnectionIds: draft.serviceConnectionIds,
@@ -895,7 +1147,20 @@ export async function openAgentSetup(options: Options) {
               revision,
               ...fields
             } = existing;
-            if (revision !== 1 || !same(fields, presetDraft)) throw stale();
+            if (
+              revision !== 1 ||
+              !same(
+                {
+                  ...fields,
+                  profile: {
+                    ...fields.profile,
+                    voice: fields.profile.voice ?? null,
+                  },
+                },
+                presetDraft,
+              )
+            )
+              throw stale();
           }
           accessMayHaveChanged = true;
           const preset =
@@ -979,6 +1244,7 @@ export async function openAgentSetup(options: Options) {
         );
         if (
           !agent ||
+          !profileMatches(agent, draft) ||
           !snapshot.owner.provisioning.some(
             (row) => row.agentId === agent.id && row.state === "ready",
           ) ||
@@ -1052,7 +1318,7 @@ export async function openAgentSetup(options: Options) {
           object(input, []);
           return view();
         }
-        if (name === "setup.new") {
+        if (name === "setup.new" || name === "setup.open") {
           const args = object(input, ["expectedRevision", "mode", "agentId"]);
           check(args.expectedRevision);
           if (!["create", "repair"].includes(String(args.mode)))
@@ -1062,6 +1328,32 @@ export async function openAgentSetup(options: Options) {
             throw new AgentSetupError(
               "Reconcile the retained setup before replacing it.",
             );
+          if (name === "setup.open" && journal) {
+            const key =
+              args.mode === "create" ? "create" : `repair:${args.agentId}`;
+            if (
+              draftKey(journal.record.draft) === key &&
+              journal.record.phase !== "complete"
+            )
+              return view();
+            const retained = journal.retained.find(
+              (saved) =>
+                draftKey(saved.record.draft) === key &&
+                saved.record.phase !== "complete",
+            );
+            if (retained) {
+              const next = {
+                ...clone(journal),
+                ...clone(retained),
+                retained: retainedFor(retained.record.draft),
+              };
+              next.record.revision = journal.record.revision + 1;
+              if (next.record.review)
+                next.record.review.draftRevision = next.record.revision;
+              await save(next);
+              return view();
+            }
+          }
           await persistDraft(
             await createDraft(
               args.mode as "create" | "repair",

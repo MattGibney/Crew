@@ -136,11 +136,17 @@ function validateActor(state: FoundationState, value: Actor): void {
   } else throw new Error("Invalid reporting identity.");
 }
 function validateProfile(value: Omit<Agent["profile"], "revision">): void {
-  record(value, ["name", "pictureRef", "personality", "systemPrompt"]);
+  record(
+    value,
+    ["name", "pictureRef", "personality", "systemPrompt", "voice"],
+    ["name", "pictureRef", "personality", "systemPrompt"],
+  );
   string(value.name, 1000, false);
   if (value.pictureRef !== null) identifier(value.pictureRef);
   string(value.personality);
   string(value.systemPrompt);
+  if (value.voice !== undefined && value.voice !== null)
+    identifier(value.voice);
 }
 function webUrl(value: unknown): asserts value is string {
   string(value, 4096, false);
@@ -383,6 +389,7 @@ export class FoundationRecords {
         "pictureRef",
         "personality",
         "systemPrompt",
+        "voice",
         "reportsTo",
         "skills",
       ],
@@ -412,6 +419,7 @@ export class FoundationRecords {
         pictureRef: next.pictureRef,
         personality: next.personality,
         systemPrompt: next.systemPrompt,
+        ...(next.voice !== undefined ? { voice: next.voice } : {}),
       });
       if (reportsTo !== undefined) {
         if (principal.type !== "owner")

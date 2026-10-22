@@ -287,12 +287,16 @@ const definitions = {
     revision,
     name: id,
     enabled: { type: "boolean" },
-    profile: object({
-      name: id,
-      pictureRef: nullable(id),
-      personality: { type: "string", maxLength: 200000 },
-      systemPrompt: { type: "string", maxLength: 200000 },
-    }),
+    profile: object(
+      {
+        name: id,
+        pictureRef: nullable(id),
+        personality: { type: "string", maxLength: 200000 },
+        systemPrompt: { type: "string", maxLength: 200000 },
+        voice: nullable(id),
+      },
+      ["voice"],
+    ),
     skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
     modelAccessId: id,
     configRef: id,

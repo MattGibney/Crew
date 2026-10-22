@@ -20,12 +20,15 @@ export function OwnerAccessSettings({
   onCommand,
   onNotify,
   workspaces = [],
+  showAgentAssignments = true,
 }: {
   snapshot: AccessOwnerView;
   isOwner: boolean;
   onCommand(name: string, args: unknown): Promise<unknown>;
   onNotify(message: string): void;
   workspaces?: readonly WorkspacePermissionChoice[];
+  /** Consolidated agent editing owns assignments in the desktop application. */
+  showAgentAssignments?: boolean;
 }) {
   const [selectedId, setSelectedId] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -109,40 +112,44 @@ export function OwnerAccessSettings({
         )}
         onSave={(change) => command("saveGroup", change)}
       />
-      <section className="py-6">
-        <Label htmlFor="crew-access-agent">Agent access</Label>
-        <NativeSelect
-          id="crew-access-agent"
-          value={agent?.id ?? ""}
-          onChange={(event) => setSelectedId(event.target.value)}
-        >
-          {!snapshot.agents.length && (
-            <option value="">No agents configured</option>
-          )}
-          {snapshot.agents.map((row) => (
-            <option key={row.id} value={row.id}>
-              {row.profile.name}
-            </option>
-          ))}
-        </NativeSelect>
-        {/* Keep editors mounted so changing agents retains drafts and pending saves. */}
-        {snapshot.agents.map((row) => (
-          <div key={row.id} hidden={agent?.id !== row.id}>
-            <AgentAccessPanel
-              {...common}
-              agent={row}
-              assignmentRevision={
-                snapshot.assignments.find(
-                  (assignment) => assignment.agentId === row.id,
-                )?.revision ?? null
-              }
-              groups={snapshot.groups}
-              connections={snapshot.connections}
-              onSave={(change) => command("saveAssignment", change)}
-            />
-          </div>
-        ))}
-      </section>
+      {showAgentAssignments && (
+        <>
+          <section className="py-6">
+            <Label htmlFor="crew-access-agent">Agent access</Label>
+            <NativeSelect
+              id="crew-access-agent"
+              value={agent?.id ?? ""}
+              onChange={(event) => setSelectedId(event.target.value)}
+            >
+              {!snapshot.agents.length && (
+                <option value="">No agents configured</option>
+              )}
+              {snapshot.agents.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.profile.name}
+                </option>
+              ))}
+            </NativeSelect>
+            {/* Keep editors mounted so changing agents retains drafts and pending saves. */}
+            {snapshot.agents.map((row) => (
+              <div key={row.id} hidden={agent?.id !== row.id}>
+                <AgentAccessPanel
+                  {...common}
+                  agent={row}
+                  assignmentRevision={
+                    snapshot.assignments.find(
+                      (assignment) => assignment.agentId === row.id,
+                    )?.revision ?? null
+                  }
+                  groups={snapshot.groups}
+                  connections={snapshot.connections}
+                  onSave={(change) => command("saveAssignment", change)}
+                />
+              </div>
+            ))}
+          </section>
+        </>
+      )}
       <CreationPresetsPanel
         {...common}
         presets={snapshot.presets}
