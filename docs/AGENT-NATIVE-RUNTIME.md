@@ -23,12 +23,16 @@ configuration snapshot and opaque subscription reference, and returns either a b
     env: { /* the complete environment; never merged with process.env */ },
   },
   skills: [/* { id, revision, nativePath: "/isolated/path/SKILL.md" } */],
+  nativePermissions: { profileId: "provider-owned-profile", approvalPolicy: "never" },
 }
 ```
 
 This is a private trusted-process seam, never an agent-configurable executable or environment.
-#89 must resolve the opaque references, enforce the actual filesystem/process/network/configuration,
-OS credential and personal-tool boundaries, and preserve supported native approvals. A declaration
+The policy field is optional in the TypeScript shape for staged provider integration, but absence
+or invalid metadata blocks before native spawn. There is no legacy fallback.
+#89 must resolve opaque references and enforce the native model-tool filesystem/network/configuration
+boundary. The pinned native host is trusted to read its Crew model auth. Host-control RPCs must not
+be exposed as model tools; the adapter never reads or copies auth values. A declaration
 that isolation is ready is not proof. The adapter validates exact caller identity, selected skill
 revision bindings and native discovery of those paths. It checks `account/read` for `chatgpt`
 authentication and rejects an API-key environment; it does not read or copy authentication files.
@@ -260,7 +264,7 @@ does not by itself make those capabilities ready. No personal profile/install, p
 business service or repository worktree was modified by the native probe.
 
 
-## Installed-runtime resume restriction discovered during composition
+## Historical resume restriction discovered during composition
 
 The installed 0.163.0-alpha.11 accepts `environments: []` on thread/start and
 turn/start. Its ThreadResumeParams has no environment selection field. A real
@@ -336,7 +340,7 @@ isolated runtime VM with no personal-file mounts, is needed instead of nesting
 Seatbelt. Neither alternative was implemented or authorized by this investigation;
 no install, account, credentials, native launch policy or production access changed.
 
-## Disposable native-owned permission investigation
+## Historical disposable native-owned permission investigation
 
 A subsequent owner-directed investigation tested the native boundary on its own,
 without changing production launch code. It used a separate synthetic HOME and
@@ -422,23 +426,51 @@ trusted adapter controls and must never become agent-facing tools. Native profil
 selection and verification must cover thread creation, fresh-process same-chat
 resume, explicit turns and server-managed realtime handoffs.
 
-The bounded acceptance harness has been prepared outside the repository. Its
-configuration parses successfully in a separate unsigned-in native process:
-default-deny filesystem, minimal runtime reads, one read-only synthetic workspace,
-explicit private-root denial, network disabled, no environment inheritance and no
-approval escalation. This is configuration evidence only. The real-model run
-requires an explicit verified idle handoff of the owner's Crew auth home; it must
-not search for, read or copy authentication values, or start another sign-in.
+The owner authorized candidate implementation while acceptance continued. The adapter now binds
+`permissions` and `approvalPolicy: "never"` on start, resume and explicit turns. It verifies the
+returned profile, approval policy, cwd/root list and exactly one local environment. A settings or
+workspace mismatch latches a configuration rejection and blocks later text/realtime input. The
+foundation keeps the exact session/turn references while reporting unknown state. Native command
+and file requests may only be declined or cancelled; a broker grant cannot expand native policy.
+The provider must independently provision and verify the effective named profile.
 
-Acceptance will challenge native command/file/edit/image surfaces that are
-actually available with disposable markers, check unchanged protected files and
-blocked direct network access, and verify an authenticated synthetic MCP tool.
-The stress configuration deliberately enables native command tools to exercise
-the permission boundary; production's additional native-tool disablement must be
-retained and verified separately. After confirmed exit, a fresh process must resume
-the same native chat/profile and complete an actual server-managed realtime
-handoff. Realtime uses a labelled synthetic text append through the supported
-WebSocket transport, with no physical microphone or fabricated human speech.
-Native turn/item correlations and actual tool outcomes are required; model claims
-alone do not pass acceptance. Production launch policy remains unchanged pending
-that evidence.
+### Current bounded evidence
+
+Real signed-in acceptance used the owner's explicitly handed-off, idle Crew auth home in place.
+Only the pinned native host accessed authentication. No auth values, personal service files or
+personal configuration were read/copied, and no new sign-in was started. Disposable test helpers,
+markers and detailed evidence remain outside the repository.
+
+| Check | Observed result and limit |
+| --- | --- |
+| Genuine subscription inference | Completed native model turns using ChatGPT authentication. |
+| Allowed native file/image surfaces | A workspace canary read and permitted image view succeeded. |
+| Tool environment | Actual `printenv` for synthetic transport/private environment canaries returned no values. |
+| Direct tool network | Actual loopback curl failed; the live synthetic endpoint recorded zero requests. |
+| Authenticated MCP | Allowed synthetic read succeeded; forbidden operation reached the broker and was explicitly denied. No retries or external action. |
+| Same-chat fresh-process resume | Same native ID returned the named profile, never-approve policy and exact local cwd/roots. |
+| Synthetic realtime handoff | Subscription WebRTC connected. Generated speech produced one native completed coding turn; retained history contains the server-created realtime delegation. The test sent no `turn/start`. |
+| Protected file/image/edit checks | Models reported permission denials and protected fixture bytes stayed unchanged. The inspected public item stream/history omits some pre-execution failures, so those claims alone do not establish per-tool denial coverage. |
+| Production adapter typed path | Native resume and exact profile-settings acknowledgement, genuine text delivery/completion, Stop, fresh-process same-thread restart and a second Stop passed through the actual adapter. |
+| Profile behavior | A simple answer omitted a synthetic prefix despite exact native settings acknowledgement. Settings acceptance therefore does not yet establish that saved profile instructions reach the model. |
+
+The stress profile intentionally enabled native command tools to exercise enforcement; production
+retains additional native-tool disablement and requires its own combined candidate validation.
+The exact authenticated Crew/services MCP endpoints use documented native dispatch approval
+configuration, while current Crew session/group/broker policy remains authoritative. Global native
+approval stays `never`; native dispatch trust is not a service grant.
+
+Earlier synthetic attempts are preserved as failures: v3 text output was rejected, the WebSocket
+audio route required API-key auth, and a WebRTC text append acknowledged without a handoff. No
+API-key fallback was used. The successful attempt fed generated speech through a synthetic browser
+audio track; it acquired no physical microphone, played no speaker audio and did not fabricate a
+human utterance. All owned peers and the temporary browser were closed after the check.
+
+The pinned runtime did not emit `bemItemPromoted` for the real handoff. Ordinary native turn events
+still drive activity, completion and Stop. Each newly observed nonterminal turn invalidates exact-session
+preparation readiness; completion and voice closure do not restore a stale readiness report. The probe's promotion-specific result therefore remains
+incomplete even though independent native history confirms delegation and completion. Production
+must not label a turn as owner voice solely because it overlaps a voice call or contains delegation
+text. Public-history provenance and human acoustic acceptance remain separate checks. Typed app
+validation can proceed against the candidate; none of this implies installed-product acceptance,
+release permission, or complete coverage of every model-accessible tool.

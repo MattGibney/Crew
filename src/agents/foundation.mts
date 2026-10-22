@@ -1378,6 +1378,23 @@ export class AgentFoundation implements AgentLifecycle {
               `${event.binding.sessionId}:${event.turnId}`,
             )
           ) {
+            if (session.activeTurnId !== event.turnId) {
+              // Native handoffs can start work without a Crew delivery receipt
+              // or realtime promotion event. Any new turn invalidates readiness;
+              // its source and public visibility remain independently verified.
+              const readiness = state.preparation?.readiness.find(
+                (row) =>
+                  row.agentId === event.binding.agentId &&
+                  row.sessionId === event.binding.sessionId,
+              );
+              if (readiness) {
+                readiness.state = "pending";
+                readiness.requiredAfter = now();
+                readiness.continuationSavedAt = null;
+                readiness.detail =
+                  "New native turn observed; report current continuation readiness.";
+              }
+            }
             if (session.activeTurnId && session.activeTurnId !== event.turnId) {
               session.observedState = "unknown";
               session.lastError = error(
