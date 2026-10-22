@@ -484,3 +484,9 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - The owner authorized integrating the completed unified-agent PRs into `codex/unified-agent-platform` as a work-in-progress testing baseline. Preserve the remaining acceptance checklist; feature-branch integration does not authorize main merge, installation or release.
 - Packaged generated-audio acceptance must prove speech reached the call. A connected UI with fake-device flags is insufficient when Chromium rejects the audio fixture. Keep the sandbox enabled and distinguish incomplete fixture input from an established transcript defect.
+
+## Retained conversation history (#102)
+
+- Settings changes, Restart and renderer reopening must retain the native chat and make its available public messages readable. Native turn pagination remains authoritative; public provenance is tied to agent/thread/turn across logical sessions. Never loosen private/unknown filtering or create another durable transcript store to fill a display gap.
+- Refresh the displayed history window, including previously loaded older pages, and rehydrate on session changes. Follow filtered or non-display pages with bounded reads; an empty page with an older cursor is not an empty conversation. Keep loading, unavailable history and stale previously loaded messages explicit. Recovery may reset only the disposable display window, never the native chat.
+- The current live voice transcript is call-scoped. The pinned runtime's missing exact voice-to-coding-turn linkage remains a separate limitation; typed-history acceptance does not prove voice transcript recovery. Keep that limitation visible in the conversation and distinguish synthetic checks from owner acceptance.
