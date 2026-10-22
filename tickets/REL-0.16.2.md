@@ -1,0 +1,7 @@
+# REL-0.16.2 — TypeScript production release
+
+Continues the authorized [TypeScript delivery](REL-0.16.0.md), preserving failed pre-publication v0.16.0 and v0.16.1 tags/runs. Hosted [run 39732488415](https://github.com/MattGibney/Crew/actions/runs/39732488415) stopped before signing/publication with 660/661 passed. The multi-project pause fixture treated historical reports as resumed readiness and checked the launch log before the new native child wrote it. Require execution and progress evidence correlated to the current run in both pause integration fixtures, and wait for the exact queued probe question rather than assuming its launch already persisted the question. Retained reports/history remain intact; every original exactly-once, prompt snapshot, capacity and update assertion stays enabled. Production source is unchanged.
+
+Version 0.16.2 uses a new release PR and exact stable tag through ordinary full hosted tests, signing and notarization. No failed tags/assets are overwritten. The user's installation/profile/auth/history, physical microphone and business services remain untouched. Known Quit #39 and portable-root automatic update limitations remain separate from signed payload/feed verification.
+
+Final local acceptance: full clean-build npm test passes 661/661 with no failures/skips/cancellations (167.9 seconds), including both corrected integration fixtures and both strict TypeScript projects. The preceding focused real-process suites pass 22/22. Independent read-only review confirmed the causal fixture barriers and no product regression.

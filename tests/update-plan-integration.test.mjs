@@ -46,7 +46,7 @@ await reportTask(state,id,run,{reportId:'fixture-progress',kind:'progress',messa
  engine=createUpdatePlan(options);await engine.ready;
  const add=async(id,brief='cooperative fixture work')=>{ids.push(id);await createTask(stateDir,{requestId:id,ticket:'AI-018',brief,projectId:project.id,repositoryId:'repo'});await controller.tick();};
  const histories=async()=>{const raw=await readFile(path.join(stateDir,'launches.jsonl'),'utf8').catch(()=> '');return raw.split('\n').filter(Boolean).map(line=>JSON.parse(line));};
- const waitLive=id=>until(async()=>{const task=await readTask(stateDir,id);return task.threadId&&task.execution?.live&&task.reports.length?task:null;},`live ${id}`);
+ const waitLive=id=>until(async()=>{const task=await readTask(stateDir,id);return task.threadId&&task.execution?.runId===task.runId&&task.execution.live&&task.reports.some(report=>report.runId===task.runId&&report.kind==='progress')?task:null;},`live ${id}`);
  t.after(async()=>{
   if(!controller)controller=await create();
   for(const id of ids){
