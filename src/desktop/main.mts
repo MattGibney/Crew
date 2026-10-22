@@ -398,6 +398,16 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
     return host.application.environmentOwnerApi.snapshot();
   if (command === "environments.projectFolder")
     return { directory: host.project.directory };
+  if (command === "environments.prepareFolderAccess") {
+    const input = object(args);
+    if (input.access !== "none" && input.access !== "read_only" && input.access !== "read_write")
+      throw new Error("Choose folder access.");
+    const result = await host.application.environmentOwnerApi.prepareFolderAccess(
+      { workspaceDirectory: text(input.workspaceDirectory), access: input.access },
+    );
+    surface.notify({ type: "owner", projectId: host.project.id, event: { kind: "changed" } });
+    return result;
+  }
   if (command === "environments.approveWorkspace") {
     const input = object(args);
     const result = await host.application.environmentOwnerApi.approveWorkspace(

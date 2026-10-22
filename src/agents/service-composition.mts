@@ -19,6 +19,7 @@ import {
 } from "./session-host.mjs";
 import {
   ProjectEnvironmentService,
+  type FolderAccessPreparation,
   type WorkspaceApproval,
 } from "./environments.mjs";
 import {
@@ -462,6 +463,20 @@ export async function startUnifiedApplication(
     };
     const environmentOwnerApi = {
       snapshot: () => environments!.ownerSnapshot(owner),
+      async prepareFolderAccess(input: FolderAccessPreparation) {
+        if (closing) throw new Error("Crew is closing.");
+        const prepared = await environments!.prepareFolderAccess(owner, input);
+        if (prepared.policy) {
+          const published = await publishPolicy(prepared.policy.id);
+          if (
+            published.policy.revision !== prepared.policy.revision ||
+            published.policy.enforcementConfigRef !==
+              prepared.policy.enforcementConfigRef
+          )
+            throw new Error("Folder access changed while preparing it.");
+        }
+        return prepared;
+      },
       async approveWorkspace(
         input: WorkspaceApproval,
         expectedRevision: number | null,
