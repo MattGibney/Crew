@@ -27,6 +27,7 @@ import {
   type PrimaryAgentVoice,
 } from "./voice-composition.mjs";
 import { createOwnerApi } from "./owner-api.mjs";
+import { OwnerConnectionSetupService } from "../access/connection-setup.mjs";
 import {
   AccessStore,
   ProjectAuthorizationService,
@@ -40,6 +41,8 @@ import {
 import {
   createGateway,
   createSupportedGatewayRegistry,
+  TrustedServiceExecutor,
+  GatewayOwnerConnectionVerifier,
 } from "../gateway/index.mjs";
 
 export const unifiedRuntimeDefaults = Object.freeze({
@@ -590,12 +593,59 @@ export async function startUnifiedApplication(
         return () => stops.forEach((stop) => stop());
       },
     };
+    let connectionSetup: OwnerConnectionSetupService;
+    const draftConnections = {
+      get: async (id: string) => connectionSetup.candidate(id),
+      listAssigned: async () => [], // Drafts are never exposed to runtime agents.
+    };
+    const draftExecutor = new TrustedServiceExecutor({
+      authorization,
+      vault,
+      connections: draftConnections,
+      resolveConfiguration: registry.resolve,
+      privateDirectory: join(root, "gateway", "owner-verification"),
+      admission: { run: async () => ({ state: "denied" as const }) },
+      canDispatch: async () => false,
+    });
+    const connectionVerifier = new GatewayOwnerConnectionVerifier({
+      vault,
+      connections: draftConnections,
+      registry,
+      discoverCapabilities: (connection, options) =>
+        draftExecutor.discoverCapabilities(connection, options),
+    });
+    connectionSetup = new OwnerConnectionSetupService({
+      store: accessStore,
+      vault,
+      projectId: options.projectId,
+      ownerUserId: options.ownerUserId,
+      setupChoices: async () => registry.setupChoices(),
+      listAgents: async () => store.snapshot().agents,
+      verify: (connection, revision, signal) => {
+        if (closing || connection.authentication.method !== "token")
+          throw new Error("Crew cannot verify this connection now.");
+        return connectionVerifier.verify(
+          connection,
+          { credentialRef: connection.authentication.credentialRef, revision },
+          { signal },
+        );
+      },
+    });
     const accessOwnerApi = createAccessOwnerApi(
       {
         authorization,
         vault,
         projectId: options.projectId,
         ownerUserId: options.ownerUserId,
+        connectionSetup,
+        rememberVerifiedConnection: async (id) => {
+          const evidence = await connectionSetup.savedEvidence(id);
+          if (evidence)
+            gateway.catalogue.rememberVerified(
+              evidence.connection,
+              evidence.capabilities,
+            );
+        },
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
         setupChoices: async () => registry.setupChoices(),
@@ -684,6 +734,7 @@ export async function startUnifiedApplication(
             await finishStep("mcp", () => mcp!.close());
             await finishStep("nativeAccess", () => nativeAccess!.close());
             await finishStep("environments", () => environments!.close());
+            await finishStep("connectionSetup", () => connectionSetup.close());
             await finishStep("accessStore", () => accessStore!.close());
             closedSteps.add("resources");
           }

@@ -78,6 +78,11 @@ export const crewActions = [
   "grants.approve",
   "grants.revoke",
 ] as const;
+const serviceIdentity = object({
+  displayName: id,
+  externalAccountId: nullable(id),
+  emailAddress: nullable(id),
+});
 const definitions = {
   json: {
     anyOf: [
@@ -180,11 +185,7 @@ const definitions = {
     name: id,
     service: id,
     revision,
-    identity: object({
-      displayName: id,
-      externalAccountId: nullable(id),
-      emailAddress: nullable(id),
-    }),
+    identity: serviceIdentity,
     transport: {
       anyOf: [
         object({ type: one("mcp"), serverConfigRef: id }),
@@ -369,13 +370,50 @@ const stateValidator = ajv.compile<AccessState>({
       environmentPolicies: array(ref("environmentPolicy")),
       assignments: array(ref("assignment")),
       presetApplications: array(ref("presetApplication")),
+      connectionSetups: array(
+        object({
+          requestId: id,
+          verificationId: nullable(id),
+          connectionId: id,
+          expiresAt: timestamp,
+          state: {
+            enum: ["verifying", "verified", "failed", "cancelled", "saved"],
+          },
+          identity: nullable(serviceIdentity),
+          identityStatus: { enum: ["verified", "unavailable"] },
+          capabilities: array(
+            object({
+              id,
+              connectionId: id,
+              upstreamName: id,
+              description: text,
+              inputSchema: ref("json"),
+              outputSchema: nullable(ref("json")),
+              verification: { enum: ["read_only", "unsupported"] },
+            }),
+            500,
+          ),
+          capabilitiesStatus: { enum: ["verified", "unavailable"] },
+          accountKind: { enum: ["personal", "dedicated"] },
+          name: id,
+          setupChoiceId: id,
+          reason: nullable(text),
+          connection: ref("connection"),
+          existing: { type: "boolean" },
+          expectedRevision: nullable(revision),
+          credentialRevision: revision,
+          inputFingerprint: fingerprint,
+          saveFingerprint: nullable(fingerprint),
+        }),
+        256,
+      ),
       requests: array(ref("request")),
       grants: array(ref("grant")),
       reservations: array(ref("reservation")),
       closedSessions: array(ref("caller")),
       audit: array(ref("audit"), 20000),
     },
-    ["presetApplications"],
+    ["presetApplications", "connectionSetups"],
   ),
 });
 export function validateState(value: unknown): asserts value is AccessState {
@@ -399,6 +437,18 @@ export function validateState(value: unknown): asserts value is AccessState {
   )
     throw new Error("Duplicate access assignment.");
   const applications = value.presetApplications ?? [];
+  const setups = value.connectionSetups ?? [];
+  if (new Set(setups.map((row) => row.requestId)).size !== setups.length)
+    throw new Error("Duplicate connection setup identity.");
+  for (const setup of setups)
+    if (
+      setup.connection.projectId !== value.projectId ||
+      setup.connection.id !== setup.connectionId ||
+      setup.capabilities.some(
+        (capability) => capability.connectionId !== setup.connectionId,
+      )
+    )
+      throw new Error("Foreign connection setup evidence.");
   if (
     new Set(applications.map((row) => row.agentId)).size !== applications.length
   )
