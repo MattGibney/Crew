@@ -17,6 +17,16 @@ export type {
   ElectronSafeStoragePort,
 } from "./vault.mjs";
 export { CodexRuntimeAccessProvider } from "./runtime-access.mjs";
+export type {
+  CodexRuntimeAccessOptions,
+  NativeGatewayBinding,
+  SubscriptionStatus,
+} from "./runtime-access.mjs";
+export { runMacWorkspaceCommand } from "./workspace-executor.mjs";
+export type {
+  WorkspaceExecutionPolicy,
+  WorkspaceCommandResult,
+} from "./workspace-executor.mjs";
 export { createAccessOwnerApi } from "./owner-api.mjs";
 export type { AccessOwnerApi, AccessOwnerApiOptions } from "./owner-api.mjs";
 export type {
