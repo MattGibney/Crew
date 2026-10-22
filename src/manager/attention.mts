@@ -56,3 +56,17 @@ export function managerAttention(input: unknown) {
     return null;
   return { id: attention.requestId, message: attention.message };
 }
+
+/** Only a validated explicit request_attention call publishes a background
+ * question to the human. Ordinary assistant commentary is never promoted. */
+export function managerAttentionMessage(input: unknown) {
+  const attention = managerAttention(input);
+  return attention
+    ? {
+        id: `manager-attention-${attention.id}`,
+        role: "assistant" as const,
+        source: "attention",
+        text: attention.message,
+      }
+    : null;
+}

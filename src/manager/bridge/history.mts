@@ -34,6 +34,7 @@ type HistoryOptions = {
   markCompleted: (id: string) => void;
   emit: (type: string, data: Record<string, unknown>) => void;
   projection: HistoryProjection;
+  reconcileRecent?: (turnIds: string[]) => Promise<void>;
 };
 /** Hydrate canonical history with the bounded legacy overlay; never starts native work. */
 export async function hydrateHistory({
@@ -46,6 +47,7 @@ export async function hydrateHistory({
   markCompleted,
   emit,
   projection,
+  reconcileRecent,
 }: HistoryOptions) {
   let savedMessages: ConversationMessage[] = [],
     historyTruncated = false;
@@ -184,6 +186,7 @@ export async function hydrateHistory({
     if (!emptyNativeThread) throw error;
     history = { data: [] };
   }
+  await reconcileRecent?.(history.data.map((turn) => turn.id));
   if (history.data.length) {
     projection.activeTurnId = null;
     projection.status = history.data[0].status;
