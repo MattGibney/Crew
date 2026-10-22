@@ -166,6 +166,19 @@ Native MCP configuration contains exactly `crew` for foundation actions/skills a
 are read back from the native process before preparation succeeds. A single gateway
 endpoint alone does not expose agent management or selected skills.
 
+Only these two authenticated servers set `default_tools_approval_mode="approve"`.
+This supported native setting skips a redundant Codex MCP confirmation before Crew
+dispatch; it does not grant a Crew capability. Foundation authorization and the
+service broker still check the current caller, session, group or explicit grant at
+dispatch. Global native execution/escalation policy is unchanged. Preparation verifies
+the exact server set, approval defaults and absence of per-tool overrides. Owner login
+and retained-history launches configure no MCP servers.
+
+The setting applies to new native launches, not an already pending elicitation.
+Never answer or replay a pending owner request to apply it. Real MCP forms and URL
+elicitations remain separate supported-UI work; `approve` is not permission to fabricate
+their responses or enable unrelated native tools.
+
 The gateway binding must be caller/session authenticated, revocable on Stop and owned by
 the host. The host shares one admission gate across runtime, environment and gateway
 dispatch and final shutdown. It registers admitted work under a short gate and performs
@@ -222,6 +235,16 @@ The installed native process also discovered two controlled SDK MCP servers usin
 the exact foundation and service URLs with bearer authentication. A mismatched expected
 foundation URL failed configuration verification. This proves native transport discovery;
 the controlled endpoint catalogue is not the composed application's live tool catalogue.
+
+On installed CLI 0.163.0-alpha.11, the final provider source also read back
+`default_tools_approval_mode="approve"` for both endpoints and retained global
+`approval_policy="on-request"`. Both authenticated endpoints discovered successfully;
+the verifier rejected missing approval mode, a per-tool override and a third server.
+This was a disposable unsigned-in configuration/transport check. Separately, #88
+reported an actual subscription model call with per-tool `approval_mode="approve"`:
+an allowed synthetic call reached Crew and a forbidden call was rejected by its broker
+while global policy remained `never`. That establishes the narrow approval-mode
+semantics, not final composed-app or server-default model acceptance.
 
 Actual Electron 44.9.2 safeStorage plus the real vault passed synthetic store/read/rotate,
 second-process reopen, stale-reference denial and deletion. This proves host OS storage
