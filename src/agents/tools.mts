@@ -10,6 +10,11 @@ import type {
 
 const string = { type: "string" };
 const id = { type: "string", minLength: 1, maxLength: 512 };
+const environmentAgentId = {
+  ...id,
+  description:
+    'Use "self" for your authenticated agent, or an authorized agent ID. No team-discovery permission is needed to address yourself.',
+};
 const object = (
   properties: JsonObject,
   required = Object.keys(properties),
@@ -88,7 +93,7 @@ const jobInput = object(
   ["work"],
 );
 const environmentInput = object({
-  agentId: id,
+  agentId: environmentAgentId,
   action: { enum: ["create", "attach", "execute", "dispose"] },
   requestId: {
     ...id,
@@ -237,14 +242,14 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "environment_action",
       description:
-        "Explicit environment action using the configured project integration. Does not change agent or chat identity.",
+        "Read, edit and run commands in an owner-approved project folder through the sandboxed workspace executor. Native file/shell tools cannot access these project folders. First use environments_read; attach its approved policy if needed, then execute an argv command with the returned environmentId. Read-only policies deny writes. Does not change agent or chat identity.",
       inputSchema: environmentInput,
     },
     {
       name: "environments_read",
       description:
-        "Read currently permitted workspace policies and attached environments. Use the returned policy ID for attach/create; this runs no project commands.",
-      inputSchema: object({ agentId: id }),
+        "Discover this agent's permitted project folders, read-only/read-write policies and attached environment IDs. For project file reading, editing or commands, use environment_action: attach the returned policyId if no environment is attached, then execute with its environmentId. This discovery runs no project commands.",
+      inputSchema: object({ agentId: environmentAgentId }),
     },
     {
       name: "jobs_list",
@@ -467,13 +472,19 @@ export function createFoundationAgentTools(
             args.markdown as string,
           );
         case "environment_action":
-          return foundation.environment(
-            principal,
-            args as unknown as Parameters<typeof foundation.environment>[1],
-          );
+          return foundation.environment(principal, {
+            ...args,
+            agentId:
+              args.agentId === "self"
+                ? caller.agentId
+                : identifier(args.agentId),
+          } as unknown as Parameters<typeof foundation.environment>[1]);
         case "scratchpad_read":
         case "environments_read": {
-          const agentId = identifier(args.agentId);
+          const agentId =
+            name === "environments_read" && args.agentId === "self"
+              ? caller.agentId
+              : identifier(args.agentId);
           await records.authorize(
             principal,
             name === "scratchpad_read"

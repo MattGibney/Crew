@@ -24,7 +24,15 @@ export {
 export type {
   GatewaySetupChoice,
   TrustedGatewayRegistration,
+  GatewayOwnerIdentityProvider,
 } from "./registry.mjs";
+export { GatewayOwnerConnectionVerifier } from "./owner-verification.mjs";
+export type {
+  GatewayVerificationCredential,
+  GatewayIdentityObservation,
+  GatewayCapabilitiesObservation,
+  GatewayOwnerVerification,
+} from "./owner-verification.mjs";
 export { GatewayCatalogue } from "./catalogue.mjs";
 
 export {

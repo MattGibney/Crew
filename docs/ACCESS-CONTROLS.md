@@ -8,6 +8,14 @@ The existing installed app has not been replaced.
 
 ## Owner behavior
 
+The [guided owner flow](GUIDED-OWNER-ACCESS.md) adds explicit personal or dedicated
+service-account setup for Linear and GitHub. The owner enters a credential for
+that chosen account; Crew verifies its actual identity and catalogue before the
+reviewed connection/group/agent save. Personal access is allowed when explicitly
+chosen, never inherited from model sign-in or personal tool configuration. Folder
+selection likewise needs an explicit approved policy and group grants; the guided
+folder helper returns those records without assigning an agent or starting work.
+
 Create a service connection with its intended acting account and a configured
 executor. Credentials are entered through the private owner settings path. Model
 access remains native ChatGPT subscription sign-in, separate from service credentials.

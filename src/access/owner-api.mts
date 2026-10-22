@@ -11,6 +11,10 @@ import type {
 import type { ProjectAuthorizationService } from "./authorization.mjs";
 import type { EncryptedCredentialVault } from "./vault.mjs";
 import { crewActions } from "./validation.mjs";
+import {
+  ConnectionSetupReviewRequired,
+  type OwnerConnectionSetupService,
+} from "./connection-setup.mjs";
 
 import type {
   AccessOwnerView,
@@ -38,6 +42,8 @@ export interface AccessOwnerApiOptions {
   catalogueSnapshot(connection: ServiceConnection): OwnerCatalogueSnapshot;
   /** Actual gateway connection check; absent means no supported verification flow. */
   verifyConnection?(connectionId: string): Promise<void>;
+  connectionSetup?: OwnerConnectionSetupService;
+  rememberVerifiedConnection?(connectionId: string): Promise<void>;
 }
 function object(value: unknown, keys?: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -292,6 +298,10 @@ export function createAccessOwnerApi(
             description: `Allow ${action.replaceAll(".", " ")}.`,
           })),
         canVerifyConnections: Boolean(options.verifyConnection),
+        canGuideConnections: Boolean(options.connectionSetup),
+        connectionSetups: options.connectionSetup
+          ? await options.connectionSetup.snapshot()
+          : [],
       };
     },
     subscribe(listener: (event: { kind: "access_changed" }) => void) {
@@ -303,6 +313,39 @@ export function createAccessOwnerApi(
       const args = object(value);
       // Snapshot private input once; later renderer edits cannot alter a pending save.
       const input = structuredClone(args);
+      if (
+        [
+          "verifyConnectionDraft",
+          "discardConnectionDraft",
+          "saveVerifiedConnection",
+        ].includes(name)
+      ) {
+        await authorization.snapshot(actor);
+        if (!options.connectionSetup)
+          throw new Error("Guided service setup is unavailable.");
+        try {
+          if (name === "verifyConnectionDraft") {
+            const pending = options.connectionSetup.verify(input);
+            input.credential = null;
+            return await pending;
+          }
+          if (name === "discardConnectionDraft")
+            return await options.connectionSetup.discard(input);
+          const saved = await options.connectionSetup.save(input);
+          // This is only a local descriptive cache. A lost projection never
+          // changes or repeats the committed authorization transaction.
+          await options
+            .rememberVerifiedConnection?.(saved.connectionId)
+            .catch(() => {});
+          return saved;
+        } catch (error) {
+          if (error instanceof ConnectionSetupReviewRequired)
+            return { state: "review_required", reason: error.message };
+          throw new Error(
+            "Connection setup did not complete. Retry the current action or cancel this setup before changing its details.",
+          );
+        }
+      }
       const run = tail.then(async () => {
         await authorization.snapshot(actor); // Verify the store owner on every command.
         switch (name) {

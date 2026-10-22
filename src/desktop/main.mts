@@ -46,6 +46,7 @@ import {
 } from "./unified-quit.mjs";
 import { createUnifiedUpdates } from "./unified-updates.mjs";
 import { openWebLink } from "./external-links.mjs";
+import { AgentSetupError, openAgentSetup } from "./agent-setup.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const desktopDirectory = join(
@@ -74,6 +75,7 @@ type ProjectHost = {
   voice: UnifiedApplication["voice"];
   voiceCommand: ReturnType<typeof createVoiceOwnerCommands>;
   imageCommand: ReturnType<typeof createImageOwnerCommands>;
+  setup: Awaited<ReturnType<typeof openAgentSetup>>;
   unsubscribe: () => void;
 };
 const hosts = new Map<string, ProjectHost>(),
@@ -254,6 +256,34 @@ async function openProject(project: DesktopProject) {
           .map((agent) => agent.id),
       );
       await schedules.start();
+      // A damaged setup draft must not prevent access to retained agents.
+      let setupOpening: ReturnType<typeof openAgentSetup> | undefined;
+      const setup = {
+        async command(name: string, value: unknown) {
+          setupOpening ??= openAgentSetup({
+            directory: join(stateDirectory, "setup"),
+            project,
+            application: composed,
+            changed: () =>
+              surface?.notify({
+                type: "owner",
+                projectId: project.id,
+                event: { kind: "changed" },
+              }),
+            created: () =>
+              schedules.register(
+                composed.foundation.store
+                  .snapshot()
+                  .agents.filter((agent) => !agent.archivedAt)
+                  .map((agent) => agent.id),
+              ),
+          }).catch((error) => {
+            setupOpening = undefined;
+            throw error;
+          });
+          return (await setupOpening).command(name, value);
+        },
+      };
       const unsubscribe = composed.ownerApi.subscribe((event) => {
         surface?.notify({ type: "owner", projectId: project.id, event });
         changed();
@@ -289,6 +319,7 @@ async function openProject(project: DesktopProject) {
         voice,
         voiceCommand: createVoiceOwnerCommands(voice, selectedVoice),
         imageCommand: createImageOwnerCommands(images),
+        setup,
         unsubscribe: () => {
           unsubscribe();
           unsubscribeVoice();
@@ -394,10 +425,31 @@ async function prepareQuit() {
 async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (quit.holding() || updates.holding())
     throw new Error("Crew is completing its execution reservation.");
+  if (command.startsWith("setup.")) return host.setup.command(command, args);
   if (command === "environments.snapshot")
     return host.application.environmentOwnerApi.snapshot();
   if (command === "environments.projectFolder")
     return { directory: host.project.directory };
+  if (command === "environments.prepareFolderAccess") {
+    const input = object(args);
+    if (
+      input.access !== "none" &&
+      input.access !== "read_only" &&
+      input.access !== "read_write"
+    )
+      throw new Error("Choose folder access.");
+    const result =
+      await host.application.environmentOwnerApi.prepareFolderAccess({
+        workspaceDirectory: text(input.workspaceDirectory),
+        access: input.access,
+      });
+    surface.notify({
+      type: "owner",
+      projectId: host.project.id,
+      event: { kind: "changed" },
+    });
+    return result;
+  }
   if (command === "environments.approveWorkspace") {
     const input = object(args);
     const result = await host.application.environmentOwnerApi.approveWorkspace(
@@ -612,7 +664,7 @@ async function start() {
         return { ok: true, value: await request(method, value) };
       } catch (error) {
         const detail =
-          error instanceof ProjectSkillError
+          error instanceof ProjectSkillError || error instanceof AgentSetupError
             ? { code: error.code, message: error.message }
             : {
                 code: "failed",

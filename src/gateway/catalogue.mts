@@ -89,6 +89,24 @@ export class GatewayCatalogue {
     this.entries.delete(connectionId);
     this.failures.delete(connectionId);
   }
+  /** Trusted owner verifier only: the same schemas were discovered with this
+   * exact connection before its reviewed save. Execution still rediscovers. */
+  rememberVerified(
+    connection: ServiceConnection,
+    capabilities: ServiceCapability[],
+  ): void {
+    this.validate(connection, capabilities);
+    if ((this.revisions.get(connection.id) ?? 0) > connection.revision) return;
+    if (this.revisions.size >= 256 && !this.revisions.has(connection.id))
+      return;
+    this.pending.delete(connection.id);
+    this.revisions.set(connection.id, connection.revision);
+    this.entries.set(connection.id, {
+      revision: connection.revision,
+      capabilities: structuredClone(capabilities),
+    });
+    this.failures.delete(connection.id);
+  }
   async hasOperation(
     connectionId: string,
     operation: string,

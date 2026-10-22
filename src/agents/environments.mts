@@ -21,6 +21,7 @@ import type {
   ExecutionAdmissionGate,
   JsonObject,
   JsonValue,
+  PermissionGroup,
 } from "./contracts.mjs";
 import type {
   WorkspaceCommandResult,
@@ -86,6 +87,19 @@ export interface WorkspaceApproval {
   executableDirectories: string[];
   /** Existing, private, owner-controlled root. No implicit directory setup. */
   managedWorktreeRoot?: string;
+}
+export type FolderAccess = "none" | "read_only" | "read_write";
+export interface FolderAccessPreparation {
+  workspaceDirectory: string;
+  access: FolderAccess;
+}
+export interface PreparedFolderAccess {
+  access: FolderAccess;
+  canonicalPath: string;
+  policy: EnvironmentPolicy | null;
+  /** Apply through the existing access group/preset authority. Preparing a
+   * folder never assigns an agent or removes another group's authority. */
+  requiredGrants: PermissionGroup["grants"];
 }
 export interface ProjectEnvironmentOptions {
   directory: string;
@@ -630,6 +644,86 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
       workspace.gitDirectory,
     ])
       if (entry) await this.verifyDirectory(entry);
+  }
+
+  /** Owner wizard preparation only. Stable per-folder/per-mode identities make
+   * retries idempotent without changing another agent's approved policy. */
+  async prepareFolderAccess(
+    actor: Actor,
+    input: FolderAccessPreparation,
+  ): Promise<PreparedFolderAccess> {
+    this.owner(actor);
+    input = structuredClone(input);
+    if (
+      !input ||
+      typeof input !== "object" ||
+      Object.keys(input).some(
+        (key) => !["workspaceDirectory", "access"].includes(key),
+      ) ||
+      !["none", "read_only", "read_write"].includes(input.access)
+    )
+      throw new Error(
+        "Choose no access, read-only or read-write folder access.",
+      );
+    const workspace = await this.identifyDirectory(input.workspaceDirectory);
+    const requiredGrants: PermissionGroup["grants"] = {
+      crew: [],
+      services: [],
+      environmentPolicyIds: [],
+    };
+    if (input.access === "none")
+      return {
+        access: input.access,
+        canonicalPath: workspace.path,
+        policy: null,
+        requiredGrants,
+      };
+    const policyId = `crew-folder-${digest({
+      projectId: this.options.projectId,
+      directory: workspace.path,
+      access: input.access,
+    })}`;
+    const previous = this.state.workspaces.find(
+      (row) => row.policy.id === policyId,
+    );
+    const writable = input.access === "read_write";
+    if (
+      previous &&
+      (canonicalJson(previous.workspace) !== canonicalJson(workspace) ||
+        previous.writable !== writable ||
+        previous.executableDirectories.length !== 0 ||
+        previous.managedWorktreeRoot !== null ||
+        previous.gitDirectory !== null)
+    )
+      throw new Error(
+        "The prepared folder policy changed. Review its current workspace settings before continuing.",
+      );
+    // approveWorkspace recognizes the exact committed approval as a retry.
+    // A concurrently changed revision fails instead of restoring old access.
+    const approved = await this.approveWorkspace(
+      actor,
+      {
+        policyId,
+        workspaceDirectory: workspace.path,
+        writable,
+        executableDirectories: [],
+      },
+      previous && previous.policy.revision > 1
+        ? previous.policy.revision - 1
+        : null,
+    );
+    requiredGrants.crew = [
+      { action: "environments.read", scope: { type: "self" } },
+      { action: "environments.attach", scope: { type: "self" } },
+      { action: "environments.execute", scope: { type: "self" } },
+    ];
+    requiredGrants.environmentPolicyIds = [approved.policy.id];
+    return {
+      access: input.access,
+      canonicalPath: workspace.path,
+      policy: approved.policy,
+      requiredGrants,
+    };
   }
 
   async approveWorkspace(
