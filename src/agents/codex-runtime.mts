@@ -63,8 +63,15 @@ export type CodexLaunchResolution =
       state: "ready";
       launch: CodexLaunch;
       skills: { id: string; revision: number; nativePath: string }[];
+      /** Trusted provider-owned named policy. Optional only for staged source
+       * compatibility; execution fails closed unless this binding is supplied. */
+      nativePermissions?: CodexNativePermissions;
     }
   | { state: "blocked"; error: RuntimeError };
+export interface CodexNativePermissions {
+  profileId: string;
+  approvalPolicy: "never";
+}
 /** Trusted #89 composition only, never supplied through an agent-facing request. */
 export type CodexLaunchResolver = (
   input: RuntimeStartInput,
@@ -112,6 +119,10 @@ type Session = {
   terminalTurns: Set<string>;
   settings: Record<string, unknown> | null;
   settingsSequence: number;
+  nativePermissions: CodexNativePermissions;
+  nativeCwd: string;
+  policyVerified: boolean;
+  policyError: RuntimeError | null;
   approvals: Map<string, Approval>;
   deliveries: Map<string, Send>;
   observers: Set<CodexEventStream<RuntimeEvent>>;
@@ -133,6 +144,48 @@ const key = (
 ) => JSON.stringify([binding.projectId, binding.agentId, binding.sessionId]);
 const same = (a: RuntimeBinding, b: RuntimeBinding) =>
   key(a) === key(b) && a.threadId === b.threadId;
+const exactRoot = (roots: unknown, cwd: string) =>
+  Array.isArray(roots) && roots.length === 1 && roots[0] === cwd;
+const nativeSettingsMatch = (session: Session, value: unknown) =>
+  object(value) &&
+  value.cwd === session.nativeCwd &&
+  value.approvalPolicy === session.nativePermissions.approvalPolicy &&
+  object(value.activePermissionProfile) &&
+  value.activePermissionProfile.id === session.nativePermissions.profileId;
+const nativeEnvironmentMatches = (session: Session, thread: unknown) => {
+  if (!object(thread) || thread.cwd !== session.nativeCwd) return false;
+  const environments = thread.environments;
+  if (!Array.isArray(environments) || environments.length !== 1) return false;
+  const environment = environments[0];
+  return (
+    object(environment) &&
+    environment.environmentId === "local" &&
+    environment.cwd === session.nativeCwd &&
+    exactRoot(environment.runtimeWorkspaceRoots, session.nativeCwd)
+  );
+};
+const escalationRequest = (method: string) =>
+  [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+  ].includes(method);
+const negativeDecision = (response: unknown) =>
+  object(response) &&
+  (response.decision === "decline" || response.decision === "cancel");
+function restrictedApproval(method: string, params: JsonObject): JsonObject {
+  const projected = projectCodexApproval(method, params);
+  if (!escalationRequest(method)) return projected;
+  return {
+    ...projected,
+    message:
+      "This native session cannot approve additional command or file access. Denial and cancellation remain available.",
+    choices: Array.isArray(projected.choices)
+      ? projected.choices.filter(
+          (choice) => object(choice) && negativeDecision(choice.response),
+        )
+      : [],
+  };
+}
 export const codexClientMessageId = (
   binding: RuntimeBinding,
   attemptId: string,
@@ -229,16 +282,20 @@ export class CodexAgentRuntime
     if (
       existing?.acknowledgement &&
       existing.peer.connected &&
-      !existing.stopping
+      !existing.stopping &&
+      existing.policyVerified &&
+      !existing.policyError
     )
       return { state: "acknowledged", value: existing.acknowledgement };
     if (existing)
       return {
         state: "uncertain",
-        error: failure(
-          "disconnected",
-          "A prior native start remains unresolved. Reconcile or stop that exact session before another start.",
-        ),
+        error:
+          existing.policyError ??
+          failure(
+            "disconnected",
+            "A prior native start remains unresolved. Reconcile or stop that exact session before another start.",
+          ),
         retainedThreadId: existing.binding?.threadId ?? null,
       };
     if (
@@ -299,7 +356,23 @@ export class CodexAgentRuntime
       const resolved = await this.options.resolveLaunch(structuredClone(input));
       if (resolved.state === "blocked")
         return { state: "failed", error: resolved.error, retainedThreadId };
-      const { launch, skills } = resolved;
+      const { launch, skills, nativePermissions } = resolved;
+      if (
+        !nativePermissions ||
+        typeof nativePermissions.profileId !== "string" ||
+        !nativePermissions.profileId.trim() ||
+        nativePermissions.profileId.length > 256 ||
+        /[\u0000-\u001f\u007f]/.test(nativePermissions.profileId) ||
+        nativePermissions.approvalPolicy !== "never"
+      )
+        return {
+          state: "failed",
+          error: failure(
+            "isolation_blocked",
+            "The trusted resolver must bind a named native permission profile with approval escalation disabled before launch.",
+          ),
+          retainedThreadId,
+        };
       if (
         !isAbsolute(launch.executable) ||
         !isAbsolute(launch.cwd) ||
@@ -353,6 +426,10 @@ export class CodexAgentRuntime
         terminalTurns: new Set(),
         settings: null,
         settingsSequence: 0,
+        nativePermissions: structuredClone(nativePermissions),
+        nativeCwd: launch.cwd,
+        policyVerified: false,
+        policyError: null,
         approvals: new Map(),
         deliveries: new Map(),
         observers: new Set(),
@@ -439,12 +516,17 @@ export class CodexAgentRuntime
                 cwd: launch.cwd,
                 ephemeral: false,
                 experimentalRawEvents: false,
-                environments: [],
+                runtimeWorkspaceRoots: [launch.cwd],
+                permissions: nativePermissions.profileId,
+                approvalPolicy: nativePermissions.approvalPolicy,
               }
             : {
                 threadId: input.thread.threadId,
                 cwd: launch.cwd,
                 excludeTurns: true,
+                runtimeWorkspaceRoots: [launch.cwd],
+                permissions: nativePermissions.profileId,
+                approvalPolicy: nativePermissions.approvalPolicy,
               },
         ),
       );
@@ -479,17 +561,21 @@ export class CodexAgentRuntime
         );
       }
       safeToClose = true;
-      // This protocol has no environments override on thread/resume. Verify the
-      // loaded selection instead of trusting an ignored request field. Unknown
-      // or previously selected native environments cannot enter the Crew route.
+      // Profile provenance is verified alongside the exact local workspace.
+      // Effective grants belong to the trusted provider's pinned profile;
+      // environment metadata alone is never an isolation attestation.
       if (
-        !Array.isArray(thread.environments) ||
-        thread.environments.length !== 0
+        !nativeSettingsMatch(current, opened) ||
+        !exactRoot(opened.runtimeWorkspaceRoots, launch.cwd) ||
+        !nativeEnvironmentMatches(current, thread) ||
+        (current.settings !== null &&
+          !nativeSettingsMatch(current, current.settings))
       )
         throw new CodexRpcError(
-          "The loaded native thread did not confirm disabled environment access.",
+          "The native thread did not confirm the bound permission profile and local workspace.",
           -32602,
         );
+      current.policyVerified = true;
       if (input.thread.mode === "create") {
         // Native naming materializes an unused persistent thread in the inspected
         // runtime. It creates no model input; the same ID survives an idle Stop.
@@ -504,7 +590,11 @@ export class CodexAgentRuntime
             }),
           ).thread,
         );
-        if (named.id !== threadId || named.name !== name)
+        if (
+          named.id !== threadId ||
+          named.name !== name ||
+          !nativeEnvironmentMatches(current, named)
+        )
           throw new CodexRpcError(
             "Native thread name was not acknowledged.",
             -32602,
@@ -556,6 +646,8 @@ export class CodexAgentRuntime
         const sequence = current.settingsSequence;
         await current.peer.rpc("thread/settings/update", {
           threadId,
+          permissions: nativePermissions.profileId,
+          approvalPolicy: nativePermissions.approvalPolicy,
           collaborationMode: {
             mode: mode.mode,
             settings: {
@@ -566,6 +658,7 @@ export class CodexAgentRuntime
           },
         });
         await this.wait(current, () => {
+          if (current.policyError) return true;
           if (
             current.settingsSequence <= sequence ||
             !object(current.settings?.collaborationMode)
@@ -574,6 +667,7 @@ export class CodexAgentRuntime
           const applied = current.settings.collaborationMode;
           return (
             object(applied.settings) &&
+            nativeSettingsMatch(current, current.settings) &&
             applied.mode === mode.mode &&
             applied.settings.model === modeSettings.model &&
             applied.settings.reasoning_effort ===
@@ -582,6 +676,11 @@ export class CodexAgentRuntime
           );
         });
       }
+      if (current.policyError || !current.policyVerified)
+        throw new CodexRpcError(
+          "Native permissions changed before startup acknowledgement.",
+          -32602,
+        );
       if (current.activeTurnId || current.stopping)
         throw new CodexRpcError(
           "Native work or unavailable observation prevented idle startup.",
@@ -612,6 +711,8 @@ export class CodexAgentRuntime
         profile: structuredClone(profile),
         usable: () =>
           Boolean(current.acknowledgement) &&
+          current.policyVerified &&
+          !current.policyError &&
           !current.stopping &&
           current.peer.connected,
         timeoutMs: this.options.acknowledgementTimeoutMs ?? 10_000,
@@ -674,7 +775,7 @@ export class CodexAgentRuntime
           error instanceof CodexRpcError && error.code !== null
             ? "failed"
             : "uncertain",
-        error: nativeError(error),
+        error: session?.policyError ?? nativeError(error),
         retainedThreadId,
       };
     }
@@ -689,6 +790,55 @@ export class CodexAgentRuntime
         false,
       );
     return session;
+  }
+  private policyFailure(session: Session): RuntimeError | null {
+    return (
+      session.policyError ??
+      (session.policyVerified
+        ? null
+        : failure("isolation_blocked", "Native permissions are unverified."))
+    );
+  }
+  private rejectPolicy(session: Session): RuntimeError {
+    if (!session.policyError) {
+      session.policyVerified = false;
+      session.policyError = failure(
+        "configuration_rejected",
+        "Native permission settings or workspace changed. Further input is blocked; retain this exact session and reconcile or stop it.",
+      );
+      if (session.binding)
+        this.emit(session, {
+          binding: session.binding,
+          observedAt: now(),
+          kind: "configuration",
+          state: "rejected",
+          error: session.policyError,
+        });
+      const voice = session.realtime?.status();
+      if (voice?.voiceSessionId && voice.state !== "closed")
+        void session.realtime!.disconnect(voice.voiceSessionId).catch(() => {});
+      this.changed(session);
+    }
+    return session.policyError;
+  }
+  private async verifyEnvironment(
+    session: Session,
+  ): Promise<RuntimeError | null> {
+    const blocked = this.policyFailure(session);
+    if (blocked) return blocked;
+    const state = record(
+      await session.peer.rpc("thread/read", {
+        threadId: session.binding!.threadId,
+        includeTurns: false,
+      }),
+    );
+    if (
+      !object(state.thread) ||
+      state.thread.id !== session.binding!.threadId ||
+      !nativeEnvironmentMatches(session, state.thread)
+    )
+      return this.rejectPolicy(session);
+    return this.policyFailure(session);
   }
   private emit(session: Session, event: RuntimeEvent) {
     if (!session.observed) {
@@ -806,7 +956,7 @@ export class CodexAgentRuntime
         kind: "native_approval",
         approvalId,
         turnId: params.turnId,
-        request: projectCodexApproval(method, params),
+        request: restrictedApproval(method, params),
       });
     } else if (method === "serverRequest/resolved") {
       for (const [approvalId, approval] of session.approvals)
@@ -826,12 +976,16 @@ export class CodexAgentRuntime
             },
           });
         }
-    } else if (
-      method === "thread/settings/updated" &&
-      object(params.threadSettings)
-    ) {
-      session.settings = params.threadSettings;
+    } else if (method === "thread/settings/updated") {
+      session.settings = object(params.threadSettings)
+        ? params.threadSettings
+        : null;
       session.settingsSequence++;
+      if (
+        session.policyVerified &&
+        !nativeSettingsMatch(session, params.threadSettings)
+      )
+        this.rejectPolicy(session);
     } else if (
       (method === "turn/started" || method === "turn/completed") &&
       object(params.turn) &&
@@ -1028,6 +1182,8 @@ export class CodexAgentRuntime
                 "The attempt ID was reused with different delivery content.",
               ),
             };
+      const policyError = this.policyFailure(session);
+      if (policyError) return { state: "not_sent", error: policyError };
       session.sending = true;
       ownsSending = true;
       const nativeInput: JsonValue[] = [];
@@ -1107,6 +1263,11 @@ export class CodexAgentRuntime
             "Native delivery target could not be confirmed.",
           ),
         };
+      if (!nativeEnvironmentMatches(session, thread))
+        return { state: "not_sent", error: this.rejectPolicy(session) };
+      const currentPolicyError = this.policyFailure(session);
+      if (currentPolicyError)
+        return { state: "not_sent", error: currentPolicyError };
       if (session.stopping)
         return {
           state: "not_sent",
@@ -1146,7 +1307,12 @@ export class CodexAgentRuntime
         },
       };
       if (input.expectedTurnId) params.expectedTurnId = input.expectedTurnId;
-      else params.environments = [];
+      else {
+        params.permissions = session.nativePermissions.profileId;
+        params.approvalPolicy = session.nativePermissions.approvalPolicy;
+        params.cwd = session.nativeCwd;
+        params.runtimeWorkspaceRoots = [session.nativeCwd];
+      }
       sent = true;
       const result = record(
         await session.peer.rpc(
@@ -1462,7 +1628,10 @@ export class CodexAgentRuntime
 
   async connectRealtime(binding: RuntimeBinding, input: CodexRealtimeConnect) {
     try {
-      const realtime = this.get(binding).realtime;
+      const session = this.get(binding);
+      const policyError = await this.verifyEnvironment(session);
+      if (policyError) return { state: "failed" as const, error: policyError };
+      const realtime = session.realtime;
       if (!realtime)
         return {
           state: "failed" as const,
@@ -1483,7 +1652,10 @@ export class CodexAgentRuntime
     audio: CodexRealtimeAudio,
   ) {
     try {
-      const realtime = this.get(binding).realtime;
+      const session = this.get(binding);
+      const policyError = this.policyFailure(session);
+      if (policyError) return { state: "failed" as const, error: policyError };
+      const realtime = session.realtime;
       if (!realtime)
         return {
           state: "failed" as const,
@@ -1566,6 +1738,14 @@ export class CodexAgentRuntime
             "Native response delivery is unresolved; it was not replayed.",
           ),
         };
+      if (escalationRequest(approval.method) && !negativeDecision(response))
+        return {
+          state: "failed",
+          error: failure(
+            "isolation_blocked",
+            "The bound native policy does not allow approval of additional command or file access. Denial and cancellation remain available.",
+          ),
+        };
       if (!validApprovalResponse(approval, response))
         return {
           state: "failed",
@@ -1600,6 +1780,14 @@ export class CodexAgentRuntime
         ? null
         : failure("disconnected", "Native process is disconnected."),
     });
+    if (session.policyError)
+      stream.push({
+        binding,
+        observedAt: now(),
+        kind: "configuration",
+        state: "rejected",
+        error: session.policyError,
+      });
     if (session.activeTurnId)
       stream.push({
         binding,
@@ -1616,7 +1804,7 @@ export class CodexAgentRuntime
           kind: "native_approval",
           approvalId,
           turnId: approval.turnId,
-          request: projectCodexApproval(approval.method, approval.params),
+          request: restrictedApproval(approval.method, approval.params),
         });
     return stream;
   }

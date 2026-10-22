@@ -1355,11 +1355,23 @@ export class AgentFoundation implements AgentLifecycle {
       });
     } else if (event.kind !== "history") {
       await this.store.update((state) => {
-        const session = state.agents.find(
+        const agent = state.agents.find(
           (entry) => entry.id === event.binding.agentId,
-        )!.runtime.session;
+        );
+        if (
+          !agent ||
+          agent.projectId !== event.binding.projectId ||
+          agent.runtime.session.sessionId !== event.binding.sessionId ||
+          agent.runtime.threadId !== event.binding.threadId ||
+          agent.runtime.session.observedState === "stopped"
+        )
+          return;
+        const session = agent.runtime.session;
         session.lastObservedAt = event.observedAt;
-        if (event.kind === "turn") {
+        if (event.kind === "configuration") {
+          session.observedState = "unknown";
+          session.lastError = event.error;
+        } else if (event.kind === "turn") {
           if (
             event.state === "started" &&
             !this.terminalTurns.has(
