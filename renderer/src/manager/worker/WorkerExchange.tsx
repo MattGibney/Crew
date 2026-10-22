@@ -1,3 +1,4 @@
+import { WebLink } from "../WebLink.js";
 import type { WorkerExchangeRecord } from "../../contracts/manager.js";
 import { ChevronDown, Terminal } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -11,19 +12,7 @@ export function Markdown({ children }: { children?: string | null }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          a: ({ href, children }) =>
-            /^https?:\/\//i.test(href || "") ? (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-primary underline underline-offset-4"
-              >
-                {children}
-              </a>
-            ) : (
-              <span>{children}</span>
-            ),
+          a: WebLink,
           img: ({ alt }) => <span>{alt || "Image"}</span>,
         }}
       >

@@ -1,3 +1,4 @@
+import { WebLink } from "./WebLink.js";
 import type { ReactNode } from "react";
 import type { MessageRecord, ManagerProfile } from "../contracts/manager.js";
 import { copyText } from "./clipboard.js";
@@ -72,43 +73,30 @@ export function Message({
         <div
           className={`break-words text-sm leading-7 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_h1]:my-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:my-3 [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:font-medium [&_code]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_table]:w-full [&_th]:border-b [&_th]:p-2 [&_th]:text-left [&_td]:border-b [&_td]:p-2 ${message.phase === "commentary" ? "text-muted-foreground" : ""}`}
         >
-          {user ? (
-            <p className="whitespace-pre-wrap">{message.text || ""}</p>
-          ) : (
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                a: ({ children, href }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-primary underline underline-offset-4"
-                  >
-                    {children}
-                  </a>
-                ),
-                pre: CodeBlock,
-                code: ({ children, className }) => (
-                  <code
-                    className={
-                      className || "rounded bg-muted px-1.5 py-0.5 font-mono"
-                    }
-                  >
-                    {children}
-                  </code>
-                ),
-                img: MessageImage,
-                table: ({ children }) => (
-                  <div className="overflow-auto">
-                    <table>{children}</table>
-                  </div>
-                ),
-              }}
-            >
-              {message.text || ""}
-            </ReactMarkdown>
-          )}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: WebLink,
+              pre: CodeBlock,
+              code: ({ children, className }) => (
+                <code
+                  className={
+                    className || "rounded bg-muted px-1.5 py-0.5 font-mono"
+                  }
+                >
+                  {children}
+                </code>
+              ),
+              img: MessageImage,
+              table: ({ children }) => (
+                <div className="overflow-auto">
+                  <table>{children}</table>
+                </div>
+              ),
+            }}
+          >
+            {message.text || ""}
+          </ReactMarkdown>
         </div>
         {copyable &&
           !user &&

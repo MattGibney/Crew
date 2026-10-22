@@ -1,3 +1,4 @@
+import { WebLink } from "../WebLink.js";
 import type { WorkerDetailState } from "../../contracts/manager.js";
 import { ArrowUpRight } from "lucide-react";
 
@@ -17,7 +18,7 @@ export function WorkerLinks({ detail }: { detail: WorkerDetailState }) {
             {link.kind || "Resource"}
           </p>
           {/^https?:\/\//i.test(link.url || "") ? (
-            <a
+            <WebLink
               href={link.url}
               target="_blank"
               rel="noopener noreferrer"
@@ -25,7 +26,7 @@ export function WorkerLinks({ detail }: { detail: WorkerDetailState }) {
             >
               {link.label || link.url}
               <ArrowUpRight className="size-4 shrink-0" />
-            </a>
+            </WebLink>
           ) : (
             <p className="break-all text-sm">
               {link.path || link.label || "Resource unavailable"}
