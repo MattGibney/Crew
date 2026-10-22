@@ -23,6 +23,10 @@ export interface OwnerRuntimeDefaults {
   modelAccessId: string;
   configRef: string;
 }
+export interface OwnerCatalogueSnapshot {
+  state: "available" | "undiscovered" | "failed";
+  capabilities: ServiceCapability[];
+}
 export interface AccessOwnerView {
   projectId: string;
   agents: Agent[];
@@ -50,7 +54,7 @@ export interface AccessOwnerView {
   }[];
   setupChoices: OwnerConnectionSetupChoice[];
   capabilities: ServiceCapability[];
-  catalogue: { connectionId: string; state: "available" | "unavailable" }[];
+  catalogue: { connectionId: string; state: OwnerCatalogueSnapshot["state"] }[];
   crewCapabilities: {
     action: CrewAction;
     label: string;

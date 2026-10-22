@@ -48,12 +48,28 @@ export function OwnerAccessSettings({
           command("removeConnection", { connectionId, expectedRevision })
         }
       />
-      {snapshot.catalogue.some((item) => item.state === "unavailable") && (
-        <p role="status" className="py-4 text-sm text-muted-foreground">
-          Some service operations could not be discovered. Check the connection
-          credential and configured adapter before granting its operations.
-        </p>
-      )}
+      {snapshot.catalogue
+        .filter((item) => item.state !== "available")
+        .map((item) => {
+          const connection = snapshot.connections.find(
+            (row) => row.id === item.connectionId,
+          );
+          return (
+            <p
+              key={item.connectionId}
+              role="status"
+              className="py-4 text-sm text-muted-foreground"
+            >
+              {connection?.name ?? "This connection"}:{" "}
+              {item.state === "undiscovered"
+                ? "service operations have not been discovered yet."
+                : "service operation discovery failed. Check the connection credential and configured adapter."}
+              {snapshot.canVerifyConnections
+                ? " Choose Verify connection to discover its current operations."
+                : " Connection verification is currently unavailable."}
+            </p>
+          );
+        })}
       <PermissionGroupsPanel
         {...common}
         groups={snapshot.groups}

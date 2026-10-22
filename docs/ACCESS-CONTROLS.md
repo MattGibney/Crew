@@ -174,3 +174,10 @@ These additions use fresh unified access state with explicit preset/default fiel
 
 
 The first-run sequence is host runtime configuration → owner connection/group setup → owner preset/profile/default → Foundation primary-agent creation. The access panel does not require that primary agent to exist first and does not designate the primary agent itself. Runtime references in an owner preset must match the trusted host defaults, an existing configured agent or the unchanged runtime of an existing preset; arbitrary renderer references are rejected.
+
+
+## Owner catalogue projection
+
+`AccessOwnerApiOptions.catalogueSnapshot(connection: ServiceConnection): { state: "available" | "undiscovered" | "failed"; capabilities: ServiceCapability[] }` is required and synchronous. The production host supplies `gateway.catalogue.projection(connection)`. It reads only the trusted local catalogue cache for that current connection; it must never call remote discovery or refresh. The former asynchronous `capabilities(connectionId)` owner option is removed. Opening or refreshing Settings therefore performs no provider discovery and does not wait on a provider network request.
+
+The owner snapshot preserves the three states in `catalogue`. `available` means a completed current catalogue, including a legitimately empty catalogue; `undiscovered` means it has not yet been discovered for this connection; `failed` means discovery failed. A thrown or malformed local projection is shown as failed, and non-available projections contribute no selectable capabilities. The UI identifies the affected connection and distinguishes not-yet-discovered operations from a failed check. Explicit Verify connection invokes the trusted gateway verification/atomic refresh flow. Discovery state is not access authority.
