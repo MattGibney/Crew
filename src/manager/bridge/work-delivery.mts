@@ -1,7 +1,9 @@
+import type { ApplicationOrigin } from "./origins.mjs";
 import type { Rpc } from "./protocol.mjs";
 
 export interface ReviewAdmission {
   background?: boolean;
+  origin?: ApplicationOrigin;
   canReview?: () => boolean;
   beforeReview?: () => Promise<boolean>;
 }
@@ -24,6 +26,7 @@ export function createWorkDelivery({
   publishPending,
   markStarted,
   completed,
+  provenance,
 }: {
   state: () => DeliveryState;
   ensureThread: () => Promise<string | undefined>;
@@ -31,6 +34,15 @@ export function createWorkDelivery({
   publishPending: (pending: boolean) => void;
   markStarted: (id: string) => void;
   completed: (id: string) => boolean;
+  provenance?: {
+    begin: (
+      requestId: string,
+      origin: ApplicationOrigin | undefined,
+      turnId: string | null,
+    ) => Promise<void>;
+    acknowledged: (turnId?: string) => Promise<void>;
+    failed?: () => Promise<void>;
+  };
 }) {
   let delivery: Promise<unknown> = Promise.resolve(),
     queued = 0,
@@ -44,6 +56,7 @@ export function createWorkDelivery({
     requestId: string,
     {
       background = false,
+      origin,
       canReview = () => true,
       beforeReview = async () => true,
     }: ReviewAdmission = {},
@@ -79,6 +92,8 @@ export function createWorkDelivery({
         if (background && !idle()) return { accepted: false };
         requireCurrent();
         const current = state();
+        await provenance?.begin(requestId, origin, current.activeTurnId);
+        requireCurrent();
         if (current.activeTurnId) {
           const expectedTurnId = current.activeTurnId;
           const directed = await rpc("turn/steer", {
@@ -91,6 +106,7 @@ export function createWorkDelivery({
             throw new Error(
               "Native steering acknowledged another turn; direction delivery is unverified.",
             );
+          await provenance?.acknowledged(directed.turnId);
           return directed;
         }
         const started = await rpc("turn/start", {
@@ -105,6 +121,7 @@ export function createWorkDelivery({
           input: [{ type: "text", text }],
         });
         const turn = started.turn;
+        await provenance?.acknowledged(turn?.id);
         if (
           turn?.status === "inProgress" &&
           !completed(turn.id) &&
@@ -122,6 +139,9 @@ export function createWorkDelivery({
             turnId: turn.id,
           });
         return started;
+      } catch (error) {
+        await provenance?.failed?.();
+        throw error;
       } finally {
         queued--;
         publishPending(queued > 0);

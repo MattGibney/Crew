@@ -43,3 +43,10 @@ A private `*.conversation.json` file beside the manager chat reference holds a b
 Native canonical timeline history, when supported, takes precedence by message identity and rollout position. Uncommitted observed partials survive as visibly partial overlays, anchored to surviving messages. Older app-servers use recent native turns and the observed journal together because their flat transcript events cannot supply stable native utterance identity. No text-equality deduplication is performed. Corrupt/unavailable overlay files are retained and reported; they never reset the manager chat reference. Conversation projection is never evidence that a worker stopped or that spoken audio was heard.
 
 Native writer-conflict recovery retains the immediate previous chat ID and the verified journal source ID in the saved reference. Only that lineage can supply speech to the fork. Successful hydration rebinds the journal; failed hydration, retry or process recreation leaves the source available. Promotion identity is retained with displayed native messages so replay cannot move a previously displayed reply past later speech.
+
+
+## Internal manager activity provenance (#63)
+
+A private `*.origins.json` beside the manager chat reference records exact application request, native turn and observed item identities. New scheduled-review/preparation inputs and routine assistant responses are excluded from public conversation state while native execution and private audit evidence remain intact. Native canonical history and bounded-overlay restoration use the same provenance; genuine typed/voice entries and explicit human steering keep their normal presentation. A validated background `request_attention` question has a stable visible identity separate from routine commentary.
+
+No old history cleanup or text-based classification occurs. Older entries without newly recorded application provenance remain unchanged. This metadata is not workflow status, worker liveness or evidence that an agent has safely paused. It contains no raw instruction text, credentials or audio and remains outside Git.
