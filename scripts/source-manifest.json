@@ -450,6 +450,7 @@
     "tickets/REL-0.15.0.md",
     "tickets/REL-0.16.0.md",
     "tickets/REL-0.16.1.md",
+    "tickets/REL-0.16.2.md",
     "tsconfig.json",
     "tsconfig.renderer.json",
     "vite.config.js"

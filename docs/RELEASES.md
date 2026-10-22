@@ -1,5 +1,9 @@
 # Delivery policy
 
+## Crew 0.16.2 release scope
+
+The second hosted gate stopped before signing/publication on a multi-project test fixture that accepted historical reports as resumed readiness. Require current-run process and progress evidence before checking the native launch log. Production code is unchanged; preserve both failed tags/runs and use 0.16.2 for the authorized TypeScript publication. See [REL-0.16.2](../tickets/REL-0.16.2.md).
+
 ## Crew 0.16.1 release scope
 
 Continues the authorized TypeScript delivery below. The v0.16.0 workflow stopped before signing/publication on a test snapshot race (660/661 passed). The execution-timing test now waits for native thread identity as well as correlated process liveness before comparing retained conversations. Production implementation is unchanged. Preserve the failed tag/run and use 0.16.1 for publication; see [REL-0.16.1](../tickets/REL-0.16.1.md).
