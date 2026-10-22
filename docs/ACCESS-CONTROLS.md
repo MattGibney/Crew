@@ -20,6 +20,13 @@ alone permits no operation. A current group capability or an explicit scoped own
 grant supplies authority. Editing a shared group affects later calls for every member.
 Skills, help replies and workflow statuses never confer permission.
 
+Crew action scope choices match the action's target. Creating agents, jobs and
+environments, listing jobs, and reading or writing project skills use the entire
+project. Their new grants default to project scope. Agent-targeted actions retain
+the self, selected-agent and project choices. An older unsupported saved scope
+stays visible and unchanged until the owner explicitly changes or removes it;
+saving an unrelated edit does not broaden it.
+
 Review the caller, acting service identity, operation, arguments and justification
 before approving. The default scope is the exact operation and arguments. Duration is
 chosen separately: once for this logical invocation, until this agent session stops,
@@ -145,6 +152,11 @@ OAuth authority or owner credential store.
 `withCredential(ref, callback)` supplies an opaque, non-serializable handle; `handle.use`
 delivers bytes only inside trusted executor code. Handles expire and validate the current
 stored revision. Binary/handle results are rejected and callback errors are sanitized.
+Current-record validation and callback invocation share the vault mutation lock,
+so a completed rotation or deletion cannot admit a stale borrowed revision.
+The lock is released before awaiting callback I/O; an already admitted callback
+may complete after a later rotation. The gateway rechecks both its connection
+snapshot and handle at final dispatch, after discovery and execution admission.
 Trusted code must still avoid copying or encoding secrets into results, logs, argv or env;
 these checks cannot sandbox arbitrary callback code. Buffer clearing is best effort because
 JavaScript/native encryption use immutable strings. Encryption at rest does not prevent
@@ -186,6 +198,13 @@ The owner commands are `saveGroup`, `saveAssignment`, `saveConnection`, `removeC
 OAuth credential paste is deliberately unsupported. A provider's actual supported authorization handshake must be implemented before exposing its reconnect action. `verifyConnection` is an optional trusted callback, and successful metadata save remains separate from observed provider verification.
 
 `OwnerAccessSettings` mounts the connection, group, assignment, creation preset, pending request and grant panels. Its parent supplies `{snapshot, isOwner, onCommand, onNotify}` through authenticated owner IPC and refreshes snapshot props on `access_changed`. Keep the component mounted across refresh. Editor drafts retain captured revisions and report conflicts without overwriting typed text or automatically applying a stale draft. Credentials are cleared on submit even when saving fails.
+
+An isolated actual-renderer walkthrough verified all six project-only Crew action
+defaults and scope choices through `saveGroup`, assignment and real authorization.
+Selected-agent reads remained restricted to the selected agent. A description-only
+save preserved an older unsupported selected-agent creation grant exactly and
+left its saved scope visible. This is bounded renderer/API acceptance, separate
+from the composed application's native walkthrough.
 
 Access owns persisted `presets`, `creationDefaults` and assignments. The owner can make an enabled preset the creation default or require explicit selection. A preset contains profile/skill/runtime references and group/connection IDs, never credential values. For first-run setup, the production host supplies `runtimeDefaults: {modelAccessId, configRef}` to `createAccessOwnerApi`; the snapshot exposes those validated non-secret references and the UI can save the first preset with no existing agents and no selected skills. If defaults are absent, first-preset creation stays unavailable with an explicit model-setup message. Existing configured agents remain optional profile/runtime/skill templates, and the owner chooses permissions independently. Current references are checked again when applying the preset. Disabling a preset prevents later creation; editing it does not rewrite existing agents.
 
