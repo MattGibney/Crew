@@ -77,6 +77,12 @@ function AgentAccessContent(props: AgentAccessPanelProps) {
             setDraft(null);
         }}
       >
+        {draft && draft.expectedRevision !== props.assignmentRevision && (
+          <p role="alert" className="text-sm text-destructive">
+            Saved assignments changed while you were editing. Your draft is
+            retained. Cancel and reopen Update to use the current revision.
+          </p>
+        )}
         <fieldset disabled={!draft || action.busy} className="space-y-4">
           <legend className="mb-2 text-sm font-medium">
             Permission groups

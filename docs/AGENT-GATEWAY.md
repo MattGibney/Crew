@@ -23,23 +23,30 @@ of an effect. Failed provider operations are terminal, including failures after 
 Import from `src/gateway/index.mts` (emitted as `runtime/gateway/index.mjs`):
 
 ```typescript
-const { broker, executor, store } = await createGateway({
+const registry = createSupportedGatewayRegistry();
+const { broker, executor, store, catalogue } = await createGateway({
   privateDirectory, // New owner-only Crew data directory, inaccessible to agents
   authorization,
-  vault, // #89 AuthorizationService and CredentialVault
+  vault, // Actual #89 vault: metadataForReference + withReplacement + CredentialVault
+  admission, // GatewayExecutionAdmission; required shared host admission lease
   connections: {
     get: readConnection, // #89 authoritative trusted ServiceConnection lookup
     listAssigned: assignedConnectionsForCaller,
   },
-  resolveConfiguration, // Trusted host registry; not a runtime tool
+  resolveConfiguration: registry.resolve, // Trusted host registry; not a runtime tool
   validateCaller, // #88 live session, project/job ownership and lifecycle admission
 });
-const server = createGatewayMcpServer({
+const journal = new GatewayRequestJournal(privateRequestDirectory);
+await journal.initialize();
+const transportBinding = await attachGatewayMcpTransport({
   broker,
+  transport: authenticatedTransport, // #88 owns authentication/listener/session lifetime
+  journal,
   authenticatedCaller, // Revalidate the authenticated session on each request
-  invocationIdForRequest, // Durable host/native request identity across delivery retries
+  nativeRequest, // (requestId) => { epoch, requestId: durableNativeRequestKey }
 });
-await server.connect(authenticatedTransport);
+// Logical Stop closes the binding and expires its caller session.
+await transportBinding.close();
 ```
 
 `broker` implements `OperationBroker`; `executor` implements `ServiceExecutor`. Direct executor
@@ -48,27 +55,44 @@ access, configuration resolution and credential callbacks are trusted host-only 
 isolation and runtime configuration. Never expose its constructor parameters as model JSON or
 expose an unauthenticated HTTP/stdio endpoint. Only the gateway endpoint enters the agent config.
 
-The host must persist the native/tool request-to-invocation mapping before admitting a request and
-reuse it after reconnect. MCP `_meta["crew/invocationId"]` can explicitly select a retained ID;
-it cannot change its caller/session/job/connection/operation/normalized arguments. A new operation
-needs a new identity. Responses include invocation/receipt/approval references in `_meta`.
+`GatewayRequestJournal` commits the authenticated caller/native-request mapping and argument
+fingerprint before the broker admits a request. The host must supply the same native key on delivery
+retry, and a new epoch when a new MCP client resets its JSON-RPC ID counter. A bare request number
+without that namespace cannot establish durable identity. Conflicting arguments under the same key
+are rejected. Tool JSON cannot select a new invocation ID through `_meta`; the explicit resume,
+reconcile and cancel controls select retained operations that the broker verifies belong to this
+caller. Responses include invocation/receipt/approval references in `_meta`.
 Ordinary proxied calls have `jobId: null`; trusted hosts can call `broker.invoke` with a validated job.
 
 #89 remains the sole authority for groups, connection assignment, approvals, revocation and vault
 storage. `validateCaller` is an additional live-session check, not a substitute for authorization.
-The final #88 execution reservation must share #89's atomic `redeem` admission barrier; an async
-boolean check alone cannot make a global Quit/update reservation atomic. Integrate
+`GatewayExecutionAdmission.run(invocation, permit, dispatch)` is mandatory. The host acquires its
+shared short admission lock, checks the current caller and closing/final reservation state, redeems
+the permit and registers an in-flight lease. It releases that lock before awaiting `dispatch` and
+retains the lease until the result settles. Final reservation consults the same gate and leases;
+preparation/status/messaging stay responsive during remote I/O. `run` returns either
+`{ state: "denied" }` or `{ state: "admitted", result }`. The executor never substitutes a preliminary
+`validateCaller` boolean for this boundary, and does not redeem the permit twice. Integrate
 `broker.settlement(projectId)` before stopping/replacing the host. Pending approval, in-flight,
 uncertain and unflushed authorization-settlement records remain distinguishable.
+
+`GatewayCatalogue` is an observed schema projection. `refresh(connection)` performs discovery
+outside access transactions; `hasOperation` only consults that projection and cannot re-enter the
+access store. Executor listing updates the projection. Owner setup refreshes before presenting or
+saving capabilities, and invalidates it after connection changes. Calls still rediscover and validate
+the actual operation schema immediately before admission. Catalogue presence never grants execution.
 
 ## Connection setup
 
 1. The owner creates a connection and enters credentials through #89's private setup path.
    Connection records contain references only. Do not reuse personal Codex connector sessions,
    read auth files, or put service secrets into runtime environment/configuration.
-2. Register immutable trusted executor configuration, then store its reference in that connection.
-   Changing endpoints, client identity or executable mappings requires a new configuration reference
-   and a connection revision. The registry must be inaccessible to agent filesystem/tool access.
+2. Select a registered adapter from `registry.setupChoices()` and validate the saved connection with
+   `registry.assertConnection`. `createSupportedGatewayRegistry()` currently supplies Linear read-only
+   and standard Streamable HTTP, using owner-entered token authentication. Custom CLI registrations
+   belong to trusted host code via `TrustedGatewayRegistry`; no runtime/owner JSON endpoint accepts
+   arbitrary commands, config paths or endpoints. Changing endpoint, service or acting identity uses
+   a new connection ID so previous grants cannot silently retarget.
 3. Assign the connection and appropriate group capability, or let the owner review exact access
    requests. Capability names come from `broker.listCapabilities`; never hand-invent permissions.
 4. Connect the authenticated runtime transport and preserve request identity. A session refresh may
@@ -93,7 +117,9 @@ or `client_secret_post`). These values must come from verified issuer/client met
 owner-created grant, not an assumed Linear account or a model argument.
 
 The gateway refreshes before dispatch, serializes refresh per connection, checks the exact connection
-snapshot, and commits replacements using vault revision CAS. A durable pending marker prevents
+snapshot, and commits replacements using the vault revision from `metadataForReference`. The vault
+creates the scoped handle through `withReplacement`; a fabricated handle is not accepted. Connection
+revision and vault revision are independent and never substituted for each other. A durable pending marker prevents
 replaying an uncertain token rotation; reauthentication/revision replacement is then required.
 [Linear's OAuth documentation](https://linear.app/developers/oauth-2-0-authentication) documents
 rotating refresh tokens and client authentication requirements. No interactive browser sign-in,
@@ -167,3 +193,23 @@ credentials. No broad test coverage/full regression suite, physical microphone, 
 native Codex conversation, live Linear/Lunar mutation or personal service credential was used.
 Parent #86 must finish the integrated #88/#89 approval and same-native-thread result flow, once/session/
 persistent policy acceptance, actual isolation evidence, native/package lifecycle and real provider setup.
+
+## Usability integration evidence — 22 October 2026
+
+A focused disposable walkthrough now uses the actual `AccessStore`,
+`ProjectAuthorizationService` and `EncryptedCredentialVault` with a disposable AES encryption backend.
+An MCP SDK client connects through the gateway transport to an authenticated loopback HTTP MCP
+upstream. It verifies discovery, exact once approval/resume, session and persistent exact grants,
+revocation before later calls, retained duplicate suppression, changed-argument rejection and Stop.
+The controlled CLI verifies the pinned binary, literal argv, explicit environment, token injection
+inside the trusted executor, redacted output and final admission denial. The request journal is reopened
+and proves stable identity plus conflicting replay rejection. Final settlement has no in-flight or
+uncertain invocations. macOS adds `__CF_USER_TEXT_ENCODING` in the controlled Node child; no ambient
+service environment is inherited.
+
+A separate bounded synthetic OAuth response check uses the real vault and two concurrent refresh
+requests: one refresh occurs; vault revision advances from 1 to 2 while connection revision remains 7;
+replacement uses the vault-created scoped handle. This closes the earlier synthetic-vault integration
+gap. The disposable provider and encryption backend do not establish OS safeStorage, native Codex
+isolation, live Linear authentication, Lunar compatibility or packaged lifecycle acceptance. Those
+remain separately owned native/provider checks. No personal tokens or live account were accessed.

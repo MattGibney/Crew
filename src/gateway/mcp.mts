@@ -5,7 +5,11 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { BrokerResult, CallerContext, JsonObject } from "../agents/contracts.mjs";
+import type {
+  BrokerResult,
+  CallerContext,
+  JsonObject,
+} from "../agents/contracts.mjs";
 import type { DurableOperationBroker } from "./broker.mjs";
 import { jsonObject, normalizeArguments } from "./json.mjs";
 
@@ -88,7 +92,10 @@ export function createGatewayMcpServer(options: {
   authenticatedCaller(): Promise<CallerContext | null>;
   /** Durable host/native request identity, stable across delivery retry/reconnect.
    * Never reuse it for a different operation in the same authenticated session. */
-  invocationIdForRequest(requestId: string | number, request: JsonObject): Promise<string>;
+  invocationIdForRequest(
+    requestId: string | number,
+    request: JsonObject,
+  ): Promise<string>;
 }): Server {
   const server = new Server(
     { name: "crew-service-gateway", version: "1.0.0" },
