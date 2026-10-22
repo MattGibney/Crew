@@ -2,8 +2,9 @@
 
 Implementation for [#89](https://github.com/MattGibney/Crew/issues/89), against the
 [canonical contracts](AGENT-CONTRACTS.md). Integration targets
-`codex/unified-agent-platform`. These are contributed modules and panels; #88/#86
-must compose them into the new application. The existing app is not switched over.
+`codex/unified-agent-platform`. The provider and matching #88 runtime adapter are
+integrated into the isolated application candidate; #95 owns its composed walkthrough.
+The existing installed app has not been replaced.
 
 ## Owner behavior
 
@@ -32,9 +33,11 @@ the same capability. Removing a connection removes all assignments, cancels pend
 requests and revokes active grants; its ID cannot be reused. It does not claim to revoke
 credentials at the provider. Credential deletion is a separate owner vault operation.
 
-Native agent Start is currently blocked because subscription authentication combined
-with the required service isolation has not been verified. See
-[the concrete isolation evidence and remaining decision](ACCESS-ISOLATION.md).
+Native access is implemented and available for isolated candidate validation. Owner
+browser sign-in was confirmed by native account readback. Preparation still requires
+that signed-in state, an exact authenticated Crew tool binding and verified native
+model-tool permissions; missing or changed evidence blocks Start. This is not full
+combined-app or voice acceptance. See [current evidence and limits](ACCESS-ISOLATION.md).
 
 ## Integration entry points
 
@@ -47,7 +50,7 @@ Import runtime implementations from `src/access/index.mts` (emitted as `.mjs`):
 | `ProjectAuthorizationService(store, identities, catalogue)` | Canonical `AuthorizationService`, protected settings and connection metadata                 |
 | `EncryptedCredentialVault(options)`                         | Canonical `CredentialVault`, owner entry/deletion and trusted refresh storage                |
 | `createElectronCredentialEncryption(safeStorage)`           | OS-backed Electron encryption adapter, injected after app readiness                          |
-| `CodexRuntimeAccessProvider`                                | Canonical `RuntimeAccessProvider`; concrete blocked result until verified containment exists |
+| `CodexRuntimeAccessProvider`                                | Verified native model-tool profile and authenticated Crew binding; fails closed on missing or changed evidence |
 
 `AccessIdentitySource.getAgent/getJob` reads #88's authoritative records. The access
 store owns membership/connection assignments; project them into `Agent.access` views.
@@ -63,7 +66,10 @@ The trusted composition binds caller and owner actors from authenticated transpo
 Never expose the store, owner administration, vault, permit or settlement methods as
 generic model-callable tools. A renderer `isOwner` flag is presentation only. Owner
 administration rejects agents even if a group contains an administrative action bit.
-Native Codex approvals remain independent and are never answered by access grants.
+Access grants never answer pending native requests. Only the two authenticated Crew
+MCP servers skip redundant native tool confirmation; fresh foundation/group/broker
+checks still decide dispatch. Native model-tool escalation remains disabled, and genuine
+form/URL elicitations require their own supported response flow.
 
 Owner methods: `snapshot`, `saveGroup`, `setAssignments`, `saveConnection`,
 `removeConnection`, `saveEnvironmentPolicy`, and the canonical `decide`/`revoke`.
@@ -146,12 +152,26 @@ another process with the same OS authority from using the keychain or reading me
 
 ## Validation boundary
 
-Type-check/build and brief disposable policy/vault/panel flows are the agreed checks.
-No broad new test suite, full regression suite, real service mutation, physical microphone,
-installed-app replacement, credential setup or personal sign-in is part of this track.
-Combined agent request → owner approval → real broker → same native thread, native OS vault
-acceptance and enforceable isolation remain #86 integration/feasibility work. The native
-runtime provider intentionally prevents claiming that combined flow is ready.
+Typecheck/build and focused disposable checks passed, including actual installed-native
+configuration, command filesystem/network/environment enforcement, authenticated MCP
+discovery, selected skills and idle same-chat resume across a fresh process. Changed
+configuration/path evidence and session revocation during skill resolution fail closed.
+These command/configuration checks do not establish every model-tool or realtime path.
+
+Actual Electron safeStorage plus the real vault passed synthetic credential
+store/read/rotate, second-process reopen, stale-reference rejection and deletion. This
+establishes OS storage integration, not installed-app identity or process isolation.
+The owner completed Crew browser sign-in, confirmed through native account readback;
+no personal authentication was copied. #88 separately recorded a subscription model
+call reaching an allowed synthetic MCP operation and a broker-denied forbidden operation.
+
+Combined provider/adapter typecheck and build passed. #95 is validating the isolated
+typed manager/worker candidate; composed lifecycle/profile/chat continuity, agent request
+→ owner approval → broker execution, agent-mediated project work and final native voice
+handoff acceptance remain integration work. Actual configured external-service setup
+and operation are not established by synthetic credentials or MCP fixtures. Packaged
+lifecycle acceptance is tracked separately. See [the detailed evidence](ACCESS-ISOLATION.md)
+for the trusted-host/model-tool boundary and remaining limits.
 
 
 ## Unified owner settings and provisioning (#89)
