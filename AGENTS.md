@@ -481,3 +481,6 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - A new voice call must not adopt delayed transcript items from the prior call. Until native started establishes a nonnull realtime session ID, fail closed; require exact item/session identity and accept deltas only for items admitted under that call. Renderer call IDs alone cannot establish native provenance because host publication stamps the current call.
 
 - Realtime flat events can arrive before typed transcript items. Exact-session typed items must supersede the flat fallback; suppress later flat duplicates, while preserving native identity checks and the desktop bridge's typed-only display.
+
+- The owner authorized integrating the completed unified-agent PRs into `codex/unified-agent-platform` as a work-in-progress testing baseline. Preserve the remaining acceptance checklist; feature-branch integration does not authorize main merge, installation or release.
+- Packaged generated-audio acceptance must prove speech reached the call. A connected UI with fake-device flags is insufficient when Chromium rejects the audio fixture. Keep the sandbox enabled and distinguish incomplete fixture input from an established transcript defect.

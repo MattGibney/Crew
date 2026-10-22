@@ -70,6 +70,20 @@ independent project resources are not deleted by Stop or Quit.
 
 ## Validation boundary
 
+Later integrated desktop acceptance supersedes the pending help and profile checks
+in the historical table below: a fresh help response used only the received message
+identity and was acknowledged by the worker; explicit Restart applied changed
+instructions in the retained chat, and an unchanged Restart generated no new turn.
+See [the desktop acceptance record](UNIFIED-DESKTOP.md#acceptance-record-22-october-2026-checkpoint).
+The final combined source checkpoint `83f0abb` built an unsigned candidate with all
+533 packaged runtime/resource files matching the built source. The final transcript
+ordering change has focused synthetic coverage; this candidate was not launched
+after that change before the owner requested wrap-up.
+
+The remaining review and implementation work is tracked in
+[the completion checklist](UNIFIED-AGENT-COMPLETION.md). Feature-branch integration
+is a testing baseline, not full acceptance or release authorization.
+
 The 22 October 2026 packaged acceptance below used runtime code `5273d9d`.
 The later combined source includes scope fix `7e4bb63`, credential fix `dd77143`,
 help identity fix `7bd058d`, and the explicit Restart/compaction implementation
@@ -127,8 +141,9 @@ per-compaction cost remain distinct evidence.
 [The native context-refresh evidence](AGENT-NATIVE-RUNTIME.md#compaction-completion-history-and-cost-evidence)
 records the diagnostic and Foundation/adapter acceptance boundaries.
 
-Full acceptance is not asserted. The later help fix, compaction desktop flow, voice
-display and failure corrections need their recorded current-source app checks.
+Full acceptance is not asserted. The later help and compaction desktop flows have
+the separate evidence linked above. Actual packaged live transcript acceptance,
+final-candidate affected native checks and documented voice provenance limits remain.
 Real third-party configuration/authentication/operation needs its own owner-approved
 service evidence; no such success is inferred from the local broker fixtures.
 
