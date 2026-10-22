@@ -71,7 +71,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   async function start() {
     diagnostics = '';
-    child = spawn(process.execPath, [join(root, 'server.mjs')], { cwd: root, env: { ...process.env, AI_MANAGER_CONFIG: configPath, AI_MANAGER_PORT: String(port), AI_MANAGER_CODEX_BINARY: executable, CODEX_BINARY: executable, ...(nativeAttention ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }, stdio: ['ignore', 'pipe', 'pipe', ...(nativeAttention ? ['ipc'] : [])] });
+    child = spawn(process.execPath, [join(root, 'server.mjs')], { cwd: root, env: { ...process.env, CREW_GLOBAL_CAPACITY_DIR: '', AI_MANAGER_CONFIG: configPath, AI_MANAGER_PORT: String(port), AI_MANAGER_CODEX_BINARY: executable, CODEX_BINARY: executable, ...(nativeAttention ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }, stdio: ['ignore', 'pipe', 'pipe', ...(nativeAttention ? ['ipc'] : [])] });
     child.stdout.on('data', data => { diagnostics += data; }); child.stderr.on('data', data => { diagnostics += data; });
     if (nativeAttention) child.on('message', message => nativeEvents.push(message));
     const deadline = Date.now() + 12000;

@@ -1,3 +1,8 @@
+import { useState } from "react";
+import {
+  trackingPreferences,
+  type TrackerProvider,
+} from "../../../src/shared/tracking.mjs";
 import type { SetupProps, Repository } from "../contracts/setup.js";
 import { readDraftPath } from "./draft.js";
 import { FolderOpen, RefreshCw, Save, Square } from "lucide-react";
@@ -9,6 +14,7 @@ import {
   Hint,
   Select,
   SetupButton,
+  SetupCheckbox,
   Status,
 } from "./components.js";
 import { environmentChoices } from "./model.js";
@@ -82,6 +88,172 @@ function Repository({
   );
 }
 
+function TrackingSettings({ setup }: SetupProps) {
+  const tracking = trackingPreferences(setup.draft!.project);
+  const [repositoryQuery, setRepositoryQuery] = useState("");
+  const github = setup.snapshot?.githubOptions;
+  const update = (next: typeof tracking) =>
+    setup.save(
+      "Save tracking preferences",
+      setup.edit("project.tracking", next),
+    );
+  const toggle = (provider: TrackerProvider, enabled: boolean) => {
+    const providers = enabled
+      ? [...new Set([...tracking.providers, provider])]
+      : tracking.providers.filter((item) => item !== provider);
+    update({
+      ...tracking,
+      providers,
+      preferred: providers.includes(tracking.preferred as TrackerProvider)
+        ? tracking.preferred
+        : providers[0] || "none",
+    });
+  };
+  return (
+    <section className="space-y-4" aria-label="External tracking">
+      <div>
+        <h3 className="font-semibold">External tracking (optional)</h3>
+        <Hint>
+          Use Crew with no external tracker, Linear, GitHub or both. Change
+          these preferences later. Existing workers keep their issue identity.
+          Configuration does not start work or verify access.
+        </Hint>
+      </div>
+      <Actions>
+        <SetupButton
+          onClick={() =>
+            update({ ...tracking, providers: [], preferred: "none" })
+          }
+        >
+          No external tracker
+        </SetupButton>
+      </Actions>
+      <div className="flex gap-6">
+        {(["linear", "github"] as const).map((provider) => (
+          <Label key={provider}>
+            <SetupCheckbox
+              checked={tracking.providers.includes(provider)}
+              onChange={(event) => toggle(provider, event.target.checked)}
+            />
+            {provider === "linear" ? "Linear" : "GitHub"}
+          </Label>
+        ))}
+      </div>
+      <Label htmlFor="preferred-tracker">Preferred tracker for new work</Label>
+      <Select
+        id="preferred-tracker"
+        value={tracking.preferred}
+        onChange={(event) =>
+          update({
+            ...tracking,
+            preferred: event.target.value as typeof tracking.preferred,
+          })
+        }
+      >
+        <option value="none">No external tracker</option>
+        {tracking.providers.map((provider) => (
+          <option key={provider} value={provider}>
+            {provider === "linear" ? "Linear" : "GitHub"}
+          </option>
+        ))}
+      </Select>
+      {!tracking.providers.length && (
+        <Hint>
+          Local tasks use their own identity and agreed brief. No external issue
+          or account is required.
+        </Hint>
+      )}
+      {tracking.providers.includes("linear") && (
+        <LinearSettings setup={setup} />
+      )}
+      {tracking.providers.includes("github") && (
+        <section className="space-y-3" aria-label="GitHub tracking">
+          <h4 className="font-medium">GitHub Issues</h4>
+          <Status
+            name="GitHub discovery"
+            value={
+              github || {
+                status: tracking.githubRepository
+                  ? "configured"
+                  : "not-configured",
+                detail:
+                  "Choose a repository through your connected GitHub tools. Saved mapping is not verified access.",
+              }
+            }
+          />
+          <Label htmlFor="github-repository">Repository (owner/name)</Label>
+          <Select
+            id="github-repository"
+            value={tracking.githubRepository || ""}
+            onChange={(event) =>
+              update({
+                ...tracking,
+                githubRepository: event.target.value || null,
+              })
+            }
+          >
+            <option value="">Choose a repository</option>
+            {github?.repositories.map((repo) => (
+              <option key={repo.fullName} value={repo.fullName}>
+                {repo.fullName}
+              </option>
+            ))}
+            {tracking.githubRepository &&
+              !github?.repositories.some(
+                (repo) => repo.fullName === tracking.githubRepository,
+              ) && (
+                <option value={tracking.githubRepository}>
+                  {tracking.githubRepository} (saved, access unverified)
+                </option>
+              )}
+          </Select>
+          <Field
+            id="github-repository-query"
+            label="Find a specific repository"
+            placeholder="owner/repository"
+            value={repositoryQuery}
+            onChange={setRepositoryQuery}
+          />
+          <SetupButton
+            disabled={!repositoryQuery.trim()}
+            onClick={() => setup.verifyGitHub(repositoryQuery.trim())}
+          >
+            Verify repository
+          </SetupButton>
+          <Actions>
+            <SetupButton
+              onClick={() =>
+                setup.check("githubOptions", "Find GitHub repositories")
+              }
+            >
+              <RefreshCw />
+              {github ? "Retry GitHub discovery" : "Find GitHub repositories"}
+            </SetupButton>
+            <SetupButton
+              variant="ghost"
+              onClick={() => toggle("github", false)}
+            >
+              Disable GitHub
+            </SetupButton>
+          </Actions>
+          {github?.truncated && (
+            <Hint>
+              This is a bounded list. Ask the manager to find and verify missing
+              repositories through connected tools.
+            </Hint>
+          )}
+          <Hint>
+            Ask the manager to read an explicitly selected issue, its comments
+            and links, or inspect linked pull request changes, reviews and
+            checks. Available tools and actual access determine what can be
+            read. Nothing is picked up or published automatically.
+          </Hint>
+        </section>
+      )}
+    </section>
+  );
+}
+
 function LinearSettings({ setup }: SetupProps) {
   const catalog = setup.snapshot?.linearOptions;
   const linear = setup.draft!.project.linear;
@@ -104,8 +276,11 @@ function LinearSettings({ setup }: SetupProps) {
         role="status"
         className="text-sm text-muted-foreground"
       >
-        {catalog?.detail ||
-          "Find your teams through your connected Linear account. You can also connect later."}
+        {(!linear.teamId
+          ? "Not configured. "
+          : "Configured mapping; access requires a current read. ") +
+          (catalog?.detail ||
+            "Find your teams through your connected Linear account. Retry discovery, switch tracker or disable Linear above.")}
       </p>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
@@ -420,7 +595,7 @@ export default function ProjectSettings({ setup }: SetupProps) {
                 </SetupButton>
               </section>
               <Separator />
-              <LinearSettings setup={setup} />
+              <TrackingSettings setup={setup} />
             </div>
           )}
           <details
@@ -476,8 +651,8 @@ export default function ProjectSettings({ setup }: SetupProps) {
             </SetupButton>
           </Actions>
           <Hint>
-            Branch and Linear choices save when selected. No work starts during
-            setup.
+            Branch and tracking choices save when selected. No work starts
+            during setup.
           </Hint>
           <div id="project-result">
             <Status name="Project" value={snapshot?.checks?.project} />

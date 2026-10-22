@@ -125,6 +125,7 @@ export interface WorkerTask {
   runId?: string | null;
   status: string;
   ticket?: string;
+  workLink?: import("../../../src/shared/tracking.mjs").WorkLink | null;
   title?: string;
   brief?: string;
   projectId?: string;
@@ -360,6 +361,7 @@ export interface StorageLike {
 export interface WorkerAssignment {
   id: string;
   ticket?: string;
+  workLink?: import("../../../src/shared/tracking.mjs").WorkLink | null;
   brief?: string;
   status?: string;
   result?: { message?: string };

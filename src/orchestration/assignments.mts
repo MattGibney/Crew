@@ -1,3 +1,4 @@
+import { validateWorkLink } from "../shared/tracking.mjs";
 import type { TaskRecord, WorkerAssignment } from "../workers/contracts.mjs";
 import { ID, text, identifier } from "./task-fields.mjs";
 const now = () => new Date().toISOString();
@@ -21,6 +22,7 @@ export function currentAssignment(task: TaskRecord): WorkerAssignment {
     task.assignments?.find((item) => item.id === task.currentAssignmentId) || {
       id: "initial",
       ticket: task.ticket,
+      ...(task.workLink !== undefined ? { workLink: task.workLink } : {}),
       brief: task.brief,
       userDecision: null,
       status: assignmentStatus(task.status),
@@ -123,7 +125,9 @@ export function validateAssignments(task: TaskRecord) {
       throw new Error("Malformed assignment adoption history");
     for (const adoption of item.adoptions || [])
       text(adoption.userDecision, "assignment adoption decision", 4000);
-    text(item.ticket, "assignment ticket", 120);
+    if (item.ticket !== "") text(item.ticket, "assignment ticket", 500);
+    validateWorkLink(item.workLink);
+    validateWorkLink(item.requestWorkLink);
     text(item.brief, "assignment brief");
     if (item.id !== "initial") {
       identifier(item.id, "assignment ID");
@@ -148,6 +152,8 @@ export function preserveAssignments(next: TaskRecord, previous: TaskRecord) {
         [
           "id",
           "ticket",
+          "workLink",
+          "requestWorkLink",
           "brief",
           "userDecision",
           "createdAt",

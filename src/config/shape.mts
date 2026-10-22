@@ -1,3 +1,4 @@
+import { trackingSchema } from "../shared/tracking.mjs";
 import { Ajv } from "ajv";
 import type { RawConfig, LoadedProject } from "./contracts.mjs";
 // This schema proves structural types only. Semantic bounds, unknown-key policy,
@@ -95,6 +96,7 @@ const schema = {
             },
           },
         },
+        tracking: trackingSchema,
         linear: {
           type: "object",
           required: ["teamId", "projectId", "teamKey"],
@@ -161,6 +163,7 @@ export interface RuntimeProjectScope {
     maxConcurrent?: number;
     environment?: Record<string, unknown>;
   };
+  tracking?: import("../shared/tracking.mjs").TrackingPreferences;
   linear?: {
     teamKey?: string | null;
     teamId?: string | null;
@@ -200,6 +203,7 @@ const runtimeProjectSchema = {
         environment: { type: "object" },
       },
     },
+    tracking: trackingSchema,
     linear: { ...schema.properties.project.properties.linear, required: [] },
     prompts: schema.properties.project.properties.prompts,
     readiness: {

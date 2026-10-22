@@ -1,3 +1,4 @@
+import { workLinkSchema } from "../shared/tracking.mjs";
 import type { ToolDefinition, ToolSchema } from "./mcp-contracts.mjs";
 export function orchestrationTools(
   role: string,
@@ -114,7 +115,15 @@ export function orchestrationTools(
             inputSchema: object(
               {
                 requestId: taskIdentifier,
-                ticket: string("Optional ticket or project-work label", 120),
+                ticket: string(
+                  "Optional legacy issue label; omit for local work",
+                  500,
+                ),
+                workLink: {
+                  ...workLinkSchema,
+                  description:
+                    "Optional canonical issue identity. No link means local task; never invent an issue. Provider preference is a default for new work, never a change to retained linkage.",
+                },
                 brief: string("Initial direction for the worker"),
                 repositoryId: string("Exact configured repository ID", 80),
               },
@@ -135,9 +144,14 @@ export function orchestrationTools(
                 requestId: taskIdentifier,
                 brief: string("Manager direction for this worker"),
                 ticket: string(
-                  "Optional ticket label; prior ticket is retained by default",
-                  120,
+                  "Optional legacy label; retains prior by default",
+                  500,
                 ),
+                workLink: {
+                  ...workLinkSchema,
+                  description:
+                    "Omit to retain previous linkage; null explicitly unlinks this new assignment only. Earlier task/assignment identities remain immutable.",
+                },
                 expectedRunId: {
                   type: ["string", "null"],
                   maxLength: 160,

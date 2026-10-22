@@ -1,3 +1,4 @@
+import { workLinkSchema } from "../../../src/shared/tracking.mjs";
 import { compile, errorsText, type Schema } from "./schema.js";
 import type {
   ApiPath,
@@ -133,6 +134,8 @@ const workSchema = object(
 const taskSchema = object(
   {
     id: string,
+    ticket: string,
+    workLink: workLinkSchema,
     status: string,
     runId: { type: ["string", "null"] },
     attention: array(
@@ -149,6 +152,7 @@ const taskSchema = object(
         {
           id: string,
           ticket: string,
+          workLink: workLinkSchema,
           brief: string,
           status: string,
           result: object({ message: string }),

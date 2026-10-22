@@ -13,7 +13,7 @@ The complete schema is illustrated by `config/set1.example.json` and `config/fix
 | project.id/name/context | Stable instance project identity and project context |
 | project.mode | repository for actual project work; fixture for disposable acceptance tests |
 | project.repositories | Configured repo IDs, display names, local Git root paths, starting branch (baseRef internally) and component descriptions |
-| project.linear.teamId/teamKey | Actual discovered or explicitly configured Linear scope; required for repository dispatch |
+| project.linear.teamId/teamKey | Optional discovered or explicitly configured Linear scope; never required for local work |
 | project.linear.projectId | Confirmed Linear project ID if tasks are limited to a project; null means team scope |
 | project.prompts.manager/worker | Editable Markdown paths |
 | project.worker.sandbox | Legacy task edit-scope guard: read-only or workspace-write. Native sandbox permissions resolve through Codex configuration. |
@@ -23,7 +23,7 @@ The complete schema is illustrated by `config/set1.example.json` and `config/fix
 
 Repository work starts from the configured committed base ref, not uncommitted source-checkout changes. Fetch refs yourself when appropriate; the application does not invent or silently update a base. Keep task worktrees until reviewed. Worktree edits remain uncommitted; commit/publish/deploy actions require a later supported workflow.
 
-The historical `set1` example filename and CLI template name are retained for compatibility; its contents are a generic incomplete project template. Normal onboarding replaces its provisional context with source-grounded understanding, canonical chosen folder, actual available starting branch and real Linear team/project choices. Unavailable values remain unset; no opaque ID needs to be invented or looked up manually. Add a separate repository entry for each confirmed boundary and describe its components. No business-specific name or domain behavior belongs in the generic application core.
+The historical `set1` example filename and CLI template name are retained for compatibility; its contents are a generic incomplete project template. Normal onboarding replaces its provisional context with source-grounded understanding, canonical chosen folder, actual available starting branch and optional Linear/GitHub choices. Unavailable values remain unset; no opaque ID needs to be invented or looked up manually. Add a separate repository entry for each confirmed boundary and describe its components. No business-specific name or domain behavior belongs in the generic application core.
 
 Use **Settings** for full replacement manager and worker instructions. Saved manager edits require explicit **Restart manager** (or Start after Stop); workers capture the saved instructions on their first launch and retain that snapshot. Settings saves live in project state without rewriting the configured Markdown files. Codex/provider system rules, runtime permissions and tool protocol remain separate. See [Settings and manager controls](SETTINGS.md). Do not change sandbox/base/project identity under an active task.
 
@@ -52,3 +52,23 @@ Configuration resolution is relative to each actual Codex cwd and its trusted pr
 Workers use separate supported Codex app-server sessions. Native approval and input requests appear in the manager conversation and worker review cards; they do not create a worker conversation or another turn. The user may choose only the decisions offered by the native request. Session approvals, offered policy amendments, requested permission subsets and connector forms retain their original meaning. A canceled native turn is retained as stopped, without claiming a successful result or automatically resuming it.
 
 Private request records retain project-state, task, run, native thread, turn and request identity. A decision, successful pipe delivery and native acknowledgement are separate evidence. Controller/window reload adopts the surviving supervisor and pending requests; a new run cannot consume an old response. Pending stop/pause blocks positive delivery; explicit denial remains available. Unknown transport or ownership keeps evidence and blocks a clean-success claim. The manager MCP tool relays an explicit human instruction; it cannot independently attest the origin of spoken consent. Direct UI decisions remain available.
+
+## Optional tracking (GitHub #78)
+
+External tracking does not determine repository/runtime readiness or admit worker execution. Configure neither, one or both providers in Project setup. `project.tracking` is optional for compatibility:
+
+```json
+"tracking": {
+  "providers": ["linear", "github"],
+  "preferred": "github",
+  "githubRepository": "owner/repository"
+}
+```
+
+Use an empty providers array and preferred `none` for local work. Preferred `none` also allows both providers to stay configured while new work defaults to local. Disabling tracking preserves saved mappings, prompts and existing task/history identity. Without this field, existing nonempty Linear mapping retains Linear preference; an empty mapping means no tracker. The historical `linear` block remains supported, with null unused values. Preferences are configuration, not verified access. Selected but incomplete/unavailable integrations offer retry, switch or disable guidance without blocking unrelated local work.
+
+Setup reads repositories through supported authenticated GitHub connected tools. Choose an actual owner/name; bounded lists may omit repositories, so use **Find a specific repository** and verify its returned identity. Multiple ambiguous connections and unsupported tool shapes remain explicit, with normal manager tool discovery as fallback. Nothing adopts a remote/account silently. New folders clear unrelated tracking mappings. No API keys, custom GitHub transport, external ticket writes or backlog execution run during setup/save.
+
+`submit_task` accepts optional `workLink`: GitHub `{provider:"github",repository:"owner/repo",number:12,url:"https://github.com/owner/repo/issues/12"}` or Linear `{provider:"linear",identifier:"TEAM-12",url:"https://linear.app/workspace/issue/TEAM-12/title"}`. Without a link/ticket, the durable task ID and brief define local work. The legacy ticket string stays readable; unambiguous canonical URLs can supply identity on new submissions, while old labels are never treated as verified access. Task IDs and provider/repository/issue identities remain separate. Follow-ups retain the original provider by omission; explicit `workLink:null` makes only the new assignment local. Preferences never rewrite task/history. Native Codex policy/approvals remain authoritative.
+
+See [tracking workflows](TRACKING.md) for issue/review/check evidence and current capability limits.

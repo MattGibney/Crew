@@ -1,3 +1,10 @@
+import {
+  validateWorkLink,
+  workLinkFromTicket,
+  retainedWorkLink,
+  sameWorkLink,
+  type WorkLink,
+} from "../shared/tracking.mjs";
 import { isRecord } from "../workers/errors.mjs";
 import { updateTask } from "./store.mjs";
 import { ensureAssignments, currentAssignment } from "./assignments.mjs";
@@ -19,6 +26,7 @@ export async function requestWorkerFollowup(
     expectedRunId,
     expectedAssignmentId,
     ticket,
+    workLink,
     brief,
     userDecision,
     reviewedWorktreeFingerprint,
@@ -28,6 +36,7 @@ export async function requestWorkerFollowup(
     expectedRunId?: string | null;
     expectedAssignmentId?: string | null;
     ticket?: string;
+    workLink?: WorkLink | null;
     brief: string;
     userDecision?: unknown;
     reviewedWorktreeFingerprint?: unknown;
@@ -36,11 +45,12 @@ export async function requestWorkerFollowup(
   identifier(taskId);
   identifier(requestId, "follow-up request ID");
   text(brief, "direction");
-  if (ticket !== undefined) text(ticket, "ticket", 120);
+  if (ticket !== undefined) text(ticket, "ticket", 500);
   if (expectedRunId !== undefined && expectedRunId !== null)
     text(expectedRunId, "observed run ID", 160);
   if (expectedAssignmentId !== undefined && expectedAssignmentId !== null)
     text(expectedAssignmentId, "observed assignment ID", 80);
+  validateWorkLink(workLink);
   return updateTask(dir, taskId, (task) => {
     const assignments = ensureAssignments(task),
       existing = assignments.find((item) => item.id === requestId),
@@ -51,6 +61,7 @@ export async function requestWorkerFollowup(
     if (existing) {
       if (
         existing.brief !== brief ||
+        !sameWorkLink(existing.requestWorkLink, workLink) ||
         JSON.stringify(
           Object.hasOwn(existing, "requestTicket")
             ? existing.requestTicket
@@ -83,7 +94,19 @@ export async function requestWorkerFollowup(
       );
     assignments.push({
       id: requestId,
-      ticket: ticket || currentAssignment(task).ticket || task.ticket,
+      ticket:
+        workLink === null
+          ? ""
+          : ticket !== undefined
+            ? ticket
+            : currentAssignment(task).ticket,
+      workLink:
+        workLink !== undefined
+          ? workLink
+          : ticket !== undefined
+            ? workLinkFromTicket(ticket)
+            : retainedWorkLink(currentAssignment(task)),
+      ...(workLink !== undefined ? { requestWorkLink: workLink } : {}),
       requestTicket: ticket ?? null,
       requestMetadata,
       brief,

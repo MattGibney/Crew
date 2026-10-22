@@ -145,9 +145,22 @@ export async function probeCodex({
         result.tools = {
           status: "discovered",
           detail:
-            "Tool discovery is not proof of access to a Linear team/project. Verify a real read with the manager before business work.",
+            "Tool discovery advertises capabilities, not verified resource access. Only selected integrations need resource reads; tracking is optional.",
           servers,
           truncated: Boolean(cursor),
+          github: {
+            status: servers.some((server) =>
+              server.tools.some((name) =>
+                /github.*(fetch_issue|get_repo|list_repositories|get_pr_info|search)/i.test(
+                  `${server.name}/${name}`,
+                ),
+              ),
+            )
+              ? "advertised"
+              : "unavailable",
+            detail:
+              "Repository, issue, review and check access need separate real reads through connected tools. Retry account discovery or switch/disable this optional integration.",
+          },
           linear: {
             status: linearTools.length
               ? "advertised"

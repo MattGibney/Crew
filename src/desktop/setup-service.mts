@@ -38,6 +38,7 @@ export interface SetupCheck {
   }>;
   truncated?: boolean;
   linear?: { status: string; detail: string };
+  github?: { status: string; detail: string };
 }
 export interface SetupPathCheck {
   name: string;

@@ -2,13 +2,13 @@
 
 A local macOS application for discussing project work by voice and coordinating independent Codex workers. One installed app manages multiple isolated project workspaces. The switcher beside the project name selects the visible workspace; Add project opens onboarding. Each project retains its own controller, manager chat, configuration, instructions, state, port and worktrees. Worker capacity is shared across projects. See [multiple workspaces](docs/multi-project-workspaces.md). There is no hosted deployment or cloud sync.
 
-The Electron desktop window uses the existing web voice interface. Its separate local controller watches durable files, so closing the window or disconnecting voice does not stop background work. A menu-bar icon lets you reopen the window and shows pending attention. Codex and Linear still require their external services; local does not mean offline.
+The Electron desktop window uses the existing web voice interface. Its separate local controller watches durable files, so closing the window or disconnecting voice does not stop background work. A menu-bar icon lets you reopen the window and shows pending attention. Codex and any selected integrations require their external services; local does not mean offline.
 
 ## Install on your Mac
 
 The desktop build is **Apple Silicon, macOS 13 or later**. Open the versioned DMG from `dist/desktop`, drag **Crew.app** into Applications, and launch it. Public GitHub releases are Developer ID signed and notarized. Local candidate builds are unsigned and are kept separate from production update feeds.
 
-Electron includes Chromium and the Node runtime. The Mac still needs **Git**, a compatible **Codex CLI**, ChatGPT sign-in and the intended Linear MCP connection. The realtime baseline tested in the earlier local application was Codex CLI `0.163.0-alpha.10.2`; experimental methods may change. Do not copy credentials from another machine or configure API-key fallback.
+Electron includes Chromium and the Node runtime. The Mac still needs **Git**, a compatible **Codex CLI**, ChatGPT sign-in and, optionally, authenticated Linear/GitHub connected tools. The realtime baseline tested in the earlier local application was Codex CLI `0.163.0-alpha.10.2`; experimental methods may change. Do not copy credentials from another machine or configure API-key fallback.
 
 First launch creates editable files under:
 
@@ -20,7 +20,7 @@ First launch creates editable files under:
   .data/
 ```
 
-First-run setup guides local tools, ChatGPT sign-in, automatic project-folder setup, permissions and readiness. Use **Project setup…** in the app or menu-bar menu to return. Existing configured chats continue normally. **Edit project configuration…** and **Open configuration folder** retain direct file access. Choose your project folder and select Set up this project. Crew saves the actual folder, an available starting branch and source-grounded context, then offers real Linear team/project names. Technical settings stay optional under Advanced. New projects receive separate ports; existing configured ports are retained. Guided saves restart only an idle controller; external file edits need Quit and reopen. Active tasks and connecting/active voice block guided apply. See [Mac installation and operations](docs/MACOS.md) and [configuration](docs/CONFIGURATION.md).
+First-run setup guides local tools, ChatGPT sign-in, automatic project-folder setup, permissions and readiness. Use **Project setup…** in the app or menu-bar menu to return. Existing configured chats continue normally. **Edit project configuration…** and **Open configuration folder** retain direct file access. Choose your project folder and select Set up this project. Crew saves the actual folder, an available starting branch and source-grounded context, then offers optional Linear/GitHub tracking choices. Technical settings stay optional under Advanced. New projects receive separate ports; existing configured ports are retained. Guided saves restart only an idle controller; external file edits need Quit and reopen. Active tasks and connecting/active voice block guided apply. See [Mac installation and operations](docs/MACOS.md) and [configuration](docs/CONFIGURATION.md).
 
 Type to your manager or choose **Connect voice**. Open microphone is the default: Connect starts the call and microphone once connected and permission allows. Input stays active when switching apps until you mute or end the call. Explicit mute is preserved on reconnect. The compact composer defaults to Voice; switch to Text to type without ending an established call or losing your draft. Configure the next call’s voice in Settings → Project settings → Manager profile; there is no separate push-to-talk mode. End call releases the complete voice session. End other calls first. Closing the window also ends voice while leaving the controller running. **Quit Crew…** is separate: its confirmation accounts for every registered project, stops owned controllers, and leaves already dispatched worker supervisors alone. Reopen Crew to collect their reports. Switching projects ends the departing voice call and opens the destination with voice off. The app neither launches at login nor keeps a sleeping Mac awake.
 
@@ -44,7 +44,7 @@ Environment configuration supplies commands and instructions as agent context. C
 
 ## Editable behavior
 
-- JSON defines the single project's context, components, repositories, Linear scope, permissions, port and state directory.
+- JSON defines the single project's context, components, repositories, optional tracking preferences, permissions, port and state directory.
 - Manager Markdown defines personality, role and communication.
 - Worker Markdown defines behavior and responsibilities.
 

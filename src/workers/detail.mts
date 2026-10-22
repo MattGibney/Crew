@@ -79,6 +79,7 @@ export async function readWorkerDetail(
         {
           id: "initial",
           ticket: task.ticket,
+          workLink: task.workLink,
           brief: task.brief,
           status: task.status,
           createdAt: task.createdAt,
@@ -313,7 +314,7 @@ export async function readWorkerDetail(
     links.push({
       kind: /github\.com\/.+\/pull\/\d+/.test(url)
         ? "pull_request"
-        : /linear\.app\//.test(url)
+        : /linear\.app\/|github\.com\/[^/]+\/[^/]+\/issues\/\d+/.test(url)
           ? "ticket"
           : "resource",
       label,
@@ -322,7 +323,8 @@ export async function readWorkerDetail(
   };
   // Only supplied URLs; never manufacture a ticket URL from a key or a PR from a branch.
   for (const value of [
-    ...assignments.map((item) => item.ticket),
+    ...assignments.flatMap((item) => [item.ticket, item.workLink?.url]),
+    task.workLink?.url,
     task.ticket,
     task.ticketUrl,
     task.pullRequestUrl,

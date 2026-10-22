@@ -28,6 +28,7 @@ export interface ProjectConfig {
     };
     repositories: Repository[];
     prompts: { manager: string; worker: string };
+    tracking?: import("../../../src/shared/tracking.mjs").TrackingPreferences;
     linear: {
       teamId: string | null;
       teamKey: string | null;
@@ -42,6 +43,7 @@ export interface CheckStatus {
 }
 export interface ToolsStatus extends CheckStatus {
   linear?: CheckStatus;
+  github?: CheckStatus;
   servers?: { name: string; tools: string[]; status: string; auth: string }[];
 }
 export interface RepositoryOption extends Repository {
@@ -80,6 +82,7 @@ export interface SetupSnapshot {
     plan: ExecutionPlan;
     actions?: ExecutionCommand[];
   }[];
+  githubOptions?: { status: string; detail: string; repositories: { fullName: string; url: string }[]; truncated: boolean };
   linearOptions?: {
     detail?: string;
     teams?: { id: string; name: string; key: string }[];
@@ -118,12 +121,13 @@ export interface SetupBridge {
   login(): Promise<SetupSnapshot>;
   microphone(): Promise<SetupSnapshot>;
   paths(): Promise<SetupSnapshot>;
+  githubOptions(repository?: string): Promise<SetupSnapshot>;
   linearOptions(): Promise<SetupSnapshot>;
 }
 export type Setup = ReturnType<typeof import("../setup/useSetup.js").useSetup>;
 export type SetupProps = { setup: Setup };
 export type SetupCheck =
-  "runtime" | "account" | "login" | "microphone" | "paths" | "linearOptions";
+  "runtime" | "account" | "login" | "microphone" | "paths" | "linearOptions" | "githubOptions";
 export interface WorkspaceSnapshot {
   selectedId?: string;
   workerLimit?: number;

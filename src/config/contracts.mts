@@ -17,6 +17,7 @@ export interface RawRepository {
   components: string[];
 }
 export interface RawProject {
+  tracking?: import("../shared/tracking.mjs").TrackingPreferences;
   id: string;
   name: string;
   mode: "fixture" | "repository";

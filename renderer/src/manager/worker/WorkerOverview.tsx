@@ -1,3 +1,8 @@
+import { WorkerReference } from "./WorkerReference.js";
+import {
+  workLinkLabel,
+  workReference,
+} from "../../../../src/shared/tracking.mjs";
 import { WorkerWorkHistory } from "./WorkerWorkHistory.js";
 import type { ManagerProps, WorkerTask } from "../../contracts/manager.js";
 import { Clock3 } from "lucide-react";
@@ -38,6 +43,7 @@ export function WorkerOverview({
     act,
   } = actions;
   const assignment = currentAssignment(task);
+  const reference = workReference(assignment, task.id);
   const managerBusy =
     actionBusy ||
     !manager.managerEnabled ||
@@ -49,9 +55,11 @@ export function WorkerOverview({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                {assignment.ticket || task.id}
-              </span>
+              <WorkerReference
+                assignment={assignment}
+                fallback={task.id}
+                className="text-xs font-medium text-muted-foreground"
+              />
               <WorkerStatus task={task} />
               <Badge variant="outline" className="text-[10px]">
                 Read-only history
@@ -66,7 +74,9 @@ export function WorkerOverview({
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-          <span aria-label={`Execution: ${workerStatus(task)}`}>Execution: {workerStatus(task)}</span>
+          <span aria-label={`Execution: ${workerStatus(task)}`}>
+            Execution: {workerStatus(task)}
+          </span>
           <span>
             {timing.live === true
               ? "Process live"
@@ -84,6 +94,20 @@ export function WorkerOverview({
             Task {task.id}
           </span>
         </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          {reference.link ? (
+            <a href={reference.link.url} target="_blank" rel="noreferrer">
+              {reference.link.provider === "github"
+                ? "GitHub issue"
+                : "Linear issue"}
+              : {workLinkLabel(reference.link)}
+            </a>
+          ) : reference.label !== task.id ? (
+            "Legacy work label — external identity/access unverified"
+          ) : (
+            "Local task · No external tracker"
+          )}
+        </p>
         {task.archiveRestoration?.requiresRecovery && (
           <p className="mt-3 rounded-lg border p-3 text-xs leading-5 text-muted-foreground">
             History restored only. Restore has not recreated this worker’s
@@ -260,7 +284,14 @@ export function WorkerOverview({
           ["Project", task.projectId],
           ["Repository", task.repositoryId],
           ["Worktree", task.worktree],
-          ["Ticket reference", assignment.ticket],
+          [
+            "Work linkage",
+            reference.link
+              ? workLinkLabel(reference.link)
+              : reference.label === task.id
+                ? "No external tracker"
+                : reference.label,
+          ],
           ["Run", task.runId],
         ].map(([label, value]) => (
           <div key={label}>
