@@ -84,6 +84,9 @@ export interface WorkspaceApproval {
 }
 export interface ProjectEnvironmentOptions {
   directory: string;
+  /** Trusted composition roots containing native auth, vaults and journals.
+   * Never supplied by model JSON or overridden by workspace approval. */
+  protectedDirectories: string[];
   projectId: string;
   ownerUserId: string;
   admission: ExecutionAdmissionGate;
@@ -288,10 +291,30 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     if (
       !isAbsolute(options.directory) ||
       !idValid(options.projectId) ||
-      !idValid(options.ownerUserId)
+      !idValid(options.ownerUserId) ||
+      !Array.isArray(options.protectedDirectories) ||
+      options.protectedDirectories.length === 0 ||
+      options.protectedDirectories.length > 32 ||
+      options.protectedDirectories.some(
+        (path) => typeof path !== "string" || !isAbsolute(path),
+      )
     )
       throw new Error("Invalid environment service identity.");
     await mkdir(options.directory, { recursive: true, mode: 0o700 });
+    for (const path of options.protectedDirectories) {
+      if ((await realpath(path)) !== path || !(await lstat(path)).isDirectory())
+        throw new Error(
+          "Protected controller roots must be canonical existing directories.",
+        );
+    }
+    if (
+      !options.protectedDirectories.some((path) =>
+        inside(path, options.directory),
+      )
+    )
+      throw new Error(
+        "Protected roots must include the environment journal directory.",
+      );
     const directory = await realpath(options.directory);
     const info = await lstat(directory);
     if (
@@ -518,15 +541,9 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     return result;
   }
 
-  private async identifyDirectory(
-    path: string,
-    privateRoot = false,
-  ): Promise<DirectoryIdentity> {
-    if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0"))
-      throw new Error("Owner-approved absolute directory required.");
-    const canonical = await realpath(path),
-      stat = await lstat(canonical);
+  private protectedPath(path: string) {
     const forbidden = [
+      ...this.options.protectedDirectories,
       this.options.directory,
       join(homedir(), ".codex", "auth.json"),
       join(homedir(), ".codex", "config.toml"),
@@ -535,11 +552,23 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
       join(homedir(), ".aws"),
       join(homedir(), "Library", "Application Support", "Crew"),
     ];
+    return (
+      path === "/" ||
+      inside(path, homedir()) ||
+      forbidden.some((entry) => overlaps(path, entry))
+    );
+  }
+  private async identifyDirectory(
+    path: string,
+    privateRoot = false,
+  ): Promise<DirectoryIdentity> {
+    if (typeof path !== "string" || !isAbsolute(path) || path.includes("\0"))
+      throw new Error("Owner-approved absolute directory required.");
+    const canonical = await realpath(path),
+      stat = await lstat(canonical);
     if (
       !stat.isDirectory() ||
-      canonical === "/" ||
-      inside(canonical, homedir()) ||
-      forbidden.some((entry) => overlaps(canonical, entry)) ||
+      this.protectedPath(canonical) ||
       (privateRoot &&
         (stat.uid !== process.getuid?.() || Boolean(stat.mode & 0o077)))
     )
@@ -551,6 +580,7 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
   private async verifyDirectory(identity: DirectoryIdentity) {
     const current = await lstat(identity.path);
     if (
+      this.protectedPath(identity.path) ||
       !current.isDirectory() ||
       current.isSymbolicLink() ||
       current.dev !== identity.device ||

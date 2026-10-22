@@ -6,7 +6,7 @@ The production composition injects `runMacWorkspaceCommand` from the access boun
 
 ## Owner setup and publication
 
-Open the service with a dedicated canonical private state directory, the project and owner identities, the shared `ExecutionAdmissionGate`, fresh authorization/session callbacks, and the actual trusted executor. `approveWorkspace(owner, approval, expectedRevision)` accepts:
+Open the service with a dedicated canonical private state directory, the project and owner identities, the shared `ExecutionAdmissionGate`, fresh authorization/session callbacks, and the actual trusted executor. Required `protectedDirectories` come from trusted composition and cover the whole private controller root, including native authentication, vaults and sibling journals. Workspace, managed-worktree and executable-directory approvals cannot overlap those roots or approve an ancestor containing them. Agent requests and owner workspace forms cannot override this exclusion. `approveWorkspace(owner, approval, expectedRevision)` accepts:
 
 - `policyId`: the access environment-policy identity.
 - `workspaceDirectory`: an existing project folder. The canonical path and directory identity are retained and checked before admission.

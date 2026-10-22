@@ -74,6 +74,8 @@ export interface FoundationOptions {
   executionSettlement?: (
     caller?: CallerContext,
   ) => Promise<{ settled: boolean; detail: string }>;
+  /** Trusted runtime Stop acknowledgement or independently confirmed process exit only. */
+  confirmVoiceExit?: (binding: RuntimeBinding) => Promise<void>;
   confirmNativeExit?: (
     caller: CallerContext,
   ) => Promise<{ confirmed: boolean; detail: string }>;
@@ -504,6 +506,11 @@ export class AgentFoundation implements AgentLifecycle {
         },
       };
     }
+    if (existing && this.options.privateInputBlocked?.(existing))
+      return reject(
+        "disconnected",
+        "The previous voice session or its public history must settle before Start.",
+      );
     if (["starting", "stopping", "unknown"].includes(previous.observedState))
       return reject(
         "disconnected",
@@ -722,6 +729,7 @@ export class AgentFoundation implements AgentLifecycle {
         await this.sessionError(agentId, stopped.error);
         return stopped;
       }
+      if (binding) await this.options.confirmVoiceExit?.(binding);
       await this.options.access.release(caller);
       await this.store.update((state) => {
         const current = state.agents.find((entry) => entry.id === agentId)!;
@@ -788,6 +796,7 @@ export class AgentFoundation implements AgentLifecycle {
       };
       const proof = await this.options.confirmNativeExit(caller);
       if (!proof.confirmed) return failed(proof.detail);
+      await this.options.confirmVoiceExit?.(binding);
       const local = await this.options.executionSettlement?.(caller);
       if (local && !local.settled) return failed(local.detail);
       const settlement = await this.options.broker.settlement(
@@ -1465,7 +1474,9 @@ export class AgentFoundation implements AgentLifecycle {
         state.projectSettings.primaryAgentId !== binding.agentId ||
         current?.runtime.session.sessionId !== binding.sessionId ||
         current.runtime.threadId !== binding.threadId ||
-        current.runtime.session.observedState !== "started"
+        !["started", "stopping", "unknown", "error"].includes(
+          current.runtime.session.observedState,
+        )
       )
         throw new Error(
           "Realtime promotion is not from the current primary session.",
@@ -1484,7 +1495,8 @@ export class AgentFoundation implements AgentLifecycle {
         (row) =>
           row.agentId === binding.agentId &&
           row.threadId === binding.threadId &&
-          row.turnId === input.turnId,
+          row.turnId === input.turnId &&
+          row.nativeItemId === input.nativeItemId,
       );
       if (prior) {
         if (
@@ -1494,6 +1506,18 @@ export class AgentFoundation implements AgentLifecycle {
         )
           throw new Error("Conflicting realtime promotion.");
         return;
+      }
+      const readiness = state.preparation?.readiness.find(
+        (row) =>
+          row.agentId === binding.agentId &&
+          row.sessionId === binding.sessionId,
+      );
+      if (readiness) {
+        readiness.state = "pending";
+        readiness.requiredAfter = now();
+        readiness.continuationSavedAt = null;
+        readiness.detail =
+          "New native voice handoff admitted; report current continuation readiness.";
       }
       state.voiceTurns.push({
         ...input,
