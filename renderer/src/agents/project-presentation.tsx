@@ -224,13 +224,20 @@ export function createProjectPresentation(
         return null;
       return <PrimarySetup {...context} command={command} draft={setupDraft} />;
     },
-    renderVoice: ({ primaryAgent, visible, mode, controlsTarget }) => (
+    renderVoice: ({
+      primaryAgent,
+      visible,
+      mode,
+      controlsTarget,
+      transcriptTarget,
+    }) => (
       <PrimaryAgentVoice
         client={voice}
         agent={primaryAgent}
         visible={visible}
         mode={mode}
         controlsTarget={controlsTarget}
+        transcriptTarget={transcriptTarget}
         embedded
       />
     ),
@@ -256,8 +263,17 @@ function validVoiceEvent(
     typeof event.binding.sessionId === "string" &&
     typeof event.binding.threadId === "string" &&
     typeof event.callId === "string" &&
-    (event.kind === "closed" || event.kind === "error") &&
-    (event.message === undefined || typeof event.message === "string"),
+    ((event.kind === "transcript" &&
+      typeof event.itemId === "string" &&
+      event.itemId.length > 0 &&
+      event.itemId.length <= 512 &&
+      (event.role === "user" || event.role === "assistant") &&
+      typeof event.text === "string" &&
+      event.text.length <= 200_000 &&
+      typeof event.done === "boolean" &&
+      typeof event.delta === "boolean") ||
+      ((event.kind === "closed" || event.kind === "error") &&
+        (event.message === undefined || typeof event.message === "string"))),
   );
 }
 

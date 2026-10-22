@@ -11,10 +11,18 @@ export interface PrimaryVoiceCall {
   /** Allocated before negotiation, so cancellation can name a pending call. */
   callId: string;
 }
-export type PrimaryVoiceEvent = PrimaryVoiceCall & {
-  kind: "closed" | "error";
-  message?: string;
-};
+export type PrimaryVoiceEvent = PrimaryVoiceCall &
+  (
+    | { kind: "closed" | "error"; message?: string }
+    | {
+        kind: "transcript";
+        itemId: string;
+        role: "user" | "assistant";
+        text: string;
+        done: boolean;
+        delta: boolean;
+      }
+  );
 
 /** Owner-authenticated transport, bound again by the server to the primary agent.
  * No method starts an agent, creates a thread, sends a user message or handoff.
