@@ -293,3 +293,22 @@ its deny rules. The current provider's outer OS policy allows the native process
 access to its own private runtime root; that policy alone does not exclude that root
 from native tool descendants. Full resumed handoff isolation remains unresolved,
 and this probe did not change the production launch policy or relax its hold.
+
+The final bounded composition probe ran that same sequence under Crew's actual
+`nativeSeatbeltPolicy` (a fresh synthetic root and no allowed network ports). Idle
+thread creation and naming succeeded. After confirmed process exit, same-chat
+resume with the named profile failed before any turn while loading local
+environment instructions: `fs sandbox helper failed with status exit status: 71:
+sandbox-exec: sandbox_apply: Operation not permitted`. Both native processes exited
+normally. The previous standalone profile result therefore cannot be promoted to
+evidence that the profile composes with Crew's outer OS boundary.
+
+Disposition: no usable full same-chat resume/realtime route has been established
+with the current pair of boundaries. The observed failure is specific to this
+installed runtime and Crew outer policy, not proof that macOS or the native runtime
+cannot support a different configuration. Removing the outer boundary or granting
+unrestricted native execution would discard the existing containment claim and was
+not attempted. Owner sign-in alone cannot repair this local pre-turn failure.
+After resolving boundary composition, effective permission enforcement in a real
+server-created handoff still needs its own bounded synthetic-private-file check;
+selection metadata and standalone command execution are insufficient evidence.
