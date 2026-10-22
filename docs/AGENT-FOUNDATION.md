@@ -80,6 +80,13 @@ authorized host contribution; this track supplies resource reads and preserves t
 
 ## Durable evidence and recovery
 
+Routed help can be answered or escalated using the received message ID from its
+authenticated Crew origin, as well as the canonical help ID. Recipients do not need
+to fetch the requester's tool result to discover a second identifier. Resolution
+retains the canonical help record and checks its actual target, state and current
+permission; an ambiguous reference is rejected. Escalations store the canonical
+parent help ID, and responses retain the original message reply relationship.
+
 Crew persists profiles, jobs, assignment history, working notes, open help/inbox content, unresolved
 message bodies, attempts, native approval identities, start-dispatch evidence and lifecycle intent.
 After native acceptance it removes the message body and keeps a compact receipt plus an intent

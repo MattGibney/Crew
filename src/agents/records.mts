@@ -55,7 +55,18 @@ export type ReportJobProgressInput = Pick<
 export interface HelpInput {
   content: AgentContent[];
   jobId?: string | null;
+  /** A canonical help ID or the received help message ID. Stored as the help ID. */
   replyToHelpRequestId?: string | null;
+}
+
+/** The recipient knows the delivered message ID, not the requester's tool result. */
+function helpByReference(state: FoundationState, reference: string) {
+  identifier(reference);
+  const matches = state.helpRequests.filter(
+    (entry) => entry.id === reference || entry.messageId === reference,
+  );
+  if (matches.length > 1) throw new Error("Help reference is ambiguous.");
+  return matches[0];
 }
 
 function record(
@@ -743,9 +754,7 @@ export class FoundationRecords {
       const jobId = input.jobId ?? null;
       if (jobId !== null) getJob(state, jobId);
       const previous = input.replyToHelpRequestId
-        ? state.helpRequests.find(
-            (entry) => entry.id === input.replyToHelpRequestId,
-          )
+        ? helpByReference(state, input.replyToHelpRequestId)
         : undefined;
       if (
         input.replyToHelpRequestId &&
@@ -803,9 +812,7 @@ export class FoundationRecords {
   ): Promise<HelpRequest> {
     identifier(helpId);
     validateContent(content);
-    const previous = this.store
-      .snapshot()
-      .helpRequests.find((entry) => entry.id === helpId);
+    const previous = helpByReference(this.store.snapshot(), helpId);
     if (!previous) throw new Error("Help request is not in this project.");
     await this.authorize(principal, "help.respond", {
       type: "agent",
@@ -813,7 +820,7 @@ export class FoundationRecords {
     });
     return this.store.update((state) => {
       const actor = this.actor(state, principal);
-      const help = state.helpRequests.find((entry) => entry.id === helpId);
+      const help = state.helpRequests.find((entry) => entry.id === previous.id);
       if (
         !help ||
         !sameActor(actor, help.target) ||

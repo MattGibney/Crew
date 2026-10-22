@@ -330,7 +330,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "help_request",
       description:
-        "Raise a help request to this agent's explicit next reporting relationship; human targets go to the owner inbox.",
+        "Raise a help request to this agent's explicit next reporting relationship; human targets go to the owner inbox. To escalate an incoming request, replyToHelpRequestId accepts its help ID or the messageId from its authenticated Crew message origin.",
       inputSchema: object(
         {
           content,
@@ -343,8 +343,14 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "help_respond",
       description:
-        "Respond to a help request addressed to this agent. A response does not grant service access.",
-      inputSchema: object({ helpId: id, content }),
+        "Respond to a help request addressed to this agent. Use its help ID or the messageId from the incoming authenticated Crew message origin. A response does not grant service access.",
+      inputSchema: object({
+        helpId: {
+          ...id,
+          description: "Help request ID or received help message ID.",
+        },
+        content,
+      }),
     },
     {
       name: "preparation_read",
