@@ -494,3 +494,26 @@ walkthrough, the model returned the current saved-profile marker after reading t
 Crew tools. That proves saved-profile access and successful tool work; it neither contradicts nor
 resolves the private instruction-only resume control. Preserve both evidence sets and scope the
 remaining limitation to the tested native instruction paths.
+
+### Explicit native context refresh control
+
+A final bounded diagnostic established a supported same-chat option for the tested retained-profile
+problem: cold `thread/resume` with the new direct `developerInstructions`, followed by explicit
+`thread/compact/start`. The compact request returned acknowledgement, then a real native turn and
+a matching `contextCompaction` item completed successfully. A fresh thread read confirmed idle.
+The next plain arithmetic input used the new instruction-only prefix. Before/after native reads
+preserved all five existing turns and ten existing item IDs under the same thread ID.
+
+This is native context maintenance with a real turn lifecycle, not an idle or zero-work restart.
+It may use model allowance; the diagnostic did not capture an exact token count. Inspectable native
+history remained intact, while the active model context was summarized. Do not describe that
+summary as lossless. Neither this probe nor the direct startup fix adds automatic compaction to
+production.
+
+The smallest implementation candidate is an explicitly authorized changed-profile Restart that
+retains the thread, supplies the current profile, runs native compaction, and acknowledges the
+applied revision only after the exact compaction item and successful turn complete and native
+policy/idle state is rechecked. RPC acknowledgement or a turn ending alone is insufficient; errors,
+timeouts and missing item completion remain failures/uncertainty. New idle Start must not silently
+run this operation. This policy requires deliberate product integration because earlier startup
+guidance promises no automatic model work.
