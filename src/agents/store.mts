@@ -33,6 +33,7 @@ export interface FoundationState {
     agentId: string;
     presetId: string;
     presetRevision: number;
+    creator: import("./contracts.mjs").Actor;
     state: "pending" | "ready" | "failed";
     error: string | null;
   }[];
@@ -41,6 +42,18 @@ export interface FoundationState {
   /** Compact intent identity survives removal of acknowledged message bodies. */
   intentFingerprints: Record<string, string>;
   receipts: MessageReceipt[];
+  /** Native realtime promotion identity only; never a second transcript store. */
+  voiceTurns: {
+    agentId: string;
+    sessionId: string;
+    threadId: string;
+    voiceSessionId: string;
+    realtimeSessionId: string;
+    turnId: string;
+    nativeItemId: string;
+    ownerUserId: string;
+    observedAt: string;
+  }[];
   helpRequests: HelpRequest[];
   ownerInbox: { helpRequestId: string; content: AgentContent[] }[];
   nativeApprovals: {
@@ -323,6 +336,8 @@ const message = object({
   }),
 });
 const readiness = object({
+  preparationId: id,
+  requiredAfter: timestamp,
   agentId: id,
   sessionId: id,
   state: choice("pending", "ready", "blocked"),
@@ -362,6 +377,19 @@ const validate = new Ajv({
         acknowledgedAt: timestamp,
       }),
     ),
+    voiceTurns: array(
+      object({
+        agentId: id,
+        sessionId: id,
+        threadId: id,
+        voiceSessionId: id,
+        realtimeSessionId: id,
+        turnId: id,
+        nativeItemId: id,
+        ownerUserId: id,
+        observedAt: timestamp,
+      }),
+    ),
     helpRequests: array(
       object({
         id,
@@ -386,6 +414,7 @@ const validate = new Ajv({
         agentId: id,
         presetId: id,
         presetRevision: revision,
+        creator: actor,
         state: choice("pending", "ready", "failed"),
         error: nullable(text()),
       }),
@@ -538,7 +567,10 @@ function validateState(
   );
   assert(value.projectSettings.projectId === projectId);
   checkAgent(value.projectSettings.primaryAgentId);
-  for (const entry of value.provisioning) checkAgent(entry.agentId);
+  for (const entry of value.provisioning) {
+    checkAgent(entry.agentId);
+    checkActor(entry.creator);
+  }
   assert(
     new Set(value.provisioning.map((entry) => entry.agentId)).size ===
       value.provisioning.length,
@@ -589,6 +621,17 @@ function validateState(
     checkAgent(entry.recipientAgentId);
     checkJob(entry.jobId);
   }
+  for (const entry of value.voiceTurns) {
+    checkAgent(entry.agentId);
+    assert(entry.ownerUserId === ownerUserId);
+  }
+  assert(
+    new Set(
+      value.voiceTurns.map((entry) =>
+        JSON.stringify([entry.agentId, entry.threadId, entry.turnId]),
+      ),
+    ).size === value.voiceTurns.length,
+  );
   for (const entry of value.helpRequests) {
     assert(entry.projectId === projectId);
     checkAgent(entry.requesterAgentId);
@@ -651,6 +694,7 @@ export class FoundationStore {
       messages: [],
       intentFingerprints: {},
       receipts: [],
+      voiceTurns: [],
       helpRequests: [],
       ownerInbox: [],
       nativeApprovals: [],

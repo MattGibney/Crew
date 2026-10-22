@@ -150,7 +150,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "environments_read",
       description:
-        "Read explicitly attached environment resource references. This runs no project commands.",
+        "Read currently permitted workspace policies and attached environments. Use the returned policy ID for attach/create; this runs no project commands.",
       inputSchema: object({ agentId: id }),
     },
     {
@@ -254,10 +254,17 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: object({ helpId: id, content }),
     },
     {
+      name: "preparation_read",
+      description:
+        "Read the current preparation request identity and required continuation freshness for this session.",
+      inputSchema: object({}),
+    },
+    {
       name: "preparation_readiness",
       description:
         "Report this exact session's readiness after an explicit preparation request. Ready requires continuationSavedAt.",
       inputSchema: object({
+        preparationId: id,
         state: { enum: ["pending", "ready", "blocked"] },
         continuationSavedAt: nullableString,
         detail: nullableString,
@@ -380,7 +387,7 @@ export function createFoundationAgentTools(
             .agents.find((entry) => entry.id === agentId)!;
           return name === "scratchpad_read"
             ? agent.scratchpad
-            : agent.resources;
+            : foundation.environmentList(principal, agentId);
         }
         case "jobs_list":
           await records.authorize(principal, "jobs.read", { type: "project" });
@@ -437,6 +444,16 @@ export function createFoundationAgentTools(
           void foundation.flush().catch(() => {});
           return result;
         }
+        case "preparation_read":
+          return (
+            foundation.store
+              .snapshot()
+              .preparation?.readiness.find(
+                (row) =>
+                  row.agentId === caller.agentId &&
+                  row.sessionId === caller.sessionId,
+              ) ?? null
+          );
         case "preparation_readiness":
           return foundation.reportReadiness(
             principal,

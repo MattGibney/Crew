@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { basename, dirname, isAbsolute } from "node:path";
 import type {
   MessageSender,
   AgentContent,
@@ -42,6 +42,21 @@ export {
   codexApprovalChoices,
   projectCodexApproval,
 } from "./codex-approvals.mjs";
+import {
+  CodexRealtimeController,
+  type CodexRealtimeAudio,
+  type CodexRealtimeConnect,
+  type CodexRealtimeEvent,
+  type CodexRealtimePort,
+} from "./codex-realtime.mjs";
+export type {
+  CodexRealtimeAudio,
+  CodexRealtimeConnect,
+  CodexRealtimeConnection,
+  CodexRealtimeEvent,
+  CodexRealtimePort,
+  CodexRealtimeState,
+} from "./codex-realtime.mjs";
 
 export type CodexLaunchResolution =
   | {
@@ -106,6 +121,7 @@ type Session = {
   historyObserved: boolean;
   observed: boolean;
   earlyEvents: RuntimeEvent[];
+  realtime: CodexRealtimeController | null;
 };
 const now = () => new Date().toISOString();
 const failure = (
@@ -160,12 +176,14 @@ function nativeError(error: unknown): RuntimeError {
 
 export function createCodexAgentRuntime(
   options: CodexRuntimeOptions,
-): AgentRuntimeAdapter {
+): CodexAgentRuntime {
   return new CodexAgentRuntime(options);
 }
 
 /** Native Codex port for #88; authorization and isolation belong to the injected #89 resolver. */
-export class CodexAgentRuntime implements AgentRuntimeAdapter {
+export class CodexAgentRuntime
+  implements AgentRuntimeAdapter, CodexRealtimePort
+{
   readonly capabilities = {
     activeTurnSteering: true,
     instructionApplication: "on_resume" as const,
@@ -177,6 +195,7 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
     { binding: RuntimeBinding; stoppedAt: string }
   >();
   private openingAgents = new Set<string>();
+  private realtimeListeners = new Set<(event: CodexRealtimeEvent) => void>();
   constructor(private options: CodexRuntimeOptions) {}
 
   async start(input: RuntimeStartInput): Promise<RuntimeStartResult> {
@@ -305,7 +324,8 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
               (bound) =>
                 bound.id === skill.id &&
                 bound.revision === skill.revision &&
-                isAbsolute(bound.nativePath),
+                isAbsolute(bound.nativePath) &&
+                basename(bound.nativePath) === "SKILL.md",
             ),
         )
       )
@@ -342,6 +362,7 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
         historyObserved: false,
         observed: false,
         earlyEvents: [],
+        realtime: null,
       };
       session = current;
       this.sessions.set(key(input.caller), current);
@@ -371,6 +392,13 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
           -32602,
           false,
         );
+      // Native discovery must use only the resolver's selected isolated roots.
+      // Sending [] also clears any prior process-local extra-root selection.
+      await current.peer.rpc("skills/extraRoots/set", {
+        extraRoots: [
+          ...new Set(skills.map((skill) => dirname(skill.nativePath))),
+        ],
+      });
       if (skills.length) {
         const discovery = record(
           await current.peer.rpc("skills/list", {
@@ -411,6 +439,7 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
                 cwd: launch.cwd,
                 ephemeral: false,
                 experimentalRawEvents: false,
+                environments: [],
               }
             : {
                 threadId: input.thread.threadId,
@@ -450,6 +479,17 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
         );
       }
       safeToClose = true;
+      // This protocol has no environments override on thread/resume. Verify the
+      // loaded selection instead of trusting an ignored request field. Unknown
+      // or previously selected native environments cannot enter the Crew route.
+      if (
+        !Array.isArray(thread.environments) ||
+        thread.environments.length !== 0
+      )
+        throw new CodexRpcError(
+          "The loaded native thread did not confirm disabled environment access.",
+          -32602,
+        );
       if (input.thread.mode === "create") {
         // Native naming materializes an unused persistent thread in the inspected
         // runtime. It creates no model input; the same ID survives an idle Stop.
@@ -566,6 +606,25 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
           appliedAt: observedAt,
         },
       };
+      current.realtime = new CodexRealtimeController({
+        binding: current.binding,
+        peer: current.peer,
+        profile: structuredClone(profile),
+        usable: () =>
+          Boolean(current.acknowledgement) &&
+          !current.stopping &&
+          current.peer.connected,
+        timeoutMs: this.options.acknowledgementTimeoutMs ?? 10_000,
+        emit: (event) => {
+          for (const listener of this.realtimeListeners) {
+            try {
+              listener(event);
+            } catch {
+              /* Display observers never break native transport. */
+            }
+          }
+        },
+      });
       return { state: "acknowledged", value: current.acknowledgement };
     } catch (error) {
       retainedThreadId = session?.binding?.threadId ?? retainedThreadId;
@@ -664,6 +723,7 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
     });
   }
   private disconnected(session: Session) {
+    session.realtime?.disconnected();
     if (session.binding)
       this.emit(session, {
         binding: session.binding,
@@ -698,6 +758,11 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
       return;
     }
     if (!binding || params.threadId !== binding.threadId) return;
+    if (envelope.id === undefined && method.startsWith("thread/realtime/")) {
+      session.realtime?.receive(envelope);
+      this.changed(session);
+      return;
+    }
     if (envelope.id !== undefined) {
       const approvalId = JSON.stringify([
         binding.sessionId,
@@ -849,6 +914,13 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
         };
       const session = this.get(binding);
       session.stopping = true;
+      const voice = session.realtime?.status();
+      if (voice?.voiceSessionId && voice.state !== "closed") {
+        const disconnected = await session.realtime!.disconnect(
+          voice.voiceSessionId,
+        );
+        if (disconnected.state === "failed") return disconnected;
+      }
       if (session.sending)
         return {
           state: "failed",
@@ -1074,6 +1146,7 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
         },
       };
       if (input.expectedTurnId) params.expectedTurnId = input.expectedTurnId;
+      else params.environments = [];
       sent = true;
       const result = record(
         await session.peer.rpc(
@@ -1353,6 +1426,92 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
       };
     } catch (error) {
       return { state: "uncertain", error: nativeError(error) };
+    }
+  }
+
+  subscribeRealtime(listener: (event: CodexRealtimeEvent) => void): () => void {
+    this.realtimeListeners.add(listener);
+    return () => this.realtimeListeners.delete(listener);
+  }
+
+  realtimeStatus(binding: RuntimeBinding) {
+    return (
+      this.get(binding).realtime?.status() ?? {
+        state: "closed" as const,
+        voiceSessionId: null,
+      }
+    );
+  }
+
+  async listRealtimeVoices(binding: RuntimeBinding) {
+    try {
+      const realtime = this.get(binding).realtime;
+      if (!realtime)
+        return {
+          state: "failed" as const,
+          error: failure(
+            "disconnected",
+            "The native agent session has not acknowledged startup.",
+          ),
+        };
+      return await realtime.listVoices();
+    } catch (error) {
+      return { state: "failed" as const, error: nativeError(error) };
+    }
+  }
+
+  async connectRealtime(binding: RuntimeBinding, input: CodexRealtimeConnect) {
+    try {
+      const realtime = this.get(binding).realtime;
+      if (!realtime)
+        return {
+          state: "failed" as const,
+          error: failure(
+            "disconnected",
+            "The native agent session has not acknowledged startup.",
+          ),
+        };
+      return await realtime.connect(input);
+    } catch (error) {
+      return { state: "failed" as const, error: nativeError(error) };
+    }
+  }
+
+  async appendRealtimeAudio(
+    binding: RuntimeBinding,
+    voiceSessionId: string,
+    audio: CodexRealtimeAudio,
+  ) {
+    try {
+      const realtime = this.get(binding).realtime;
+      if (!realtime)
+        return {
+          state: "failed" as const,
+          error: failure(
+            "disconnected",
+            "The native agent session has not acknowledged startup.",
+          ),
+        };
+      return await realtime.appendAudio(voiceSessionId, audio);
+    } catch (error) {
+      return { state: "failed" as const, error: nativeError(error) };
+    }
+  }
+
+  async disconnectRealtime(binding: RuntimeBinding, voiceSessionId: string) {
+    try {
+      const realtime = this.get(binding).realtime;
+      if (!realtime)
+        return {
+          state: "failed" as const,
+          error: failure(
+            "disconnected",
+            "The native agent session has not acknowledged startup.",
+          ),
+        };
+      return await realtime.disconnect(voiceSessionId);
+    } catch (error) {
+      return { state: "failed" as const, error: nativeError(error) };
     }
   }
 
