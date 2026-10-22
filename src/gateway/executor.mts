@@ -52,10 +52,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       authorization: AuthorizationService;
       vault: GatewayCredentialVault;
       admission: GatewayExecutionAdmission;
-      onCatalogue?: (
+      catalogue?: (
         connection: ServiceConnection,
-        capabilities: ServiceCapability[],
-      ) => void;
+      ) => Promise<ServiceCapability[]>;
       connections: GatewayConnections;
       resolveConfiguration: ResolveExecutorConfiguration;
       privateDirectory: string;
@@ -85,6 +84,14 @@ export class TrustedServiceExecutor implements ServiceExecutor {
     return config;
   }
   async listCapabilities(
+    connection: ServiceConnection,
+  ): Promise<ServiceCapability[]> {
+    return this.options.catalogue
+      ? this.options.catalogue(connection)
+      : this.discoverCapabilities(connection);
+  }
+  /** Host catalogue callback only; broker discovery uses listCapabilities. */
+  async discoverCapabilities(
     connection: ServiceConnection,
   ): Promise<ServiceCapability[]> {
     const config = await this.configuration(connection);
@@ -149,7 +156,6 @@ export class TrustedServiceExecutor implements ServiceExecutor {
         });
       },
     );
-    this.options.onCatalogue?.(connection, capabilities);
     return capabilities;
   }
 
