@@ -182,6 +182,10 @@ const observePreparation = createRunnerPreparation({
   },
 });
 const directions = createRunnerDirections({
+  prepareText: async (text) =>
+    config.workerProfileSource
+      ? `${profileContext((await currentWorkerProfile("direction")).text)}\n\n${text}`
+      : text,
   globalCapacityDir: config.globalCapacityDir,
   ...requestContext(),
   snapshot: () => ({

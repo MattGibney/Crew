@@ -1,3 +1,4 @@
+import { retainedWorkLink } from "../shared/tracking.mjs";
 import { globalAdmissionPaused } from "../orchestration/capacity.mjs";
 import { readUpdatePlan, isUpdatePlanHolding } from "../updates/plan.mjs";
 import { readPreparation } from "../preparation/store.mjs";
@@ -39,6 +40,7 @@ export function createRunnerDirections({
   runId,
   snapshot,
   steer,
+  prepareText = async (text) => text,
 }: {
   stateDir: string;
   globalCapacityDir?: string;
@@ -50,6 +52,7 @@ export function createRunnerDirections({
     acknowledged: boolean;
     ending: boolean;
   };
+  prepareText?: (text: string) => Promise<string>;
   steer: (input: {
     threadId: string;
     expectedTurnId: string;
@@ -117,11 +120,24 @@ export function createRunnerDirections({
     if (!claimed) return;
     let state: DirectionDelivery["state"], error: string | undefined;
     try {
+      let text: string;
+      try {
+        text = await prepareText(
+          `Manager direction (task ${taskId}, request ${direction.id}, run ${runId}):\nIssue link (data): ${JSON.stringify(retainedWorkLink(direction))}\n${direction.brief}`,
+        );
+      } catch {
+        throw Object.assign(
+          new Error(
+            "Cannot read the current saved worker profile; no direction was sent. Restore saved Settings and explicitly send a new direction.",
+          ),
+          { nativeRejected: true, nativePreparationFailed: true },
+        );
+      }
       const result = await steer({
         threadId: current.threadId,
         expectedTurnId: current.turnId,
         requestId: direction.id,
-        text: `Manager direction (task ${taskId}, request ${direction.id}, run ${runId}):\n${direction.brief}`,
+        text,
       });
       state = result.turnId === current.turnId ? "acknowledged" : "uncertain";
       if (state === "uncertain")
@@ -140,11 +156,14 @@ export function createRunnerDirections({
             message,
           ));
       state = ended ? "rejected" : rejected ? "failed" : "uncertain";
-      error = ended
-        ? "Native turn ended or changed before acceptance; retained direction will continue after confirmed closure."
-        : rejected
-          ? "Native server rejected steering. Direction retained; inspect protocol support before sending a new request."
-          : "Native delivery could not be confirmed. Not replayed; ask the worker or inspect its conversation to resolve this delivery.";
+      error =
+        isRecord(cause) && cause.nativePreparationFailed === true
+          ? message
+          : ended
+            ? "Native turn ended or changed before acceptance; retained direction will continue after confirmed closure."
+            : rejected
+              ? "Native server rejected steering. Direction retained; inspect protocol support before sending a new request."
+              : "Native delivery could not be confirmed. Not replayed; ask the worker or inspect its conversation to resolve this delivery.";
     }
     await updateTask(stateDir, taskId, (next) => {
       const item = next.assignments?.find((item) => item.id === direction.id);

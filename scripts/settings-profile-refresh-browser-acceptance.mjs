@@ -262,11 +262,15 @@ try {
     };
     delete nativeEnv.ELECTRON_RUN_AS_NODE;
     native = await _electron.launch({
-      executablePath: path.join(
-        root,
-        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-      ),
-      args: [root, "--config", configPath],
+      executablePath:
+        process.env.CREW_ACCEPTANCE_EXECUTABLE ||
+        path.join(
+          root,
+          "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+        ),
+      args: process.env.CREW_ACCEPTANCE_EXECUTABLE
+        ? ["--config", configPath]
+        : [root, "--config", configPath],
       env: nativeEnv,
       timeout: 45000,
     });

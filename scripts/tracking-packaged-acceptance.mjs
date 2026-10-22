@@ -34,6 +34,18 @@ async function returnFromOwnedQuit(){
 }
 async function quit(){
  if(!native||native.exitCode!==null||native.signalCode!==null)return;
+ if(process.env.CREW_ACCEPTANCE_UI_ONLY==='1'){
+  // Keep historical product Quit outside this UI acceptance. Stop only the
+  // disposable controller, then dispose this exact isolated app process.
+  assert.ok(native.spawnargs.includes(configPath));
+  await app.evaluate(({BrowserWindow})=>{for(const window of BrowserWindow.getAllWindows())window.close();});
+  await run(process.execPath,[path.join(bundled,'cli.mjs'),'stop','--config',configPath],{timeout:20000});
+  native.kill('SIGTERM');const deadline=Date.now()+5000;
+  while(native.exitCode===null&&native.signalCode===null&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
+  if(native.exitCode===null&&native.signalCode===null){native.kill('SIGKILL');proof.forcedFixtureShellDisposals=(proof.forcedFixtureShellDisposals||0)+1;}
+  await until(()=>native.exitCode!==null||native.signalCode!==null,'owned fixture shell disposal');
+  return;
+ }
  await returnFromOwnedQuit();
  await app.evaluate(({dialog,Menu})=>{dialog.showMessageBox=async()=>({response:1});Menu.getApplicationMenu().items[0].submenu.items.find(item=>item.label==='Quit Crew…').click();});
  await until(()=>native.exitCode!==null||native.signalCode!==null,'normal owned native Quit');
@@ -125,6 +137,6 @@ if(['turn/start','turn/steer'].includes(m.method)){
  assert.equal((await saved()).project.linear.teamId,'synthetic-team');await setup.close();assert.equal(await page.evaluate(()=>window.__gh78MediaCalls),0);await quit();
  const calls=(await readFile(protocol,'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse);assert.equal(calls.some(m=>m.method==='thread/realtime/start'),false);assert.deepEqual(errors,[]);
  const toolCalls=calls.filter(m=>m.method==='mcpServer/tool/call').map(m=>m.params.tool);assert.deepEqual([...new Set(toolCalls)].sort(),['get_repo','list_projects','list_repositories','list_teams']);
- Object.assign(proof,{pass:true,choices:['none','linear','github','both'],syntheticConnectedTools:toolCalls,realConfigStore:true,savedReloadedRelaunched:true,normalOwnedQuit:true,rendererErrors:errors});
+ Object.assign(proof,{pass:true,choices:['none','linear','github','both'],syntheticConnectedTools:toolCalls,realConfigStore:true,savedReloadedRelaunched:true,normalOwnedQuit:process.env.CREW_ACCEPTANCE_UI_ONLY!=='1',productQuitAcceptance:process.env.CREW_ACCEPTANCE_UI_ONLY==='1'?'excluded; normal controller CLI stop and owned shell disposal only':'normal owned Quit',rendererErrors:errors});
 }catch(error){proof.error=error.message;await page?.screenshot({path:path.join(output,'failure.png')}).catch(()=>{});throw error;}
 finally{try{await quit();}finally{await writeFile(path.join(output,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));}}

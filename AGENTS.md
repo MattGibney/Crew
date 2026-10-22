@@ -385,3 +385,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Binding `CREW_GLOBAL_CAPACITY_DIR` to a fresh directory without `capacity.json` intentionally holds production admission. Before scheduling/full-suite validation, initialize only the disposable test ledger through `configureGlobalCapacity` and verify `globalAdmissionPaused` is false. Never weaken the fail-closed guard, alter live claims, or skip assertions to make fixtures proceed.
 - A clean-base cancellation under the same invalid environment does not prove a product baseline defect. Preserve that evidence and correct the conclusion when the harness cause is established. `scripts/issue66-isolated-validation.mjs` records initialized isolation, exact source hashes and focused/full logs outside Git.
+
+## Grouped 0.18.0 integration (REL-0.18.0)
+
+- Integrate only original PR heads #79–82 through merge commits, preserving all histories. This assignment permits the integration branch, scoped commits, push and reviewable integration PR; main merge, tag and publication remain manager actions. Preserve installed profiles, workers and physical microphone boundaries.
+- Ordinary manager steering is also a Crew-owned prompt boundary: read the current saved worker profile immediately before explicit native delivery, and include the direction’s actual canonical optional issue link, including null. A save alone sends nothing. A failed profile read sends no stale input and retains explicit recovery guidance without blind replay.

@@ -1,5 +1,6 @@
 // GH-50 opt-in real subscription acceptance. Never opens voice or the installed app.
 // Run only with explicit authorization for bounded subscription use and disposable fixtures.
+import { createPromptSettings } from "../runtime/manager/instructions/settings.mjs";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -86,7 +87,13 @@ try {
   };
   const workerPrompt =
     "You are a bounded disposable transport acceptance participant. Follow the fixture brief exactly. Use only local_orchestration.report and normal shell tools in this disposable worktree. Never read credentials, access business services, open voice, create workers, commit, push or mutate external services. Existing subscription and normal native permissions apply. Report real observations only.";
+  const profiles = await createPromptSettings({
+    stateDir,
+    projectId: project.id,
+    workerPrompt,
+  });
   controller = await createController({
+    workerProfileSource: { projectId: project.id },
     stateDir,
     sourceDir,
     executable,
@@ -125,11 +132,31 @@ try {
   const runtimeBefore = JSON.parse(
     await readFile(path.join(started.runDir, "runtime.json"), "utf8"),
   );
+  const beforeSave = await profiles.read();
+  await profiles.save({
+    role: "worker",
+    expectedVersion: beforeSave.worker.version,
+    text:
+      workerPrompt +
+      "\nWhen an explicit manager direction asks for profile verification, report the current saved profile marker REL018_CURRENT_PROFILE.",
+  });
+  await delay(500);
+  assert.equal(
+    (await read()).assignments?.length || 1,
+    1,
+    "Saving Settings alone creates no direction",
+  );
   await requestWorkerFollowup(stateDir, {
     taskId,
+    workLink: {
+      provider: "github",
+      repository: "MattGibney/crew",
+      number: 78,
+      url: "https://github.com/MattGibney/crew/issues/78",
+    },
     requestId: "subscription-correction-one",
     brief:
-      "Live correction ONE: call local_orchestration.report now with kind progress, reportId consumed-correction-one, message CORRECTION_ONE_CONSUMED. Stay in this active turn and keep waiting for acceptance-release. Do not report result yet.",
+      "Live correction ONE: first verify the current saved worker profile by reporting kind progress, reportId profile-consumed, message containing the current saved profile marker. Then call local_orchestration.report now with kind progress, reportId consumed-correction-one, message CORRECTION_ONE_CONSUMED. Stay in this active turn and keep waiting for acceptance-release. Do not report result yet.",
   });
   await requestWorkerFollowup(stateDir, {
     taskId,
@@ -140,10 +167,31 @@ try {
   const consumed = await wait(
     read,
     (n) =>
-      ["consumed-correction-one", "consumed-correction-two"].every((id) =>
-        n.reports.some((r) => r.reportId === id),
-      ),
+      [
+        "consumed-correction-one",
+        "consumed-correction-two",
+        "profile-consumed",
+      ].every((id) => n.reports.some((r) => r.reportId === id)),
     "model-consumed corrections before completion",
+  );
+  assert.match(
+    consumed.reports.find((r) => r.reportId === "profile-consumed").message,
+    /REL018_CURRENT_PROFILE/,
+  );
+  const promptReads = (
+    await readFile(
+      path.join(started.runDir, "prompt-consumptions.jsonl"),
+      "utf8",
+    )
+  )
+    .trim()
+    .split("\n")
+    .map(JSON.parse);
+  assert.equal(promptReads.filter((p) => p.boundary === "direction").length, 2);
+  assert.ok(
+    promptReads
+      .filter((p) => p.boundary === "direction")
+      .every((p) => p.saved.text.includes("REL018_CURRENT_PROFILE")),
   );
   assert.equal(consumed.runId, started.runId);
   assert.equal(consumed.threadId, started.threadId);
@@ -182,18 +230,17 @@ try {
     pass: true,
     version,
     evidenceDir: dir,
+    currentSavedProfileConsumed: true,
     sameRun: completed.runId === started.runId,
     sameThread: completed.threadId === started.threadId,
     sameWorktree: completed.worktree === started.worktree,
     sameNativeTurn: runtimeAfter.turnId === runtimeBefore.turnId,
-    nativeAcknowledgements: completed.assignments
-      .slice(1)
-      .map((a) => ({
-        requestId: a.id,
-        state: a.delivery.state,
-        turnId: a.delivery.turnId,
-        history: a.deliveryHistory,
-      })),
+    nativeAcknowledgements: completed.assignments.slice(1).map((a) => ({
+      requestId: a.id,
+      state: a.delivery.state,
+      turnId: a.delivery.turnId,
+      history: a.deliveryHistory,
+    })),
     modelConsumptionReports: consumed.reports
       .filter((r) => r.reportId.startsWith("consumed-correction-"))
       .map((r) => ({ reportId: r.reportId, at: r.at, message: r.message })),

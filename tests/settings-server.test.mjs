@@ -548,3 +548,21 @@ test('save does not steer a live worker; an explicit preparation delivery reads 
  const steer=(await f.calls()).find(c=>c.workerRunId===live.runId&&c.method==='turn/steer');assert.match(steer.params.input[0].text,/PROFILE CURRENT AT EXPLICIT PREPARATION/);assert.doesNotMatch(steer.params.input[0].text,/PROFILE BEFORE LIVE TURN/);assert.equal(steer.params.expectedTurnId,'http-turn');
  await writeFile(join(f.directory,'release-turn'),'release');await nativeFinished(f,id);await f.stop();
 });
+
+test('REL-0.18.0 explicit live directions consume current saved profile and exact optional linkage without a save-triggered send', async t => {
+ const f=await fixture(t);await f.start();await savedWorker(f,'PROFILE ORIGINAL LIVE');await writeFile(join(f.directory,'hold-turn'),'hold');
+ const id='release018-live-direction';await createTask(f.stateDir,{requestId:id,ticket:'LOCAL-REL018',brief:'Hold disposable native turn',projectId:'http-settings-fixture'});
+ const live=await waitProfileWorker(f,id,async task=>task.threadId&&(await f.calls()).some(c=>c.workerRunId===task.runId&&c.method==='turn/start'),'live direction turn');
+ const original=await readFile(join(live.runDir,'config.json'),'utf8');
+ await savedWorker(f,'PROFILE CURRENT DIRECTION');await delay(180);assert.equal((await f.calls()).filter(c=>c.workerRunId===live.runId&&c.method==='turn/steer').length,0);
+ const {requestWorkerFollowup}=await import('../runtime/orchestration/store.mjs');
+ const workLink={provider:'github',repository:'MattGibney/crew',number:78,url:'https://github.com/MattGibney/crew/issues/78'};
+ await requestWorkerFollowup(f.stateDir,{taskId:id,requestId:'linked-direction',workLink,brief:'Explicit linked correction'});
+ const linked=await waitProfileWorker(f,id,n=>n.assignments?.find(a=>a.id==='linked-direction')?.delivery?.state==='acknowledged','linked direction');
+ let calls=(await f.calls()).filter(c=>c.workerRunId===live.runId&&c.method==='turn/steer');assert.equal(calls.length,1);assert.match(calls[0].params.input[0].text,/PROFILE CURRENT DIRECTION/);assert.doesNotMatch(calls[0].params.input[0].text,/PROFILE ORIGINAL LIVE/);assert.ok(calls[0].params.input[0].text.includes(JSON.stringify(workLink)));assert.equal(calls[0].params.expectedTurnId,'http-turn');
+ await savedWorker(f,'PROFILE CURRENT LOCAL DIRECTION');await requestWorkerFollowup(f.stateDir,{taskId:id,requestId:'local-direction',workLink:null,brief:'Explicit local correction'});
+ await waitProfileWorker(f,id,n=>n.assignments?.find(a=>a.id==='local-direction')?.delivery?.state==='acknowledged','local direction');
+ calls=(await f.calls()).filter(c=>c.workerRunId===live.runId&&c.method==='turn/steer');assert.equal(calls.length,2);assert.match(calls[1].params.input[0].text,/PROFILE CURRENT LOCAL DIRECTION/);assert.match(calls[1].params.input[0].text,/Issue link \(data\): null/);
+ assert.equal(linked.runId,live.runId);assert.equal(linked.threadId,live.threadId);assert.equal(linked.worktree,live.worktree);assert.equal(linked.currentAssignmentId,live.currentAssignmentId || "initial");assert.equal(await readFile(join(live.runDir,'config.json'),'utf8'),original);
+ await writeFile(join(f.directory,'release-turn'),'release');await nativeFinished(f,id);await f.stop();
+});

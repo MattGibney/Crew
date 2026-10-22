@@ -296,3 +296,11 @@ test("shared admission holds steering before a project preparation journal exist
   assert.equal(f.calls.length, 1);
   assert.equal((await f.read()).assignments[1].delivery.state, "acknowledged");
 });
+
+test('saved-profile failure sends nothing, retains recovery and never blindly retries the direction', async t => {
+ const f=await fixture(t);await f.follow();
+ const observer=createRunnerDirections({...f.options,prepareText:async()=>{throw Error('saved profile unreadable');}});
+ await observer.observe();assert.equal(f.calls.length,0);
+ const task=await f.read();assert.equal(task.assignments[1].delivery.state,'failed');assert.match(task.followupWait,/no direction was sent.*Restore saved Settings/i);
+ await createRunnerDirections(f.options).observe();assert.equal(f.calls.length,0);
+});
