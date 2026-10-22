@@ -71,3 +71,13 @@ Project execution plans expose Set up, Start, Resume, Check readiness, Stop and 
 Save runs nothing. Managers and workers read the current command context through get_project_environment and decide when to execute existing project commands through native tools. Dispatch runs no setup, start, resume or readiness command. Prior attempts, resources and outcomes remain in history. Explicit archive can use configured scoped cleanup; dirty worktrees and unresolved resource ownership still protect destructive removal.
 
 Cancel discards only the unsaved editor. Navigation between settings pages retains drafts. Invalid/stale saves leave saved settings and draft intact. Reload settings before retrying a stale save; copy any edits you need to retain first.
+
+## Manager schedules (#64)
+
+Open **Project settings → Manager schedules** to add or edit named instructions, enable/disable them, and choose an interval (1–10080 minutes) or a daily wall-clock time with an explicit IANA time zone, such as `Europe/London`. **Save schedules** applies configuration without running a task; drafts survive switching Settings pages. Stale saves preserve the draft and require reloading the current version.
+
+The existing ten-minute commitment review appears as **Review commitments**. It still requires saved outstanding commitments and new/due evidence; its instruction, enabled state and timing are editable. Custom schedules run the saved instruction on each eligible slot, so configure only work you intend to delegate. Writing “check email” does not install a mail integration or grant account access: normal Codex tools, sign-in, approvals and the manager's instructions still apply.
+
+Only a running, idle manager with no active/connecting call or pending approval is eligible. Update preparation and project/global holds defer schedules. Missed times are skipped; Crew does not wake a stopped manager or replay a backlog. The settings list shows last submission, next check, submitted/deferred/no-changes/error status and any error. “Submitted” means native delivery was acknowledged, not that the agent finished the task. Status refreshes while this page is visible. A daily time follows its configured time zone through daylight-saving changes; a nonexistent spring-forward time skips that day's slot, and a repeated fall-back time runs once.
+
+Scheduled prompts and routine background commentary do not appear in the conversation. A manager requiring a human decision can explicitly call the existing `request_attention` tool; that validated question is shown as a manager message and retains normal attention signaling. Nothing automatically opens voice or a microphone.

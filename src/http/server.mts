@@ -3,6 +3,7 @@ import { readRequestBody } from "./request-body.mjs";
 import { runtimeRoot, resourceURL } from "../shared/paths.mjs";
 import { parseArchiveAction } from "./input.mjs";
 import { createScratchpadFeed } from "../manager/scratchpad-feed.mjs";
+import { createManagerSchedules } from "../manager/reviews/schedules.mjs";
 import { createManagerReviews } from "../manager/reviews/controller.mjs";
 import { createSettingsSave } from "./settings-save.mjs";
 import { createEnvironmentSettings } from "../projects/environment-settings.mjs";
@@ -250,7 +251,9 @@ const manager = await createManagerLifecycle({
   },
   onChange: (state) => broadcast({ type: "manager-lifecycle", state }),
 });
+const managerSchedules = createManagerSchedules(orchestrationDir);
 const settingsView = createSettingsView({
+  managerSchedules,
   prompts,
   manager,
   managerProfile,
@@ -333,6 +336,7 @@ updatePlanTimer = setInterval(
 );
 const scratchpadTimer = setInterval(() => void scratchpadFeed!.refresh(), 1000);
 const managerReview = createManagerReviews({
+  schedules: managerSchedules,
   stateDir: orchestrationDir,
   bridge,
   manager,
@@ -460,6 +464,10 @@ const server = http.createServer(async (req, res) => {
           "Crew is preparing an update across projects. Work admission is paused until you resume or return to work.",
       });
     if (req.method === "PUT") {
+      if (req.url === "/api/settings/manager-schedules") {
+        await managerSchedules.save(rawInput);
+        return send(200, await settingsView());
+      }
       if (req.url === "/api/settings/worker-environment") {
         const saved = await environmentSettings.save(rawInput);
         project.worker.environment = structuredClone(saved.environment);

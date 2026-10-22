@@ -171,7 +171,23 @@ export interface PromptSnapshot {
   text: string;
   version: string;
 }
+export interface ManagerSchedule {
+  id: string;
+  name: string;
+  instruction: string;
+  enabled: boolean;
+  builtin?: boolean;
+  timing:
+    | { kind: "interval"; minutes: number }
+    | { kind: "daily"; time: string; timeZone: string };
+  run?: { nextAt: number; lastAt?: number; status?: string; error?: string };
+}
+export interface ManagerSchedules {
+  revision: string;
+  schedules: ManagerSchedule[];
+}
 export interface SettingsState {
+  managerSchedules?: ManagerSchedules;
   projectId?: string;
   projectName?: string;
   managerProfile: ManagerProfile;
@@ -271,6 +287,7 @@ export interface ApiResults {
   "settings/manager-profile": SettingsState;
   "settings/prompts": SettingsState;
   "settings/worker-environment": SettingsState;
+  "settings/manager-schedules": SettingsState;
   "archived-worker-action": JsonObject;
   config: { nativeAttentionSound?: boolean; project: ProjectInfo };
   state: WorkState;

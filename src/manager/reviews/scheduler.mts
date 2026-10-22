@@ -236,19 +236,20 @@ export class ManagerReview {
     }
   }
 
-  async tick() {
+  async tick({ scheduled = false } = {}) {
     if (this.stopped) return { reviewed: false, reason: "stopped" };
     if (this.busy) return { reviewed: false, reason: "busy" };
     const generation = this.generation;
     const cancelled = () => this.stopped || this.generation !== generation;
     const at = this.now();
-    if (at < this.nextAt) return { reviewed: false, reason: "interval" };
+    if (!scheduled && at < this.nextAt)
+      return { reviewed: false, reason: "interval" };
     this.busy = true;
     this.nextAt = at + this.intervalMs;
     try {
       const previous = await this.readCheckpoint();
       if (cancelled()) return { reviewed: false, reason: "stopped" };
-      if (at < previous.at + this.intervalMs)
+      if (!scheduled && at < previous.at + this.intervalMs)
         return { reviewed: false, reason: "interval" };
       const snapshot = await this.getSnapshot();
       if (cancelled()) return { reviewed: false, reason: "stopped" };

@@ -202,3 +202,10 @@ test("retained worker assignment/workflow state and exact native approval identi
   };
   assert.equal(decodeManagerEvent(event), event);
 });
+
+test('manager schedule responses validate interval/daily timing before rendering',()=>{
+ const settings={managerProfile:{voice:null,version:'profile'},managerLifecycle:{state:'running'},manager:{saved:{text:'manager',version:'m1'}},worker:{saved:{text:'worker',version:'w1'}},managerSchedules:{revision:'r1',schedules:[{id:'interval',name:'Check',instruction:'Check my work',enabled:true,timing:{kind:'interval',minutes:30},run:{nextAt:1234}}]}};
+ assert.equal(decodeApi('settings/manager-schedules',settings),settings);
+ const broken=structuredClone(settings);delete broken.managerSchedules.schedules[0].timing.minutes;assert.throws(()=>decodeApi('settings',broken));
+ broken.managerSchedules.schedules[0].timing={kind:'daily',time:'09:00',timeZone:'Europe/London'};assert.equal(decodeApi('settings',broken),broken);
+});

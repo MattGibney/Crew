@@ -10,7 +10,7 @@ The behavior is visible in the default manager instructions in Settings. Customi
 
 ## Local review
 
-The project controller checks every ten minutes, starting ten minutes after controller startup. Only saved outstanding commitments qualify. Empty records and completed/cancelled commitments do not launch model work. The manager must be enabled, idle, without pending native approvals and with voice disconnected; local and all-project update holds block admission. A final check after native preparation protects races with Stop, conversation, voice and update reservations. A stopped manager is never restarted by this scheduler. Only the user's explicit Start re-enables it.
+The project controller uses the single local manager schedule engine. The built-in Review commitments schedule defaults to ten minutes and is editable in Project settings → Manager schedules (#64). Only saved outstanding commitments qualify. Empty records and completed/cancelled commitments do not launch model work. The manager must be enabled, idle, without pending native approvals and with voice disconnected; local and all-project update holds block admission. A final check after native preparation protects races with Stop, conversation, voice and update reservations. A stopped manager is never restarted by this scheduler. Only the user's explicit Start re-enables it.
 
 Each eligible review asks the same persistent subscription-backed manager to inspect saved commitments and matching worker evidence. It grants no additional execution, lifecycle, external mutation or approval authority. A question requiring human judgment uses existing attention, without opening a call or microphone. The scheduler itself never launches workers or chooses tickets/backlog.
 
@@ -22,6 +22,8 @@ Within the existing project orchestration directory:
 
 - `manager-scratchpad.json`: versioned structured record, bounded at 256 KiB, revision and timestamp. Commitments use stable IDs and pending/delegated/blocked/completed/cancelled statuses, optional outcome, nextAction, nextReviewAt and task/run/ticket references. Notes, decisions and questions are arrays of concise strings.
 - `manager-review.json`: last reserved review fingerprint/time. Contains no credentials or audio.
+- `manager-schedules.json`: saved schedule definitions and optimistic revision.
+- `manager-schedule-runs.json`: last submission, next slot and status/error receipts.
 
 Only manager-role `local_orchestration.read_manager_scratchpad` and `update_manager_scratchpad` expose the record. Updates supply `patchJson` containing expectedRevision and complete replacement arrays for included sections. Omitted sections are preserved. Cross-process state locking and atomic replacement protect revision checks; identical saves do not advance time/revision. Malformed data is preserved and fails closed. Do not store secrets, private reasoning or raw conversation dumps.
 

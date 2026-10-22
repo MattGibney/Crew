@@ -4,7 +4,9 @@ import type { PromptSettings } from "../manager/instructions/contracts.mjs";
 import type { LoadedProject } from "../config/contracts.mjs";
 import type { createManagerLifecycle } from "../manager/lifecycle.mjs";
 import type { createManagerProfile } from "../manager/profile.mjs";
+import type { createManagerSchedules } from "../manager/reviews/schedules.mjs";
 interface SettingsContext {
+  managerSchedules?: ReturnType<typeof createManagerSchedules>;
   prompts: PromptSettings;
   manager: Awaited<ReturnType<typeof createManagerLifecycle>>;
   managerProfile: ReturnType<typeof createManagerProfile>;
@@ -17,12 +19,14 @@ export function createSettingsView({
   managerProfile,
   project,
   environmentSettings,
+  managerSchedules,
 }: SettingsContext) {
   return async () => {
     const saved = await prompts.read(),
       lifecycle = manager.view();
     const profile = await managerProfile.read();
     return {
+      managerSchedules: await managerSchedules?.view(),
       projectId: project.id,
       projectName: project.name,
       workerEnvironment: await environmentSettings.read(),

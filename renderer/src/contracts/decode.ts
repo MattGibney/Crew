@@ -185,6 +185,52 @@ const settingsSchema = object(
     manager: object({ saved: prompt }, ["saved"]),
     worker: object({ saved: prompt }, ["saved"]),
     workerEnvironment: workerEnvironmentSettings,
+    managerSchedules: object(
+      {
+        revision: string,
+        schedules: array(
+          object(
+            {
+              id: string,
+              name: string,
+              instruction: string,
+              enabled: { type: "boolean" },
+              timing: {
+                anyOf: [
+                  object(
+                    {
+                      kind: { const: "interval" },
+                      minutes: { type: "integer" },
+                    },
+                    ["kind", "minutes"],
+                  ),
+                  object(
+                    {
+                      kind: { const: "daily" },
+                      time: string,
+                      timeZone: string,
+                    },
+                    ["kind", "time", "timeZone"],
+                  ),
+                ],
+              },
+              builtin: { type: "boolean" },
+              run: object(
+                {
+                  nextAt: { type: "number" },
+                  lastAt: { type: "number" },
+                  status: string,
+                  error: string,
+                },
+                ["nextAt"],
+              ),
+            },
+            ["id", "name", "instruction", "enabled", "timing"],
+          ),
+        ),
+      },
+      ["revision", "schedules"],
+    ),
   },
   ["managerProfile", "managerLifecycle", "manager", "worker"],
 );
@@ -206,6 +252,7 @@ const schemas: Record<keyof ApiResults, Schema> = {
   "settings/manager-profile": settingsSchema,
   "settings/prompts": settingsSchema,
   "settings/worker-environment": settingsSchema,
+  "settings/manager-schedules": settingsSchema,
   "archived-worker-action": object({}),
   config: object(
     {
