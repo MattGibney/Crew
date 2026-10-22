@@ -13,11 +13,11 @@ The package entry, development entry and `crew start` open `src/desktop/main.mts
 
 ## Native lifecycle
 
-Closing the window releases voice/media and keeps the menu-bar host and independent work alive. Explicit Quit prepares all projects and observes the same readiness request while conversation remains available. Final reservations are acquired for every project before any project is closed. If closing begins but cannot be confirmed, retain reservations and report recovery required; releasing a partially disposed composition is not a safe Return to work.
+Closing the window releases voice/media and keeps the menu-bar host and independent work alive. Explicit Quit prepares all projects and observes the same readiness request while conversation remains available. Final reservations are acquired for every project before any project is closed. If closing begins but cannot be confirmed, retain reservations and offer Retry Quit under those exact reservations. A retry skips cleanup stages already confirmed complete; it does not release reservations or resume queues before disposal. Releasing a partially disposed composition is not a safe Return to work.
 
 Updates adapt the existing signed-update coordinator. A shared installation lease covers startup and installation, and other native instances are checked. Explicit installation requires fresh all-project reservations. Unsigned candidates cannot establish a stable update feed or install automatically. This track does not install or replace the user's existing Crew app.
 
-The renderer retains submitted and newly typed drafts across async acknowledgements. Settings editors remain mounted across navigation, and revision conflicts preserve the user's draft. A rebuilt pinned renderer requires a controller restart before native validation; a successful build does not update an already open editor.
+The renderer retains submitted and newly typed drafts across async acknowledgements. Settings editors remain mounted across navigation and agent selection, and revision conflicts preserve the user's draft. A successful access save remains acknowledged if its following refresh fails; Retry refresh repeats only the read and preserves pending drafts. A rebuilt pinned renderer requires a controller restart before native validation; a successful build does not update an already open editor.
 
 ## Acceptance record: 22 October 2026 checkpoint
 
@@ -36,9 +36,9 @@ Verified through the composed native application:
 
 Current limits and follow-up:
 
-- The owner has approved applying changed instructions through supported native compaction on explicit Restart. That implementation and its same-chat behavioural proof belong to the runtime track; these profile readbacks do not establish that acceptance. Ordinary unchanged Start/Restart must remain idle.
-- Help correlation still needs the actual request identity in its supported native context or discovery surface; successful recovery through worker history must not hide the initial wrong-ID failure.
-- This track's typed and packaged evidence does not establish visible voice transcript/history acceptance, human microphone/acoustic acceptance, or every schedule overlap case. Voice provenance and the remaining runtime/profile checks are reported separately.
+- Changed instructions now use supported native compaction on explicit Restart, with exact item/turn completion and idle/policy readback required before marking the instruction digest applied. Actual integrated same-chat behavioural acceptance is being checked separately; the earlier profile readbacks do not establish it. Ordinary unchanged Start/Restart must remain idle.
+- Routed help now accepts the authenticated incoming messageId as well as canonical helpId, while preserving canonical durable correlation and permission checks. A fresh actual exchange must verify this path without recovering a hidden ID from worker history; the earlier wrong-ID failure remains preserved.
+- Validated native live transcripts now have a bounded, call-scoped owner display that clears on call/binding end. Synthetic controller/render checks pass; this track's typed and packaged evidence does not establish actual desktop live-call acceptance, retained voice-turn attribution, human microphone/acoustic acceptance, or every schedule overlap case. Private/unknown coding-turn content remains filtered.
 - The packaged candidate was launched directly, never installed or used to replace the user's Crew app. No signed updater installation, merge or release occurred.
 
 Private screenshots, exact native identities, fixture state and terminal evidence remain outside Git. Historical/intermediate snapshots are preserved separately from final terminal snapshots. See [access isolation](ACCESS-ISOLATION.md), [unified composition](AGENT-UNIFIED-COMPOSITION.md), and [project skills](PROJECT-SKILLS.md) for their implementation boundaries.
