@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AccessState } from "./state.mjs";
 import type {
   Actor,
+  AgentCreationPreset,
   AuthorizationInput,
   EnvironmentPolicy,
   GrantScope,
@@ -269,6 +270,24 @@ const definitions = {
     serviceConnectionIds: ids,
     revision,
   }),
+  preset: object({
+    id,
+    projectId: id,
+    revision,
+    name: id,
+    enabled: { type: "boolean" },
+    profile: object({
+      name: id,
+      pictureRef: nullable(id),
+      personality: { type: "string", maxLength: 200000 },
+      systemPrompt: { type: "string", maxLength: 200000 },
+    }),
+    skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
+    modelAccessId: id,
+    configRef: id,
+    permissionGroupIds: ids,
+    serviceConnectionIds: ids,
+  }),
   audit: object({
     id,
     at: timestamp,
@@ -302,6 +321,11 @@ export function validateGroup(
 ): asserts value is PermissionGroup {
   check("group", value);
 }
+export function validatePreset(
+  value: unknown,
+): asserts value is AgentCreationPreset {
+  check("preset", value);
+}
 export function validateConnection(
   value: unknown,
 ): asserts value is ServiceConnection {
@@ -328,6 +352,8 @@ const stateValidator = ajv.compile<AccessState>({
     projectId: id,
     ownerUserId: id,
     groups: array(ref("group")),
+    presets: array(ref("preset")),
+    creationDefaults: object({ revision, presetId: nullable(id) }),
     connections: array(ref("connection")),
     environmentPolicies: array(ref("environmentPolicy")),
     assignments: array(ref("assignment")),
@@ -343,6 +369,7 @@ export function validateState(value: unknown): asserts value is AccessState {
     throw new Error("Malformed access state; restore instead of resetting.");
   for (const rows of [
     value.groups,
+    value.presets,
     value.connections,
     value.environmentPolicies,
     value.requests,
@@ -359,6 +386,7 @@ export function validateState(value: unknown): asserts value is AccessState {
     throw new Error("Duplicate access assignment.");
   for (const row of [
     ...value.groups,
+    ...value.presets,
     ...value.connections,
     ...value.environmentPolicies,
     ...value.grants,

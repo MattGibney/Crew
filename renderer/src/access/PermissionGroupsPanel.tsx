@@ -213,6 +213,14 @@ function GroupEditor({
         if (saved) onClose();
       }}
     >
+      {group &&
+        props.groups.find((row) => row.id === group.id)?.revision !==
+          group.revision && (
+          <p role="alert" className="text-sm text-destructive">
+            This group changed while you were editing. Your draft is retained.
+            Cancel and reopen Update to use the current revision.
+          </p>
+        )}
       <fieldset disabled={action.busy} className="space-y-5">
         <legend className="mb-4 text-sm font-semibold">
           {group ? `Update ${group.name}` : "Create permission group"}

@@ -35,14 +35,17 @@ export async function createGateway(options: {
   let catalogue: GatewayCatalogue;
   const executor = new TrustedServiceExecutor({
     ...options,
-    onCatalogue: (connection, capabilities) => catalogue.observe(connection, capabilities),
+    onCatalogue: (connection, capabilities) =>
+      catalogue.observe(connection, capabilities),
     canDispatch: async (invocation: BrokerInvocation) =>
       (await options.validateCaller(invocation.caller, invocation.jobId)) &&
       !(await store.isCancelled(
         operationKey(invocation.caller, invocation.operation.invocationId),
       )),
   });
-  catalogue = new GatewayCatalogue(connection => executor.listCapabilities(connection));
+  catalogue = new GatewayCatalogue((connection) =>
+    executor.listCapabilities(connection),
+  );
   const broker = new DurableOperationBroker({
     ...options,
     store,
