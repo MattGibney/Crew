@@ -1,6 +1,9 @@
 import type {
   Agent,
   AgentContent,
+  AgentCreationPreset,
+  ProjectAgentSettings,
+  Actor,
   AgentMessage,
   DeliveryMode,
   ExecutionReservation,
@@ -24,6 +27,10 @@ export interface AgentsSnapshot {
   projectId: Id;
   projectName: string;
   ownerId: Id;
+  /** Explicit project selection; absence is setup, never inferred from agent order. */
+  primaryAgentId?: Id | null;
+  projectSettings?: ProjectAgentSettings;
+  creationPresets?: AgentCreationPreset[];
   agents: Agent[];
   jobs: Job[];
   skills: Skill[];
@@ -51,8 +58,10 @@ export interface SaveProfileInput {
   skills: Agent["skills"];
 }
 export interface CreateAgentInput {
-  profile: ProfileInput;
-  skills: Agent["skills"];
+  presetId: Id;
+  expectedPresetRevision: number;
+  name?: string;
+  reportsTo?: Actor;
 }
 export interface SendMessageInput {
   recipientAgentId: Id;
@@ -111,4 +120,7 @@ export interface AgentsClient {
   ): Promise<PreparationReadiness[]>;
   /** Resolves only already-authorized artifact references; never returns a credential. */
   artifactUrl?(fileRef: string): string | null;
+  /** Private project picture bytes pass through the authenticated owner channel. */
+  saveImage?(picture: string): Promise<{ imageRef: string }>;
+  readImage?(imageRef: string): Promise<{ picture: string } | null>;
 }

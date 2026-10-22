@@ -71,3 +71,7 @@
   background: color-mix(in srgb, var(--chart-2) 12%, var(--background));
   color: var(--chart-2);
 }
+
+.agents-app [hidden] {
+  display: none !important;
+}
