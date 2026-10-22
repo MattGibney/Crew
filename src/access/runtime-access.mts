@@ -23,8 +23,10 @@ import type {
 } from "../agents/contracts.mjs";
 import {
   CodexPeer,
+  CodexRpcError,
   object,
   record,
+  type CodexEnvelope,
   type CodexLaunch,
 } from "../agents/codex-peer.mjs";
 import type { CodexLaunchResolution } from "../agents/codex-runtime.mjs";
@@ -53,10 +55,50 @@ export interface CodexRuntimeAccessOptions {
     skills: Skill[],
   ): Promise<{ id: string; revision: number; nativePath: string }[]>;
 }
+type SignInStage =
+  | "initialization"
+  | "configuration"
+  | "request"
+  | "response"
+  | "completion"
+  | "transport";
+export type SubscriptionSignInStatus =
+  | { state: "pending"; reason: null }
+  | {
+      state: "failed";
+      reason: string;
+      stage: SignInStage;
+      code: number | null;
+    };
 export type SubscriptionStatus =
   | { state: "signed_in"; plan: string | null }
-  | { state: "sign_in_required" }
+  | { state: "sign_in_required"; signIn?: SubscriptionSignInStatus }
   | { state: "blocked"; reason: string };
+const signInFailure = (
+  stage: SignInStage,
+  error?: unknown,
+): SubscriptionSignInStatus => ({
+  state: "failed",
+  stage,
+  // Never expose arbitrary native error text: it can include auth response data.
+  code:
+    error instanceof CodexRpcError && Number.isSafeInteger(error.code)
+      ? error.code
+      : null,
+  reason: {
+    initialization:
+      "Crew could not initialize its native sign-in process. Try again.",
+    configuration: "Crew could not verify the isolated sign-in configuration.",
+    request:
+      "The native device-code request failed. Check network access and whether device-code sign-in is enabled for your account, then try again.",
+    response:
+      "Native sign-in returned an unsupported response. No code was accepted.",
+    completion:
+      "Native sign-in did not complete successfully. Start a new sign-in attempt.",
+    transport:
+      "The native sign-in connection ended before completion. Start a new sign-in attempt.",
+  }[stage],
+});
 const key = (caller: CallerContext) =>
   JSON.stringify([caller.projectId, caller.agentId, caller.sessionId]);
 const hash = (value: unknown) =>
@@ -109,7 +151,14 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   private egress: Awaited<ReturnType<typeof openModelEgress>> | null = null;
   private bindings = new Map<string, Bound>();
   private releasedSessions = new Set<string>();
-  private signing: { peer: CodexPeer; loginId: string | null } | null = null;
+  private signing: {
+    peer: CodexPeer;
+    loginId: string | null;
+    generation: number;
+    completed: boolean;
+  } | null = null;
+  private signInStatus: SubscriptionSignInStatus | null = null;
+  private signInCompletedGeneration: number | null = null;
   private signInStarting = false;
   private signInGeneration = 0;
   private signInStartDone: Promise<void> | null = null;
@@ -411,12 +460,16 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     void operation.finally(() => this.peerStops.delete(peer)).catch(() => {});
     return operation;
   }
-  private async peer(launch: CodexLaunch): Promise<CodexPeer> {
+  private async peer(
+    launch: CodexLaunch,
+    receive: (envelope: CodexEnvelope) => void = () => {},
+    disconnected: () => void = () => {},
+  ): Promise<CodexPeer> {
     this.assertLaunchable();
     const peer = new CodexPeer(
       launch,
-      () => {},
-      () => {},
+      receive,
+      disconnected,
       15_000,
     );
     this.trackPeer(peer);
@@ -482,6 +535,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   }
   async subscriptionStatus(): Promise<SubscriptionStatus> {
     try {
+      const completedGeneration = this.signInCompletedGeneration;
       const peer = await this.peer(await this.launch("owner", null, []));
       try {
         await this.verifyConfiguration(peer, null);
@@ -498,13 +552,27 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
                 : null,
           };
         }
-        return response.account === null
-          ? { state: "sign_in_required" }
-          : {
-              state: "blocked",
-              reason:
-                "Crew requires native ChatGPT subscription sign-in, without an API-key fallback.",
-            };
+        if (response.account === null) {
+          // Account readback, not a completion event alone, establishes sign-in.
+          if (
+            completedGeneration !== null &&
+            completedGeneration === this.signInGeneration
+          ) {
+            this.signInStatus = signInFailure("completion");
+            if (this.signing) await this.stopPeer(this.signing.peer);
+          }
+          return {
+            state: "sign_in_required",
+            ...(this.signInStatus
+              ? { signIn: structuredClone(this.signInStatus) }
+              : {}),
+          };
+        }
+        return {
+          state: "blocked",
+          reason:
+            "Crew requires native ChatGPT subscription sign-in, without an API-key fallback.",
+        };
       } finally {
         await this.stopPeer(peer);
       }
@@ -518,6 +586,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       };
     }
   }
+  private currentSignInStatus(): SubscriptionSignInStatus | null {
+    return this.signInStatus;
+  }
   /** Mount only on authenticated owner ingress, invoked by explicit owner action. */
   async beginSignIn(): Promise<{
     loginId: string;
@@ -528,6 +599,8 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     if (this.signing || this.signInStarting || this.signInCancelTask)
       throw new Error("A Crew sign-in or cancellation is already pending.");
     this.signInStarting = true;
+    this.signInStatus = { state: "pending", reason: null };
+    this.signInCompletedGeneration = null;
     let finishStarting!: () => void;
     const started = new Promise<void>((resolve) => {
       finishStarting = resolve;
@@ -535,19 +608,81 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     this.signInStartDone = started;
     const generation = ++this.signInGeneration;
     let peer: CodexPeer | null = null;
+    let stage: SignInStage = "initialization";
+    const earlyCompletions = new Map<string, boolean>();
+    let earlyCompletionOverflow = false;
+    const complete = (completion: { loginId: string; success: boolean }) => {
+      const signing = this.signing;
+      if (
+        !peer ||
+        signing?.peer !== peer ||
+        signing.generation !== this.signInGeneration ||
+        signing.completed
+      )
+        return;
+      if (signing.loginId === null) {
+        if (!earlyCompletions.has(completion.loginId)) {
+          if (earlyCompletions.size >= 8) earlyCompletionOverflow = true;
+          else earlyCompletions.set(completion.loginId, completion.success);
+        }
+        return;
+      }
+      if (completion.loginId !== signing.loginId) return;
+      signing.completed = true;
+      if (completion.success) this.signInCompletedGeneration = generation;
+      if (!completion.success) {
+        this.signInStatus = signInFailure("completion");
+        // Stop only the exact owned attempt; failed exit remains a launch blocker.
+        void this.stopPeer(peer).catch(() => {});
+      }
+      // On success keep the peer until account/read confirms the stored account.
+    };
+    const disconnected = () => {
+      const signing = this.signing;
+      if (
+        peer &&
+        signing?.peer === peer &&
+        signing.generation === this.signInGeneration &&
+        !signing.completed &&
+        !this.stoppingPeers.has(peer)
+      ) {
+        this.signInStatus = signInFailure("transport");
+        void this.stopPeer(peer).catch(() => {});
+      }
+    };
     try {
-      peer = await this.peer(await this.launch("owner", null, []));
+      peer = await this.peer(
+        await this.launch("owner", null, []),
+        (event) => {
+          if (
+            event.method === "account/login/completed" &&
+            typeof event.params.loginId === "string" &&
+            typeof event.params.success === "boolean"
+          )
+            complete({
+              loginId: event.params.loginId,
+              success: event.params.success,
+            });
+        },
+        disconnected,
+      );
       if (this.closed || generation !== this.signInGeneration)
         throw new Error("Crew sign-in was cancelled.");
-      this.signing = { peer, loginId: null };
+      this.signing = { peer, loginId: null, generation, completed: false };
+      stage = "configuration";
       await this.verifyConfiguration(peer, null);
-      const login = record(
-        await peer.rpc("account/login/start", { type: "chatgptDeviceCode" }),
-      );
+      stage = "request";
+      const response = await peer.rpc("account/login/start", {
+        type: "chatgptDeviceCode",
+      });
+      stage = "response";
+      const login = record(response);
       if (
         login.type !== "chatgptDeviceCode" ||
         typeof login.loginId !== "string" ||
+        !login.loginId ||
         typeof login.userCode !== "string" ||
+        !login.userCode ||
         login.verificationUrl !== "https://auth.openai.com/codex/device"
       )
         throw new Error("Unsupported native sign-in response.");
@@ -558,12 +693,26 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       )
         throw new Error("Crew sign-in was cancelled.");
       this.signing.loginId = login.loginId;
+      if (earlyCompletionOverflow)
+        throw new Error("Native sign-in completion correlation exceeded its bound.");
+      const earlySuccess = earlyCompletions.get(login.loginId);
+      if (earlySuccess !== undefined)
+        complete({ loginId: login.loginId, success: earlySuccess });
+      if (this.currentSignInStatus()?.state === "failed") {
+        stage = "completion";
+        throw new Error("Native sign-in ended before code delivery.");
+      }
       return {
         loginId: login.loginId,
         verificationUrl: login.verificationUrl,
         userCode: login.userCode,
       };
-    } catch {
+    } catch (error) {
+      if (!this.closed && generation === this.signInGeneration)
+        this.signInStatus =
+          this.currentSignInStatus()?.state === "failed"
+            ? this.signInStatus
+            : signInFailure(stage, error);
       if (peer) await this.stopPeer(peer);
       if (
         this.stoppingPeers.size ||
@@ -571,9 +720,12 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       )
         throw new Error(pendingExitMessage);
       throw new Error(
-        "Native device sign-in could not start. Check network access and try again.",
+        this.closed || generation !== this.signInGeneration
+          ? "Crew sign-in was cancelled."
+          : this.signInStatus?.reason ?? "Native device sign-in could not start.",
       );
     } finally {
+      earlyCompletions.clear();
       this.signInStarting = false;
       if (this.signInStartDone === started) this.signInStartDone = null;
       finishStarting();
@@ -583,6 +735,8 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     if (this.signInCancelTask) return this.signInCancelTask;
     const operation = (async () => {
       this.signInGeneration++;
+      this.signInStatus = null;
+      this.signInCompletedGeneration = null;
       const starting = this.signInStartDone;
       const signing = this.signing;
       if (signing) {
