@@ -17,6 +17,7 @@ export interface WorkerConfiguration {
   executable: string;
   mcpScript: string;
   workerPrompt: string;
+  workerProfileSource?: { projectId: string } | null;
   workerPromptVersion?: string;
   sandbox?: string;
   timeoutMs?: number;
@@ -51,6 +52,19 @@ const configShape = ajv.compile<WorkerConfiguration>({
     worktree: { type: "string" },
     executable: { type: "string" },
     mcpScript: { type: "string" },
+    workerProfileSource: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          required: ["projectId"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,63}$" },
+          },
+        },
+      ],
+    },
     workerPrompt: { type: "string" },
     sandbox: { type: "string" },
     timeoutMs: { type: "number" },
@@ -67,6 +81,13 @@ export function parseWorkerConfiguration(value: unknown): WorkerConfiguration {
   if (!configShape(value))
     throw new Error("Malformed worker runner configuration.");
   validateWorkLink(value.workLink);
+  if (
+    value.workerProfileSource &&
+    value.workerProfileSource.projectId !== value.project?.id
+  )
+    throw new Error(
+      "Worker profile project does not match the native task project.",
+    );
   return value;
 }
 export interface NativeThread {

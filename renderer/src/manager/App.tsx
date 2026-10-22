@@ -28,6 +28,9 @@ export function App() {
   const [pane, setPane] = useState("conversation");
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [settingsReturn, setSettingsReturn] = useState("conversation");
+  useEffect(() => {
+    if (pane === "settings") void manager.loadSettings().catch(() => {});
+  }, [pane, manager.loadSettings]);
   const workspace = useRef<HTMLElement | null>(null),
     resizing = useRef(false);
   const [workerWidth, setWorkerWidth] = useState<number | null>(null);

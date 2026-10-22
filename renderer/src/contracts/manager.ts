@@ -189,6 +189,7 @@ export interface ManagerSchedules {
   schedules: ManagerSchedule[];
 }
 export interface SettingsState {
+  settingsRevision?: { source: string; sequence: number };
   managerSchedules?: ManagerSchedules;
   projectId?: string;
   projectName?: string;

@@ -12,6 +12,7 @@ export function createRunnerPreparation({
   snapshot,
   steer,
   onPreparing,
+  prepareText = async (text) => text,
 }: {
   stateDir: string;
   actor: PreparationActor;
@@ -28,6 +29,7 @@ export function createRunnerPreparation({
     text: string;
   }) => Promise<{ turnId?: string }>;
   onPreparing: () => void;
+  prepareText?: (text: string) => Promise<string>;
 }) {
   let observing = false;
   return async function observePreparation() {
@@ -60,12 +62,23 @@ export function createRunnerPreparation({
         });
         return;
       }
+      let text: string;
+      try {
+        text = await prepareText(preparationMessage(request));
+      } catch {
+        await recordPreparationDelivery(stateDir, identity, {
+          state: "failed",
+          error:
+            "Cannot read the current saved worker profile. No preparation was sent. Restore access to the saved Settings document or restore a valid copy, then explicitly retry preparation.",
+        });
+        return;
+      }
       try {
         const result = await steer({
           threadId: current.threadId,
           expectedTurnId: current.turnId,
           requestId: request.requestId,
-          text: preparationMessage(request),
+          text,
         });
         if (result.turnId !== current.turnId) {
           await recordPreparationDelivery(stateDir, identity, {
