@@ -301,6 +301,7 @@ export async function startUnifiedApplication(
               },
             },
       lookupSender: createFoundationSenderLookup(store),
+      readSubscriptionUsage: () => nativeAccess!.subscriptionUsage(),
       onProcessStarted: (caller, pid) => processes.recordStarted(caller, pid),
     });
     foundation = new AgentFoundation({
@@ -671,6 +672,10 @@ export async function startUnifiedApplication(
       voice,
       subscription: {
         status: () => nativeAccess!.subscriptionStatus(),
+        usage: () => runtime.readSubscriptionUsage(),
+        subscribeUsage: (
+          listener: Parameters<typeof runtime.subscribeSubscriptionUsage>[0],
+        ) => runtime.subscribeSubscriptionUsage(listener),
         beginSignIn: () => nativeAccess!.beginSignIn(),
         cancelSignIn: () => nativeAccess!.cancelSignIn(),
       },
