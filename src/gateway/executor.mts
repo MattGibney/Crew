@@ -8,7 +8,6 @@ import type {
   AuthorizationService,
   BrokerCallOptions,
   BrokerInvocation,
-  CredentialVault,
   ExecutionPermit,
   ExecutorResult,
   OperationReceipt,
@@ -19,6 +18,8 @@ import type {
 } from "../agents/contracts.mjs";
 import type {
   CliConfiguration,
+  GatewayCredentialVault,
+  GatewayExecutionAdmission,
   ExecutorConfiguration,
   GatewayConnections,
   McpHttpConfiguration,
@@ -49,7 +50,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
   constructor(
     private readonly options: {
       authorization: AuthorizationService;
-      vault: CredentialVault;
+      vault: GatewayCredentialVault;
+      admission: GatewayExecutionAdmission;
+      onCatalogue?: (connection: ServiceConnection, capabilities: ServiceCapability[]) => void;
       connections: GatewayConnections;
       resolveConfiguration: ResolveExecutorConfiguration;
       privateDirectory: string;
@@ -82,7 +85,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
     connection: ServiceConnection,
   ): Promise<ServiceCapability[]> {
     const config = await this.configuration(connection);
-    return this.credentials.use(
+    const capabilities = await this.credentials.use(
       connection,
       config,
       async (_handle, token, sanitizer) => {
@@ -118,7 +121,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
                 return tools;
               });
         const names = new Set<string>();
-        return tools.map((tool) => {
+        return tools.map((tool): ServiceCapability => {
           if (
             !tool.name ||
             names.has(tool.name) ||
@@ -143,6 +146,8 @@ export class TrustedServiceExecutor implements ServiceExecutor {
         });
       },
     );
+    this.options.onCatalogue?.(connection, capabilities);
+    return capabilities;
   }
 
   async execute(
@@ -175,20 +180,17 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               "Credential-bearing arguments are prohibited.",
               evidence,
             );
-          const admit = async () => {
-            if (
-              options.signal?.aborted ||
-              !(await this.options.canDispatch(invocation))
-            )
-              return false;
-            const decision = await this.options.authorization.redeem(permit);
-            if (decision.state !== "allowed") return false;
-            admitted = true;
-            // Cancellation after redemption but before dispatch is still conclusive non-execution.
-            return (
-              (await this.options.canDispatch(invocation)) &&
-              !options.signal?.aborted
-            );
+          const dispatch = async (action: () => Promise<ExecutorResult>): Promise<ExecutorResult> => {
+            if (options.signal?.aborted || !(await this.options.canDispatch(invocation)))
+              return noExecution("Execution admission denied or cancelled.", evidence);
+            const admission = await this.options.admission.run(invocation, permit, async () => {
+              if (options.signal?.aborted || !(await this.options.canDispatch(invocation)))
+                return noExecution("Execution cancelled before dispatch.", evidence);
+              admitted = true;
+              return action();
+            });
+            return admission.state === "admitted" ? admission.result
+              : noExecution("Execution admission denied or cancelled.", evidence);
           };
           if (config.type === "cli")
             return this.executeCli(
@@ -197,7 +199,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               permit,
               token,
               sanitizer,
-              admit,
+              dispatch,
               evidence,
               options,
             );
@@ -219,11 +221,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
                 invocation.operation.argumentsFingerprint
             )
               return noExecution("Tool schema or operation changed.", evidence);
-            if (!(await admit()))
-              return noExecution(
-                "Execution admission denied or cancelled.",
-                evidence,
-              );
+            return dispatch(async () => {
             const result = await client.callTool(
               {
                 name: capability.upstreamName,
@@ -254,6 +252,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               externalReference: null,
               content: [{ type: "data", value: { crewMcpResult: safe } }],
             };
+            });
           });
         },
       );
@@ -509,7 +508,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
     permit: ExecutionPermit,
     token: string | null,
     sanitizer: Sanitizer,
-    admit: () => Promise<boolean>,
+    dispatch: (action: () => Promise<ExecutorResult>) => Promise<ExecutorResult>,
     evidence: string,
     options: BrokerCallOptions,
   ): Promise<ExecutorResult> {
@@ -572,9 +571,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       invocation.operation.invocationId,
     );
     await atomicJson(marker, { attemptId: permit.attemptId, state: "pending" });
-    if (!(await admit()))
-      return noExecution("Execution admission denied or cancelled.", evidence);
-    return new Promise((resolve) => {
+    return dispatch(() => new Promise<ExecutorResult>((resolve) => {
       const child = spawn(config.executable, mapped.argv, {
         cwd: config.cwd,
         env: environment,
@@ -691,6 +688,6 @@ export class TrustedServiceExecutor implements ServiceExecutor {
         });
       });
       child.stdin.end(stdin);
-    });
+    }));
   }
 }
