@@ -59,9 +59,9 @@ type SubscriptionStatus =
     }
   | { state: "blocked"; reason: string };
 interface SignIn {
+  type: "browser";
   loginId: string;
-  verificationUrl: string;
-  userCode: string;
+  authorizationUrl: string;
 }
 interface ProjectEvent {
   type?: string;
@@ -1195,7 +1195,7 @@ function SubscriptionSettings({
         if (kind === "beginSignIn") setStartFailed(true);
         setError(
           kind === "beginSignIn"
-            ? "Sign-in did not return a usable code. Check the status or cancel the pending attempt before starting again."
+            ? "Sign-in did not return a usable browser link. Check the status or cancel the pending attempt before starting again."
             : "Sign-in cancellation was not confirmed. Check the current status before trying again.",
         );
         // Read the provider's bounded stage classification after an action fails.
@@ -1249,19 +1249,14 @@ function SubscriptionSettings({
       </div>
       {login ? (
         <div className="space-y-4">
-          <p className="text-sm">
-            Open the official sign-in page and enter this code:
-          </p>
-          <code className="block select-all text-xl font-semibold tracking-wider">
-            {login.userCode}
-          </code>
+          <p className="text-sm">Continue sign-in in your browser.</p>
           <div className="flex flex-wrap gap-3">
             <Button
               disabled={!openLink || busy}
               onClick={() => {
-                void openLink?.(login.verificationUrl).catch(() =>
+                void openLink?.(login.authorizationUrl).catch(() =>
                   setError(
-                    "The sign-in page could not be opened. Use the official address shown below.",
+                    "The sign-in page could not be opened. Try Open sign-in page again.",
                   ),
                 );
               }}
@@ -1276,9 +1271,6 @@ function SubscriptionSettings({
               Cancel sign-in
             </Button>
           </div>
-          <p className="break-all text-xs text-muted-foreground">
-            {login.verificationUrl}
-          </p>
           <p className="text-xs text-muted-foreground">
             Finish sign-in in your browser, then return here. Starting sign-in
             does not start an agent or microphone.
@@ -1323,18 +1315,23 @@ function SubscriptionSettings({
 function validSignIn(value: SignIn): boolean {
   if (
     !value ||
+    value.type !== "browser" ||
     typeof value.loginId !== "string" ||
     !value.loginId ||
     value.loginId.length > 512 ||
-    typeof value.userCode !== "string" ||
-    !value.userCode ||
-    value.userCode.length > 256 ||
-    /[\u0000-\u001f\u007f]/.test(value.userCode)
+    /[\u0000-\u001f\u007f]/.test(value.loginId) ||
+    typeof value.authorizationUrl !== "string" ||
+    value.authorizationUrl.length > 4096
   )
     return false;
   try {
-    const url = new URL(value.verificationUrl);
-    return url.href === "https://auth.openai.com/codex/device";
+    const url = new URL(value.authorizationUrl);
+    return (
+      url.origin === "https://auth.openai.com" &&
+      !url.username &&
+      !url.password &&
+      !url.hash
+    );
   } catch {
     return false;
   }
