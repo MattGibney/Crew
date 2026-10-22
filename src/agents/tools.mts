@@ -237,13 +237,13 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "environment_action",
       description:
-        "Explicit environment action using the configured project integration. Does not change agent or chat identity.",
+        "Read, edit and run commands in an owner-approved project folder through the sandboxed workspace executor. Native file/shell tools cannot access these project folders. First use environments_read; attach its approved policy if needed, then execute an argv command with the returned environmentId. Read-only policies deny writes. Does not change agent or chat identity.",
       inputSchema: environmentInput,
     },
     {
       name: "environments_read",
       description:
-        "Read currently permitted workspace policies and attached environments. Use the returned policy ID for attach/create; this runs no project commands.",
+        "Discover this agent's permitted project folders, read-only/read-write policies and attached environment IDs. For project file reading, editing or commands, use environment_action: attach the returned policyId if no environment is attached, then execute with its environmentId. This discovery runs no project commands.",
       inputSchema: object({ agentId: id }),
     },
     {

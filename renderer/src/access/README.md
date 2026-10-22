@@ -1,5 +1,14 @@
 # Access panels — GH-89 integration boundary
 
+#101 also exports `ServiceConnectionWizard` and `ServiceConnectionWizardProps`
+from `index.ts` for Settings and project/agent onboarding. Pass the live authenticated
+`snapshot`, `isOwner`, `onCommand`, `onNotify`, `onComplete(connectionId)`,
+`onCancel`, and optional `onSkip`. Owner command names are `verifyConnectionDraft`,
+`discardConnectionDraft` and `saveVerifiedConnection`; the desktop channel prefixes
+these with `access.`. The wizard never calls provider endpoints itself. See
+[`GUIDED-OWNER-ACCESS.md`](../../../docs/GUIDED-OWNER-ACCESS.md) for exact API,
+revision, cancellation and retry semantics and the #100 folder preparation contract.
+
 Import the five contributed React panels from `renderer/src/access/index.ts`.
 #88 owns Settings/navigation composition; these panels do not mount themselves, fetch data,
 call a controller, start sessions, authenticate a provider, or change model access.

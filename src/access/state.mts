@@ -16,6 +16,17 @@ import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { validateState } from "./validation.mjs";
+import type { OwnerConnectionVerification } from "./owner-contracts.mjs";
+
+/** Owner setup workflow only; none of these records grants runtime authority. */
+export interface ConnectionSetupRecord extends OwnerConnectionVerification {
+  connection: ServiceConnection;
+  existing: boolean;
+  expectedRevision: number | null;
+  credentialRevision: number;
+  inputFingerprint: string;
+  saveFingerprint: string | null;
+}
 
 export interface AccessAssignment {
   agentId: string;
@@ -59,6 +70,7 @@ export interface AccessState {
   assignments: AccessAssignment[];
   /** Absent in earlier fresh-project journals; never inferred from assignments. */
   presetApplications?: PresetApplicationReceipt[];
+  connectionSetups?: ConnectionSetupRecord[];
   connections: ServiceConnection[];
   environmentPolicies: EnvironmentPolicy[];
   requests: AccessRequest[];
