@@ -343,7 +343,8 @@ without changing production launch code. It used a separate synthetic HOME and
 CODEX_HOME, synthetic Crew/auth/vault roots and a synthetic credential file outside
 the main fixture. No personal files or real credentials were read or copied.
 
-The verified fixture configuration was:
+The filesystem rules below were verified across resume; environment inheritance
+was checked separately with the same profile and the explicit `inherit` setting:
 
 ```toml
 default_permissions = "crew-probe"
@@ -366,7 +367,8 @@ extends = ":read-only"
 The literal fixture paths above stand for canonical disposable paths. The thread
 was created and named without model input, its process exited, and a fresh process
 resumed the same ID using `permissions: "crew-probe"`; the selected profile was
-returned. The following native calls then produced these results:
+returned. The filesystem/execution matrix and separate environment check produced
+these results:
 
 | Surface | Observed result |
 | --- | --- |
