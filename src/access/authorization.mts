@@ -3,6 +3,8 @@ import type {
   AccessSource,
   Actor,
   Agent,
+  AgentCreationPreset,
+  AgentProvisioning,
   ApprovalGrant,
   AuthorizationDecision,
   AuthorizationInput,
@@ -23,6 +25,7 @@ import type {
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AccessStore } from "./state.mjs";
+import { crewActionRequiresProject } from "./crew-scopes.mjs";
 import type {
   AccessAssignment,
   AccessReservation,
@@ -34,6 +37,7 @@ import {
   validateConnection,
   validateEnvironmentPolicy,
   validateGroup,
+  validatePreset,
   validateInput,
   validateRecord,
   validateScope,
@@ -52,6 +56,8 @@ export interface AccessCatalogue {
 }
 export type OwnerAccessSnapshot = Pick<
   AccessState,
+  | "presets"
+  | "creationDefaults"
   | "groups"
   | "assignments"
   | "connections"
@@ -60,6 +66,11 @@ export type OwnerAccessSnapshot = Pick<
   | "grants"
   | "audit"
 >;
+type CatalogueEvidence = {
+  connectionId: string;
+  revision: number;
+  operations: string[];
+}[];
 const now = () => new Date().toISOString();
 const denied = (reason: string) => ({ state: "denied" as const, reason });
 const administrative = new Set<CrewAction>([
@@ -69,12 +80,6 @@ const administrative = new Set<CrewAction>([
   "connections.manage",
   "grants.approve",
   "grants.revoke",
-]);
-const projectOnly = new Set<CrewAction>([
-  "agents.create",
-  "jobs.create",
-  "skills.write",
-  "environments.create",
 ]);
 function exact(input: AuthorizationInput): GrantScope {
   const { connectionId, operation, argumentsFingerprint } = input.operation;
@@ -165,7 +170,9 @@ function owner(state: AccessState, actor: Actor): void {
 
 /** Trusted control-plane object. Never expose decide/admin/permit methods as
  * generic agent tools; HTTP/IPC must bind the owner/caller from its transport. */
-export class ProjectAuthorizationService implements AuthorizationService {
+export class ProjectAuthorizationService
+  implements AuthorizationService, AgentProvisioning
+{
   constructor(
     private readonly store: AccessStore,
     private readonly identities: AccessIdentitySource,
@@ -202,6 +209,7 @@ export class ProjectAuthorizationService implements AuthorizationService {
   private async operation(
     state: AccessState,
     input: AuthorizationInput,
+    evidence: CatalogueEvidence,
   ): Promise<void> {
     validateInput(input);
     await this.live(state, input.caller);
@@ -226,15 +234,9 @@ export class ProjectAuthorizationService implements AuthorizationService {
       !assignment?.serviceConnectionIds.includes(input.operation.connectionId)
     )
       throw new Error("Connection is not assigned to this agent.");
-    if (
-      !(await this.catalogue.hasOperation(
-        input.operation.connectionId,
-        input.operation.operation,
-      ))
-    )
-      throw new Error(
-        "Operation is not in the discovered capability catalogue.",
-      );
+    this.assertCatalogue(state, evidence, input.operation.connectionId, [
+      input.operation.operation,
+    ]);
     for (const previous of [
       ...state.reservations.map((row) => row.input),
       ...state.requests.map((row) => ({
@@ -249,6 +251,74 @@ export class ProjectAuthorizationService implements AuthorizationService {
       )
         throw new Error("Logical invocation identity cannot change.");
     }
+  }
+  /** Discovery may re-enter getConnection; never invoke it while holding the store. */
+  private async discover(
+    scopes: { connectionId: string; operations: string[] }[],
+  ): Promise<CatalogueEvidence> {
+    const evidence = await this.store.transaction((state) =>
+      scopes.map((scope) => {
+        const connection = state.connections.find(
+          (row) => row.id === scope.connectionId,
+        );
+        if (!connection)
+          throw new Error("Connection unavailable in this project.");
+        return { ...scope, revision: connection.revision };
+      }),
+    );
+    for (const scope of evidence)
+      for (const operation of scope.operations)
+        if (!(await this.catalogue.hasOperation(scope.connectionId, operation)))
+          throw new Error(
+            "Operation is not in the discovered capability catalogue.",
+          );
+    return evidence;
+  }
+  private assertCatalogue(
+    state: AccessState,
+    evidence: CatalogueEvidence,
+    connectionId: string,
+    operations: string[],
+  ): void {
+    const connection = state.connections.find((row) => row.id === connectionId);
+    const scope = evidence.find(
+      (row) =>
+        row.connectionId === connectionId &&
+        row.revision === connection?.revision &&
+        operations.every((op) => row.operations.includes(op)),
+    );
+    if (!scope)
+      throw new Error(
+        "Connection changed during capability discovery. Retry with current settings.",
+      );
+  }
+  private scopeOperations(scope: GrantScope): {
+    connectionId: string;
+    operations: string[];
+  } {
+    return {
+      connectionId: scope.connectionId,
+      operations:
+        scope.type === "exact_operation"
+          ? [scope.operation]
+          : scope.capabilities,
+    };
+  }
+  private async reservationEvidence(
+    reservationId: string,
+  ): Promise<CatalogueEvidence> {
+    const input = await this.store.transaction(
+      (state) =>
+        state.reservations.find((row) => row.id === reservationId)?.input ??
+        null,
+    );
+    if (!input) throw new Error("Unknown reservation.");
+    return this.discover([
+      {
+        connectionId: input.operation.connectionId,
+        operations: [input.operation.operation],
+      },
+    ]);
   }
   private sources(
     state: AccessState,
@@ -368,7 +438,7 @@ export class ProjectAuthorizationService implements AuthorizationService {
         if (target.type !== "agent" && target.type !== "project")
           return denied("Invalid access target.");
         if (target.type === "agent") await this.agent(state, target.agentId);
-        if (projectOnly.has(action) && target.type !== "project")
+        if (crewActionRequiresProject(action) && target.type !== "project")
           return denied("This operation requires project scope.");
         const assignment = state.assignments.find(
           (row) => row.agentId === caller.agentId,
@@ -413,9 +483,22 @@ export class ProjectAuthorizationService implements AuthorizationService {
       throw new Error(
         "Request needs a bounded justification and scope covering this operation.",
       );
+    const evidence = await this.discover([
+      {
+        connectionId: input.operation.connectionId,
+        operations: [input.operation.operation],
+      },
+      this.scopeOperations(requestedScope),
+    ]);
     return this.store.transaction(async (state) => {
-      await this.operation(state, input);
-      await this.scopeKnown(requestedScope);
+      await this.operation(state, input, evidence);
+      const scope = this.scopeOperations(requestedScope);
+      this.assertCatalogue(
+        state,
+        evidence,
+        scope.connectionId,
+        scope.operations,
+      );
       const request = this.request(state, input, requestedScope, justification);
       if (request.state === "pending") {
         request.requestedScope = requestedScope;
@@ -431,9 +514,20 @@ export class ProjectAuthorizationService implements AuthorizationService {
   ): Promise<AuthorizationDecision> {
     input = structuredClone(input);
     validateInput(input);
+    let evidence: CatalogueEvidence;
+    try {
+      evidence = await this.discover([
+        {
+          connectionId: input.operation.connectionId,
+          operations: [input.operation.operation],
+        },
+      ]);
+    } catch {
+      return denied("Current operation catalogue is unavailable.");
+    }
     return this.store.transaction(async (state) => {
       try {
-        await this.operation(state, input);
+        await this.operation(state, input, evidence);
       } catch (error) {
         return denied(
           error instanceof Error &&
@@ -483,6 +577,12 @@ export class ProjectAuthorizationService implements AuthorizationService {
   ): ReturnType<AuthorizationService["beginAttempt"]> {
     if (typeof attemptId !== "string" || !attemptId || attemptId.length > 256)
       return denied("Invalid attempt identity.");
+    let evidence: CatalogueEvidence;
+    try {
+      evidence = await this.reservationEvidence(reservationId);
+    } catch {
+      return denied("Current operation catalogue is unavailable.");
+    }
     return this.store.transaction(async (state) => {
       const reservation = state.reservations.find(
         (row) => row.id === reservationId,
@@ -490,7 +590,7 @@ export class ProjectAuthorizationService implements AuthorizationService {
       if (!reservation || reservation.state !== "open")
         return denied("Reservation is unavailable or already settled.");
       try {
-        await this.operation(state, reservation.input);
+        await this.operation(state, reservation.input, evidence);
       } catch {
         return denied("Current caller or connection access is unavailable.");
       }
@@ -538,6 +638,12 @@ export class ProjectAuthorizationService implements AuthorizationService {
   ): ReturnType<AuthorizationService["redeem"]> {
     permit = structuredClone(permit);
     validateRecord("permit", permit);
+    let evidence: CatalogueEvidence;
+    try {
+      evidence = await this.reservationEvidence(permit.reservationId);
+    } catch {
+      return denied("Current operation catalogue is unavailable.");
+    }
     return this.store.transaction(async (state) => {
       const reservation = state.reservations.find(
         (row) => row.id === permit.reservationId,
@@ -563,7 +669,7 @@ export class ProjectAuthorizationService implements AuthorizationService {
           "Another execution attempt remains active or unresolved.",
         );
       try {
-        await this.operation(state, reservation.input);
+        await this.operation(state, reservation.input, evidence);
       } catch {
         return denied("Current session or assigned connection is unavailable.");
       }
@@ -664,14 +770,6 @@ export class ProjectAuthorizationService implements AuthorizationService {
     });
   }
 
-  private async scopeKnown(scope: GrantScope): Promise<void> {
-    for (const operation of scope.type === "exact_operation"
-      ? [scope.operation]
-      : scope.capabilities)
-      if (!(await this.catalogue.hasOperation(scope.connectionId, operation)))
-        throw new Error("Approval scope includes an undiscovered operation.");
-  }
-
   async decide(
     requestId: string,
     approver: Actor,
@@ -690,6 +788,21 @@ export class ProjectAuthorizationService implements AuthorizationService {
       decision.reason.length > 4096
     )
       throw new Error("A bounded rejection reason is required.");
+    const reviewed = await this.store.transaction((state) => {
+      owner(state, approver);
+      return state.requests.find((row) => row.id === requestId) ?? null;
+    });
+    if (!reviewed) throw new Error("Unknown access request.");
+    const evidence =
+      decision.state === "approved"
+        ? await this.discover([
+            {
+              connectionId: reviewed.operation.connectionId,
+              operations: [reviewed.operation.operation],
+            },
+            this.scopeOperations(decision.scope),
+          ])
+        : [];
     return this.store.transaction(async (state) => {
       owner(state, approver);
       const request = state.requests.find((row) => row.id === requestId);
@@ -713,12 +826,22 @@ export class ProjectAuthorizationService implements AuthorizationService {
         throw new Error("Request was already decided or expired.");
       }
       if (decision.state === "approved") {
-        await this.operation(state, {
-          caller: request.caller,
-          jobId: request.jobId,
-          operation: request.operation,
-        });
-        await this.scopeKnown(decision.scope);
+        await this.operation(
+          state,
+          {
+            caller: request.caller,
+            jobId: request.jobId,
+            operation: request.operation,
+          },
+          evidence,
+        );
+        const scope = this.scopeOperations(decision.scope);
+        this.assertCatalogue(
+          state,
+          evidence,
+          scope.connectionId,
+          scope.operations,
+        );
         if (!matches(decision.scope, request))
           throw new Error(
             "Approved scope must explicitly cover the reviewed operation.",
@@ -854,6 +977,8 @@ export class ProjectAuthorizationService implements AuthorizationService {
       owner(state, actor);
       const {
         groups,
+        presets,
+        creationDefaults,
         assignments,
         connections,
         environmentPolicies,
@@ -863,6 +988,8 @@ export class ProjectAuthorizationService implements AuthorizationService {
       } = state;
       return {
         groups,
+        presets,
+        creationDefaults,
         assignments,
         connections,
         environmentPolicies,
@@ -870,6 +997,231 @@ export class ProjectAuthorizationService implements AuthorizationService {
         grants,
         audit,
       };
+    });
+  }
+  async listPresets(): Promise<AgentCreationPreset[]> {
+    return this.store.transaction((state) =>
+      state.presets.filter((row) => row.enabled),
+    );
+  }
+  async defaultPreset(): Promise<AgentCreationPreset | null> {
+    return this.store.transaction(
+      (state) =>
+        state.presets.find(
+          (row) => row.id === state.creationDefaults.presetId && row.enabled,
+        ) ?? null,
+    );
+  }
+  async savePreset(
+    actor: Actor,
+    preset: AgentCreationPreset,
+    expectedRevision: number | null,
+  ): Promise<AgentCreationPreset> {
+    actor = structuredClone(actor);
+    preset = structuredClone(preset);
+    validatePreset(preset);
+    return this.store.transaction((state) => {
+      owner(state, actor);
+      if (preset.projectId !== state.projectId)
+        throw new Error("Foreign creation preset.");
+      this.assertAssignments(
+        state,
+        preset.permissionGroupIds,
+        preset.serviceConnectionIds,
+      );
+      preset.revision = revision(
+        state.presets.find((row) => row.id === preset.id),
+        expectedRevision,
+      );
+      upsert(state.presets, preset);
+      audit(state, actor, "preset.saved", preset.id);
+      return preset;
+    });
+  }
+  async setDefaultPreset(
+    actor: Actor,
+    presetId: string | null,
+    expectedRevision: number,
+  ): Promise<AccessState["creationDefaults"]> {
+    return this.store.transaction((state) => {
+      owner(state, actor);
+      if (
+        presetId !== null &&
+        !state.presets.some((row) => row.id === presetId && row.enabled)
+      )
+        throw new Error("Choose an enabled creation preset.");
+      state.creationDefaults = {
+        revision: revision(state.creationDefaults, expectedRevision),
+        presetId,
+      };
+      audit(state, actor, "preset.default_saved", presetId ?? "none");
+      return state.creationDefaults;
+    });
+  }
+  private assertAssignments(
+    state: AccessState,
+    groupIds: string[],
+    connectionIds: string[],
+  ): void {
+    if (
+      groupIds.some((id) => !state.groups.some((row) => row.id === id)) ||
+      connectionIds.some(
+        (id) => !state.connections.some((row) => row.id === id),
+      )
+    )
+      throw new Error(
+        "Assignments must refer to current project groups and connections.",
+      );
+  }
+  async accessFor(agentId: string): Promise<Agent["access"]> {
+    const assignment = await this.assignment(agentId);
+    return {
+      permissionGroupIds: assignment?.permissionGroupIds ?? [],
+      serviceConnectionIds: assignment?.serviceConnectionIds ?? [],
+      inheritPersonalServiceCredentials: false,
+    };
+  }
+  /** Called under the foundation's creation/admission gate, never recursively acquires it.
+   * Only a new stopped child gets a preset. Managers cannot use this to alter self/existing access.
+   */
+  async applyPreset(
+    input: Parameters<AgentProvisioning["applyPreset"]>[0],
+  ): Promise<Agent["access"]> {
+    input = structuredClone(input);
+    validateActor(input.actor);
+    return this.store.transaction(async (state) => {
+      const target = await this.agent(state, input.agentId);
+      if (
+        target.runtime.session.sessionId !== null ||
+        target.runtime.threadId !== null
+      )
+        throw new Error(
+          "Creation access applies only to a new unprovisioned agent.",
+        );
+      const receipt = state.presetApplications?.find(
+        (row) => row.agentId === target.id,
+      );
+      if (receipt) {
+        if (
+          !isDeepStrictEqual(receipt.actor, input.actor) ||
+          receipt.presetId !== input.presetId ||
+          receipt.presetRevision !== input.expectedPresetRevision
+        )
+          throw new Error(
+            "Provisioning retry differs from the committed preset application.",
+          );
+        // The original access transaction already succeeded. Return today's
+        // authority without reapplying an old preset or restoring revoked access.
+        const current = state.assignments.find(
+          (row) => row.agentId === target.id,
+        );
+        return {
+          permissionGroupIds: current?.permissionGroupIds ?? [],
+          serviceConnectionIds: current?.serviceConnectionIds ?? [],
+          inheritPersonalServiceCredentials: false,
+        };
+      }
+      if (state.assignments.some((row) => row.agentId === target.id))
+        throw new Error(
+          "Existing access has no matching preset application receipt.",
+        );
+      if (input.actor.type === "user") owner(state, input.actor);
+      else {
+        if (
+          target.id === input.actor.agentId ||
+          target.reportsTo.type !== "agent" ||
+          target.reportsTo.agentId !== input.actor.agentId
+        )
+          throw new Error(
+            "Creation access must belong to this manager's new child.",
+          );
+        const manager = await this.agent(state, input.actor.agentId);
+        if (!manager.runtime.session.sessionId)
+          throw new Error("Creating manager session is unavailable.");
+        await this.live(state, {
+          projectId: state.projectId,
+          agentId: manager.id,
+          sessionId: manager.runtime.session.sessionId,
+        });
+        const assigned = state.assignments.find(
+          (row) => row.agentId === manager.id,
+        );
+        if (
+          !state.groups.some(
+            (group) =>
+              assigned?.permissionGroupIds.includes(group.id) &&
+              group.grants.crew.some(
+                (grant) =>
+                  grant.action === "agents.create" &&
+                  grant.scope.type === "project",
+              ),
+          )
+        )
+          throw new Error(
+            "Manager does not have current agent creation permission.",
+          );
+      }
+      const preset = state.presets.find(
+        (row) => row.id === input.presetId && row.enabled,
+      );
+      if (!preset || preset.revision !== input.expectedPresetRevision)
+        throw new Error(
+          "Creation preset changed; choose its current revision.",
+        );
+      this.assertAssignments(
+        state,
+        preset.permissionGroupIds,
+        preset.serviceConnectionIds,
+      );
+      if (
+        target.runtime.modelAccessId !== preset.modelAccessId ||
+        target.runtime.configRef !== preset.configRef
+      )
+        throw new Error("Agent runtime differs from its approved preset.");
+      const access: Agent["access"] = {
+        permissionGroupIds: [...preset.permissionGroupIds],
+        serviceConnectionIds: [...preset.serviceConnectionIds],
+        inheritPersonalServiceCredentials: false,
+      };
+      state.assignments.push({
+        agentId: target.id,
+        permissionGroupIds: access.permissionGroupIds,
+        serviceConnectionIds: access.serviceConnectionIds,
+        revision: 1,
+      });
+      (state.presetApplications ??= []).push({
+        agentId: target.id,
+        actor: input.actor,
+        presetId: input.presetId,
+        presetRevision: input.expectedPresetRevision,
+        appliedAt: now(),
+      });
+      audit(state, input.actor, "preset.applied", target.id);
+      return access;
+    });
+  }
+  subscribe(listener: () => void): () => void {
+    return this.store.subscribe(listener);
+  }
+
+  /** Access is authoritative; foundation and renderer must project these assignments. */
+  async assignment(agentId: string): Promise<AccessAssignment | null> {
+    return this.store.transaction(
+      (state) =>
+        state.assignments.find((row) => row.agentId === agentId) ?? null,
+    );
+  }
+  async listAssignedConnections(
+    caller: CallerContext,
+  ): Promise<ServiceConnection[]> {
+    return this.store.transaction(async (state) => {
+      await this.live(state, caller);
+      const assignment = state.assignments.find(
+        (row) => row.agentId === caller.agentId,
+      );
+      return state.connections.filter((row) =>
+        assignment?.serviceConnectionIds.includes(row.id),
+      );
     });
   }
   /** Trusted gateway metadata. Do not expose this record to the runtime. */
@@ -919,6 +1271,14 @@ export class ProjectAuthorizationService implements AuthorizationService {
     actor = structuredClone(actor);
     group = structuredClone(group);
     validateGroup(group);
+    // Authenticate before allowing any upstream discovery.
+    await this.store.transaction((state) => owner(state, actor));
+    const evidence = await this.discover(
+      group.grants.services.map((service) => ({
+        connectionId: service.connectionId,
+        operations: service.capabilities,
+      })),
+    );
     return this.store.transaction(async (state) => {
       owner(state, actor);
       if (group.projectId !== state.projectId)
@@ -930,14 +1290,12 @@ export class ProjectAuthorizationService implements AuthorizationService {
       for (const service of group.grants.services) {
         if (!state.connections.some((row) => row.id === service.connectionId))
           throw new Error("Unknown group connection.");
-        for (const operation of service.capabilities)
-          if (
-            !(await this.catalogue.hasOperation(
-              service.connectionId,
-              operation,
-            ))
-          )
-            throw new Error("Group includes an undiscovered operation.");
+        this.assertCatalogue(
+          state,
+          evidence,
+          service.connectionId,
+          service.capabilities,
+        );
       }
       if (
         group.grants.environmentPolicyIds.some(
@@ -959,11 +1317,14 @@ export class ProjectAuthorizationService implements AuthorizationService {
     actor: Actor,
     connection: ServiceConnection,
     expectedRevision: number | null,
+    prepareAuthentication?: (
+      current: ServiceConnection | null,
+    ) => Promise<ServiceConnection["authentication"]>,
   ): Promise<ServiceConnection> {
     actor = structuredClone(actor);
     connection = structuredClone(connection);
     validateConnection(connection);
-    return this.store.transaction((state) => {
+    return this.store.transaction(async (state) => {
       owner(state, actor);
       if (connection.projectId !== state.projectId)
         throw new Error("Foreign service connection.");
@@ -989,6 +1350,13 @@ export class ProjectAuthorizationService implements AuthorizationService {
       )
         throw new Error("A removed connection identity cannot be reused.");
       connection.revision = revision(current, expectedRevision);
+      // Owner vault writes run only after identity and revision checks. A commit
+      // failure fails the store closed; never claim a credential-only save succeeded.
+      if (prepareAuthentication)
+        connection.authentication = await prepareAuthentication(
+          current ?? null,
+        );
+      validateConnection(connection);
       upsert(state.connections, connection);
       audit(state, actor, "connection.saved", connection.id);
       return connection;

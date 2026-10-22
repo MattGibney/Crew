@@ -6,6 +6,10 @@ import type {
   ServiceCapability,
   ServiceConnectionView,
 } from "../../../src/agents/contracts.mjs";
+import {
+  crewPermissionScopes,
+  defaultCrewPermissionScope,
+} from "../../../src/access/crew-scopes.mjs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +20,7 @@ import type {
   GroupDraft,
   GroupSave,
   OwnerPanelProps,
+  WorkspacePermissionChoice,
 } from "./types";
 import {
   AccessSection,
@@ -26,12 +31,19 @@ import {
   useAccessAction,
 } from "./shared";
 
+const scopeLabels = {
+  self: "This agent only",
+  agents: "Selected agents",
+  project: "Entire project",
+} as const;
+
 export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   groups: readonly PermissionGroup[];
   connections: readonly ServiceConnectionView[];
   capabilities: readonly ServiceCapability[];
   crewCapabilities: readonly CrewPermissionChoice[];
   agents: readonly Agent[];
+  workspaces?: readonly WorkspacePermissionChoice[];
   onSave: (change: GroupSave) => Promise<void>;
 }
 
@@ -91,7 +103,8 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
                       (count, service) => count + service.capabilities.length,
                       0,
                     )}{" "}
-                    service capabilities
+                    service capabilities ·{" "}
+                    {group.grants.environmentPolicyIds.length} workspaces
                   </p>
                 </div>
                 <Button
@@ -190,6 +203,17 @@ function GroupEditor({
         capability,
       })),
   );
+  const workspaces = props.workspaces ?? [];
+  const setWorkspace = (policyId: string, selected: boolean) =>
+    setDraft((current) => ({
+      ...current,
+      grants: {
+        ...current.grants,
+        environmentPolicyIds: selected
+          ? [...new Set([...current.grants.environmentPolicyIds, policyId])]
+          : current.grants.environmentPolicyIds.filter((id) => id !== policyId),
+      },
+    }));
   return (
     <form
       className="space-y-5"
@@ -213,6 +237,14 @@ function GroupEditor({
         if (saved) onClose();
       }}
     >
+      {group &&
+        props.groups.find((row) => row.id === group.id)?.revision !==
+          group.revision && (
+          <p role="alert" className="text-sm text-destructive">
+            This group changed while you were editing. Your draft is retained.
+            Cancel and reopen Update to use the current revision.
+          </p>
+        )}
       <fieldset disabled={action.busy} className="space-y-5">
         <legend className="mb-4 text-sm font-semibold">
           {group ? `Update ${group.name}` : "Create permission group"}
@@ -323,6 +355,9 @@ function GroupEditor({
               const permission = draft.grants.crew.find(
                 (item) => item.action === choice.action,
               );
+              const scopes = crewPermissionScopes(choice.action);
+              const unsupportedScope =
+                permission && !scopes.includes(permission.scope.type);
               return (
                 <div key={choice.action}>
                   <Choice
@@ -331,7 +366,10 @@ function GroupEditor({
                       setCrew(
                         choice.action,
                         checked
-                          ? { action: choice.action, scope: { type: "self" } }
+                          ? {
+                              action: choice.action,
+                              scope: defaultCrewPermissionScope(choice.action),
+                            }
                           : null,
                       )
                     }
@@ -349,6 +387,7 @@ function GroupEditor({
                         value={permission.scope.type}
                         onChange={(event) => {
                           const type = event.target.value;
+                          if (!scopes.some((scope) => scope === type)) return;
                           setCrew(choice.action, {
                             action: choice.action,
                             scope:
@@ -360,11 +399,25 @@ function GroupEditor({
                           });
                         }}
                       >
-                        <option value="self">This agent only</option>
-                        <option value="agents">Selected agents</option>
-                        <option value="project">Entire project</option>
+                        {unsupportedScope && (
+                          <option value={permission.scope.type} disabled>
+                            {scopeLabels[permission.scope.type]} (saved scope)
+                          </option>
+                        )}
+                        {scopes.map((scope) => (
+                          <option key={scope} value={scope}>
+                            {scopeLabels[scope]}
+                          </option>
+                        ))}
                       </NativeSelect>
-                      {permission.scope.type === "agents" &&
+                      {unsupportedScope && (
+                        <p className="text-sm text-muted-foreground">
+                          This action requires the entire project. The saved
+                          scope is retained until you change or remove it.
+                        </p>
+                      )}
+                      {!unsupportedScope &&
+                        permission.scope.type === "agents" &&
                         props.agents.map((agent) => (
                           <Choice
                             key={agent.id}
@@ -412,13 +465,53 @@ function GroupEditor({
               ))}
           </div>
         </details>
-        {draft.grants.environmentPolicyIds.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {draft.grants.environmentPolicyIds.length} existing environment
-            policies will be retained. Runtime isolation is configured
-            separately.
+        <fieldset className="space-y-3 border-t pt-4">
+          <legend className="text-sm font-medium">Workspaces</legend>
+          <p className="text-sm text-muted-foreground">
+            Choose the approved folders agents in this group can use. Configure
+            folders in Workspace settings.
           </p>
-        )}
+          {workspaces.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No approved workspaces are available.
+            </p>
+          )}
+          {workspaces.map((workspace) => (
+            <Choice
+              key={workspace.policy.id}
+              checked={draft.grants.environmentPolicyIds.includes(
+                workspace.policy.id,
+              )}
+              onChange={(checked) => setWorkspace(workspace.policy.id, checked)}
+              description={workspace.description}
+            >
+              {workspace.label}
+            </Choice>
+          ))}
+          {draft.grants.environmentPolicyIds
+            .filter(
+              (id) =>
+                !workspaces.some((workspace) => workspace.policy.id === id),
+            )
+            .map((id) => (
+              <div
+                key={id}
+                className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+              >
+                <span className="break-all">
+                  {id} · workspace unavailable; existing permission retained
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setWorkspace(id, false)}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+        </fieldset>
       </fieldset>
       <ErrorMessage>{action.error}</ErrorMessage>
       <FormActions

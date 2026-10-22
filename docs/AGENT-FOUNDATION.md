@@ -51,6 +51,13 @@ Call `recover()` before serving a reopened store. Bind agent tools only through 
 session transport; bind the owner API only to the local owner's control surface. Inject #89 panels
 through `AgentsApp.settingsPanels`; no credential-entry form is implemented in this track.
 
+The native tool catalogue describes nested inputs, including message content blocks,
+editable profile fields, local/ticket work and each environment argument shape. For
+example, `job_create` takes `{ "input": { "work": { "type": "local", "title": "…",
+"objective": "…" } } }`. Agents should discover these shapes from MCP rather than
+need an owner to explain an undocumented payload. Record validation and current
+authorization still govern execution; schema discovery grants no permission.
+
 #89 must use `foundation.executionAllowed(caller)` in its fresh execution admission path before
 `admissionUsesFoundationBarrier` may be enabled. Without this composition assertion,
 `reserveExecution` blocks. Once reserved, foundation sends/starts and fresh broker admission are
@@ -72,6 +79,13 @@ is performed implicitly. Existing project tooling/environment operations still n
 authorized host contribution; this track supplies resource reads and preserves the references.
 
 ## Durable evidence and recovery
+
+Routed help can be answered or escalated using the received message ID from its
+authenticated Crew origin, as well as the canonical help ID. Recipients do not need
+to fetch the requester's tool result to discover a second identifier. Resolution
+retains the canonical help record and checks its actual target, state and current
+permission; an ambiguous reference is rejected. Escalations store the canonical
+parent help ID, and responses retain the original message reply relationship.
 
 Crew persists profiles, jobs, assignment history, working notes, open help/inbox content, unresolved
 message bodies, attempts, native approval identities, start-dispatch evidence and lifecycle intent.

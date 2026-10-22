@@ -1,5 +1,6 @@
 import type {
   AccessRequest,
+  AgentCreationPreset,
   Actor,
   ApprovalGrant,
   AuthorizationInput,
@@ -21,6 +22,13 @@ export interface AccessAssignment {
   permissionGroupIds: string[];
   serviceConnectionIds: string[];
   revision: number;
+}
+export interface PresetApplicationReceipt {
+  agentId: string;
+  actor: Actor;
+  presetId: string;
+  presetRevision: number;
+  appliedAt: string;
 }
 export interface AccessAttempt {
   permit: ExecutionPermit;
@@ -46,7 +54,11 @@ export interface AccessState {
   projectId: string;
   ownerUserId: string;
   groups: PermissionGroup[];
+  presets: AgentCreationPreset[];
+  creationDefaults: { revision: number; presetId: string | null };
   assignments: AccessAssignment[];
+  /** Absent in earlier fresh-project journals; never inferred from assignments. */
+  presetApplications?: PresetApplicationReceipt[];
   connections: ServiceConnection[];
   environmentPolicies: EnvironmentPolicy[];
   requests: AccessRequest[];
@@ -61,6 +73,7 @@ const LIMIT = 8 * 1024 * 1024;
 /** One trusted controller owns a store. A leftover lease blocks recovery rather
  * than guessing whether another controller/executor is still alive. */
 export class AccessStore {
+  #listeners = new Set<() => void>();
   #tail: Promise<unknown> = Promise.resolve();
   #closed = false;
   #failed = false;
@@ -82,7 +95,10 @@ export class AccessStore {
       projectId,
       ownerUserId,
       groups: [],
+      presets: [],
+      creationDefaults: { revision: 1, presetId: null },
       assignments: [],
+      presetApplications: [],
       connections: [],
       environmentPolicies: [],
       requests: [],
@@ -220,6 +236,12 @@ export class AccessStore {
           );
         }
         this.state = draft;
+        for (const listener of this.#listeners)
+          queueMicrotask(() => {
+            try {
+              listener();
+            } catch {}
+          });
       }
       return structuredClone(result);
     });
@@ -227,9 +249,15 @@ export class AccessStore {
     return operation;
   }
 
+  subscribe(listener: () => void): () => void {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  }
+
   async close(): Promise<void> {
     if (this.#closing) return this.#closing;
     this.#closed = true;
+    this.#listeners.clear();
     this.#closing = this.#tail.then(async () => {
       await rm(path.join(this.directory, "controller.lock"));
     });

@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { AccessState } from "./state.mjs";
 import type {
   Actor,
+  AgentCreationPreset,
   AuthorizationInput,
   EnvironmentPolicy,
   GrantScope,
@@ -24,10 +25,13 @@ const array = (items: object, maxItems = 10000) => ({
   maxItems,
 });
 const ids = { ...array(id, 256), uniqueItems: true };
-const object = (properties: Record<string, unknown>) => ({
+const object = (
+  properties: Record<string, unknown>,
+  optional: string[] = [],
+) => ({
   type: "object",
   properties,
-  required: Object.keys(properties),
+  required: Object.keys(properties).filter((key) => !optional.includes(key)),
   additionalProperties: false,
 });
 const one = (value: string) => ({ const: value });
@@ -269,6 +273,31 @@ const definitions = {
     serviceConnectionIds: ids,
     revision,
   }),
+  presetApplication: object({
+    agentId: id,
+    actor: ref("actor"),
+    presetId: id,
+    presetRevision: revision,
+    appliedAt: timestamp,
+  }),
+  preset: object({
+    id,
+    projectId: id,
+    revision,
+    name: id,
+    enabled: { type: "boolean" },
+    profile: object({
+      name: id,
+      pictureRef: nullable(id),
+      personality: { type: "string", maxLength: 200000 },
+      systemPrompt: { type: "string", maxLength: 200000 },
+    }),
+    skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
+    modelAccessId: id,
+    configRef: id,
+    permissionGroupIds: ids,
+    serviceConnectionIds: ids,
+  }),
   audit: object({
     id,
     at: timestamp,
@@ -302,6 +331,11 @@ export function validateGroup(
 ): asserts value is PermissionGroup {
   check("group", value);
 }
+export function validatePreset(
+  value: unknown,
+): asserts value is AgentCreationPreset {
+  check("preset", value);
+}
 export function validateConnection(
   value: unknown,
 ): asserts value is ServiceConnection {
@@ -323,26 +357,33 @@ export function validateRecord(
 }
 const stateValidator = ajv.compile<AccessState>({
   $defs: definitions,
-  ...object({
-    version: { const: 1 },
-    projectId: id,
-    ownerUserId: id,
-    groups: array(ref("group")),
-    connections: array(ref("connection")),
-    environmentPolicies: array(ref("environmentPolicy")),
-    assignments: array(ref("assignment")),
-    requests: array(ref("request")),
-    grants: array(ref("grant")),
-    reservations: array(ref("reservation")),
-    closedSessions: array(ref("caller")),
-    audit: array(ref("audit"), 20000),
-  }),
+  ...object(
+    {
+      version: { const: 1 },
+      projectId: id,
+      ownerUserId: id,
+      groups: array(ref("group")),
+      presets: array(ref("preset")),
+      creationDefaults: object({ revision, presetId: nullable(id) }),
+      connections: array(ref("connection")),
+      environmentPolicies: array(ref("environmentPolicy")),
+      assignments: array(ref("assignment")),
+      presetApplications: array(ref("presetApplication")),
+      requests: array(ref("request")),
+      grants: array(ref("grant")),
+      reservations: array(ref("reservation")),
+      closedSessions: array(ref("caller")),
+      audit: array(ref("audit"), 20000),
+    },
+    ["presetApplications"],
+  ),
 });
 export function validateState(value: unknown): asserts value is AccessState {
   if (!stateValidator(value))
     throw new Error("Malformed access state; restore instead of resetting.");
   for (const rows of [
     value.groups,
+    value.presets,
     value.connections,
     value.environmentPolicies,
     value.requests,
@@ -357,8 +398,17 @@ export function validateState(value: unknown): asserts value is AccessState {
     value.assignments.length
   )
     throw new Error("Duplicate access assignment.");
+  const applications = value.presetApplications ?? [];
+  if (
+    new Set(applications.map((row) => row.agentId)).size !== applications.length
+  )
+    throw new Error("Duplicate preset application receipt.");
+  for (const row of applications)
+    if (row.actor.type === "user" && row.actor.userId !== value.ownerUserId)
+      throw new Error("Invalid preset application authority.");
   for (const row of [
     ...value.groups,
+    ...value.presets,
     ...value.connections,
     ...value.environmentPolicies,
     ...value.grants,

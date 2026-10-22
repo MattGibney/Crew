@@ -1,25 +1,55 @@
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type {
-  CredentialVault,
   JsonObject,
   ServiceConnection,
   TrustedCredentialHandle,
 } from "../agents/contracts.mjs";
 import { withStateLock } from "../orchestration/state-lock.mjs";
 import { assertHttpEndpoint } from "./config.mjs";
-import type { ExecutorConfiguration, GatewayConnections } from "./config.mjs";
+import type {
+  ExecutorConfiguration,
+  GatewayConnections,
+  GatewayCredentialVault,
+} from "./config.mjs";
 import { canonicalJson, jsonObject, Sanitizer, sha256 } from "./json.mjs";
 import { atomicJson } from "./store.mjs";
 
 /** Owns protocol coordination only. All credential persistence and CAS belongs to #89. */
 export class GatewayCredentials {
   constructor(
-    private readonly vault: CredentialVault,
+    private readonly vault: GatewayCredentialVault,
     private readonly connections: GatewayConnections,
     private readonly privateDirectory: string,
   ) {}
+
+  private async currentConnection(connection: ServiceConnection) {
+    const current = await this.connections.get(connection.id);
+    if (
+      !current ||
+      current.revision !== connection.revision ||
+      current.projectId !== connection.projectId ||
+      current.service !== connection.service ||
+      canonicalJson(current.authentication) !==
+        canonicalJson(connection.authentication) ||
+      canonicalJson(current.transport) !== canonicalJson(connection.transport) ||
+      canonicalJson(current.identity) !== canonicalJson(connection.identity)
+    )
+      throw new Error("Connection changed during credential preparation.");
+    return current;
+  }
+
+  /** Preparation can await discovery or admission. Revalidate the exact
+   * connection and borrowed vault revision immediately before dispatch. An
+   * owner rotation/removal or a concurrent refresh must invalidate old bytes. */
+  async withCurrent<T>(
+    connection: ServiceConnection,
+    handle: TrustedCredentialHandle | null,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    await this.currentConnection(connection);
+    return handle ? handle.use(action) : action();
+  }
 
   async use<T>(
     connection: ServiceConnection,
@@ -31,23 +61,15 @@ export class GatewayCredentials {
     ) => Promise<T>,
   ): Promise<T> {
     const sanitizer = new Sanitizer();
-    if (connection.authentication.method === "none")
+    if (connection.authentication.method === "none") {
+      await this.currentConnection(connection);
       return action(null, null, sanitizer);
-    const expectedRevision =
-      connection.authentication.method === "oauth"
-        ? await this.refresh(connection, config)
-        : connection.revision;
-    const current = await this.connections.get(connection.id);
-    if (
-      !current ||
-      current.revision !== expectedRevision ||
-      current.projectId !== connection.projectId ||
-      current.authentication.method !== connection.authentication.method ||
-      canonicalJson(current.transport) !==
-        canonicalJson(connection.transport) ||
-      canonicalJson(current.identity) !== canonicalJson(connection.identity)
-    )
-      throw new Error("Connection changed during credential preparation.");
+    }
+    if (connection.authentication.method === "oauth")
+      await this.refresh(connection, config);
+    const current = await this.currentConnection(connection);
+    if (current.authentication.method === "none")
+      throw new Error("Connection authentication changed.");
     return this.vault.withCredential(
       current.authentication.credentialRef,
       (handle) =>
@@ -71,7 +93,7 @@ export class GatewayCredentials {
   private async refresh(
     connection: ServiceConnection,
     config: ExecutorConfiguration,
-  ): Promise<number> {
+  ): Promise<void> {
     const key = sha256(connection.id);
     return withStateLock(
       this.privateDirectory,
@@ -85,6 +107,11 @@ export class GatewayCredentials {
           canonicalJson(current) !== canonicalJson(connection)
         )
           throw new Error("OAuth connection changed.");
+        const metadata = await this.vault.metadataForReference(
+          current.authentication.credentialRef,
+        );
+        if (metadata.deleted)
+          throw new Error("OAuth credential is unavailable.");
         const markerFile = join(this.privateDirectory, `refresh-${key}.json`);
         let marker: JsonObject | null = null;
         try {
@@ -99,7 +126,10 @@ export class GatewayCredentials {
             throw error;
         }
         // Refresh tokens may rotate even if the response was lost. Never blindly refresh again.
-        if (marker?.revision === current.revision && marker.state === "pending")
+        if (
+          marker?.revision === metadata.revision &&
+          marker.state === "pending"
+        )
           throw new Error(
             "OAuth refresh outcome is unknown; owner reauthentication is required.",
           );
@@ -117,8 +147,7 @@ export class GatewayCredentials {
                 throw new Error(
                   "OAuth credential requires an access token and expiry.",
                 );
-              if (saved.expires_at > Date.now() + 30_000)
-                return current.revision;
+              if (saved.expires_at > Date.now() + 30_000) return;
               const oauth = config.oauth;
               if (!oauth || typeof saved.refresh_token !== "string")
                 throw new Error("OAuth owner sign-in is required.");
@@ -138,7 +167,7 @@ export class GatewayCredentials {
                 form.set("client_secret", saved.client_secret);
               }
               await atomicJson(markerFile, {
-                revision: current.revision,
+                revision: metadata.revision,
                 state: "pending",
               });
               const response = await fetch(url, {
@@ -181,16 +210,14 @@ export class GatewayCredentials {
                 }),
               );
               try {
-                const revision = await this.vault.replace(
+                const revision = await this.vault.withReplacement(
                   current.id,
-                  current.revision,
-                  {
-                    opaqueHandle: randomUUID(),
-                    use: (callback) => callback(replacement),
-                  },
+                  replacement,
+                  (handle) =>
+                    this.vault.replace(current.id, metadata.revision, handle),
                 );
                 await atomicJson(markerFile, { revision, state: "saved" });
-                return revision;
+                return;
               } finally {
                 replacement.fill(0);
               }

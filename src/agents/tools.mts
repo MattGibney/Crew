@@ -24,8 +24,106 @@ const content = {
   type: "array",
   minItems: 1,
   maxItems: 100,
-  items: { type: "object" },
+  items: {
+    anyOf: [
+      object({ type: { const: "text" }, text: string }),
+      object({
+        type: { const: "image" },
+        fileRef: id,
+        caption: nullableString,
+      }),
+      object({
+        type: { const: "file" },
+        fileRef: id,
+        name: string,
+        mediaType: string,
+      }),
+      object({ type: { const: "data" }, value: {} }),
+    ],
+  },
 };
+const profileInput = object(
+  {
+    name: { type: "string", minLength: 1, maxLength: 1000 },
+    pictureRef: { anyOf: [id, { type: "null" }] },
+    personality: string,
+    systemPrompt: string,
+    skills: {
+      type: "array",
+      items: object({ skillId: id, enabled: { type: "boolean" } }),
+    },
+  },
+  [],
+);
+const jobInput = object(
+  {
+    work: {
+      anyOf: [
+        object({
+          type: { const: "local" },
+          title: { type: "string", minLength: 1, maxLength: 1000 },
+          objective: { type: "string", minLength: 1, maxLength: 200_000 },
+        }),
+        object({
+          type: { const: "ticket" },
+          ticket: object({
+            provider: { enum: ["linear", "github"] },
+            connectionId: id,
+            externalId: {
+              ...id,
+              description:
+                "GitHub: owner/repository#number. Linear: immutable issue UUID. Use the actual provider identity.",
+            },
+            url: {
+              ...string,
+              description: "Canonical HTTP(S) ticket URL without credentials.",
+            },
+          }),
+        }),
+      ],
+    },
+    assignedToAgentId: { anyOf: [id, { type: "null" }] },
+    instruction: nullableString,
+  },
+  ["work"],
+);
+const environmentInput = object({
+  agentId: id,
+  action: { enum: ["create", "attach", "execute", "dispose"] },
+  requestId: {
+    ...id,
+    description:
+      "Unique operation ID; reuse only to reconcile the exact same action and arguments.",
+  },
+  arguments: {
+    description:
+      "create: policyId and optional ref; attach: policyId; execute: environmentId and command, with optional relativeCwd/timeoutMs; dispose: environmentId. Read environments_read for existing IDs and approved policy IDs.",
+    anyOf: [
+      object({ policyId: id, ref: id }, ["policyId"]),
+      object(
+        {
+          environmentId: id,
+          command: {
+            type: "array",
+            minItems: 1,
+            maxItems: 256,
+            items: string,
+            description:
+              'Argument vector, for example ["/usr/bin/git", "status", "--short"].',
+          },
+          relativeCwd: {
+            ...string,
+            description:
+              "Directory relative to the environment, default '.'; no parent traversal.",
+          },
+          timeoutMs: { type: "integer", minimum: 100, maximum: 120_000 },
+        },
+        ["environmentId", "command"],
+      ),
+      object({ environmentId: id }),
+    ],
+  },
+});
 const tools: { name: string; description: string; inputSchema: JsonObject }[] =
   [
     {
@@ -41,10 +139,25 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: object({ agentId: id }),
     },
     {
+      name: "agent_creation_presets",
+      description:
+        "List owner-approved creation choices. These choices do not grant administration rights.",
+      inputSchema: object({}),
+    },
+    {
       name: "agent_create",
       description:
-        "Create the same persistent agent model with an explicit profile and runtime references. Does not Start.",
-      inputSchema: object({ input: { type: "object" } }),
+        "Create a provisioned persistent agent from an exact owner-approved preset revision; reports to the creating agent. Does not Start.",
+      inputSchema: object({
+        input: object(
+          {
+            presetId: id,
+            expectedPresetRevision: { type: "integer", minimum: 1 },
+            name: string,
+          },
+          ["presetId", "expectedPresetRevision"],
+        ),
+      }),
     },
     {
       name: "agent_profile_save",
@@ -53,7 +166,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: object({
         agentId: id,
         expectedRevision: { type: "integer", minimum: 1 },
-        input: { type: "object" },
+        input: profileInput,
       }),
     },
     {
@@ -122,9 +235,15 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: object({ agentId: id }),
     },
     {
+      name: "environment_action",
+      description:
+        "Explicit environment action using the configured project integration. Does not change agent or chat identity.",
+      inputSchema: environmentInput,
+    },
+    {
       name: "environments_read",
       description:
-        "Read explicitly attached environment resource references. This runs no project commands.",
+        "Read currently permitted workspace policies and attached environments. Use the returned policy ID for attach/create; this runs no project commands.",
       inputSchema: object({ agentId: id }),
     },
     {
@@ -137,7 +256,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       name: "job_create",
       description:
         "Create a thin ticket reference or local objective; no automatic assignment message, setup or workflow.",
-      inputSchema: object({ input: { type: "object" } }),
+      inputSchema: object({ input: jobInput }),
     },
     {
       name: "job_assign",
@@ -211,7 +330,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "help_request",
       description:
-        "Raise a help request to this agent's explicit next reporting relationship; human targets go to the owner inbox.",
+        "Raise a help request to this agent's explicit next reporting relationship; human targets go to the owner inbox. To escalate an incoming request, replyToHelpRequestId accepts its help ID or the messageId from its authenticated Crew message origin.",
       inputSchema: object(
         {
           content,
@@ -224,14 +343,27 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "help_respond",
       description:
-        "Respond to a help request addressed to this agent. A response does not grant service access.",
-      inputSchema: object({ helpId: id, content }),
+        "Respond to a help request addressed to this agent. Use its help ID or the messageId from the incoming authenticated Crew message origin. A response does not grant service access.",
+      inputSchema: object({
+        helpId: {
+          ...id,
+          description: "Help request ID or received help message ID.",
+        },
+        content,
+      }),
+    },
+    {
+      name: "preparation_read",
+      description:
+        "Read the current preparation request identity and required continuation freshness for this session.",
+      inputSchema: object({}),
     },
     {
       name: "preparation_readiness",
       description:
         "Report this exact session's readiness after an explicit preparation request. Ready requires continuationSavedAt.",
       inputSchema: object({
+        preparationId: id,
         state: { enum: ["pending", "ready", "blocked"] },
         continuationSavedAt: nullableString,
         detail: nullableString,
@@ -270,9 +402,9 @@ export function createFoundationAgentTools(
           await records.authorize(principal, "agents.read", {
             type: "project",
           });
-          return foundation.store
-            .snapshot()
-            .agents.map(({ scratchpad, resources, ...identity }) => identity);
+          return (await foundation.agentViews()).map(
+            ({ scratchpad, resources, ...identity }) => identity,
+          );
         case "agent_read": {
           const agentId = identifier(args.agentId);
           await records.authorize(principal, "agents.read", {
@@ -280,16 +412,23 @@ export function createFoundationAgentTools(
             agentId,
           });
           // Scratchpad has an independent capability; do not leak notes via identity reads.
-          const agent = foundation.store
-            .snapshot()
-            .agents.find((entry) => entry.id === agentId)!;
+          const agent = (await foundation.agentViews()).find(
+            (entry) => entry.id === agentId,
+          )!;
           const { scratchpad, resources, ...identity } = agent;
           return identity;
         }
+        case "agent_creation_presets":
+          await records.authorize(principal, "agents.create", {
+            type: "project",
+          });
+          return foundation.creationPresets();
         case "agent_create":
-          return records.createAgent(
+          return foundation.createFromPreset(
             principal,
-            args.input as unknown as CreateAgentInput,
+            args.input as unknown as Parameters<
+              typeof foundation.createFromPreset
+            >[1],
           );
         case "agent_profile_save":
           return records.updateProfile(
@@ -327,6 +466,11 @@ export function createFoundationAgentTools(
             args.expectedRevision as number,
             args.markdown as string,
           );
+        case "environment_action":
+          return foundation.environment(
+            principal,
+            args as unknown as Parameters<typeof foundation.environment>[1],
+          );
         case "scratchpad_read":
         case "environments_read": {
           const agentId = identifier(args.agentId);
@@ -342,7 +486,7 @@ export function createFoundationAgentTools(
             .agents.find((entry) => entry.id === agentId)!;
           return name === "scratchpad_read"
             ? agent.scratchpad
-            : agent.resources;
+            : foundation.environmentList(principal, agentId);
         }
         case "jobs_list":
           await records.authorize(principal, "jobs.read", { type: "project" });
@@ -399,6 +543,16 @@ export function createFoundationAgentTools(
           void foundation.flush().catch(() => {});
           return result;
         }
+        case "preparation_read":
+          return (
+            foundation.store
+              .snapshot()
+              .preparation?.readiness.find(
+                (row) =>
+                  row.agentId === caller.agentId &&
+                  row.sessionId === caller.sessionId,
+              ) ?? null
+          );
         case "preparation_readiness":
           return foundation.reportReadiness(
             principal,

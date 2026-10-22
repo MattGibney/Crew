@@ -8,7 +8,6 @@ import type {
   AuthorizationService,
   BrokerCallOptions,
   BrokerInvocation,
-  CredentialVault,
   ExecutionPermit,
   ExecutorResult,
   OperationReceipt,
@@ -19,6 +18,8 @@ import type {
 } from "../agents/contracts.mjs";
 import type {
   CliConfiguration,
+  GatewayCredentialVault,
+  GatewayExecutionAdmission,
   ExecutorConfiguration,
   GatewayConnections,
   McpHttpConfiguration,
@@ -49,7 +50,11 @@ export class TrustedServiceExecutor implements ServiceExecutor {
   constructor(
     private readonly options: {
       authorization: AuthorizationService;
-      vault: CredentialVault;
+      vault: GatewayCredentialVault;
+      admission: GatewayExecutionAdmission;
+      catalogue?: (
+        connection: ServiceConnection,
+      ) => Promise<ServiceCapability[]>;
       connections: GatewayConnections;
       resolveConfiguration: ResolveExecutorConfiguration;
       privateDirectory: string;
@@ -81,8 +86,16 @@ export class TrustedServiceExecutor implements ServiceExecutor {
   async listCapabilities(
     connection: ServiceConnection,
   ): Promise<ServiceCapability[]> {
+    return this.options.catalogue
+      ? this.options.catalogue(connection)
+      : this.discoverCapabilities(connection);
+  }
+  /** Host catalogue callback only; broker discovery uses listCapabilities. */
+  async discoverCapabilities(
+    connection: ServiceConnection,
+  ): Promise<ServiceCapability[]> {
     const config = await this.configuration(connection);
-    return this.credentials.use(
+    const capabilities = await this.credentials.use(
       connection,
       config,
       async (_handle, token, sanitizer) => {
@@ -118,7 +131,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
                 return tools;
               });
         const names = new Set<string>();
-        return tools.map((tool) => {
+        return tools.map((tool): ServiceCapability => {
           if (
             !tool.name ||
             names.has(tool.name) ||
@@ -143,6 +156,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
         });
       },
     );
+    return capabilities;
   }
 
   async execute(
@@ -164,7 +178,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       return await this.credentials.use(
         connection,
         config,
-        async (_handle, token, sanitizer) => {
+        async (handle, token, sanitizer) => {
           // Credential-bearing input is rejected before dispatch, including values under innocent keys.
           const encoded = canonicalJson(invocation.operation.arguments);
           if (
@@ -175,20 +189,50 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               "Credential-bearing arguments are prohibited.",
               evidence,
             );
-          const admit = async () => {
+          const dispatch = async (
+            action: () => Promise<ExecutorResult>,
+          ): Promise<ExecutorResult> => {
             if (
               options.signal?.aborted ||
               !(await this.options.canDispatch(invocation))
             )
-              return false;
-            const decision = await this.options.authorization.redeem(permit);
-            if (decision.state !== "allowed") return false;
-            admitted = true;
-            // Cancellation after redemption but before dispatch is still conclusive non-execution.
-            return (
-              (await this.options.canDispatch(invocation)) &&
-              !options.signal?.aborted
+              return noExecution(
+                "Execution admission denied or cancelled.",
+                evidence,
+              );
+            const admission = await this.options.admission.run(
+              invocation,
+              permit,
+              async () => {
+                if (
+                  options.signal?.aborted ||
+                  !(await this.options.canDispatch(invocation))
+                )
+                  return noExecution(
+                    "Execution cancelled before dispatch.",
+                    evidence,
+                  );
+                return this.credentials.withCurrent(
+                  connection,
+                  handle,
+                  async () => {
+                    if (options.signal?.aborted)
+                      return noExecution(
+                        "Execution cancelled before dispatch.",
+                        evidence,
+                      );
+                    admitted = true;
+                    return action();
+                  },
+                );
+              },
             );
+            return admission.state === "admitted"
+              ? admission.result
+              : noExecution(
+                  "Execution admission denied or cancelled.",
+                  evidence,
+                );
           };
           if (config.type === "cli")
             return this.executeCli(
@@ -197,7 +241,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               permit,
               token,
               sanitizer,
-              admit,
+              dispatch,
               evidence,
               options,
             );
@@ -219,41 +263,38 @@ export class TrustedServiceExecutor implements ServiceExecutor {
                 invocation.operation.argumentsFingerprint
             )
               return noExecution("Tool schema or operation changed.", evidence);
-            if (!(await admit()))
-              return noExecution(
-                "Execution admission denied or cancelled.",
-                evidence,
+            return dispatch(async () => {
+              const result = await client.callTool(
+                {
+                  name: capability.upstreamName,
+                  arguments: invocation.operation.arguments,
+                },
+                CallToolResultSchema,
+                {
+                  timeout: config.timeoutMs,
+                  signal: options.signal,
+                  onprogress: () =>
+                    options.onProgress?.({
+                      invocationId: invocation.operation.invocationId,
+                      attemptId: permit.attemptId,
+                      label: "Upstream progress",
+                      detail: null,
+                    }),
+                },
               );
-            const result = await client.callTool(
-              {
-                name: capability.upstreamName,
-                arguments: invocation.operation.arguments,
-              },
-              CallToolResultSchema,
-              {
-                timeout: config.timeoutMs,
-                signal: options.signal,
-                onprogress: () =>
-                  options.onProgress?.({
-                    invocationId: invocation.operation.invocationId,
-                    attemptId: permit.attemptId,
-                    label: "Upstream progress",
-                    detail: null,
-                  }),
-              },
-            );
-            const safe = jsonObject(sanitizer.value(result));
-            if (result.isError)
+              const safe = jsonObject(sanitizer.value(result));
+              if (result.isError)
+                return {
+                  state: "failed",
+                  externalReference: null,
+                  reason: `Upstream tool error: ${canonicalJson(safe).slice(0, 2000)}`,
+                };
               return {
-                state: "failed",
+                state: "succeeded",
                 externalReference: null,
-                reason: `Upstream tool error: ${canonicalJson(safe).slice(0, 2000)}`,
+                content: [{ type: "data", value: { crewMcpResult: safe } }],
               };
-            return {
-              state: "succeeded",
-              externalReference: null,
-              content: [{ type: "data", value: { crewMcpResult: safe } }],
-            };
+            });
           });
         },
       );
@@ -509,7 +550,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
     permit: ExecutionPermit,
     token: string | null,
     sanitizer: Sanitizer,
-    admit: () => Promise<boolean>,
+    dispatch: (
+      action: () => Promise<ExecutorResult>,
+    ) => Promise<ExecutorResult>,
     evidence: string,
     options: BrokerCallOptions,
   ): Promise<ExecutorResult> {
@@ -572,125 +615,132 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       invocation.operation.invocationId,
     );
     await atomicJson(marker, { attemptId: permit.attemptId, state: "pending" });
-    if (!(await admit()))
-      return noExecution("Execution admission denied or cancelled.", evidence);
-    return new Promise((resolve) => {
-      const child = spawn(config.executable, mapped.argv, {
-        cwd: config.cwd,
-        env: environment,
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      const id = invocation.operation.invocationId;
-      this.activeInvocationIds.add(id);
-      const stdout: Buffer[] = [],
-        stderr: Buffer[] = [];
-      let outBytes = 0,
-        errBytes = 0,
-        overflow = false,
-        cancelled = false,
-        done = false;
-      let grace: ReturnType<typeof setTimeout> | undefined;
-      const finish = (result: ExecutorResult) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        if (grace) clearTimeout(grace);
-        options.signal?.removeEventListener("abort", cancel);
-        resolve(result);
-      };
-      const exited = async (result: ExecutorResult) => {
-        try {
-          await atomicJson(marker, {
-            attemptId: permit.attemptId,
-            state: "exited",
+    return dispatch(
+      () =>
+        new Promise<ExecutorResult>((resolve) => {
+          const child = spawn(config.executable, mapped.argv, {
+            cwd: config.cwd,
+            env: environment,
+            shell: false,
+            stdio: ["pipe", "pipe", "pipe"],
           });
-          finish(result);
-        } catch {
-          finish({
-            state: "uncertain",
-            verificationRef: null,
-            reason: "CLI exit could not be recorded durably.",
+          const id = invocation.operation.invocationId;
+          this.activeInvocationIds.add(id);
+          const stdout: Buffer[] = [],
+            stderr: Buffer[] = [];
+          let outBytes = 0,
+            errBytes = 0,
+            overflow = false,
+            cancelled = false,
+            done = false;
+          let grace: ReturnType<typeof setTimeout> | undefined;
+          const finish = (result: ExecutorResult) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            if (grace) clearTimeout(grace);
+            options.signal?.removeEventListener("abort", cancel);
+            resolve(result);
+          };
+          const exited = async (result: ExecutorResult) => {
+            try {
+              await atomicJson(marker, {
+                attemptId: permit.attemptId,
+                state: "exited",
+              });
+              finish(result);
+            } catch {
+              finish({
+                state: "uncertain",
+                verificationRef: null,
+                reason: "CLI exit could not be recorded durably.",
+              });
+            }
+          };
+          const cancel = () => {
+            if (cancelled) return;
+            cancelled = true;
+            child.kill("SIGTERM"); // Cooperative signal to this owned child only; never force-kill.
+            grace = setTimeout(
+              () =>
+                finish({
+                  state: "uncertain",
+                  verificationRef: null,
+                  reason:
+                    "CLI cancellation requested; execution/exit is unconfirmed.",
+                }),
+              500,
+            );
+          };
+          const timer = setTimeout(cancel, config.timeoutMs);
+          options.signal?.addEventListener("abort", cancel, { once: true });
+          if (options.signal?.aborted) cancel();
+          child.stdout.on("data", (chunk: Buffer) => {
+            outBytes += chunk.length;
+            if (outBytes <= 64 * 1024) stdout.push(chunk);
+            else {
+              overflow = true;
+              cancel();
+            }
           });
-        }
-      };
-      const cancel = () => {
-        if (cancelled) return;
-        cancelled = true;
-        child.kill("SIGTERM"); // Cooperative signal to this owned child only; never force-kill.
-        grace = setTimeout(
-          () =>
-            finish({
-              state: "uncertain",
-              verificationRef: null,
-              reason:
-                "CLI cancellation requested; execution/exit is unconfirmed.",
-            }),
-          500,
-        );
-      };
-      const timer = setTimeout(cancel, config.timeoutMs);
-      options.signal?.addEventListener("abort", cancel, { once: true });
-      if (options.signal?.aborted) cancel();
-      child.stdout.on("data", (chunk: Buffer) => {
-        outBytes += chunk.length;
-        if (outBytes <= 64 * 1024) stdout.push(chunk);
-        else {
-          overflow = true;
-          cancel();
-        }
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        errBytes += chunk.length;
-        if (errBytes <= 64 * 1024) stderr.push(chunk);
-        else {
-          overflow = true;
-          cancel();
-        }
-      });
-      child.stdin.on("error", () => {});
-      child.on("error", () => {
-        if (child.pid === undefined) {
-          this.activeInvocationIds.delete(id);
-          void exited(noExecution("CLI process was not spawned.", evidence));
-        } else
-          finish({
-            state: "uncertain",
-            verificationRef: null,
-            reason: "CLI process observation failed.",
+          child.stderr.on("data", (chunk: Buffer) => {
+            errBytes += chunk.length;
+            if (errBytes <= 64 * 1024) stderr.push(chunk);
+            else {
+              overflow = true;
+              cancel();
+            }
           });
-      });
-      child.on("close", (code, signal) => {
-        this.activeInvocationIds.delete(id);
-        if (cancelled || signal || overflow)
-          return void exited({
-            state: "uncertain",
-            verificationRef: null,
-            reason:
-              "CLI was interrupted or exceeded output limits; outcome needs verification.",
+          child.stdin.on("error", () => {});
+          child.on("error", () => {
+            if (child.pid === undefined) {
+              this.activeInvocationIds.delete(id);
+              void exited(
+                noExecution("CLI process was not spawned.", evidence),
+              );
+            } else
+              finish({
+                state: "uncertain",
+                verificationRef: null,
+                reason: "CLI process observation failed.",
+              });
           });
-        if (code !== 0)
-          return void exited({
-            state: "failed",
-            externalReference: null,
-            reason: `CLI exited ${code ?? "without a code"}: ${sanitizer.text(Buffer.concat(stderr).toString("utf8")).slice(0, 2000)}`,
+          child.on("close", (code, signal) => {
+            this.activeInvocationIds.delete(id);
+            if (cancelled || signal || overflow)
+              return void exited({
+                state: "uncertain",
+                verificationRef: null,
+                reason:
+                  "CLI was interrupted or exceeded output limits; outcome needs verification.",
+              });
+            if (code !== 0)
+              return void exited({
+                state: "failed",
+                externalReference: null,
+                reason: `CLI exited ${code ?? "without a code"}: ${sanitizer.text(Buffer.concat(stderr).toString("utf8")).slice(0, 2000)}`,
+              });
+            void exited({
+              state: "succeeded",
+              externalReference: null,
+              content: [
+                {
+                  type: "data",
+                  value: {
+                    stdout: sanitizer.text(
+                      Buffer.concat(stdout).toString("utf8"),
+                    ),
+                    stderr: sanitizer.text(
+                      Buffer.concat(stderr).toString("utf8"),
+                    ),
+                    exitCode: code,
+                  },
+                },
+              ],
+            });
           });
-        void exited({
-          state: "succeeded",
-          externalReference: null,
-          content: [
-            {
-              type: "data",
-              value: {
-                stdout: sanitizer.text(Buffer.concat(stdout).toString("utf8")),
-                stderr: sanitizer.text(Buffer.concat(stderr).toString("utf8")),
-                exitCode: code,
-              },
-            },
-          ],
-        });
-      });
-      child.stdin.end(stdin);
-    });
+          child.stdin.end(stdin);
+        }),
+    );
   }
 }

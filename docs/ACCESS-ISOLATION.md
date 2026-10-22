@@ -1,119 +1,292 @@
-# Runtime access isolation — Crew #89
+# Native access and project execution — #89 / #90
 
-`CodexRuntimeAccessProvider` in [`src/access/runtime-access.mts`](../src/access/runtime-access.mts)
-implements the canonical [`RuntimeAccessProvider`](./AGENT-CONTRACTS.md) port. It currently
-blocks every preparation. There is no verified route in this implementation that combines
-ChatGPT subscription sign-in with the required exclusion of personal service credentials.
-This is an implementation limitation, not a claim that Codex or OS isolation cannot support
-such a route.
+`CodexRuntimeAccessProvider.open` launches the pinned Codex app-server as a trusted host
+with a native model-tool permission profile. It checks the actual effective native
+configuration and uses native `account/read` to distinguish
+signed-in subscription access from a required owner action. It never copies personal
+authentication, reads tokens, or supplies an API-key fallback. Empty construction
+remains blocked. A new home or an owner setting alone cannot produce `ready`.
 
-The rest of the access system can store policy, connections and grants independently. Those
-records cannot make native execution safe or authorize an alternate unisolated launch. #88
-must show the blocked reason and limitations before starting or resuming the agent runtime.
-#86 owns final composition and combined acceptance; this module does not change the legacy
-manager/worker launch path.
+This replacement is draft implementation pending #88's actual native handoff proof and
+the composed application walkthrough. Isolated candidate validation is authorized;
+configuration and disposable command checks do not establish complete model-tool isolation.
 
-## Behavior and integration
+## Owner setup
 
-- Construct `new CodexRuntimeAccessProvider()` and inject it as the canonical port.
-- `prepare(caller, configuration)` returns `state: "blocked"` and a fresh limitations array.
-  It never returns a binding, evidence reference or misleading verification timestamp.
-- `release(caller)` is an idempotent no-op because this provider allocates nothing. It does
-  not release another provider's resources, stop an agent or alter a permission session.
-- Both methods leave configuration, auth, history, files, processes and native approvals
-  untouched. Inputs are not echoed into diagnostics or treated as evidence. No reference
-  is resolved, and no caller-supplied flag or attestation can enable execution.
+The production composition supplies a fresh, private Crew native directory, the verified
+Codex executable, its exact runtime-config reference, authenticated session gateway
+bindings, and selected immutable project skill paths. The initial tested CLI version is
+`0.163.0-alpha.11`; another version requires current validation and otherwise fails closed.
 
-Existing native approvals remain separate from Crew access grants. Neither approval system
-can be treated as proof that the other system's boundary is enforced.
+In Subscription settings, the owner selects **Sign in with ChatGPT**. The owner-only
+`beginSignIn()` API uses native `account/login/start` with `chatgpt`, returning
+`{type: "browser", loginId, authorizationUrl}`. The URL must use an allowed official
+HTTPS origin and the expected loopback callback. The owner opens that link and completes
+the browser ceremony; Crew checks `subscriptionStatus()` afterward. `cancelSignIn()`
+cancels only this pending Crew login. No personal account is logged out or replaced.
+Authorization URLs are transient owner UI state, never tickets, logs or repository content.
 
-## Evidence reviewed on 22 October 2026
+Only explicit owner browser sign-in requests the callback listener at `localhost:1455`.
+The pinned host owns callback verification and credential persistence; Crew never
+parses authorization codes or tokens. A busy callback port fails startup without killing
+another process. Browser startup/cancellation does not establish completed authentication.
 
-The installed bundled macOS CLI reported `codex-cli 0.163.0-alpha.11`. Its `--help`,
-`app-server --help`, `sandbox --help` and experimental app-server JSON schema were inspected
-using an empty temporary home/Codex home, a minimal explicit child environment, bounded
-process lifetimes and cleanup. Schema generation succeeded and created no thread or turn.
-No personal configuration, auth file, history or keychain item was inspected. No login,
-model call, app-server listener or service connection was started. Temporary output was
-removed. This inspection establishes available interfaces only, not enforcement.
+While signed out, `subscriptionStatus()` includes optional `signIn` state: `pending`
+with a null reason, or `failed` with a fixed safe reason, stage and numeric RPC code
+when available. Failure remains visible across status refreshes until a new attempt or
+explicit cancellation. Missing `signIn` means no active or retained attempt. The owner
+UI clears its transient link and waiting state when the attempt fails or disappears.
+Stages distinguish initialization, configuration, request, response, completion and
+transport; arbitrary native errors are never returned. A matching login-completion
+failure closes only the owned attempt. Explicit cancellation is tracked by generation,
+not inferred from error text. Completion success alone does not establish sign-in;
+a fresh account read must confirm the stored ChatGPT account.
 
-An initial obsolete `sandbox macos --help` probe was interpreted by this CLI as a request
-to execute a command named `macos`; it exited 71 because that command did not exist. It
-provides no isolation evidence. The successful `sandbox --help` probe identified the
-current command syntax; no sandbox workload was run.
+Authentication is stored by Codex in its existing Crew native home using its supported file
+credential store. Native account state is distinct from Crew service connections and
+the encrypted vault. Subscription availability is not model entitlement: a real completed
+turn is still needed to verify inference. In the coordinated 22 October 2026 owner run,
+the UI track confirmed a fresh native `account/read` reported signed in after the owner
+completed browser OAuth. This establishes the owner sign-in path, not a subscription-backed
+model response or the proposed native model-tool permission boundary. The storage marker
+and `crew.codex.broker-only.v1` configuration reference remain compatible; this change
+does not replace, import, reset or copy the existing authentication directory.
 
-The version-specific generated schema establishes:
+## Confirmed native process shutdown
 
-| Interface                                  | Observed support                                                             | Boundary of the evidence                                                     |
-| ------------------------------------------ | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `LoginAccountParams`                       | `chatgpt` and `chatgptDeviceCode` native login variants                      | Neither sign-in nor entitlement was exercised                                |
-| `LoginAccountParams.chatgptAuthTokens`     | Marked unstable and **for OpenAI internal use only; do not use**             | Crew must not use this as an auth-copy or token-extraction route             |
-| `ThreadStartParams` / `ThreadResumeParams` | `permissions`, `sandbox`, configuration overrides and native approval fields | A named profile and acknowledgement alone cannot prove containment           |
-| `ThreadStartParams.environments`           | Empty selection disables environment access unless a turn overrides it       | Does not establish exclusion of other tool surfaces or durable enforcement   |
-| `ConfigLayerSource`                        | Packaged, managed, enterprise, user, project and session layers              | A different user config directory does not remove every configuration source |
+Every access probe and sign-in app-server is retained until its exit is observed.
+Ending stdin is a stop request, not exit evidence. If the native peer does not confirm
+exit within its bounded close wait, cancellation reports that uncertainty and further
+launches/sign-in are blocked. The same native home also remains blocked if initial
+provider opening fails with an unfinished process. Confirmed later exit clears that
+in-process hold; Crew never force-stops it or discards its reference to retry silently.
 
-Official OpenAI documentation confirms native subscription sign-in and configurable auth
-storage, including process-memory storage. Those are potential building blocks; selecting
-storage does not prove that service credentials or host capabilities are inaccessible.
-[Authentication](https://learn.chatgpt.com/docs/auth)
+Provider close attempts every tool-binding revocation and model-egress close even when
+a native process remains alive, then reports the pending owned process. A later close
+can confirm completion. Cancelling during initial sign-in RPC setup waits for that exact
+attempt to stop before permitting another attempt. This tracks processes owned by the
+current controller; it does not claim persisted crash adoption or native installation
+lifecycle acceptance.
 
-Named profiles can deny filesystem reads, filter shell environment inheritance and control
-command networking. The network rules do not cover apps, MCP or hosted search, and proxy
-rules require active enforcement. These knobs require observation across all execution
-surfaces. [Configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+## Native boundary
 
-Full approved sandbox escalation can bypass command-proxy restrictions. An outer boundary
-must therefore continue to protect service authority while normal native approvals remain
-available. [Agent approvals and security](https://learn.chatgpt.com/docs/agent-approvals-security)
+The previous outer Seatbelt policy prevented native nested sandbox helpers from loading
+a resumed local environment. The provider now launches the exact pinned executable
+directly. The host is trusted with its own model authentication; native named permissions
+constrain model tools. Host RPCs such as filesystem readers and process spawning are not
+model-safe interfaces and must never be exposed through Crew tools. The retained model
+proxy is a fixed OpenAI transport route, not an operating-system boundary around this
+trusted host.
 
-Current web documentation describes externally managed ChatGPT tokens as an experimental
-host-owned auth mode, but the installed schema above expressly reserves that variant for
-internal use. This implementation follows the narrower installed support boundary. It
-does not extract credentials from the user's existing session.
-[App-server authentication](https://learn.chatgpt.com/docs/app-server#3c-log-in-with-externally-managed-chatgpt-tokens-chatgptauthtokens)
+Each launch gets one `crew-model-v2-<roots-hash>` profile extending `:read-only`, with
+filesystem default deny, minimal system reads, explicit personal-home/native-root deny,
+and read access only to its neutral workspace and selected immutable skill directories.
+Network is disabled and global native escalation is `never`. Shell/JS/apps/plugins and
+other unrelated surfaces remain disabled, but feature flags alone are not enforcement.
+The host receives an explicit environment; model commands inherit none and have no
+explicit variable injection. Crew's session bearer identifies only the authenticated
+session and does not contain an upstream provider credential.
 
-The separately documented Sign in with ChatGPT plan-usage integration requires its own
-owner-authorized OAuth lifecycle; its existence does not establish Crew client eligibility,
-installed-runtime compatibility or isolation. It was reviewed as an alternative, not used.
-[Plan-usage app-server integration](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server)
+The verifier compares the complete effective profile: exact filesystem entries, no
+extra profiles, no network/socket allowances, no environment overrides and no escalation.
+Native normalized null defaults remain null. Canonical private storage directories and
+narrow skill roots are checked before launch. The resolver repeats the managed store's
+exact-revision/resource-manifest verification and rejects changed paths; private storage
+directory identities must remain the same. It rechecks session revocation after these
+asynchronous reads. Existing auth files are neither read nor rewritten by Crew. TLS
+retains the supported public CA bundle setting. New `native-permissions-evidence.json`
+records profile checks separately from historical outer-boundary evidence.
 
-## What remains unverified
+The trusted resolver returns `nativePermissions: { profileId, approvalPolicy: "never" }`.
+#88 selects that profile explicitly on start/resume/turn requests and verifies the
+returned profile, approval policy and exact local workspace. It must fail closed on
+missing or changed evidence. This replaces the earlier empty-environment requirement;
+the local environment is the neutral read-only workspace, never a real project root.
+Before discovery, selected skill roots are still sent through `skills/extraRoots/set`.
+Real project work remains behind the separately authorized executor below.
 
-1. **Filesystem, processes and OS credentials.** No containment implementation yet excludes
-   personal homes, shared mounts, readable credential files, host keychain services, process
-   inspection, Git credential helpers, SSH configuration and agent sockets. A private
-   worktree or a new `CODEX_HOME` is configuration separation, not this boundary.
-2. **Configuration and tool discovery.** No observed route excludes personal MCP/OAuth,
-   apps/plugins, shell startup and CLI state across effective configuration layers and
-   resumed threads. Environment filtering cannot establish filesystem or keychain denial.
-3. **Model access.** Native subscription sign-in must be established within the chosen
-   boundary through a supported owner sign-in flow. An opaque `signInRef`, catalog entry
-   or existing login elsewhere is insufficient. No API-key fallback or copied auth.
-4. **Direct operations and approvals.** The runtime must reach its authenticated gateway
-   while arbitrary commands and other tool surfaces cannot bypass it using personal or
-   Crew upstream credentials. Native escalation must remain inside an outer service
-   isolation boundary, with exact caller/session correlation and revocation.
+## Actual project work
 
-## Next implementation decision
+`runMacWorkspaceCommand(policy, input)` is the trusted executor contribution consumed by
+#88's `AgentEnvironmentService`. It genuinely reads, edits and executes project commands
+inside a separately sandboxed workspace. The environment authority resolves the current
+owner assignment, filesystem grants and tool installations before invoking it. Model
+arguments cannot supply host policy roots or executable directories.
 
-Evaluate a separately provisioned OS/VM execution boundary with its own supported native
-ChatGPT sign-in, no personal host mounts or forwarded credential/agent sockets, and a
-session-bound Crew gateway. This is a candidate architecture requiring its own reviewed
-scope and evidence, not a selected or provisioned backend. Do not provision accounts,
-change the installed app, alter global Codex settings or trigger sign-in merely to make
-the blocked result disappear.
+The executor receives an explicit command string (passed as one shell argument), relative
+working directory and bounded timeout. It uses a fresh empty HOME, no inherited secrets,
+no native subscription directory and no broker vault. Stdout and stderr have separate
+32 KiB limits. It distinguishes launch failure, root command exit and timeout; a timeout
+may already have produced effects and is never evidence for automatic retry. Root command
+exit does not prove independently launched project resources were removed.
 
-A future provider must observe the exact runtime version, effective policy, owned boundary,
-configuration revision and caller/session before returning `ready`. Use synthetic canary
-credentials to verify denied personal-file/env/helper/socket/keychain/process access and
-an allowed broker operation. Cover ordinary commands, approved commands, tool discovery,
-thread resume and recovery. Verify owner-authorized subscription access separately;
-never probe personal secret values. Preserve native approvals and produce inspectable,
-sanitized evidence. Missing, stale or ambiguous proof stays blocked.
+Results include `processesSettled` and `processEvidenceRef`. The executor records the
+actual detached process group, root exit and observed descendant PID/start/command hashes
+in a private receipt outside writable command scratch. It confirms fresh group and
+observed-process absence before setting `processesSettled: true`. Foreground completion
+can therefore release an execution reservation while background work remains unsettled.
+Workspace and tool roots may not overlap this private directory.
 
-Releasing a future binding must act only on resources that provider owns. It must not stop
-project services, delete worktrees or terminate detached work as an isolation side effect.
+The host persists every returned reference, including both creation and registration
+commands for a managed worktree. It can later call
+`reconcileMacWorkspaceCommand(privateDirectory, processEvidenceRef)` and use a fresh
+confirmed result to settle the original operation. Reconciliation reads evidence and OS
+process state only: it neither repeats commands nor sends stop signals. Missing, unsafe,
+incomplete or malformed evidence stays unsettled; retain the original reference on failure.
+The proof covers the launched group and observed descendants. It does not prove arbitrary
+unobserved daemonization or that databases, containers or other independent resources were
+removed. Those require their own explicit project lifecycle evidence.
 
-Validation for this module is a focused compile and disposable blocked-result check.
-No authenticated end-to-end flow, native isolation or model access is claimed by those
-checks; combined runtime acceptance remains pending under #86.
+The initial executor has no network access. Package downloads, networked project setup,
+container sockets, development-server port binding and additional runtime libraries need
+explicit supported environment policy before they can work. Do not present the narrow
+local command proof as acceptance of an arbitrary existing project setup. No project
+source patch or Crew-specific integration is required for local file/edit/test operations.
+
+## Composition API
+
+```ts
+const access = await CodexRuntimeAccessProvider.open({
+  directory,
+  projectId,
+  executable,
+  runtimeConfigRef: "crew.codex.broker-only.v1",
+  gatewayFor: async (caller) => ({
+    url: gatewayUrl,
+    foundationUrl,
+    bearerToken,
+    bindingRef,
+    release,
+  }),
+  resolveSkills: async (skills) => exactSelectedSkillPaths,
+});
+// Inject access.prepare/release and access.resolveLaunch into the one #88 host.
+// Mount subscriptionStatus/beginSignIn/cancelSignIn on authenticated owner ingress.
+// For retained history, first verify the saved agent/thread identity in the host,
+// then call access.resolveHistoryLaunch(binding). It opens no service session.
+// close only after the host has settled sessions and reserved final shutdown.
+```
+
+Native MCP configuration contains exactly `crew` for foundation actions/skills and
+`services` for the service gateway. Both exact URLs and required bearer-token settings
+are read back from the native process before preparation succeeds. A single gateway
+endpoint alone does not expose agent management or selected skills.
+
+Only these two authenticated servers set `default_tools_approval_mode="approve"`.
+This supported native setting skips a redundant Codex MCP confirmation before Crew
+dispatch; it does not grant a Crew capability. Foundation authorization and the
+service broker still check the current caller, session, group or explicit grant at
+dispatch. It does not relax the native profile's `never` escalation policy. Preparation verifies
+the exact server set, approval defaults and absence of per-tool overrides. Owner login
+and retained-history launches configure no MCP servers.
+
+The setting applies to new native launches, not an already pending elicitation.
+Never answer or replay a pending owner request to apply it. Real MCP forms and URL
+elicitations remain separate supported-UI work; `approve` is not permission to fabricate
+their responses or enable unrelated native tools.
+
+The gateway binding must be caller/session authenticated, revocable on Stop and owned by
+the host. The host shares one admission gate across runtime, environment and gateway
+dispatch and final shutdown. It registers admitted work under a short gate and performs
+network/command I/O outside the mutex. Access-store projections remain the policy authority.
+
+## Evidence and remaining acceptance
+
+Historical macOS checks below exercised the earlier outer policy; they are not current
+trusted-host containment claims:
+native configuration/account read; permitted owned file read; denied synthetic outside
+service file; denied descendant read; other-process denial; keychain-list denial; denied
+host TCP and Unix socket access; allowed TLS to the model host and denied other-domain
+proxy/direct host access. No owner credential values were read. Private evidence is
+written to the owned native directory, not this repository.
+
+Actual device-login checks now exercise public begin/status/cancel/retry with the fixed
+CA environment. Cancellation clears pending status only alongside confirmed peer exit.
+A controlled native cancellation delivered as a completion event (without calling the
+provider's cancel method) verifies persistent failed-completion status, owned peer exit
+and a permitted new attempt. Removing the CA setting only in a disposable diagnostic
+launch reproduces the original request failure and retains stage `request` / RPC code
+`-32603` across polling and retry. No owner authorization was completed or token values
+read; these checks stop at code issuance and cancellation.
+
+The later owner device-code ceremony reported browser success while the native process
+remained active, exchanged network bytes and had no observed credential file or completion
+event. Its polling/persistence cause was not established. The authorized corrective route
+uses ordinary browser OAuth with the narrow callback permission described above; it is not
+a claim that the device-code completion problem was diagnosed. Preserve any existing attempt
+until the replacement app is ready and the owner coordinates cancellation/retry.
+
+The browser replacement passed actual public-provider begin/status/cancel/close in a
+fresh disposable native home. Its only listener was `127.0.0.1:1455`; original boundary
+canaries still passed under the login policy, and normal owner/model policies retained
+no inbound permission. The authorization URL passed the same official-origin/length
+constraints as the UI. No browser was opened or authentication completed by that check.
+Separately, the subsequent owner browser ceremony completed and the UI track confirmed
+signed-in state through a fresh native account read. The owner flow used the preserved
+Crew authentication home; no credential values were read or copied by this review.
+
+The separate workspace executor inspected a disposable script, edited it and ran its test
+successfully. It also denied an outside canary and read-only mutation, showed a clean
+environment, and reported timeout as possibly executed. These are actual process/file
+checks, not a completed agent-mediated project walkthrough.
+
+Actual process-settlement checks confirm foreground completion, a background sleep that
+blocks settlement, and later read-only confirmation after natural exit. Invalid evidence,
+private-root overlap and attempted receipt tampering fail closed. A component composition
+using the real access store, environment service, admission gate and sandbox executor
+confirms that foreground work clears execution settlement, a held final reservation
+rejects new commands, and running background work remains a settlement blocker. That check
+uses a controlled session identity; it does not establish a native agent turn.
+
+The installed native process also discovered two controlled SDK MCP servers using
+the exact foundation and service URLs with bearer authentication. A mismatched expected
+foundation URL failed configuration verification. This proves native transport discovery;
+the controlled endpoint catalogue is not the composed application's live tool catalogue.
+
+Before the native-owned replacement, installed CLI 0.163.0-alpha.11 read back
+`default_tools_approval_mode="approve"` for both endpoints and retained global
+`approval_policy="on-request"`. Both authenticated endpoints discovered successfully;
+the verifier rejected missing approval mode, a per-tool override and a third server.
+This was a disposable unsigned-in configuration/transport check. Separately, #88
+reported an actual subscription model call with per-tool `approval_mode="approve"`:
+an allowed synthetic call reached Crew and a forbidden call was rejected by its broker
+while global policy remained `never`. That establishes the narrow approval-mode
+semantics, not final composed-app or server-default model acceptance.
+
+The current native-owned draft passed a separate unsigned-in/no-model check using the
+actual provider and installed runtime. Commands read the neutral workspace and selected
+skill, denied outside/native-private reads and workspace writes, inherited no synthetic
+tokens and failed to reach a loopback canary (zero received requests). Skill discovery
+and idle start, warm resume and fresh-process same-chat resume retained the exact profile,
+`never` approval and neutral local workspace, with zero turns. Twelve altered config
+readbacks were rejected. Replaced/symlinked workspace and skill paths and a mismatched
+managed directory reference were rejected. All owned peers exited. These are native
+command/configuration checks, not a claim that every model tool or realtime handoff is
+contained. #88 owns the real-model handoff evidence; #95 validates the isolated composed
+candidate. Final acceptance remains pending.
+
+A separate controlled resolver-state check emitted the exact trusted permissions for
+matched state, then denied launch when that session was released during asynchronous
+skill validation. It used a seeded binding and is not authenticated preparation evidence.
+
+Actual Electron 44.9.2 safeStorage plus the real vault passed synthetic store/read/rotate,
+second-process reopen, stale-reference denial and deletion. This proves host OS storage
+integration, not signed/installed Crew application identity or process isolation.
+
+The later [composition checkpoint](AGENT-UNIFIED-COMPOSITION.md#validation-boundary)
+records actual signed-in manager/worker tool work, steering/queueing, a disposable project
+command, completed jobs and unsigned packaged launch/Quit/reopen with retained chats and
+sign-in. These supersede the earlier pending typed/project/package milestones above.
+Changed-profile compaction integration and help/private-work/preparation checks remain
+in progress. Real synthetic-audio voice handoff execution is recorded in the
+[native runtime evidence](AGENT-NATIVE-RUNTIME.md#current-bounded-evidence), with public
+history provenance still unresolved. Live third-party service operation, physical
+microphone/acoustic acceptance and signed automatic updates are not established.
+
+References: [native authentication](https://learn.chatgpt.com/docs/auth),
+[app-server protocol](https://learn.chatgpt.com/docs/app-server),
+[configuration](https://learn.chatgpt.com/docs/config-file/config-reference), and the
+installed CLI's generated experimental protocol schema. Native token-import variants
+marked internal-only are not used.
+
+The certificate setting is documented in [native environment variables](https://learn.chatgpt.com/docs/config-file/environment-variables).

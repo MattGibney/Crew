@@ -1,19 +1,32 @@
 import { useEffect, useRef, useState } from "react";
-import type { ManagerProps, ManagerSchedule } from "../../contracts/manager.js";
+import type {
+  ManagerSchedule,
+  ManagerSchedules as SavedSchedules,
+} from "../../contracts/manager.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { errorText } from "../api.js";
 const stamp = (at?: number) => (at ? new Date(at).toLocaleString() : "Not yet");
+export interface ScheduleSettingsModel {
+  settings?: { managerSchedules?: SavedSchedules } | null;
+  loadSettings(): Promise<unknown>;
+  saveManagerSchedules(
+    schedules: ManagerSchedule[],
+    expectedRevision: string,
+  ): Promise<{ managerSchedules?: SavedSchedules }>;
+}
 export function ManagerSchedules({
   manager,
   onNotify,
   visible,
+  subject = "manager",
 }: {
-  manager: ManagerProps["manager"];
+  manager: ScheduleSettingsModel;
   onNotify: (message: string) => void;
   visible: boolean;
+  subject?: "manager" | "agent";
 }) {
   const saved = manager.settings?.managerSchedules;
   const [draft, setDraft] = useState<ManagerSchedule[] | null>(null),
@@ -67,11 +80,15 @@ export function ManagerSchedules({
       if (draftRef.current === submitted) {
         setDraft(null);
         setRevision(null);
-        onNotify("Manager schedules saved.");
+        onNotify(
+          subject === "manager"
+            ? "Manager schedules saved."
+            : "Agent schedules saved.",
+        );
       } else {
         setRevision(confirmedRevision);
         onNotify(
-          "Manager schedules saved. Your newer edits are still unsaved.",
+          `${subject === "manager" ? "Manager" : "Agent"} schedules saved. Your newer edits are still unsaved.`,
         );
       }
     } catch (e) {
@@ -83,7 +100,7 @@ export function ManagerSchedules({
   return (
     <div className="space-y-6">
       <p className="text-sm leading-6 text-muted-foreground">
-        Schedules run only while the manager is running and available. Calls,
+        Schedules run only while the {subject} is running and available. Calls,
         active work and restart preparation defer them. Missed times do not
         build a queue. Routine scheduled activity stays out of your
         conversation; meaningful questions and findings appear through
@@ -91,7 +108,7 @@ export function ManagerSchedules({
       </p>
       {!saved && (
         <p role="status" className="text-sm text-muted-foreground">
-          Loading manager schedules…
+          Loading {subject} schedules…
         </p>
       )}
       {entries.map((schedule) => (

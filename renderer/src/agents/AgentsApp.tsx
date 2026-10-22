@@ -1,8 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { ChangeEvent, CSSProperties, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  GitBranch,
+  Keyboard,
+  Mic,
+  Layers,
+  NotebookPen,
+  Settings2,
+  Radio,
+  UserRound,
+  FolderGit2,
+  LayoutDashboard,
+  Link2,
+  type LucideIcon,
+  ArrowDown,
   ArrowLeft,
   ArrowUp,
   Check,
@@ -18,13 +31,26 @@ import {
   RotateCw,
   Settings,
   Square,
-  Users,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Message } from "../manager/Message";
+import { readProfilePicture } from "../manager/profile";
+import { AgentPicture, useAgentPicture } from "./AgentPicture";
+import { WorkerReference } from "../manager/worker/WorkerReference";
+import { WebLink } from "../manager/WebLink";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
 import type {
   Agent,
   AgentContent,
@@ -34,6 +60,7 @@ import type {
   HelpRequest,
   Job,
   JobStatus,
+  MessageSender,
   RuntimeHistoryItem,
   Skill,
 } from "../../../src/agents/contracts.mjs";
@@ -43,14 +70,18 @@ import type {
   CreateJobInput,
   ProfileInput,
 } from "./client";
+import crewMark from "../../../build/crew-mark.png";
 import "./agents.css";
 
 export interface AgentSettingsPanel {
   id: string;
   label: string;
+  description?: string;
+  icon?: LucideIcon;
   render(context: {
     snapshot: AgentsSnapshot;
     refresh: () => Promise<void>;
+    visible: boolean;
   }): ReactNode;
 }
 export interface AgentsAppProps {
@@ -58,6 +89,29 @@ export interface AgentsAppProps {
   /** #89 supplies access, connections and approval panels; foundation owns navigation. */
   settingsPanels?: AgentSettingsPanel[];
   banner?: ReactNode;
+  /** Return null once owner setup is complete. Opening setup starts no work. */
+  renderSetup?: (context: {
+    snapshot: AgentsSnapshot;
+    refresh: () => Promise<void>;
+    openSettings: (pageId: string) => void;
+  }) => ReactNode;
+  /** Mounted once. Visibility controls presentation only; the app owns call lifetime. */
+  renderVoice?: (context: {
+    primaryAgent: Agent | null;
+    snapshot: AgentsSnapshot;
+    visible: boolean;
+    mode: "voice" | "compact" | "hidden";
+    controlsTarget: HTMLElement | null;
+    transcriptTarget: HTMLElement | null;
+  }) => ReactNode;
+  headerActions?: ReactNode;
+  headerUpdates?: ReactNode;
+  nativeWindow?: boolean;
+  navigationRequest?: { id: string; view: View };
+  renderPreparationActions?: (context: {
+    snapshot: AgentsSnapshot;
+    refresh: () => Promise<void>;
+  }) => ReactNode;
 }
 
 type Action = (
@@ -65,8 +119,14 @@ type Action = (
   operation: () => Promise<unknown>,
   success?: string,
 ) => Promise<boolean>;
-type View = "agents" | "inbox" | "prepare" | "settings";
-type AgentTab = "conversation" | "jobs" | "scratchpad" | "profile";
+type View =
+  | "conversation"
+  | "agents"
+  | "scratchpad"
+  | "inbox"
+  | "prepare"
+  | "settings"
+  | "updates";
 const statusLabels: Record<JobStatus, string> = {
   not_started: "Not started",
   in_progress: "In progress",
@@ -80,22 +140,45 @@ export function AgentsApp({
   client,
   settingsPanels = [],
   banner,
+  renderSetup,
+  renderVoice,
+  headerActions,
+  headerUpdates,
+  nativeWindow = false,
+  navigationRequest,
+  renderPreparationActions,
 }: AgentsAppProps) {
   const [snapshot, setSnapshot] = useState<AgentsSnapshot | null>(null);
-  const [view, setView] = useState<View>("agents");
+  const [view, setView] = useState<View>("conversation");
+  const [settingsReturn, setSettingsReturn] = useState<View>("conversation");
+  const [settingsRequest, setSettingsRequest] = useState({
+    id: "initial",
+    page: "crew-sessions",
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [visitedIds, setVisitedIds] = useState<Set<string>>(new Set());
-  const [showArchived, setShowArchived] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [pending, setPending] = useState<Set<string>>(new Set());
   const [historyVersion, setHistoryVersion] = useState(0);
+  const [inputMode, setInputMode] = useState<"text" | "voice">("voice");
+  const [composerVoiceTarget, setComposerVoiceTarget] =
+    useState<HTMLElement | null>(null);
+  const [transcriptTarget, setTranscriptTarget] = useState<HTMLElement | null>(
+    null,
+  );
+  const [secondaryVoiceTarget, setSecondaryVoiceTarget] =
+    useState<HTMLElement | null>(null);
+  const [workerWidth, setWorkerWidth] = useState<number | null>(null);
+  const [workspaceWidth, setWorkspaceWidth] = useState(1000);
+  const workspace = useRef<HTMLElement | null>(null);
+  const resizing = useRef(false);
   const locks = useRef(new Set<string>());
   const refreshVersion = useRef(0);
   const alive = useRef(true);
-  const selectedRef = useRef(selectedId);
-  selectedRef.current = selectedId;
+  const selectedRef = useRef<string | null>(null);
+  selectedRef.current =
+    view === "conversation" ? primaryAgentId(snapshot) : selectedId;
   const refresh = useCallback(async () => {
     const request = ++refreshVersion.current;
     const next = await client.readSnapshot();
@@ -112,8 +195,6 @@ export function AgentsApp({
         event.event.binding.agentId === selectedRef.current
       )
         historyChanged = true;
-      // Native text streams can publish many events per second. Coalesce their
-      // disposable projections without delaying the final update indefinitely.
       if (scheduled !== undefined) return;
       scheduled = setTimeout(() => {
         scheduled = undefined;
@@ -129,6 +210,33 @@ export function AgentsApp({
       unsubscribe();
     };
   }, [client, refresh]);
+  useEffect(() => {
+    if (!navigationRequest) return;
+    if (
+      navigationRequest.view === "prepare" ||
+      navigationRequest.view === "inbox" ||
+      navigationRequest.view === "updates"
+    ) {
+      setSettingsRequest({
+        id: navigationRequest.id,
+        page:
+          navigationRequest.view === "updates"
+            ? "crew-updates"
+            : navigationRequest.view === "prepare"
+              ? "crew-preparation"
+              : "crew-attention",
+      });
+      setView("settings");
+    } else setView(navigationRequest.view);
+  }, [navigationRequest?.id]);
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width > 0)
+        setWorkspaceWidth(entry.contentRect.width);
+    });
+    if (workspace.current) observer.observe(workspace.current);
+    return () => observer.disconnect();
+  }, [Boolean(snapshot)]);
   const act: Action = async (key, operation, success) => {
     if (locks.current.has(key)) return false;
     locks.current.add(key);
@@ -155,7 +263,6 @@ export function AgentsApp({
     } catch (cause) {
       setError(errorText(cause));
     } finally {
-      // Refresh even after a failure: it may have retained a native thread or pending intent.
       try {
         await refresh();
       } catch (cause) {
@@ -166,102 +273,244 @@ export function AgentsApp({
     }
     return completed;
   };
-
-  const selected =
-    snapshot?.agents.find((agent) => agent.id === selectedId) ?? null;
-  const agents =
-    snapshot?.agents.filter((agent) => showArchived || !agent.archivedAt) ?? [];
-  const openHelp =
-    snapshot?.helpRequests.filter(
-      (item) => item.target.type === "user" && item.state === "open",
-    ) ?? [];
-  const attentionCount =
-    openHelp.length + (snapshot?.nativeApprovals.length ?? 0);
-  const openAgent = (id: string) => {
+  const primary =
+    snapshot?.agents.find((agent) => agent.id === primaryAgentId(snapshot)) ??
+    null;
+  const showWorker = (id: string) => {
     setVisitedIds((current) => new Set([...current, id]));
     setSelectedId(id);
     setView("agents");
-    setCreating(false);
   };
-
+  const openSettings = (page?: string) => {
+    if (view !== "settings") setSettingsReturn(view);
+    if (page) setSettingsRequest({ id: crypto.randomUUID(), page });
+    setView("settings");
+  };
+  const setup = snapshot
+    ? renderSetup?.({ snapshot, refresh, openSettings })
+    : null;
+  const setupVisible = Boolean(setup) && view !== "settings";
+  const attentionCount =
+    (snapshot?.helpRequests.filter(
+      (item) => item.target.type === "user" && item.state === "open",
+    ).length ?? 0) + (snapshot?.nativeApprovals.length ?? 0);
+  const maximumWorkerWidth = Math.round(Math.min(720, workspaceWidth * 0.6));
+  const resizeWorkers = (width: number) =>
+    setWorkerWidth(
+      Math.round(Math.max(280, Math.min(width, 720, workspaceWidth * 0.6))),
+    );
+  const panels: AgentSettingsPanel[] = snapshot
+    ? [
+        {
+          id: "crew-sessions",
+          label: "Sessions",
+          description: "Manage the live manager session for this project.",
+          icon: Radio,
+          render: () =>
+            primary ? (
+              <AgentSessionPanel
+                agent={primary}
+                skills={snapshot.skills}
+                pending={pending}
+                act={act}
+                client={client}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Choose your primary agent during setup.
+              </p>
+            ),
+        },
+        {
+          id: "crew-manager",
+          label: "Manager profile",
+          description:
+            "Customize your manager’s identity, personality, instructions and project skills.",
+          icon: UserRound,
+          render: () =>
+            primary ? (
+              <ProfileEditor
+                key={primary.id}
+                agent={primary}
+                client={client}
+                skills={snapshot.skills}
+                pending={pending.has(`profile-${primary.id}`)}
+                onSave={async (input) => {
+                  let saved: Agent | null = null;
+                  const success = await act(
+                    `profile-${primary.id}`,
+                    async () => {
+                      saved = await client.saveProfile(primary.id, {
+                        ...input,
+                        expectedRevision:
+                          input.expectedRevision ?? primary.profile.revision,
+                      });
+                    },
+                    primary.runtime.threadId
+                      ? "Profile saved. Restart to apply changed instructions."
+                      : "Profile saved. Start will use these instructions.",
+                  );
+                  return success ? saved : null;
+                }}
+              />
+            ) : null,
+        },
+        ...settingsPanels,
+        {
+          id: "crew-attention",
+          label: "Questions and approvals",
+          description: "Review requests that need your decision.",
+          icon: CircleHelp,
+          render: () => (
+            <OwnerInbox
+              snapshot={snapshot}
+              client={client}
+              pending={pending}
+              act={act}
+              openAgent={showWorker}
+            />
+          ),
+        },
+        {
+          id: "crew-preparation",
+          label: "Restart and Quit",
+          description:
+            "Review continuation notes and readiness before closing Crew.",
+          icon: RotateCw,
+          render: () => (
+            <Preparation
+              snapshot={snapshot}
+              client={client}
+              pending={pending}
+              act={act}
+              actions={renderPreparationActions?.({ snapshot, refresh })}
+            />
+          ),
+        },
+      ]
+    : [];
+  const detailVisible = view === "agents" && selectedId !== null;
+  const normalView =
+    !setupVisible &&
+    (view === "conversation" || view === "agents" || view === "scratchpad") &&
+    !detailVisible;
   return (
-    <div className="agents-app min-h-dvh bg-background text-foreground">
-      <header className="border-b bg-background px-4 sm:px-7">
-        <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-3 py-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <Users className="size-4" />
-            </div>
-            <strong className="text-lg tracking-tight">Crew</strong>
-            <span className="h-4 border-l" />
-            <span className="truncate text-sm text-muted-foreground">
-              {snapshot?.projectName || "Agents"}
-            </span>
+    <div className="agents-app flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      <a
+        href={
+          view === "conversation" ? "#manager-composer" : "#workspace-content"
+        }
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:rounded-md focus:bg-background focus:p-3"
+      >
+        {view === "conversation"
+          ? "Skip to message"
+          : "Skip to project content"}
+      </a>
+      <header
+        className={`flex min-h-18 shrink-0 items-center justify-between gap-4 border-b px-5 sm:px-7 ${nativeWindow ? "crew-window-header" : ""}`}
+      >
+        <div className="flex min-w-0 items-center gap-4">
+          <div className="flex items-center gap-2.5">
+            <img
+              src={crewMark}
+              alt=""
+              width="34"
+              height="34"
+              className="size-8"
+            />
+            <span className="text-xl font-semibold tracking-tight">Crew</span>
           </div>
-          <nav aria-label="Project navigation" className="flex gap-1">
-            <NavButton
-              active={view === "agents"}
-              onClick={() => {
-                setView("agents");
-                setSelectedId(null);
-                setCreating(false);
-              }}
-              icon={<Users />}
-            >
-              Agents
-            </NavButton>
-            <NavButton
-              active={view === "inbox"}
-              onClick={() => setView("inbox")}
-              icon={<Inbox />}
-            >
-              Inbox
-              {attentionCount > 0 && (
-                <span className="rounded-full bg-primary px-1.5 text-xs text-primary-foreground">
-                  {attentionCount}
-                </span>
-              )}
-            </NavButton>
-            <NavButton
-              active={view === "prepare"}
-              onClick={() => setView("prepare")}
-              icon={<Check />}
-            >
-              Prepare
-            </NavButton>
-            <NavButton
-              active={view === "settings"}
-              onClick={() => setView("settings")}
-              icon={<Settings />}
-            >
-              Settings
-            </NavButton>
-          </nav>
+          <span className="h-6 border-l" aria-hidden="true" />
+          <div className="min-w-0">
+            {headerActions || (
+              <span className="block truncate text-sm font-medium">
+                {snapshot?.projectName || "Opening project…"}
+              </span>
+            )}
+            <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <GitBranch className="size-3" aria-hidden="true" />
+              Local workspace
+            </p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            variant={view === "settings" ? "secondary" : "ghost"}
+            aria-pressed={view === "settings"}
+            onClick={() => {
+              if (view === "settings") setView(settingsReturn);
+              else openSettings();
+            }}
+          >
+            <Settings2 aria-hidden="true" />
+            <span className="hidden sm:inline">Settings</span>
+            <span className="sr-only sm:hidden">Settings</span>
+          </Button>
+          {headerUpdates}
         </div>
       </header>
       {banner && (
-        <div className="border-b bg-muted/50 px-5 py-2 text-center text-xs text-muted-foreground">
+        <div className="shrink-0 border-b bg-muted/50 px-5 py-2 text-center text-xs text-muted-foreground">
           {banner}
         </div>
       )}
-      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-7 sm:py-8">
-        {error && (
-          <div
-            role="alert"
-            className="mb-5 flex items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+      <nav
+        aria-label="Workspace views"
+        className={`${normalView ? "flex" : "hidden"} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}
+      >
+        <Button
+          variant={view === "conversation" ? "secondary" : "ghost"}
+          aria-pressed={view === "conversation"}
+          className="h-8 text-xs"
+          onClick={() => {
+            setView("conversation");
+            setSelectedId(null);
+          }}
+        >
+          <MessageSquare />
+          Conversation
+          {attentionCount > 0 && <Badge>{attentionCount} to review</Badge>}
+        </Button>
+        <Button
+          variant={view === "agents" ? "secondary" : "ghost"}
+          aria-pressed={view === "agents"}
+          className="h-8 text-xs"
+          onClick={() => {
+            setView("agents");
+            setSelectedId(null);
+          }}
+        >
+          <Layers />
+          Workers
+        </Button>
+        <Button
+          variant={view === "scratchpad" ? "secondary" : "ghost"}
+          aria-pressed={view === "scratchpad"}
+          className="h-8 text-xs"
+          onClick={() => setView("scratchpad")}
+        >
+          <NotebookPen />
+          Scratchpad
+        </Button>
+      </nav>
+      {error && (
+        <div
+          role="alert"
+          className="mx-5 my-3 flex shrink-0 items-start justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
+        >
+          <span>{error}</span>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Dismiss error"
+            onClick={() => setError("")}
           >
-            <span>{error}</span>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label="Dismiss error"
-              onClick={() => setError("")}
-            >
-              <X />
-            </Button>
-          </div>
-        )}
-        {!snapshot ? (
+            <X />
+          </Button>
+        </div>
+      )}
+      {!snapshot && (
+        <div className="m-8">
           <Empty
             title={error ? "Project unavailable" : "Loading project"}
             icon={<LoaderCircle className={error ? "" : "animate-spin"} />}
@@ -273,160 +522,218 @@ export function AgentsApp({
               Retry
             </Button>
           </Empty>
-        ) : (
-          <>
-            {view === "agents" && !selected && !creating && (
-              <>
-                <PageHeading
-                  title="Agents"
-                  description="Persistent colleagues, each with their own instructions and work."
-                >
-                  <Button onClick={() => setCreating(true)}>
-                    <Plus />
-                    New agent
-                  </Button>
-                </PageHeading>
-                <div className="mb-5 flex items-center justify-between gap-3 text-sm text-muted-foreground">
-                  <span>
-                    {agents.length} {agents.length === 1 ? "agent" : "agents"}
-                  </span>
-                  <label className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={showArchived}
-                      onChange={(event) =>
-                        setShowArchived(event.target.checked)
-                      }
-                    />
-                    Show archived
-                  </label>
-                </div>
-                {agents.length ? (
-                  <div className="grid auto-rows-fr gap-3 md:grid-cols-2 xl:grid-cols-3">
-                    {agents.map((agent) => (
-                      <button
-                        key={agent.id}
-                        onClick={() => openAgent(agent.id)}
-                        className="flex min-w-0 items-start gap-3 rounded-xl border p-4 text-left transition-colors hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"
+        </div>
+      )}
+      {snapshot && (
+        <>
+          {setupVisible && (
+            <section className="min-h-0 flex-1 overflow-auto">{setup}</section>
+          )}
+          <main
+            ref={workspace}
+            id="workspace-content"
+            style={
+              workerWidth === null
+                ? undefined
+                : ({
+                    "--crew-worker-width": `${workerWidth}px`,
+                  } as CSSProperties)
+            }
+            className={`${!setupVisible && (view === "conversation" || (view === "agents" && !selectedId)) ? "grid" : "hidden"} min-h-0 flex-1 ${view === "conversation" ? "manager-split" : ""}`}
+          >
+            <section
+              aria-label="Manager workspace"
+              className={`${view === "conversation" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col overflow-hidden`}
+            >
+              {primary ? (
+                <Conversation
+                  key={primary.id}
+                  agent={primary}
+                  snapshot={snapshot}
+                  client={client}
+                  pending={pending}
+                  act={act}
+                  historyVersion={historyVersion}
+                  visible={!setupVisible && view === "conversation"}
+                  readOnly={false}
+                  onReturnToPrimary={() => setView("conversation")}
+                  inputMode={inputMode}
+                  onInputMode={setInputMode}
+                  voiceTarget={setComposerVoiceTarget}
+                  transcriptTarget={setTranscriptTarget}
+                  hasVoice={Boolean(renderVoice)}
+                  onOpenSettings={() => openSettings("crew-sessions")}
+                  attention={
+                    attentionCount > 0 ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => openSettings("crew-attention")}
                       >
-                        <Avatar agent={agent} client={client} />
-                        <div className="min-w-0 flex-1">
-                          <h2 className="truncate font-medium">
-                            {agent.profile.name}
-                          </h2>
-                          <div className="mt-1 line-clamp-2 min-h-10 text-sm text-muted-foreground">
-                            {agent.profile.personality || "No personality set"}
-                          </div>
-                          <div className="mt-4">
-                            <AgentJobSummary
-                              agent={agent}
-                              jobs={snapshot.jobs}
-                            />
-                          </div>
-                          <p className="mt-3 text-xs text-muted-foreground">
-                            {agent.archivedAt
-                              ? "Archived"
-                              : `Session ${agent.runtime.session.observedState}`}
-                          </p>
-                        </div>
-                        <ChevronRight className="mt-2 size-4 shrink-0 text-muted-foreground" />
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <Empty icon={<Users />} title="Your first colleague">
-                    <p>
-                      Create an agent, then start its session when you are
-                      ready.
-                    </p>
-                    <Button onClick={() => setCreating(true)}>
-                      <Plus />
-                      Create agent
+                        <CircleHelp />
+                        {attentionCount} question
+                        {attentionCount === 1 ? "" : "s"} or approval
+                        {attentionCount === 1 ? "" : "s"} to review
+                      </Button>
+                    ) : undefined
+                  }
+                />
+              ) : (
+                <div className="m-8">
+                  <Empty icon={<Settings />} title="Set up your manager">
+                    <p>Choose your primary agent in Project settings.</p>
+                    <Button onClick={() => openSettings()}>
+                      Open settings
                     </Button>
                   </Empty>
-                )}
-              </>
-            )}
-            {view === "agents" && creating && (
-              <div className="mx-auto max-w-3xl">
-                <Button
-                  variant="ghost"
-                  className="mb-5"
-                  onClick={() => setCreating(false)}
-                >
-                  <ArrowLeft />
-                  Back to agents
-                </Button>
-                <PageHeading
-                  title="New agent"
-                  description="Every agent has the same capabilities. Its instructions define its responsibilities."
-                />
-                <ProfileEditor
-                  key="new"
-                  skills={snapshot.skills}
-                  pending={pending.has("create-agent")}
-                  onSave={async (input) => {
-                    let created: Agent | undefined;
-                    const success = await act(
-                      "create-agent",
-                      async () => {
-                        created = await client.createAgent(input);
-                      },
-                      "Agent created. Start its session when ready.",
-                    );
-                    if (success && created) openAgent(created.id);
-                    return success && created ? created : null;
+                </div>
+              )}
+            </section>
+            <div
+              role="separator"
+              aria-label="Resize worker panel"
+              aria-orientation="vertical"
+              aria-valuemin={280}
+              aria-valuemax={maximumWorkerWidth}
+              aria-valuenow={Math.min(workerWidth || 560, maximumWorkerWidth)}
+              tabIndex={view === "conversation" ? 0 : -1}
+              className={`${view === "conversation" ? "hidden lg:block" : "hidden"} relative z-10 cursor-col-resize touch-none bg-border outline-none before:absolute before:inset-y-0 before:-left-1.5 before:w-3 hover:bg-primary focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring`}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                resizing.current = true;
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (resizing.current)
+                  resizeWorkers(
+                    (workspace.current?.getBoundingClientRect().right ||
+                      event.clientX) - event.clientX,
+                  );
+              }}
+              onPointerUp={(event) => {
+                resizing.current = false;
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+              }}
+              onPointerCancel={() => {
+                resizing.current = false;
+              }}
+              onLostPointerCapture={() => {
+                resizing.current = false;
+              }}
+              onDoubleClick={() => setWorkerWidth(null)}
+              onKeyDown={(event) => {
+                const offset =
+                  event.key === "ArrowLeft"
+                    ? 32
+                    : event.key === "ArrowRight"
+                      ? -32
+                      : 0;
+                if (offset || event.key === "Home" || event.key === "End") {
+                  event.preventDefault();
+                  resizeWorkers(
+                    event.key === "Home"
+                      ? 280
+                      : event.key === "End"
+                        ? 720
+                        : (workerWidth || 560) + offset,
+                  );
+                }
+              }}
+            />
+            <aside
+              aria-label="Project workers"
+              className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${view === "conversation" ? "hidden lg:block" : "block"}`}
+            >
+              <AgentWorkerList
+                snapshot={snapshot}
+                client={client}
+                onSelect={showWorker}
+                compact={view === "conversation"}
+              />
+            </aside>
+          </main>
+          {snapshot.agents
+            .filter(
+              (agent) => visitedIds.has(agent.id) && agent.id !== primary?.id,
+            )
+            .map((agent) => (
+              <div
+                key={agent.id}
+                hidden={
+                  setupVisible || !detailVisible || selectedId !== agent.id
+                    ? true
+                    : undefined
+                }
+                className="min-h-0 flex-1 flex-col overflow-hidden flex"
+              >
+                <AgentDetail
+                  agent={agent}
+                  snapshot={snapshot}
+                  client={client}
+                  pending={pending}
+                  act={act}
+                  historyVersion={historyVersion}
+                  visible={
+                    !setupVisible && detailVisible && selectedId === agent.id
+                  }
+                  onBack={() => {
+                    setSelectedId(null);
+                    setView("conversation");
+                  }}
+                  onArchived={() => {
+                    setSelectedId(null);
+                    setView("agents");
                   }}
                 />
               </div>
-            )}
-            {snapshot.agents
-              .filter((agent) => visitedIds.has(agent.id))
-              .map((agent) => (
-                <div
-                  key={agent.id}
-                  hidden={view !== "agents" || selectedId !== agent.id}
-                >
-                  <AgentDetail
-                    agent={agent}
-                    snapshot={snapshot}
-                    client={client}
-                    pending={pending}
-                    act={act}
-                    historyVersion={historyVersion}
-                    visible={view === "agents" && selectedId === agent.id}
-                    onBack={() => setSelectedId(null)}
-                    onArchived={() => setSelectedId(null)}
-                  />
-                </div>
-              ))}
-            <div hidden={view !== "inbox"}>
-              <OwnerInbox
-                snapshot={snapshot}
-                client={client}
-                pending={pending}
-                act={act}
-                openAgent={openAgent}
-              />
-            </div>
-            <div hidden={view !== "prepare"}>
-              <Preparation
-                snapshot={snapshot}
-                client={client}
-                pending={pending}
-                act={act}
-              />
-            </div>
-            <div hidden={view !== "settings"}>
-              <SettingsView
-                snapshot={snapshot}
-                panels={settingsPanels}
-                refresh={refresh}
-              />
-            </div>
-          </>
-        )}
-      </main>
+            ))}
+          <section
+            hidden={setupVisible || view !== "scratchpad"}
+            className="min-h-0 flex-1 overflow-y-auto px-5 py-8 sm:px-8"
+          >
+            {primary && <AgentScratchpad agent={primary} />}
+          </section>
+          <div
+            ref={setSecondaryVoiceTarget}
+            hidden={
+              setupVisible || view === "conversation" || view === "settings"
+            }
+            className="shrink-0 border-t bg-background"
+          />
+          <div
+            hidden={setupVisible || view !== "settings"}
+            className="min-h-0 flex-1 flex overflow-hidden"
+          >
+            <SettingsView
+              snapshot={snapshot}
+              panels={panels}
+              refresh={refresh}
+              visible={view === "settings" && !setupVisible}
+              requestedPage={settingsRequest}
+            />
+          </div>
+          {renderVoice?.({
+            primaryAgent: primary,
+            snapshot,
+            visible: !setupVisible && view !== "settings",
+            mode:
+              setupVisible || view === "settings"
+                ? "hidden"
+                : view === "conversation"
+                  ? inputMode === "voice"
+                    ? "voice"
+                    : "compact"
+                  : "compact",
+            transcriptTarget,
+            controlsTarget:
+              view === "conversation"
+                ? composerVoiceTarget
+                : secondaryVoiceTarget,
+          })}
+        </>
+      )}
       {toast && (
         <div
           role="status"
@@ -449,6 +756,247 @@ export function AgentsApp({
   );
 }
 
+function AgentWorkerList({
+  snapshot,
+  client,
+  onSelect,
+  compact,
+}: {
+  snapshot: AgentsSnapshot;
+  client: AgentsClient;
+  onSelect(id: string): void;
+  compact: boolean;
+}) {
+  const [showArchived, setShowArchived] = useState(false);
+  const workers = snapshot.agents.filter(
+    (agent) =>
+      agent.id !== primaryAgentId(snapshot) &&
+      (showArchived || !agent.archivedAt),
+  );
+  return (
+    <section aria-label="Workers and worktrees" className="min-w-0 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">
+            Your crew{" "}
+            <span className="ml-1 text-muted-foreground">{workers.length}</span>
+          </h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Independent work. One manager.
+          </p>
+        </div>
+        <Layers className="size-4 text-muted-foreground" aria-hidden="true" />
+      </div>
+      {snapshot.agents.some((agent) => agent.archivedAt) && (
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(event) => setShowArchived(event.target.checked)}
+          />
+          Show archived
+        </label>
+      )}
+      {!workers.length && (
+        <div className="rounded-xl border border-dashed px-5 py-9 text-center">
+          <FolderGit2 className="mx-auto mb-3 size-6 text-muted-foreground" />
+          <h3 className="text-sm font-medium">A workspace for every task</h3>
+          <p className="mt-2 text-xs leading-5 text-muted-foreground">
+            Agree a task with your manager. Its worker and progress appear here.
+          </p>
+        </div>
+      )}
+      <div className="grid auto-rows-fr grid-cols-[repeat(auto-fit,minmax(min(100%,240px),1fr))] gap-2.5">
+        {workers.map((agent) => {
+          const job = snapshot.jobs
+            .filter((job) => job.assignment.assignedToAgentId === agent.id)
+            .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+          return (
+            <article key={agent.id} className="h-full min-w-0">
+              <button
+                type="button"
+                onClick={() => onSelect(agent.id)}
+                aria-label={`Open worker ${agent.profile.name}`}
+                className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5">
+                  <WorkerReference
+                    assignment={{
+                      ticket:
+                        job?.work.type === "ticket" ? job.work.ticket.url : "",
+                    }}
+                    fallback={agent.profile.name}
+                    className="text-[11px] font-medium text-muted-foreground"
+                  />
+                  {job && (
+                    <Badge variant="outline" className="max-w-64 text-[10px]">
+                      {job.progress.label || statusLabels[job.progress.status]}
+                      {job.progress.percent !== null
+                        ? ` · ${job.progress.percent}%`
+                        : ""}
+                    </Badge>
+                  )}
+                </div>
+                <div className="mt-2 flex items-start gap-2.5">
+                  <AgentPicture
+                    client={client}
+                    imageRef={agent.profile.pictureRef}
+                    className="mt-0.5 size-7"
+                  />
+                  <h3 className="min-h-10 line-clamp-2 break-words text-sm font-semibold leading-5">
+                    {job
+                      ? job.work.type === "local"
+                        ? job.work.title
+                        : job.assignment.instruction?.split("\n")[0] ||
+                          agent.profile.name
+                      : agent.profile.name}
+                  </h3>
+                </div>
+                {!compact && (
+                  <p className="mt-1 min-h-5 line-clamp-1 break-words text-xs leading-5 text-muted-foreground">
+                    {job?.progress.detail || "No progress detail reported"}
+                  </p>
+                )}
+                {!compact && (
+                  <p className="mt-auto pt-2 text-[10px] text-muted-foreground">
+                    {agent.archivedAt
+                      ? "Archived"
+                      : `Session ${agent.runtime.session.observedState}`}
+                  </p>
+                )}
+              </button>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AgentSessionPanel({
+  agent,
+  skills,
+  client,
+  pending,
+  act,
+}: {
+  agent: Agent;
+  skills: Skill[];
+  client: AgentsClient;
+  pending: Set<string>;
+  act: Action;
+}) {
+  const session = agent.runtime.session;
+  const busy =
+    ["starting", "stopping"].includes(session.observedState) ||
+    pending.has(`lifecycle-${agent.id}`);
+  const pendingProfile =
+    !session.appliedConfiguration ||
+    Boolean(
+      agent.runtime.threadId &&
+      !session.appliedConfiguration.instructionsDigest,
+    ) ||
+    session.appliedConfiguration.profileRevision !== agent.profile.revision ||
+    !sameSkills(agent, skills);
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Badge
+          variant={
+            session.observedState === "started" ? "secondary" : "outline"
+          }
+        >
+          {session.instructionPreparation?.state === "compacting"
+            ? "Applying instructions"
+            : session.observedState}
+        </Badge>
+        <div className="flex flex-wrap gap-2">
+          {(["start", "stop", "restart"] as const).map((action) => (
+            <Button
+              key={action}
+              variant="outline"
+              disabled={
+                busy ||
+                Boolean(agent.archivedAt) ||
+                (action === "start" && session.observedState === "started") ||
+                (action === "stop" && session.observedState === "stopped")
+              }
+              onClick={() =>
+                void act(`lifecycle-${agent.id}`, () =>
+                  client.lifecycle(agent.id, action),
+                )
+              }
+            >
+              {action === "start" ? (
+                <Play />
+              ) : action === "stop" ? (
+                <Square />
+              ) : (
+                <RotateCw />
+              )}
+              {action[0].toUpperCase() + action.slice(1)}
+            </Button>
+          ))}
+        </div>
+      </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        Stop preserves the chat, notes and resources. Start never connects voice
+        or creates an assignment.
+      </p>
+      {pendingProfile && session.instructionPreparation?.state !== "compacting" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {agent.runtime.threadId
+            ? "Saved instructions or skills are waiting for Restart."
+            : "Start applies your saved instructions and skills."}
+        </p>
+      )}
+      {session.instructionPreparation?.state === "compacting" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Updating instructions in this chat. Codex is summarizing its active
+          context; the readable chat history is kept. This uses model allowance.
+        </p>
+      )}
+      {session.instructionPreparation?.state === "uncertain" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          The instruction update could not be confirmed. The existing chat is
+          retained; check the session error before retrying.
+        </p>
+      )}
+      {session.lastError && (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
+        >
+          {session.lastError.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AgentScratchpad({ agent }: { agent: Agent }) {
+  return (
+    <div className="mx-auto max-w-3xl space-y-5">
+      <div>
+        <h1 className="text-lg font-semibold">Work notes</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          The agent’s visible working notes. Read only.
+        </p>
+      </div>
+      {agent.scratchpad.markdown ? (
+        <div className="agent-markdown text-sm leading-7">
+          <Markdown text={agent.scratchpad.markdown} />
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground">No notes saved yet.</p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Last saved {formatDate(agent.scratchpad.updatedAt)}
+      </p>
+    </div>
+  );
+}
+
 function AgentDetail({
   agent,
   snapshot,
@@ -467,115 +1015,70 @@ function AgentDetail({
   act: Action;
   historyVersion: number;
   visible: boolean;
-  onBack: () => void;
-  onArchived: () => void;
+  onBack(): void;
+  onArchived(): void;
 }) {
-  const [tab, setTab] = useState<AgentTab>("conversation");
-  const session = agent.runtime.session;
-  const busy =
-    ["starting", "stopping"].includes(session.observedState) ||
-    pending.has(`lifecycle-${agent.id}`);
-  const start = (action: "start" | "stop" | "restart") =>
-    void act(`lifecycle-${agent.id}`, () => client.lifecycle(agent.id, action));
-  const applied = session.appliedConfiguration;
-  const pendingProfile =
-    !applied ||
-    applied.profileRevision !== agent.profile.revision ||
-    !sameSkills(agent, snapshot.skills);
-  const agentJobs = snapshot.jobs.filter(
+  const [tab, setTab] = useState<
+    "overview" | "conversation" | "notes" | "links"
+  >("conversation");
+  const jobs = snapshot.jobs.filter(
     (job) => job.assignment.assignedToAgentId === agent.id,
   );
   return (
-    <section>
-      <Button variant="ghost" className="mb-5 -ml-2" onClick={onBack}>
-        <ArrowLeft />
-        All agents
-      </Button>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <Avatar agent={agent} client={client} />
-          <div className="min-w-0">
-            <h1 className="truncate text-2xl font-semibold tracking-tight">
-              {agent.profile.name}
-            </h1>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Session {session.observedState}
-              {session.activeTurnId ? " · Turn active" : ""}
-              {agent.archivedAt ? " · Archived" : ""}
-            </p>
-          </div>
+    <section
+      aria-label="Worker detail"
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="shrink-0 border-b px-5 pt-4 sm:px-8">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-2 h-7 shrink-0 text-xs text-muted-foreground"
+            onClick={onBack}
+          >
+            <ArrowLeft />
+            Back to manager
+          </Button>
+          <span className="hidden h-4 border-l sm:block" />
+          <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
+            {agent.profile.name}
+          </h1>
+          <Badge variant="outline" className="text-[10px]">
+            Session {agent.runtime.session.observedState}
+          </Badge>
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            disabled={
-              busy ||
-              Boolean(agent.archivedAt) ||
-              session.observedState === "started"
-            }
-            onClick={() => start("start")}
-          >
-            <Play />
-            Start
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy || session.observedState === "stopped"}
-            onClick={() => start("stop")}
-          >
-            <Square />
-            Stop
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy || Boolean(agent.archivedAt)}
-            onClick={() => start("restart")}
-          >
-            <RotateCw />
-            Restart
-          </Button>
-        </div>
-      </div>
-      {pendingProfile && (
-        <p
-          role="status"
-          className="mt-4 rounded-lg border bg-muted/30 px-3 py-2 text-sm"
+        <div
+          role="tablist"
+          aria-label="Worker detail tabs"
+          className="-mb-px mt-3 flex gap-4 overflow-x-auto sm:gap-5"
         >
-          {session.observedState === "started"
-            ? "Saved instructions or skills are waiting for Restart. The current session keeps its applied configuration."
-            : "Start applies the saved profile and skills after native acknowledgement."}
-        </p>
-      )}
-      {session.lastError && (
-        <p
-          role="alert"
-          className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
-        >
-          {session.lastError.message}
-        </p>
-      )}
-      <nav
-        aria-label={`${agent.profile.name} views`}
-        className="mt-6 flex gap-5 overflow-x-auto border-b"
-      >
-        {(["conversation", "jobs", "scratchpad", "profile"] as AgentTab[]).map(
-          (value) => (
+          {(
+            [
+              ["overview", "Overview", LayoutDashboard],
+              ["conversation", "Conversation", MessageSquare],
+              ["notes", "Work notes", FileText],
+              ["links", "Links", Link2],
+            ] as const
+          ).map(([value, label, Icon]) => (
             <button
               key={value}
-              aria-current={tab === value ? "page" : undefined}
+              type="button"
+              role="tab"
+              aria-selected={tab === value}
               onClick={() => setTab(value)}
-              className={`shrink-0 border-b-2 px-1 pb-3 text-sm font-medium capitalize ${tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+              className={`flex shrink-0 items-center gap-2 border-b-2 pb-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
             >
-              {value}
-              {value === "jobs" && agentJobs.length > 0
-                ? ` (${agentJobs.length})`
-                : ""}
+              <Icon className="size-3.5" />
+              {label}
             </button>
-          ),
-        )}
-      </nav>
-      {/* Keep editors mounted while changing views so unsaved drafts survive navigation. */}
-      <div hidden={tab !== "conversation"} className="mx-auto max-w-4xl">
+          ))}
+        </div>
+      </div>
+      <div
+        hidden={tab !== "conversation"}
+        className="min-h-0 flex-1 flex flex-col"
+      >
         <Conversation
           agent={agent}
           snapshot={snapshot}
@@ -584,92 +1087,71 @@ function AgentDetail({
           act={act}
           historyVersion={historyVersion}
           visible={visible && tab === "conversation"}
+          readOnly
+          onReturnToPrimary={onBack}
         />
       </div>
-      <div hidden={tab !== "jobs"} className="py-6">
-        <JobsView
-          agent={agent}
-          snapshot={snapshot}
-          client={client}
-          pending={pending}
-          act={act}
-        />
+      <div
+        hidden={tab !== "notes"}
+        className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
+      >
+        <AgentScratchpad agent={agent} />
       </div>
-      <div hidden={tab !== "scratchpad"} className="mx-auto max-w-4xl py-6">
-        <PageHeading
-          title="Scratchpad"
-          description="The agent’s visible working notes. These can change as its work develops."
-        />
-        {agent.scratchpad.markdown ? (
-          <div className="agent-markdown rounded-xl border p-5">
-            <Markdown text={agent.scratchpad.markdown} />
-          </div>
-        ) : (
-          <Empty icon={<FileText />} title="No notes yet">
-            <p>This agent has not saved any working notes.</p>
-          </Empty>
-        )}
-        <p className="mt-4 text-xs text-muted-foreground">
-          Last saved {formatDate(agent.scratchpad.updatedAt)} · Read only
-        </p>
-      </div>
-      <div hidden={tab !== "profile"} className="mx-auto max-w-3xl py-6">
-        <ProfileEditor
-          agent={agent}
-          skills={snapshot.skills}
-          pending={pending.has(`profile-${agent.id}`)}
-          onSave={async (input) => {
-            let saved: Agent | null = null;
-            const success = await act(
-              `profile-${agent.id}`,
-              async () => {
-                saved = await client.saveProfile(agent.id, {
-                  ...input,
-                  expectedRevision:
-                    input.expectedRevision ?? agent.profile.revision,
-                });
-              },
-              "Profile saved. Use Start or Restart to apply it.",
-            );
-            return success ? saved : null;
-          }}
-        />
-        <div className="mt-8 space-y-3 border-t pt-6 text-sm">
-          <h2 className="font-medium">Access and resources</h2>
-          <p className="text-muted-foreground">
-            Permissions and service connections are managed in Settings. Skills
-            provide instructions; they do not grant access.
-          </p>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
-            <dt className="text-muted-foreground">Permission groups</dt>
-            <dd>{agent.access.permissionGroupIds.length || "None assigned"}</dd>
-            <dt className="text-muted-foreground">Connections</dt>
-            <dd>
-              {agent.access.serviceConnectionIds.length || "None assigned"}
-            </dd>
-            <dt className="text-muted-foreground">Reports to</dt>
-            <dd>{actorLabel(agent.reportsTo, snapshot)}</dd>
-            <dt className="text-muted-foreground">Resources</dt>
-            <dd>
-              {agent.resources.length
-                ? agent.resources
-                    .map(
-                      (resource) => `${resource.kind} · ${resource.location}`,
-                    )
-                    .join("\n")
-                : "None attached. Conversations do not require a coding environment."}
-            </dd>
-          </dl>
-        </div>
-        {!agent.archivedAt && (
-          <div className="mt-8 flex flex-wrap items-center justify-between gap-4 border-t pt-6">
-            <div>
-              <h2 className="text-sm font-medium">Archive agent</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Hide it from the default list. History and resources are
-                retained.
-              </p>
+      <div
+        hidden={tab !== "overview"}
+        className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
+      >
+        <div className="mx-auto max-w-4xl space-y-8">
+          <AgentSessionPanel
+            agent={agent}
+            skills={snapshot.skills}
+            client={client}
+            pending={pending}
+            act={act}
+          />
+          <JobsView
+            agent={agent}
+            snapshot={snapshot}
+            client={client}
+            pending={pending}
+            act={act}
+          />
+          <details className="border-t pt-5">
+            <summary className="text-sm font-medium">
+              Profile and instructions
+            </summary>
+            <div className="mt-5">
+              <ProfileEditor
+                agent={agent}
+                client={client}
+                skills={snapshot.skills}
+                pending={pending.has(`profile-${agent.id}`)}
+                onSave={async (input) => {
+                  let saved: Agent | null = null;
+                  const success = await act(
+                    `profile-${agent.id}`,
+                    async () => {
+                      saved = await client.saveProfile(agent.id, {
+                        ...input,
+                        expectedRevision:
+                          input.expectedRevision ?? agent.profile.revision,
+                      });
+                    },
+                    agent.runtime.threadId
+                      ? "Profile saved. Restart to apply changed instructions."
+                      : "Profile saved. Start will use these instructions.",
+                  );
+                  return success ? saved : null;
+                }}
+              />
             </div>
+          </details>
+          <p className="text-xs text-muted-foreground">
+            Reports to {actorLabel(agent.reportsTo, snapshot)} ·{" "}
+            {agent.access.permissionGroupIds.length} permission groups ·{" "}
+            {agent.access.serviceConnectionIds.length} connections
+          </p>
+          {!agent.archivedAt && (
             <Button
               variant="outline"
               disabled={pending.has(`archive-${agent.id}`)}
@@ -684,10 +1166,42 @@ function AgentDetail({
                   onArchived();
               }}
             >
-              Archive
+              Archive worker
             </Button>
-          </div>
-        )}
+          )}
+        </div>
+      </div>
+      <div
+        hidden={tab !== "links"}
+        className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
+      >
+        <div className="mx-auto max-w-3xl space-y-4">
+          {jobs
+            .filter((job) => job.work.type === "ticket")
+            .map((job) => (
+              <p key={job.id}>
+                {job.work.type === "ticket" && (
+                  <SafeLink url={job.work.ticket.url}>
+                    {job.work.ticket.externalId}
+                  </SafeLink>
+                )}
+              </p>
+            ))}
+          {agent.resources.map((resource) => (
+            <div key={resource.id} className="rounded-lg border p-4">
+              <p className="text-sm font-medium">{resource.kind}</p>
+              <p className="mt-1 break-all text-xs text-muted-foreground">
+                {resource.location}
+              </p>
+            </div>
+          ))}
+          {!agent.resources.length &&
+            !jobs.some((job) => job.work.type === "ticket") && (
+              <p className="text-sm text-muted-foreground">
+                No links or resources attached.
+              </p>
+            )}
+        </div>
       </div>
     </section>
   );
@@ -701,6 +1215,15 @@ function Conversation({
   act,
   historyVersion,
   visible,
+  readOnly,
+  onReturnToPrimary,
+  inputMode = "text",
+  onInputMode,
+  voiceTarget,
+  transcriptTarget,
+  hasVoice = false,
+  onOpenSettings,
+  attention,
 }: {
   agent: Agent;
   snapshot: AgentsSnapshot;
@@ -709,23 +1232,40 @@ function Conversation({
   act: Action;
   historyVersion: number;
   visible: boolean;
+  readOnly: boolean;
+  onReturnToPrimary: () => void;
+  inputMode?: "text" | "voice";
+  onInputMode?: (mode: "text" | "voice") => void;
+  voiceTarget?: (node: HTMLDivElement | null) => void;
+  transcriptTarget?: (node: HTMLDivElement | null) => void;
+  hasVoice?: boolean;
+  onOpenSettings?: () => void;
+  attention?: ReactNode;
 }) {
   const [items, setItems] = useState<RuntimeHistoryItem[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const sequence = useRef(0);
-  const [draft, setDraft] = useState("");
-  const [mode, setMode] = useState<DeliveryMode>("queue");
-  const [jobId, setJobId] = useState("");
-  const agentJobs = snapshot.jobs.filter(
-    (job) => job.assignment.assignedToAgentId === agent.id,
-  );
+  const draftKey = `crew-agent-draft:${snapshot.projectId}:${agent.id}`;
+  const [draft, setDraft] = useState(() => readComposerDraft(draftKey));
+  useEffect(() => {
+    if (readOnly) return;
+    try {
+      if (draft) localStorage.setItem(draftKey, draft);
+      else localStorage.removeItem(draftKey);
+    } catch {
+      /* Unavailable local storage never discards an in-memory draft. */
+    }
+  }, [draft, draftKey, readOnly]);
+  const [mode, setMode] = useState<DeliveryMode>("steer");
   const intents = snapshot.pendingMessages.filter(
-    (message) => message.recipientAgentId === agent.id,
+    (message) =>
+      message.recipientAgentId === agent.id && message.sender.type !== "system",
   );
   const receipts = snapshot.receipts.filter(
-    (receipt) => receipt.recipientAgentId === agent.id,
+    (receipt) =>
+      receipt.recipientAgentId === agent.id && receipt.sender.type !== "system",
   );
   const load = useCallback(
     async (nextCursor?: string) => {
@@ -761,12 +1301,12 @@ function Conversation({
   }, [visible, agent.runtime.threadId, historyVersion, load]);
   const send = async () => {
     const content = draft.trim();
-    if (!content) return;
+    if (!content || readOnly) return;
     const submitted = draft;
     const success = await act(`send-${agent.id}`, () =>
       client.sendMessage({
         recipientAgentId: agent.id,
-        jobId: jobId || null,
+        jobId: null,
         replyToMessageId: null,
         content: [{ type: "text", text: content }],
         deliveryMode: mode,
@@ -777,173 +1317,325 @@ function Conversation({
       await load();
     }
   };
+  const effectiveMode = hasVoice ? inputMode : "text";
   return (
-    <div className="py-6">
-      {historyError && (
-        <div
-          role="alert"
-          className="mb-4 rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
-        >
-          {historyError}
-          <Button variant="ghost" className="ml-2" onClick={() => void load()}>
-            Retry history
-          </Button>
-        </div>
-      )}
-      <div aria-label="Native conversation" className="min-h-52 space-y-5">
-        {cursor && (
-          <div className="text-center">
-            <Button
-              variant="outline"
-              disabled={loading}
-              onClick={() => void load(cursor)}
-            >
-              Load earlier history
-            </Button>
-          </div>
-        )}
-        {!items.length && (
-          <Empty
-            icon={
-              loading ? (
-                <LoaderCircle className="animate-spin" />
-              ) : (
-                <MessageSquare />
-              )
+    <MessageScrollerProvider
+      autoScroll
+      defaultScrollPosition="end"
+      scrollEdgeThreshold={8}
+    >
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <MessageScroller className="flex-1">
+          <MessageScrollerViewport
+            aria-label={
+              readOnly ? "Worker conversation" : "Manager conversation"
             }
-            title={loading ? "Loading conversation" : "No conversation yet"}
+            className="px-5 sm:px-7 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/40"
           >
-            <p>
-              {agent.runtime.threadId
-                ? "Native history has no messages to display."
-                : "Start makes this agent available. Your first message begins the conversation."}
-            </p>
-          </Empty>
-        )}
-        {items
-          .filter((item) => item.kind !== "other")
-          .map((item) => (
-            <HistoryItem
-              key={item.runtimeRef}
-              item={item}
-              snapshot={snapshot}
-              client={client}
-            />
-          ))}
-      </div>
-      {(intents.length > 0 || receipts.length > 0) && (
-        <details className="my-6 rounded-lg border px-4 py-3 text-sm">
-          <summary className="font-medium">
-            Delivery activity
-            {intents.length ? ` · ${intents.length} retained` : ""}
-          </summary>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Acknowledgement confirms native acceptance, not completion of the
-            work.
-          </p>
-          <div className="mt-4 divide-y">
-            {intents.map((message) => (
-              <DeliveryItem
-                key={message.id}
-                message={message}
-                client={client}
-                snapshot={snapshot}
-                act={act}
-                pending={pending}
-              />
-            ))}
-            {receipts
-              .slice(-10)
-              .reverse()
-              .map((receipt) => (
-                <div key={receipt.messageId} className="py-3 text-xs">
-                  <span className="font-medium">Acknowledged</span>
-                  <span className="ml-2 text-muted-foreground">
-                    {actorLabel(receipt.sender, snapshot)} ·{" "}
-                    {formatDate(receipt.acknowledgedAt)}
-                  </span>
-                  <details className="mt-2 text-muted-foreground">
-                    <summary>Delivery reference</summary>
-                    <p className="mt-1 break-all">
-                      {receipt.messageId} · Attempt {receipt.attemptId}
-                    </p>
-                    <p className="break-all">
-                      Thread {receipt.threadId}
-                      {receipt.runtimeMessageRef
-                        ? ` · Message ${receipt.runtimeMessageRef}`
-                        : " · Native message reference unavailable"}
-                    </p>
+            <MessageScrollerContent
+              aria-label="Conversation messages"
+              aria-live="off"
+              className="mx-auto max-w-3xl gap-7 py-8"
+            >
+              {(attention ||
+                historyError ||
+                (!readOnly && agent.runtime.session.lastError)) && (
+                <MessageScrollerItem
+                  messageId="conversation-notices"
+                  className="space-y-3"
+                >
+                  {attention}
+                  {agent.runtime.session.lastError && !readOnly && (
+                    <div
+                      role="alert"
+                      className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
+                    >
+                      {agent.runtime.session.lastError.message}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-2"
+                        onClick={onOpenSettings}
+                      >
+                        Open Sessions
+                      </Button>
+                    </div>
+                  )}
+                  {historyError && (
+                    <div
+                      role="alert"
+                      className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
+                    >
+                      {historyError}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="ml-2"
+                        onClick={() => void load()}
+                      >
+                        Retry history
+                      </Button>
+                    </div>
+                  )}
+                </MessageScrollerItem>
+              )}
+              {cursor && (
+                <MessageScrollerItem
+                  messageId="earlier-history"
+                  className="text-center"
+                >
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={loading}
+                    onClick={() => void load(cursor)}
+                  >
+                    Load earlier history
+                  </Button>
+                </MessageScrollerItem>
+              )}
+              {!items.length && (
+                <MessageScrollerItem messageId="conversation-empty">
+                  <p className="text-center text-sm text-muted-foreground">
+                    {loading
+                      ? "Loading conversation…"
+                      : historyError
+                        ? "Saved history is currently unavailable."
+                        : agent.runtime.threadId
+                          ? "No messages yet."
+                          : "Start your manager in Settings, then send your first message."}
+                  </p>
+                </MessageScrollerItem>
+              )}
+              {items
+                .filter(
+                  (item) =>
+                    item.kind !== "other" && item.sender.type !== "system",
+                )
+                .map((item) => (
+                  <MessageScrollerItem
+                    key={item.runtimeRef}
+                    messageId={item.runtimeRef}
+                    scrollAnchor={item.sender.type === "user"}
+                  >
+                    <HistoryItem
+                      item={item}
+                      snapshot={snapshot}
+                      client={client}
+                      managerDirection={
+                        readOnly && item.sender.type === "agent"
+                      }
+                    />
+                  </MessageScrollerItem>
+                ))}
+              {!readOnly && (
+                <div ref={transcriptTarget} className="empty:hidden" />
+              )}
+              {(intents.length > 0 || receipts.length > 0) && (
+                <MessageScrollerItem messageId="delivery-activity">
+                  <details className="rounded-lg border px-4 py-3 text-sm">
+                    <summary className="text-xs font-medium text-muted-foreground">
+                      Delivery activity
+                      {intents.length ? ` · ${intents.length} pending` : ""}
+                    </summary>
+                    <div className="mt-3 divide-y">
+                      {intents.map((message) => (
+                        <DeliveryItem
+                          key={message.id}
+                          message={message}
+                          client={client}
+                          snapshot={snapshot}
+                          act={act}
+                          pending={pending}
+                        />
+                      ))}
+                      {receipts
+                        .slice(-10)
+                        .reverse()
+                        .map((receipt) => (
+                          <p
+                            key={receipt.messageId}
+                            className="py-2 text-xs text-muted-foreground"
+                          >
+                            Accepted · {actorLabel(receipt.sender, snapshot)} ·{" "}
+                            {formatDate(receipt.acknowledgedAt)}
+                          </p>
+                        ))}
+                    </div>
                   </details>
-                </div>
-              ))}
-          </div>
-        </details>
-      )}
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-        className="sticky bottom-3 mt-6 rounded-xl border bg-background p-3 shadow-sm"
-      >
-        <Textarea
-          aria-label={`Message ${agent.profile.name}`}
-          placeholder={`Message ${agent.profile.name}…`}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          className="min-h-20 border-0 shadow-none focus-visible:ring-0"
-          disabled={Boolean(agent.archivedAt)}
-        />
-        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <NativeSelect
-              aria-label="Delivery mode"
-              value={mode}
-              onChange={(event) => setMode(event.target.value as DeliveryMode)}
-            >
-              <option value="queue">Queue</option>
-              <option value="steer">Steer</option>
-            </NativeSelect>
-            <NativeSelect
-              aria-label="Related job"
-              value={jobId}
-              onChange={(event) => setJobId(event.target.value)}
-              className="max-w-52"
-            >
-              <option value="">No job</option>
-              {agentJobs.map((job) => (
-                <option key={job.id} value={job.id}>
-                  {jobTitle(job)}
-                </option>
-              ))}
-            </NativeSelect>
-          </div>
-          <Button
-            type="submit"
-            aria-label={`Send ${mode} message`}
-            disabled={
-              !draft.trim() ||
-              pending.has(`send-${agent.id}`) ||
-              Boolean(agent.archivedAt)
-            }
+                </MessageScrollerItem>
+              )}
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+          <MessageScrollerButton
+            size="sm"
+            variant="outline"
+            className="rounded-full px-3 shadow-md"
+            aria-label="Jump to latest"
           >
-            {pending.has(`send-${agent.id}`) ? (
-              <LoaderCircle className="animate-spin" />
-            ) : (
-              <ArrowUp />
-            )}
-            Send
-          </Button>
-        </div>
-        <p className="mt-2 px-1 text-xs text-muted-foreground">
-          {agent.runtime.session.observedState === "stopped"
-            ? "This agent is stopped. Messages are retained until you explicitly Start it."
-            : mode === "queue"
-              ? "Waits for the current turn to finish."
-              : "Addresses the active turn when supported. Unsupported steering is not sent."}
-        </p>
-      </form>
-    </div>
+            <ArrowDown className="size-3.5" />
+            Jump to latest
+          </MessageScrollerButton>
+        </MessageScroller>
+        {readOnly ? (
+          <div className="shrink-0 border-t px-5 py-3 text-xs text-muted-foreground sm:px-8">
+            Read-only worker history.{" "}
+            <button
+              type="button"
+              className="underline underline-offset-4"
+              onClick={onReturnToPrimary}
+            >
+              Return to your manager
+            </button>{" "}
+            to send directions.
+          </div>
+        ) : (
+          <div className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7">
+            <div className="mx-auto max-w-3xl">
+              <form
+                id="manager-composer"
+                tabIndex={-1}
+                aria-label="Message and voice composer"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void send();
+                }}
+                className="flex flex-col overflow-hidden rounded-xl border bg-background shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20"
+              >
+                {hasVoice && (
+                  <div className="flex items-center justify-between gap-3 px-3 pt-2">
+                    <div
+                      role="tablist"
+                      aria-label="Input method"
+                      className="flex gap-1 rounded-lg bg-muted/60 p-0.5"
+                    >
+                      {(["text", "voice"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          id={`input-tab-${mode}`}
+                          type="button"
+                          role="tab"
+                          aria-selected={effectiveMode === mode}
+                          aria-controls={`input-panel-${mode}`}
+                          tabIndex={effectiveMode === mode ? 0 : -1}
+                          onClick={() => onInputMode?.(mode)}
+                          onKeyDown={(event) => {
+                            if (
+                              [
+                                "ArrowLeft",
+                                "ArrowRight",
+                                "Home",
+                                "End",
+                              ].includes(event.key)
+                            ) {
+                              event.preventDefault();
+                              const next =
+                                event.key === "Home"
+                                  ? "text"
+                                  : event.key === "End"
+                                    ? "voice"
+                                    : mode === "text"
+                                      ? "voice"
+                                      : "text";
+                              onInputMode?.(next);
+                              document
+                                .getElementById(`input-tab-${next}`)
+                                ?.focus();
+                            }
+                          }}
+                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${effectiveMode === mode ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
+                        >
+                          {mode === "text" ? (
+                            <Keyboard className="size-3.5" />
+                          ) : (
+                            <Mic className="size-3.5" />
+                          )}
+                          {mode === "text" ? "Text" : "Voice"}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="text-[11px] text-muted-foreground">
+                      Message your manager
+                    </span>
+                  </div>
+                )}
+                <div
+                  ref={voiceTarget}
+                  id="input-panel-voice"
+                  role="tabpanel"
+                  aria-labelledby="input-tab-voice"
+                  className={effectiveMode === "text" ? "order-3" : ""}
+                />
+                <div
+                  id="input-panel-text"
+                  role="tabpanel"
+                  aria-labelledby={hasVoice ? "input-tab-text" : undefined}
+                  hidden={effectiveMode !== "text"}
+                  className="p-2"
+                >
+                  <Textarea
+                    aria-label="Message your manager"
+                    placeholder="Message your manager…"
+                    value={draft}
+                    maxLength={200_000}
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        !event.shiftKey &&
+                        !event.nativeEvent.isComposing
+                      ) {
+                        event.preventDefault();
+                        if (!pending.has(`send-${agent.id}`) && draft.trim())
+                          void send();
+                      }
+                    }}
+                    className="min-h-14 max-h-40 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+                    disabled={Boolean(agent.archivedAt)}
+                  />
+                  <div className="flex items-center justify-between gap-2 px-1">
+                    <p className="text-[11px] text-muted-foreground">
+                      {agent.runtime.session.observedState === "stopped"
+                        ? "Manager is stopped. Your message waits until Start in Settings."
+                        : agent.runtime.session.activeTurnId
+                          ? "Send another message to guide the current work."
+                          : "Enter to send · Shift Enter for a new line"}
+                    </p>
+                    <NativeSelect
+                      aria-label="Delivery mode"
+                      value={mode}
+                      onChange={(event) =>
+                        setMode(event.target.value as DeliveryMode)
+                      }
+                      className="h-7 max-w-36 text-[11px]"
+                    >
+                      <option value="steer">Send now</option>
+                      <option value="queue">After current turn</option>
+                    </NativeSelect>
+                    <Button
+                      type="submit"
+                      size="icon"
+                      aria-label="Send message"
+                      disabled={
+                        !draft.trim() ||
+                        pending.has(`send-${agent.id}`) ||
+                        Boolean(agent.archivedAt)
+                      }
+                    >
+                      {pending.has(`send-${agent.id}`) ? (
+                        <LoaderCircle className="animate-spin" />
+                      ) : (
+                        <ArrowUp />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+      </div>
+    </MessageScrollerProvider>
   );
 }
 
@@ -951,52 +1643,61 @@ function HistoryItem({
   item,
   snapshot,
   client,
+  managerDirection = false,
 }: {
   item: RuntimeHistoryItem;
   snapshot: AgentsSnapshot;
   client: AgentsClient;
+  managerDirection?: boolean;
 }) {
+  const sender = item.sender;
+  const senderAgent =
+    sender.type === "agent" || sender.type === "assistant"
+      ? snapshot.agents.find((agent) => agent.id === sender.agentId)
+      : undefined;
+  const picture = useAgentPicture(client, senderAgent?.profile.pictureRef);
   const own =
     item.sender.type === "user" && item.sender.userId === snapshot.ownerId;
   const technical = item.kind === "tool" || item.kind === "approval";
-  const content = <Content blocks={item.content} client={client} />;
-  return (
-    <article
-      className={own ? "ml-auto max-w-[92%] sm:max-w-[85%]" : "max-w-full"}
-    >
-      <div
-        className={`mb-2 flex items-center gap-2 text-xs text-muted-foreground ${own ? "justify-end" : ""}`}
-      >
-        <strong className="font-medium text-foreground">
-          {historyActor(item, snapshot)}
-        </strong>
-        <span>
+  if (technical)
+    return (
+      <details className="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+        <summary className="text-xs font-medium text-muted-foreground">
           {item.kind === "approval"
             ? "Native approval record"
-            : item.kind === "tool"
-              ? "Tool activity"
-              : ""}
-        </span>
-      </div>
-      {technical ? (
-        <details className="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
-          <summary>
-            {item.kind === "approval"
-              ? "Approval details"
-              : "Execution details"}
-          </summary>
-          <div className="mt-3">{content}</div>
-          <HistoryCorrelation item={item} />
-        </details>
-      ) : (
-        <div
-          className={`rounded-xl p-4 ${own ? "bg-muted" : "border bg-background"}`}
-        >
-          {content}
-          <HistoryCorrelation item={item} />
+            : "Tool activity"}
+        </summary>
+        <div className="mt-3">
+          <Content blocks={item.content} client={client} />
+        </div>
+        <HistoryCorrelation item={item} />
+      </details>
+    );
+  const text = item.content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n\n");
+  const attachments = item.content.filter((block) => block.type !== "text");
+  const name = historyActor(item, snapshot);
+  return (
+    <Message
+      message={{
+        id: item.runtimeRef,
+        role: own || managerDirection ? "user" : "assistant",
+        text,
+        turnId: item.turnId ?? undefined,
+      }}
+      label={name}
+      ariaLabel={own ? "Your message" : `${name} message`}
+      profile={{ name, picture, voice: null, version: "native-projection" }}
+      copyable={!own}
+    >
+      {attachments.length > 0 && (
+        <div className="mt-3">
+          <Content blocks={attachments} client={client} />
         </div>
       )}
-    </article>
+    </Message>
   );
 }
 function HistoryCorrelation({ item }: { item: RuntimeHistoryItem }) {
@@ -1089,11 +1790,13 @@ type ProfileSave = {
 };
 function ProfileEditor({
   agent,
+  client,
   skills,
   pending,
   onSave,
 }: {
   agent?: Agent;
+  client: AgentsClient;
   skills: Skill[];
   pending: boolean;
   onSave: (input: ProfileSave) => Promise<Agent | null>;
@@ -1115,6 +1818,20 @@ function ProfileEditor({
   const savedSource = useRef(agent);
   const [dirty, setDirty] = useState(false);
   const editVersion = useRef(0);
+  const pictureInputId = useId();
+  const pictureRequest = useRef(0);
+  const [draftPicture, setDraftPicture] = useState<string | null | undefined>(
+    undefined,
+  );
+  const [readingPicture, setReadingPicture] = useState(false);
+  const [savingPicture, setSavingPicture] = useState(false);
+  const [pictureError, setPictureError] = useState("");
+  useEffect(
+    () => () => {
+      pictureRequest.current++;
+    },
+    [],
+  );
   useEffect(() => {
     if (!agent || dirty || savedSource.current === agent) return;
     setProfile({
@@ -1125,6 +1842,7 @@ function ProfileEditor({
     });
     setRevision(agent.profile.revision);
     setSelection(agent.skills);
+    setDraftPicture(undefined);
     savedSource.current = agent;
   }, [agent, dirty]);
   const change = <K extends keyof ProfileInput>(
@@ -1135,20 +1853,77 @@ function ProfileEditor({
     setDirty(true);
     setProfile((current) => ({ ...current, [key]: value }));
   };
+  const choosePicture = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const request = ++pictureRequest.current;
+    editVersion.current++;
+    setDirty(true);
+    setReadingPicture(true);
+    setPictureError("");
+    try {
+      const picture = await readProfilePicture(file);
+      if (request === pictureRequest.current) setDraftPicture(picture);
+    } catch (error) {
+      if (request === pictureRequest.current) setPictureError(errorText(error));
+    } finally {
+      if (request === pictureRequest.current) setReadingPicture(false);
+    }
+  };
   return (
     <form
       className="space-y-6"
       onSubmit={async (event) => {
         event.preventDefault();
+        if (
+          pending ||
+          savingPicture ||
+          readingPicture ||
+          (agent && dirty && revision !== agent.profile.revision)
+        )
+          return;
         const submittedVersion = editVersion.current;
-        const saved = await onSave({
-          profile,
-          skills: selection,
-          expectedRevision: revision,
-        });
-        if (saved) {
-          setRevision(saved.profile.revision);
-          if (submittedVersion === editVersion.current) setDirty(false);
+        setSavingPicture(true);
+        setPictureError("");
+        try {
+          const pictureRef =
+            draftPicture === undefined
+              ? profile.pictureRef
+              : draftPicture === null
+                ? null
+                : client.saveImage
+                  ? (await client.saveImage(draftPicture)).imageRef
+                  : await Promise.reject(
+                      new Error(
+                        "Picture uploads are unavailable. Try again when this project reconnects.",
+                      ),
+                    );
+          const saved = await onSave({
+            profile: { ...profile, pictureRef },
+            skills: selection,
+            expectedRevision: revision,
+          });
+          if (saved) {
+            setRevision(saved.profile.revision);
+            if (submittedVersion === editVersion.current) {
+              setProfile({
+                name: saved.profile.name,
+                pictureRef: saved.profile.pictureRef,
+                personality: saved.profile.personality,
+                systemPrompt: saved.profile.systemPrompt,
+              });
+              setDraftPicture(undefined);
+              savedSource.current = saved;
+              setDirty(false);
+            }
+          }
+        } catch {
+          setPictureError(
+            "The profile could not be saved. Your changes are kept; try again.",
+          );
+        } finally {
+          setSavingPicture(false);
         }
       }}
     >
@@ -1167,7 +1942,19 @@ function ProfileEditor({
         >
           The saved profile changed while you were editing. Your draft is
           retained; reload the saved version before saving again.
-          <Button variant="ghost" onClick={() => setDirty(false)}>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={pending || savingPicture}
+            onClick={() => {
+              pictureRequest.current++;
+              editVersion.current++;
+              setReadingPicture(false);
+              setDraftPicture(undefined);
+              setPictureError("");
+              setDirty(false);
+            }}
+          >
             Reload saved profile
           </Button>
         </p>
@@ -1180,15 +1967,70 @@ function ProfileEditor({
           onChange={(event) => change("name", event.target.value)}
         />
       </Field>
-      <Field
-        label="Picture reference"
-        hint="Use an existing Crew artifact reference. Leave empty for initials."
-      >
-        <Input
-          value={profile.pictureRef ?? ""}
-          onChange={(event) => change("pictureRef", event.target.value || null)}
-        />
-      </Field>
+      <div className="space-y-2">
+        <p className="text-sm font-medium">Picture</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <AgentPicture
+            client={client}
+            imageRef={profile.pictureRef}
+            picture={draftPicture}
+            className="size-12"
+          />
+          <label
+            htmlFor={pictureInputId}
+            className="cursor-pointer text-xs text-primary"
+          >
+            Choose picture
+          </label>
+          <input
+            id={pictureInputId}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            aria-label="Agent picture"
+            className="max-w-full text-xs"
+            disabled={
+              pending || savingPicture || readingPicture || !client.saveImage
+            }
+            onChange={(event) => void choosePicture(event)}
+          />
+          {(draftPicture === undefined ? profile.pictureRef : draftPicture) && (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              disabled={pending || savingPicture}
+              onClick={() => {
+                pictureRequest.current++;
+                setReadingPicture(false);
+                setPictureError("");
+                setDraftPicture(null);
+                change("pictureRef", null);
+              }}
+            >
+              Remove picture
+            </Button>
+          )}
+        </div>
+        <p className="text-xs leading-5 text-muted-foreground">
+          PNG, JPEG or WebP, up to 512 KB and 2048 × 2048 pixels. The picture
+          stays in this project on this Mac.
+        </p>
+        {readingPicture && (
+          <p role="status" className="text-xs text-muted-foreground">
+            Checking picture…
+          </p>
+        )}
+        {!client.saveImage && (
+          <p className="text-xs text-muted-foreground">
+            Picture uploads are unavailable in this connection.
+          </p>
+        )}
+        {pictureError && (
+          <p role="alert" className="text-xs text-destructive">
+            {pictureError}
+          </p>
+        )}
+      </div>
       <Field label="Personality">
         <Textarea
           rows={3}
@@ -1217,7 +2059,10 @@ function ProfileEditor({
           <p>
             These instructions define this agent’s behavior. Permissions are
             managed separately. Saving does not start a turn or alter active
-            instructions; explicit Start or Restart applies the saved profile.
+            instructions. Start uses the profile for a new chat. For an existing
+            chat, use Restart to apply changed instructions; Codex summarizes
+            active context while keeping the readable chat history. This uses
+            model allowance. Unchanged instructions do not trigger that work.
           </p>
         </div>
       </details>
@@ -1264,11 +2109,15 @@ function ProfileEditor({
           type="submit"
           disabled={
             pending ||
+            savingPicture ||
+            readingPicture ||
             !profile.name.trim() ||
             Boolean(agent && dirty && revision !== agent.profile.revision)
           }
         >
-          {pending && <LoaderCircle className="animate-spin" />}{" "}
+          {(pending || savingPicture) && (
+            <LoaderCircle className="animate-spin" />
+          )}{" "}
           {agent ? "Save profile" : "Create agent"}
         </Button>
       </div>
@@ -1388,11 +2237,6 @@ function JobCard({
         </div>
         <JobProgressView job={job} />
       </div>
-      {job.progress.detail && (
-        <p className="mt-3 text-sm text-muted-foreground">
-          {job.progress.detail}
-        </p>
-      )}
       {job.assignment.instruction && (
         <div className="mt-4">
           <p className="text-xs font-medium text-muted-foreground">
@@ -1836,11 +2680,13 @@ function Preparation({
   client,
   pending,
   act,
+  actions,
 }: {
   snapshot: AgentsSnapshot;
   client: AgentsClient;
   pending: Set<string>;
   act: Action;
+  actions?: ReactNode;
 }) {
   const [reason, setReason] =
     useState<ExecutionReservation["reason"]>("restart");
@@ -1889,6 +2735,7 @@ function Preparation({
         remove environments. The host must also verify execution has settled
         before reserving an actual restart.
       </p>
+      {actions && <div className="mb-5">{actions}</div>}
       {snapshot.readiness.length ? (
         <div className="divide-y rounded-xl border">
           {snapshot.readiness.map((item) => (
@@ -1929,75 +2776,96 @@ function SettingsView({
   snapshot,
   panels,
   refresh,
+  visible,
+  requestedPage,
 }: {
   snapshot: AgentsSnapshot;
   panels: AgentSettingsPanel[];
   refresh: () => Promise<void>;
+  visible: boolean;
+  requestedPage: { id: string; page: string };
 }) {
   const [active, setActive] = useState(panels[0]?.id ?? "");
+  const content = useRef<HTMLElement | null>(null);
   const panel = panels.find((item) => item.id === active) ?? panels[0];
+  useEffect(() => {
+    setActive(requestedPage.page);
+  }, [requestedPage.id]);
+  useEffect(() => {
+    if (visible) void refresh().catch(() => {});
+  }, [visible, refresh]);
+  useEffect(() => {
+    if (content.current) content.current.scrollTop = 0;
+  }, [active]);
   return (
-    <>
-      <PageHeading
-        title="Project settings"
-        description="Shared settings for the agents in this project."
-      />
-      {!panels.length ? (
-        <Empty icon={<Settings />} title="Access settings are not connected">
-          <p>
-            The access-control track supplies connection, permission and grant
-            panels here. Agent profiles remain available on each agent.
-          </p>
-        </Empty>
-      ) : (
-        <div className="flex flex-col items-start gap-8 md:flex-row">
-          <nav
-            aria-label="Settings pages"
-            className="flex shrink-0 gap-2 md:w-44 md:flex-col"
-          >
-            {panels.map((item) => (
-              <Button
-                key={item.id}
-                variant="ghost"
-                className={`justify-start ${panel?.id === item.id ? "bg-primary/10 text-primary" : "text-muted-foreground"}`}
-                aria-current={panel?.id === item.id ? "page" : undefined}
-                onClick={() => setActive(item.id)}
-              >
-                {item.label}
-              </Button>
-            ))}
-          </nav>
-          <div className="min-w-0 flex-1">
-            {panels.map((item) => (
-              <div key={item.id} hidden={panel?.id !== item.id}>
-                {item.render({ snapshot, refresh })}
+    <section
+      ref={content}
+      aria-label="Settings"
+      className="min-h-0 flex-1 overflow-y-auto px-5 py-10 sm:px-10"
+    >
+      <div className="mx-auto grid max-w-6xl items-start gap-8 md:grid-cols-[192px_minmax(0,1fr)] md:gap-12 lg:grid-cols-[224px_minmax(0,1fr)] lg:gap-16">
+        <aside className="self-start md:sticky md:top-0">
+          <h1 className="mb-3 px-3 text-sm font-semibold tracking-tight">
+            Settings
+          </h1>
+          <nav aria-label="Settings pages" className="space-y-6">
+            <div>
+              <h2 className="mb-2 px-3 text-[11px] font-medium text-muted-foreground">
+                Project settings
+              </h2>
+              <div className="flex flex-wrap gap-2 md:flex-col">
+                {panels.map((item) => {
+                  const Icon = item.icon ?? Settings2;
+                  return (
+                    <Button
+                      key={item.id}
+                      type="button"
+                      variant="ghost"
+                      aria-current={panel?.id === item.id ? "page" : undefined}
+                      className={`h-11 justify-start gap-3 rounded-lg px-3 text-sm md:w-full ${panel?.id === item.id ? "bg-muted/60 font-semibold text-primary" : "font-medium text-muted-foreground hover:text-foreground"}`}
+                      onClick={() => setActive(item.id)}
+                    >
+                      <Icon
+                        className={`size-5 ${panel?.id === item.id ? "text-primary" : "text-muted-foreground/70"}`}
+                        aria-hidden="true"
+                      />
+                      {item.label}
+                    </Button>
+                  );
+                })}
               </div>
-            ))}
+            </div>
+          </nav>
+        </aside>
+        <div className="min-w-0 space-y-8">
+          <div>
+            <p className="mb-2 text-xs font-medium text-primary">
+              {snapshot.projectName}
+            </p>
+            <h2 className="text-2xl font-semibold tracking-tight">
+              {panel?.label || "Project settings"}
+            </h2>
+            {panel?.description && (
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                {panel.description}
+              </p>
+            )}
           </div>
+          {panels.map((item) => (
+            <div key={item.id} hidden={panel?.id !== item.id}>
+              {item.render({
+                snapshot,
+                refresh,
+                visible: visible && panel?.id === item.id,
+              })}
+            </div>
+          ))}
         </div>
-      )}
-    </>
+      </div>
+    </section>
   );
 }
 
-function AgentJobSummary({ agent, jobs }: { agent: Agent; jobs: Job[] }) {
-  const assigned = jobs
-    .filter((job) => job.assignment.assignedToAgentId === agent.id)
-    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-  const job = assigned[0];
-  if (!job)
-    return <p className="text-xs text-muted-foreground">No assigned job</p>;
-  // Cards show a selected job only; no status is inferred from native execution.
-  return (
-    <div>
-      <div className="mb-2 truncate text-xs text-muted-foreground">
-        {jobTitle(job)}
-        {assigned.length > 1 ? ` · +${assigned.length - 1} jobs` : ""}
-      </div>
-      <JobProgressView job={job} />
-    </div>
-  );
-}
 function JobProgressView({ job }: { job: Job }) {
   const progress = job.progress;
   return (
@@ -2013,6 +2881,11 @@ function JobProgressView({ job }: { job: Job }) {
           </span>
         )}
       </div>
+      {progress.detail && (
+        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+          {progress.detail}
+        </p>
+      )}
       <span className="sr-only">
         {statusLabels[progress.status]}
         {progress.percent === null
@@ -2123,18 +2996,7 @@ function Markdown({ text }: { text: string }) {
   );
 }
 function SafeLink({ url, children }: { url: string; children: ReactNode }) {
-  return safeUrl(url) ? (
-    <a
-      href={url}
-      target="_blank"
-      rel="noreferrer"
-      className="text-primary underline-offset-4 hover:underline"
-    >
-      {children}
-    </a>
-  ) : (
-    <span>{children}</span>
-  );
+  return <WebLink href={url}>{children}</WebLink>;
 }
 function safeUrl(url: string, artifact = false) {
   if (artifact && url.startsWith("/") && !url.startsWith("//")) return true;
@@ -2148,34 +3010,6 @@ function safeUrl(url: string, artifact = false) {
   } catch {
     return false;
   }
-}
-function Avatar({ agent, client }: { agent: Agent; client: AgentsClient }) {
-  const ref = agent.profile.pictureRef;
-  const url = ref ? client.artifactUrl?.(ref) : null;
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [url]);
-  return url && safeUrl(url, true) && !failed ? (
-    <img
-      src={url}
-      alt=""
-      onError={() => setFailed(true)}
-      referrerPolicy="no-referrer"
-      className="size-11 shrink-0 rounded-xl object-cover"
-    />
-  ) : (
-    <div
-      aria-hidden="true"
-      className="flex size-11 shrink-0 items-center justify-center rounded-xl border bg-muted text-sm font-semibold text-muted-foreground"
-    >
-      {agent.profile.name
-        .split(/\s+/)
-        .filter(Boolean)
-        .slice(0, 2)
-        .map((part) => part[0])
-        .join("")
-        .toUpperCase() || "A"}
-    </div>
-  );
 }
 function Field({
   label,
@@ -2240,32 +3074,6 @@ function Empty({
     </div>
   );
 }
-function NavButton({
-  active,
-  onClick,
-  icon,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: ReactNode;
-  children: ReactNode;
-}) {
-  return (
-    <Button
-      variant="ghost"
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-      className={
-        active ? "bg-primary/10 text-primary" : "text-muted-foreground"
-      }
-    >
-      {icon}
-      <span className="hidden sm:inline">{children}</span>
-      <span className="sr-only sm:hidden">{children}</span>
-    </Button>
-  );
-}
 function WorkLinks({ links }: { links: { label: string; url: string }[] }) {
   return (
     <div className="mt-2 flex flex-wrap gap-3">
@@ -2302,15 +3110,20 @@ function agentName(id: string, snapshot: AgentsSnapshot) {
     `Agent ${id}`
   );
 }
-function actorLabel(
-  actor: { type: "user"; userId: string } | { type: "agent"; agentId: string },
-  snapshot: AgentsSnapshot,
-) {
-  return actor.type === "agent"
-    ? agentName(actor.agentId, snapshot)
-    : actor.userId === snapshot.ownerId
-      ? "You"
-      : `User ${actor.userId}`;
+function primaryAgentId(snapshot: AgentsSnapshot | null): string | null {
+  return snapshot?.projectSettings
+    ? snapshot.projectSettings.primaryAgentId
+    : (snapshot?.primaryAgentId ?? null);
+}
+
+function actorLabel(actor: MessageSender, snapshot: AgentsSnapshot) {
+  return actor.type === "system"
+    ? "Internal"
+    : actor.type === "agent"
+      ? agentName(actor.agentId, snapshot)
+      : actor.userId === snapshot.ownerId
+        ? "You"
+        : `User ${actor.userId}`;
 }
 function historyActor(item: RuntimeHistoryItem, snapshot: AgentsSnapshot) {
   const sender = item.sender;
@@ -2340,4 +3153,13 @@ function sameSkills(agent: Agent, skills: Skill[]) {
 }
 function uniqueHistory(items: RuntimeHistoryItem[]) {
   return [...new Map(items.map((item) => [item.runtimeRef, item])).values()];
+}
+
+function readComposerDraft(key: string): string {
+  try {
+    const value = localStorage.getItem(key);
+    return value && value.length <= 200_000 ? value : "";
+  } catch {
+    return "";
+  }
 }

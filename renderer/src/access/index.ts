@@ -19,3 +19,6 @@ export type {
   AssignmentSave,
   AccessDecision,
 } from "./types";
+
+export { OwnerAccessSettings } from "./OwnerAccessSettings";
+export { CreationPresetsPanel } from "./CreationPresetsPanel";

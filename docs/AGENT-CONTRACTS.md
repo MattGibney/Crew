@@ -222,6 +222,15 @@ reconcile result delivery separately using native message/turn correlation.
 
 ## Quit, update and explicit cutover
 
+After a partial desktop Quit, **Retry Quit** keeps the original reservations and
+retries only projects whose closure is unconfirmed. Confirmed closures and
+successful cleanup stages are skipped. Each unresolved composition rechecks its
+reservation and current execution settlement; lost native Stop acknowledgements
+use the existing exact-process exit proof. Return to work remains blocked once
+shutdown starts. Reservations clear only after resource cleanup, with foundation
+admission already closed. Failed persistence or unavailable ownership evidence
+remains blocked; retry never resets state or grants permission to start work.
+
 #88 `prepare` collects agent readiness/continuation while communication remains available. Just before
 actual stop/restart/install, `reserveExecution` atomically blocks new turns/broker admissions, rechecks
 readiness, native execution, messages and `BrokerSettlement`; release on cancellation/failure. No long
@@ -256,3 +265,35 @@ to TypeScript/build and small compile-only usage examples; there is no runtime/U
 No new tests, full suites, packaged/installed-app checks, service setup or physical microphone use.
 
 Validation passed: `npm run typecheck`, `npm run build`, and a disposable compile-only example importing the three ports plus local/ticket work, progress, agent messages and exact once grants. The emitted contract module has no runtime exports. No tests were added or run.
+
+
+## Usability composition amendments (#88, #89/#90, #95)
+
+`ProjectAgentSettings` stores the explicit primary agent in foundation state; only
+an authenticated owner can change it. `AgentCreationPreset` and assignments live
+in access, with no second editable copy in foundation. `AgentProvisioning`
+rechecks the exact approved preset revision before assignment. Foundation records
+pending/ready/failed provisioning, holds Start until ready and projects current
+access memberships on reads. Agent-created agents report to their authenticated
+creator; owner may explicitly select another valid, acyclic relationship.
+
+One `ExecutionAdmissionGate` instance serializes access redemption, native input
+admission and final Quit/update reservation. It is an async critical section, not
+an earlier liveness poll. Gate callbacks must not recursively acquire it. Pending
+and admitted broker records remain the settlement authority after admission.
+
+The owner API is a trusted main-process capability. HTTP deployment requires
+unpredictable owner-session authentication as well as exact origin/host checks.
+Native tools use a separate session-bound bearer and exact caller identity; no
+model-provided actor can grant owner rights. Persist request/invocation correlation
+before tool dispatch. End session authority at Stop/Restart, retaining receipts.
+
+`ProjectSkillSource` supplies native directories at exact revisions from the
+single project store. `AgentEnvironmentService` implements explicit authorized
+actions and preserves request identity; absent integration reports unavailable.
+Neither missing environments nor dirty/completed work gates communication.
+
+Later #88 implementation amendments add exact preparation generation/freshness,
+compact authoritative realtime promotion metadata and original provisioning creator
+identity. See [Unified application composition](AGENT-UNIFIED-COMPOSITION.md) for
+the implemented host boundaries and the separate native/provider acceptance limits.

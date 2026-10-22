@@ -30,11 +30,21 @@ export interface Skill {
 }
 export interface AppliedConfiguration {
   profileRevision: Revision;
+  instructionsDigest?: string; // SHA-256 of verified native instructions, not a second prompt store
   permissionGroups: RevisionReference[];
   serviceConnections: RevisionReference[];
   skills: RevisionReference[];
   runtimeConfigRevision: Revision;
   appliedAt: Timestamp;
+}
+export interface InstructionPreparation {
+  state: "compacting" | "completed" | "failed" | "uncertain";
+  threadId: string;
+  turnId: string | null;
+  itemId: string | null;
+  startedAt: Timestamp;
+  completedAt: Timestamp | null;
+  error: RuntimeError | null;
 }
 export interface AgentSession {
   sessionId: Id | null; // Logical Start-to-Stop identity; distinct from thread/turn
@@ -46,6 +56,7 @@ export interface AgentSession {
   lastObservedAt: Timestamp | null;
   lastError: RuntimeError | null;
   appliedConfiguration: AppliedConfiguration | null;
+  instructionPreparation?: InstructionPreparation | null;
 }
 export interface Agent {
   id: Id;
@@ -153,11 +164,13 @@ export type AgentContent =
   | { type: "file"; fileRef: string; name: string; mediaType: string }
   | { type: "data"; value: JsonValue }; // Sanitized structured tool result
 export type DeliveryMode = "queue" | "steer";
-export type MessageSender = Actor;
+export type MessageSender =
+  Actor | { type: "system"; source: "schedule" | "preparation"; sourceId: Id };
 export interface AgentMessage {
   id: Id;
   projectId: Id;
   sender: MessageSender;
+  visibility: "public" | "private";
   recipientAgentId: Id;
   jobId: Id | null;
   replyToMessageId: Id | null;
@@ -184,7 +197,9 @@ export interface DeliveryAttempt {
 }
 export interface MessageReceipt {
   messageId: Id;
-  sender: Actor;
+  sender: MessageSender;
+  visibility: "public" | "private";
+  turnId: string;
   recipientAgentId: Id;
   jobId: Id | null;
   sessionId: Id;
@@ -539,7 +554,7 @@ export interface OperationBroker {
   ): Promise<BrokerResult>;
   reconcile(caller: CallerContext, invocationId: Id): Promise<BrokerResult>;
   cancel(caller: CallerContext, invocationId: Id): Promise<BrokerResult>;
-  settlement(projectId: Id): Promise<BrokerSettlement>;
+  settlement(projectId: Id, caller?: CallerContext): Promise<BrokerSettlement>;
 }
 /** Trusted-only; one actual attempt. Broker, not executor, owns retries. */
 export interface ServiceExecutor {
@@ -587,6 +602,13 @@ export interface RuntimeStartInput {
   modelAccess: ModelAccess; // Runtime-managed subscription reference only
   configuration: ConfigurationSnapshot;
   access: RuntimeAccessBinding;
+  instructionRefresh?: {
+    intent: "start" | "restart";
+    previousInstructionsDigest: string | null;
+  };
+  onInstructionPreparation?: (
+    preparation: InstructionPreparation,
+  ) => Promise<void>;
 }
 export interface RuntimeError {
   code:
@@ -615,6 +637,7 @@ export type RuntimeStartResult =
       state: "failed" | "uncertain";
       error: RuntimeError;
       retainedThreadId: string | null;
+      nativeDispatched?: false; // Explicit adapter proof that no native process/request began
     };
 export type DeliveryResult =
   | {
@@ -680,7 +703,7 @@ export interface RuntimeHistoryItem {
   turnId: string | null;
   kind: "message" | "tool" | "approval" | "other";
   sender:
-    | Actor
+    | MessageSender
     | { type: "assistant"; agentId: Id }
     | { type: "system" }
     | { type: "unattributed_native"; nativeRole: string }
@@ -705,6 +728,7 @@ export type RuntimeEvent = {
       request: JsonObject;
     }
   | { kind: "delivery"; attemptId: Id; result: DeliveryResult }
+  | { kind: "configuration"; state: "rejected"; error: RuntimeError }
   | {
       kind: "connection";
       state: "connected" | "disconnected";
@@ -712,6 +736,8 @@ export type RuntimeEvent = {
     }
 );
 export interface PreparationReadiness {
+  preparationId: Id;
+  requiredAfter: Timestamp;
   agentId: Id;
   sessionId: Id;
   state: "pending" | "ready" | "blocked";
@@ -741,4 +767,58 @@ export interface AgentLifecycle {
     | { state: "blocked"; reason: string }
   >;
   releaseExecution(reservationId: Id): Promise<void>;
+}
+
+// #88 usability amendments: one production composition, owner-approved creation.
+export interface ProjectAgentSettings {
+  projectId: Id;
+  revision: Revision;
+  primaryAgentId: Id | null;
+}
+/** Access owns this data and its revision-checked administration. No credentials. */
+export interface AgentCreationPreset {
+  id: Id;
+  projectId: Id;
+  revision: Revision;
+  name: string;
+  enabled: boolean;
+  profile: Omit<Agent["profile"], "revision">;
+  skills: Agent["skills"];
+  modelAccessId: Id;
+  configRef: string;
+  permissionGroupIds: Id[];
+  serviceConnectionIds: Id[];
+}
+/** The same instance serializes native admission, permit redemption and the final
+ * lifecycle reservation. Callbacks must not recursively acquire this gate. */
+export interface ExecutionAdmissionGate {
+  run<T>(operation: () => Promise<T>): Promise<T>;
+}
+/** Trusted composition port. Access is the only assignment/preset authority. */
+export interface AgentProvisioning {
+  listPresets(): Promise<AgentCreationPreset[]>;
+  applyPreset(input: {
+    actor: Actor;
+    agentId: Id;
+    presetId: Id;
+    expectedPresetRevision: Revision;
+  }): Promise<Agent["access"]>;
+  accessFor(agentId: Id): Promise<Agent["access"]>;
+}
+/** Skill storage/UI are owned by #34/#95; the runtime consumes exact revisions. */
+export interface ProjectSkillSource {
+  list(): Promise<Skill[]>;
+  resolve(skillId: Id, revision: Revision): Promise<{ nativePath: string }>;
+}
+/** Explicit environment operations. No job/status/lifecycle inference. */
+export interface AgentEnvironmentService {
+  resources?(agentId: Id): Agent["resources"] | Promise<Agent["resources"]>;
+  list?(caller: CallerContext, agentId: Id): Promise<JsonValue>;
+  invoke(input: {
+    caller: CallerContext;
+    agentId: Id;
+    action: "create" | "attach" | "execute" | "dispose";
+    requestId: Id;
+    arguments: JsonObject;
+  }): Promise<JsonValue>;
 }
