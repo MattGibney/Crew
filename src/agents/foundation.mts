@@ -875,31 +875,53 @@ export class AgentFoundation implements AgentLifecycle {
   }
 
   /** Trusted scheduler/lifecycle ingress only, never exposed as an owner/model
-   * JSON command. Internal work cannot steer into a human conversation turn. */
-  async sendInternal(input: {
-    id: string;
-    source: "schedule" | "preparation";
-    sourceId: string;
-    recipientAgentId: string;
-    content: AgentContent[];
-  }) {
+   * JSON command. Internal work cannot steer into a human conversation turn.
+   * Eligibility must use bounded local reads and must not reacquire admission. */
+  async sendInternal(
+    input: {
+      id: string;
+      source: "schedule" | "preparation";
+      sourceId: string;
+      recipientAgentId: string;
+      content: AgentContent[];
+    },
+    isCurrent?: () => Promise<boolean>,
+  ): Promise<AgentMessage | { messageId: string } | null> {
     if (!["schedule", "preparation"].includes(input.source) || !input.sourceId)
       throw new Error("An explicit internal source identity is required.");
-    return this.enqueue(
-      { type: "system", source: input.source, sourceId: input.sourceId },
-      {
-        id: input.id,
-        recipientAgentId: input.recipientAgentId,
-        content: input.content,
-        jobId: null,
-        replyToMessageId: null,
-        deliveryMode: "queue",
-      },
-      "private",
-    );
+    const message = await this.admit(async () => {
+      if (isCurrent && !(await isCurrent())) return null;
+      return this.saveIntent(
+        { type: "system", source: input.source, sourceId: input.sourceId },
+        {
+          id: input.id,
+          recipientAgentId: input.recipientAgentId,
+          content: input.content,
+          jobId: null,
+          replyToMessageId: null,
+          deliveryMode: "queue",
+        },
+        "private",
+      );
+    });
+    // pump acquires admission independently for dispatch. Never start it while
+    // retaining the private-intent gate or await native delivery under that gate.
+    if (message) void this.pump(input.recipientAgentId).catch(() => {});
+    return message;
   }
 
   private async enqueue(
+    actor: MessageSender,
+    input: SendInput,
+    visibility: "public" | "private",
+    principal?: FoundationPrincipal,
+  ): Promise<AgentMessage | { messageId: string }> {
+    const message = await this.saveIntent(actor, input, visibility, principal);
+    void this.pump(input.recipientAgentId).catch(() => {});
+    return message;
+  }
+
+  private async saveIntent(
     actor: MessageSender,
     input: SendInput,
     visibility: "public" | "private",
@@ -1018,7 +1040,6 @@ export class AgentFoundation implements AgentLifecycle {
       });
       return created;
     });
-    void this.pump(input.recipientAgentId).catch(() => {});
     return message;
   }
 
@@ -1737,7 +1758,8 @@ export class AgentFoundation implements AgentLifecycle {
       !["pending", "ready", "blocked"].includes(input.state) ||
       (input.state === "ready" &&
         (!input.continuationSavedAt ||
-          !Number.isFinite(Date.parse(input.continuationSavedAt))))
+          !Number.isFinite(Date.parse(input.continuationSavedAt)) ||
+          Date.parse(input.continuationSavedAt) > Date.now()))
     )
       throw new Error("Ready requires an explicit continuation save time.");
     await this.store.update((state) => {
@@ -1763,7 +1785,7 @@ export class AgentFoundation implements AgentLifecycle {
       if (
         entry.preparationId !== input.preparationId ||
         (input.state === "ready" &&
-          Date.parse(input.continuationSavedAt!) <
+          Date.parse(input.continuationSavedAt!) <=
             Date.parse(entry.requiredAfter))
       )
         throw new Error(

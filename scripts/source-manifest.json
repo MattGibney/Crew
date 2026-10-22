@@ -222,6 +222,7 @@
     "src/access/validation.mts",
     "src/access/vault.mts",
     "src/access/workspace-executor.mts",
+    "src/access/workspace-process-evidence.mts",
     "src/agents/admission.mts",
     "src/agents/codex-approvals.mts",
     "src/agents/codex-history.mts",

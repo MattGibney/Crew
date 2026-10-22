@@ -33,6 +33,7 @@ import {
   CodexRuntimeAccessProvider,
   createAccessOwnerApi,
   runMacWorkspaceCommand,
+  reconcileMacWorkspaceCommand,
   type CredentialEncryptionBackend,
 } from "../access/index.mjs";
 import {
@@ -186,6 +187,7 @@ export async function startUnifiedApplication(
       ownerUserId: options.ownerUserId,
       admission: gate,
       execute: runMacWorkspaceCommand,
+      observeExecution: reconcileMacWorkspaceCommand,
       verifyExecution: async (caller) => {
         if (closing || !foundation?.executionAllowed(caller))
           throw new Error("This native session cannot admit workspace work.");
@@ -475,6 +477,8 @@ export async function startUnifiedApplication(
         return workspace;
       },
       publishPolicy,
+      reconcileOperation: (operationId: string) =>
+        environments!.reconcileOperation(owner, operationId),
     };
     mcp = await startAgentMcpHost({
       privateDirectory: join(root, "native-transport"),
