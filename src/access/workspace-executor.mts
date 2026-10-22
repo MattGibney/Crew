@@ -3,6 +3,9 @@ import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { homedir } from "node:os";
 import { nativeSeatbeltPolicy } from "./native-boundary.mjs";
+import { WorkspaceProcessRecorder } from "./workspace-process-evidence.mjs";
+export { reconcileMacWorkspaceCommand } from "./workspace-process-evidence.mjs";
+export type { WorkspaceProcessSettlement } from "./workspace-process-evidence.mjs";
 
 /** Supplied only by the trusted #88 environment authority after current group and
  * resource admission. No roots, executable paths or network policy from model JSON. */
@@ -24,6 +27,11 @@ export interface WorkspaceCommandResult {
   truncated: boolean;
   /** Timeout/output-limit termination cannot prove that side effects did not occur. */
   mayHaveExecuted: boolean;
+  /** Fresh absence of the launched group and observed descendants. Root exit alone
+   * does not establish this; arbitrary unobserved daemonization is outside scope. */
+  processesSettled: boolean;
+  /** Opaque controller-private receipt for a later read-only process check. */
+  processEvidenceRef: string | null;
 }
 const inside = (root: string, candidate: string) => {
   const value = relative(root, candidate);
@@ -79,6 +87,21 @@ export async function runMacWorkspaceCommand(
     )
   )
     throw new Error("Broad or noncanonical workspace roots are not allowed.");
+  if (
+    [
+      policy.workspaceDirectory,
+      ...policy.readableRoots,
+      ...policy.writableRoots,
+      ...policy.executableDirectories,
+    ].some(
+      (root) =>
+        inside(root, policy.privateDirectory) ||
+        inside(policy.privateDirectory, root),
+    )
+  )
+    throw new Error(
+      "Command roots must not overlap the private controller directory.",
+    );
   const cwd = await realpath(
     join(policy.workspaceDirectory, input.relativeCwd ?? "."),
   );
@@ -94,6 +117,8 @@ export async function runMacWorkspaceCommand(
       stderr: "Command cancelled before launch.",
       truncated: false,
       mayHaveExecuted: false,
+      processesSettled: true,
+      processEvidenceRef: null,
     };
   const scratch = await mkdtemp(join(policy.privateDirectory, "execution-"));
   await mkdir(join(scratch, "home"), { mode: 0o700 });
@@ -126,6 +151,9 @@ export async function runMacWorkspaceCommand(
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
   };
+  const processRecorder = await WorkspaceProcessRecorder.prepare(
+    policy.privateDirectory,
+  );
   // Cancellation may arrive while the private directory/policy is being written.
   // No await is permitted between this check and spawning the command.
   if (input.signal?.aborted)
@@ -136,6 +164,8 @@ export async function runMacWorkspaceCommand(
       stderr: "Command cancelled before launch.",
       truncated: false,
       mayHaveExecuted: false,
+      processesSettled: true,
+      processEvidenceRef: null,
     };
   return new Promise((resolve) => {
     const child = spawn(
@@ -148,6 +178,7 @@ export async function runMacWorkspaceCommand(
         detached: true,
       },
     );
+    if (child.pid) processRecorder.launched(child.pid);
     const limit = 32 * 1024;
     let stdout = Buffer.alloc(0),
       stderr = Buffer.alloc(0),
@@ -179,7 +210,7 @@ export async function runMacWorkspaceCommand(
     const timer = setTimeout(stopOwnedGroup, timeout);
     input.signal?.addEventListener("abort", stopOwnedGroup, { once: true });
     if (input.signal?.aborted) stopOwnedGroup();
-    const finish = (
+    const finish = async (
       state: WorkspaceCommandResult["state"],
       exitCode: number | null,
       started: boolean,
@@ -190,6 +221,9 @@ export async function runMacWorkspaceCommand(
       input.signal?.removeEventListener("abort", stopOwnedGroup);
       child.stdout.destroy();
       child.stderr.destroy();
+      const processEvidence = started
+        ? await processRecorder.finish(policy.privateDirectory)
+        : { processesSettled: true, processEvidenceRef: null };
       resolve({
         state,
         exitCode,
@@ -197,6 +231,8 @@ export async function runMacWorkspaceCommand(
         stderr: stderr.toString("utf8"),
         truncated,
         mayHaveExecuted: started,
+        processesSettled: processEvidence.processesSettled,
+        processEvidenceRef: processEvidence.processEvidenceRef,
       });
     };
     child.once("error", () => finish("not_started", null, false));
@@ -205,11 +241,12 @@ export async function runMacWorkspaceCommand(
     );
     // A command may intentionally launch an independent background service. Do not
     // wait indefinitely for its inherited pipes or claim that root exit stopped it.
-    child.once("exit", (code) =>
+    child.once("exit", (code, signal) => {
+      processRecorder.rootExited(code, signal);
       setTimeout(
         () => finish(expired ? "timed_out" : "exited", code, true),
         25,
-      ),
-    );
+      );
+    });
   });
 }
