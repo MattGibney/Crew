@@ -84,7 +84,11 @@ Current unresolved acceptance: a fresh-process native resume restores a local
 environment, so the adapter holds that route. A bounded native probe verified
 named permission-profile selection on the same resumed chat and standalone command
 denial of a synthetic private file. Effective filesystem restrictions inside a
-server-managed realtime handoff remain unverified.
+server-managed realtime handoff remain unverified. Repeating the named-profile
+resume under Crew's actual outer OS policy failed before a turn: the native
+filesystem helper could not apply its sandbox (`sandbox_apply: Operation not
+permitted`). The standalone result does not establish a usable combined boundary,
+and completing owner sign-in alone does not resolve that local failure.
 
 Real workspace commands now retain private evidence for their launched process
 group and observed descendants. Foreground completion and a background process's
