@@ -33,7 +33,6 @@ import {
   createAgentImages,
   createImageOwnerCommands,
 } from "../application/agent-images.mjs";
-import type { RuntimeBinding } from "../agents/contracts.mjs";
 import {
   openUnifiedRegistry,
   type DesktopProject,
@@ -55,12 +54,8 @@ import {
 import { randomUUID } from "node:crypto";
 import { createUnifiedProjectBrowser } from "../browser/unified-browser.mjs";
 import { combineAgentToolExtensions } from "../agents/tool-extensions.mjs";
-import type { SubscriptionUsageSnapshot } from "../agents/codex-usage.mjs";
-
-type UsageState = {
-  status: "available" | "disconnected" | "unsupported" | "error";
-  snapshot: SubscriptionUsageSnapshot | null;
-};
+import { createAgentConfiguration } from "../application/agent-configuration.mjs";
+import { createSubscriptionUsageOwnerAdapter } from "../application/subscription-usage.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const desktopDirectory = join(
@@ -91,7 +86,8 @@ type ProjectHost = {
   imageCommand: ReturnType<typeof createImageOwnerCommands>;
   setup: Awaited<ReturnType<typeof openAgentSetup>>;
   browser: ReturnType<typeof createUnifiedProjectBrowser>;
-  readUsage(): Promise<UsageState>;
+  configuration: ReturnType<typeof createAgentConfiguration>;
+  usage: ReturnType<typeof createSubscriptionUsageOwnerAdapter>;
   unsubscribe: () => void;
 };
 const hosts = new Map<string, ProjectHost>(),
@@ -231,9 +227,12 @@ async function openProject(project: DesktopProject) {
       });
       const composed = application;
       const voice = composed.voice;
-      const selectedVoice = () =>
+      const configuration = createAgentConfiguration(composed);
+      await configuration.migrateLegacyVoice(
         registry.snapshot().projects.find((row) => row.id === project.id)
-          ?.voice ?? null;
+          ?.voice,
+        () => registry.retireLegacyVoice(project.id),
+      );
       const images = createAgentImages({
         projectId: project.id,
         directory: join(stateDirectory, "images"),
@@ -324,34 +323,14 @@ async function openProject(project: DesktopProject) {
       const unsubscribeVoice = voice.subscribe((event) =>
         surface?.notify({ type: "voice", projectId: project.id, event }),
       );
-      let usageState: UsageState = { status: "disconnected", snapshot: null };
-      const publishUsage = (state: UsageState) => {
-        usageState = structuredClone(state);
+      const usage = createSubscriptionUsageOwnerAdapter(composed.subscription);
+      const unsubscribeUsage = usage.subscribe((state) =>
         surface?.notify({
           type: "subscription-usage",
           projectId: project.id,
-          state: usageState,
-        });
-      };
-      const unsubscribeUsage = composed.subscription.subscribeUsage(
-        (snapshot) => publishUsage({ status: "available", snapshot }),
+          state,
+        }),
       );
-      const readUsage = async (): Promise<UsageState> => {
-        const result = await composed.subscription.usage();
-        if (result.state === "acknowledged")
-          publishUsage({ status: "available", snapshot: result.value });
-        else
-          publishUsage({
-            status:
-              result.error.code === "disconnected"
-                ? "disconnected"
-                : result.error.code === "unsupported"
-                  ? "unsupported"
-                  : "error",
-            snapshot: usageState.snapshot,
-          });
-        return structuredClone(usageState);
-      };
       const unsubscribeTranscript = voice.subscribeRealtime((event) => {
         // Only native role-bearing transcript items reach the owner display.
         // These are live call text, never evidence of a coding-turn association.
@@ -378,15 +357,20 @@ async function openProject(project: DesktopProject) {
         schedules,
         scheduleCommand: createScheduleOwnerCommands(schedules),
         voice,
-        voiceCommand: createVoiceOwnerCommands(voice, selectedVoice),
+        voiceCommand: createVoiceOwnerCommands(
+          voice,
+          configuration.selectedVoice,
+        ),
         imageCommand: createImageOwnerCommands(images),
         setup,
         browser: projectBrowser,
-        readUsage,
+        usage,
+        configuration,
         unsubscribe: () => {
           unsubscribe();
           unsubscribeVoice();
           unsubscribeUsage();
+          usage.dispose();
           unsubscribeTranscript();
         },
       });
@@ -553,26 +537,11 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (command.startsWith("schedules."))
     return host.scheduleCommand(command, args);
   if (command.startsWith("images.")) return host.imageCommand(command, args);
-  if (command === "voice.select") {
-    const input = object(args),
-      voice = text(input.voice);
-    const catalog = await host.voice.listVoices(
-      input.binding as RuntimeBinding,
-    );
-    if (!catalog.voices.some((item) => item.id === voice))
-      throw new Error("Select an available native voice.");
-    await registry.selectVoice(host.project.id, voice);
-    surface.notify({
-      type: "owner",
-      projectId: host.project.id,
-      event: { kind: "changed" },
-    });
-    return;
-  }
+  if (command === "agents.options") return host.configuration.options();
   if (command.startsWith("voice.")) return host.voiceCommand(command, args);
   if (command === "subscription.status")
     return host.application.subscription.status();
-  if (command === "subscription.usage") return host.readUsage();
+  if (command === "subscription.usage") return host.usage.read();
   if (command === "subscription.beginSignIn")
     return host.application.subscription.beginSignIn();
   if (command === "subscription.cancelSignIn")
