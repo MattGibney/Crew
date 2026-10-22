@@ -99,6 +99,9 @@ export async function startUnifiedApplication(
   let environments: ProjectEnvironmentService | undefined;
   let voice: PrimaryAgentVoice | undefined;
   let closing = false;
+  let closeReservationId: string | undefined;
+  let closeStarted = false;
+  const closedSteps = new Set<string>();
   const cleanupSubscriptions: (() => void)[] = [];
   try {
     const accessDirectory = join(root, "access");
@@ -610,42 +613,66 @@ export async function startUnifiedApplication(
       async close(reservationId?: string): Promise<void> {
         if (closing) throw new Error("Crew close is already in progress.");
         const state = store.snapshot();
+        if (closeStarted && reservationId !== closeReservationId)
+          throw new Error("Retry the exact retained shutdown reservation.");
         if (
-          state.agents.some(
-            (agent) => agent.runtime.session.observedState !== "stopped",
-          ) &&
+          !closedSteps.has("resources") &&
+          (state.reservation ||
+            state.agents.some(
+              (agent) => agent.runtime.session.observedState !== "stopped",
+            )) &&
           (!reservationId || state.reservation?.id !== reservationId)
         )
           throw new Error(
             "Prepare and reserve this project before closing active native sessions.",
           );
         closing = true;
+        closeStarted = true;
+        closeReservationId = reservationId;
         try {
-          const local = environments!.settlement();
-          if (
-            local.inFlightOperationIds.length ||
-            local.uncertainOperationIds.length ||
-            !voice!.settlement().settled
-          )
-            throw new Error(
-              "Workspace or voice activity must settle before closing this project.",
-            );
-          for (const agent of store.snapshot().agents) {
-            const result = await foundation!.stop(agent.id);
-            if (result.state !== "acknowledged")
-              throw new Error(result.error.message);
+          if (!closedSteps.has("resources")) {
+            const local = environments!.settlement();
+            if (
+              local.inFlightOperationIds.length ||
+              local.uncertainOperationIds.length ||
+              !voice!.settlement().settled
+            )
+              throw new Error(
+                "Workspace or voice activity must settle before closing this project.",
+              );
+            for (const agent of store.snapshot().agents) {
+              const result = await foundation!.stop(agent.id);
+              if (result.state !== "acknowledged") {
+                // An earlier Stop may have lost its acknowledgement after exit.
+                // Existing recovery proves the exact owned process exited and all
+                // activity settled; it never signals or launches a process.
+                const recovered = await foundation!.recoverSession(
+                  { type: "owner", userId: options.ownerUserId },
+                  agent.id,
+                );
+                if (recovered.state !== "acknowledged")
+                  throw new Error(result.error.message);
+              }
+            }
+            const finishStep = async (
+              name: string,
+              run: () => Promise<void>,
+            ) => {
+              if (closedSteps.has(name)) return;
+              await run();
+              closedSteps.add(name);
+            };
+            await finishStep("subscriptions", async () => {
+              for (const stop of cleanupSubscriptions) stop();
+            });
+            await finishStep("voice", () => voice!.dispose());
+            await finishStep("mcp", () => mcp!.close());
+            await finishStep("nativeAccess", () => nativeAccess!.close());
+            await finishStep("environments", () => environments!.close());
+            await finishStep("accessStore", () => accessStore!.close());
+            closedSteps.add("resources");
           }
-          if (store.snapshot().reservation)
-            await foundation!.releaseExecution(
-              store.snapshot().reservation!.id,
-            );
-          for (const stop of cleanupSubscriptions) stop();
-          await voice!.dispose();
-          await mcp!.close();
-          await nativeAccess!.close();
-          await environments!.close();
-          await foundation!.dispose();
-          await accessStore!.close();
+          await foundation!.dispose(reservationId);
         } catch (error) {
           closing = false;
           throw error;

@@ -104,6 +104,9 @@ export async function startAgentMcpHost(options: {
   const active = new Map<string, Promise<CallToolResult>>();
   let origin = "";
   let closed = false;
+  let closeTask: Promise<void> | null = null;
+  let httpClosed = false;
+  let closeComplete = false;
 
   const current = (binding: Binding): boolean => {
     if (closed || binding.revoked) return false;
@@ -500,17 +503,30 @@ export async function startAgentMcpHost(options: {
     revoke,
     refreshTools,
     async close() {
-      if (closed) return;
+      if (closeComplete) return;
+      if (closeTask) return closeTask;
       closed = true;
-      unsubscribe();
-      await Promise.allSettled(
-        [...bindings.values()].map((binding) => revoke(binding.caller)),
-      );
-      await Promise.allSettled([...active.values()]);
-      await new Promise<void>((resolve, reject) =>
-        http.close((failure) => (failure ? reject(failure) : resolve())),
-      );
-      await store.close();
+      const operation = (async () => {
+        unsubscribe();
+        await Promise.allSettled(
+          [...bindings.values()].map((binding) => revoke(binding.caller)),
+        );
+        await Promise.allSettled([...active.values()]);
+        if (!httpClosed) {
+          await new Promise<void>((resolve, reject) =>
+            http.close((failure) => (failure ? reject(failure) : resolve())),
+          );
+          httpClosed = true;
+        }
+        await store.close();
+        closeComplete = true;
+      })();
+      closeTask = operation;
+      try {
+        await operation;
+      } finally {
+        if (closeTask === operation) closeTask = null;
+      }
     },
   };
 }
