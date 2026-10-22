@@ -79,6 +79,7 @@
     "renderer/src/agents/http-client.ts",
     "renderer/src/agents/main.tsx",
     "renderer/src/agents/project-presentation.tsx",
+    "renderer/src/agents/useConversationHistory.ts",
     "renderer/src/agents/voice/LiveVoiceTranscript.tsx",
     "renderer/src/agents/voice/PrimaryAgentVoice.tsx",
     "renderer/src/agents/voice/client.ts",

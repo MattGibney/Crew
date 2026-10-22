@@ -498,3 +498,9 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - These owner-requested fixes use separate feature-targeted PRs and isolated validation. Do not change the user’s live test state, install, merge to main or release as a side effect.
 
 - Model coordination correction (22 October 2026): the owner changed this chat and all three #100–#102 implementation chats to GPT 6.1 Sol with Medium reasoning. This supersedes earlier Astra/Extra High selections. Preserve user-changed chat settings by omitting model/thinking overrides on routine follow-ups; do not reapply stale settings when resuming work.
+
+## Retained conversation history (#102)
+
+- Settings changes, Restart and renderer reopening must retain the native chat and make its available public messages readable. Native turn pagination remains authoritative; public provenance is tied to agent/thread/turn across logical sessions. Never loosen private/unknown filtering or create another durable transcript store to fill a display gap.
+- Refresh the displayed history window, including previously loaded older pages, and rehydrate on session changes. Follow filtered or non-display pages with bounded reads; an empty page with an older cursor is not an empty conversation. Keep loading, unavailable history and stale previously loaded messages explicit. Recovery may reset only the disposable display window, never the native chat.
+- The current live voice transcript is call-scoped. The pinned runtime's missing exact voice-to-coding-turn linkage remains a separate limitation; typed-history acceptance does not prove voice transcript recovery. Keep that limitation visible in the conversation and distinguish synthetic checks from owner acceptance.

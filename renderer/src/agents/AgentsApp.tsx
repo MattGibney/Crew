@@ -38,6 +38,7 @@ import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
 import { readProfilePicture } from "../manager/profile";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
+import { useConversationHistory } from "./useConversationHistory";
 import { WorkerReference } from "../manager/worker/WorkerReference";
 import { WebLink } from "../manager/WebLink";
 import { Input } from "@/components/ui/input";
@@ -1263,11 +1264,23 @@ function Conversation({
   onOpenSettings?: () => void;
   attention?: ReactNode;
 }) {
-  const [items, setItems] = useState<RuntimeHistoryItem[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [historyError, setHistoryError] = useState("");
-  const sequence = useRef(0);
+  const {
+    items,
+    cursor,
+    loading,
+    loaded,
+    error: historyError,
+    refresh: load,
+    loadEarlier,
+    showLatest,
+  } = useConversationHistory({
+    client,
+    agentId: agent.id,
+    threadId: agent.runtime.threadId,
+    sessionId: agent.runtime.session.sessionId,
+    visible,
+    version: historyVersion,
+  });
   const draftKey = `crew-agent-draft:${snapshot.projectId}:${agent.id}`;
   const [draft, setDraft] = useState(() => readComposerDraft(draftKey));
   useEffect(() => {
@@ -1288,38 +1301,6 @@ function Conversation({
     (receipt) =>
       receipt.recipientAgentId === agent.id && receipt.sender.type !== "system",
   );
-  const load = useCallback(
-    async (nextCursor?: string) => {
-      const request = ++sequence.current;
-      setLoading(true);
-      setHistoryError("");
-      try {
-        const result = await client.readHistory(agent.id, nextCursor);
-        if (request !== sequence.current) return;
-        if (result.state === "failed") {
-          setHistoryError(result.error.message);
-          return;
-        }
-        setItems((current) =>
-          nextCursor
-            ? uniqueHistory([...result.value.items, ...current])
-            : uniqueHistory(result.value.items),
-        );
-        setCursor(result.value.nextCursor);
-      } catch (cause) {
-        if (request === sequence.current) setHistoryError(errorText(cause));
-      } finally {
-        if (request === sequence.current) setLoading(false);
-      }
-    },
-    [agent.id, client],
-  );
-  useEffect(() => {
-    if (visible && agent.runtime.threadId) void load();
-    return () => {
-      sequence.current++;
-    };
-  }, [visible, agent.runtime.threadId, historyVersion, load]);
   const send = async () => {
     const content = draft.trim();
     if (!content || readOnly) return;
@@ -1388,13 +1369,28 @@ function Conversation({
                       className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
                     >
                       {historyError}
+                      {items.length > 0 && (
+                        <p className="mt-1">
+                          Showing the last loaded messages; history has not
+                          refreshed.
+                        </p>
+                      )}
                       <Button
                         variant="ghost"
                         size="sm"
                         className="ml-2"
+                        disabled={loading}
                         onClick={() => void load()}
                       >
                         Retry history
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={loading}
+                        onClick={() => void showLatest()}
+                      >
+                        Show latest history
                       </Button>
                     </div>
                   )}
@@ -1409,7 +1405,7 @@ function Conversation({
                     variant="outline"
                     size="sm"
                     disabled={loading}
-                    onClick={() => void load(cursor)}
+                    onClick={() => void loadEarlier()}
                   >
                     Load earlier history
                   </Button>
@@ -1418,37 +1414,40 @@ function Conversation({
               {!items.length && (
                 <MessageScrollerItem messageId="conversation-empty">
                   <p className="text-center text-sm text-muted-foreground">
-                    {loading
+                    {loading || (!loaded && agent.runtime.threadId)
                       ? "Loading conversation…"
                       : historyError
                         ? "Saved history is currently unavailable."
-                        : agent.runtime.threadId
-                          ? "No messages yet."
-                          : "Start your manager in Settings, then send your first message."}
+                        : cursor
+                          ? "No public messages in these pages. Load earlier history to continue."
+                          : agent.runtime.threadId
+                            ? "No saved public messages are available for this chat."
+                            : "Start your manager in Settings, then send your first message."}
                   </p>
                 </MessageScrollerItem>
               )}
-              {items
-                .filter(
-                  (item) =>
-                    item.kind !== "other" && item.sender.type !== "system",
-                )
-                .map((item) => (
-                  <MessageScrollerItem
-                    key={item.runtimeRef}
-                    messageId={item.runtimeRef}
-                    scrollAnchor={item.sender.type === "user"}
-                  >
-                    <HistoryItem
-                      item={item}
-                      snapshot={snapshot}
-                      client={client}
-                      managerDirection={
-                        readOnly && item.sender.type === "agent"
-                      }
-                    />
-                  </MessageScrollerItem>
-                ))}
+              {items.map((item) => (
+                <MessageScrollerItem
+                  key={item.runtimeRef}
+                  messageId={item.runtimeRef}
+                  scrollAnchor={item.sender.type === "user"}
+                >
+                  <HistoryItem
+                    item={item}
+                    snapshot={snapshot}
+                    client={client}
+                    managerDirection={readOnly && item.sender.type === "agent"}
+                  />
+                </MessageScrollerItem>
+              ))}
+              {hasVoice && !readOnly && (
+                <MessageScrollerItem messageId="voice-history-limit">
+                  <p className="text-xs text-muted-foreground">
+                    Live voice transcripts are currently available only during
+                    the call. They are not restored from chat history.
+                  </p>
+                </MessageScrollerItem>
+              )}
               {!readOnly && (
                 <div ref={transcriptTarget} className="empty:hidden" />
               )}
@@ -3172,10 +3171,6 @@ function sameSkills(agent: Agent, skills: Skill[]) {
     })
   );
 }
-function uniqueHistory(items: RuntimeHistoryItem[]) {
-  return [...new Map(items.map((item) => [item.runtimeRef, item])).values()];
-}
-
 function readComposerDraft(key: string): string {
   try {
     const value = localStorage.getItem(key);
