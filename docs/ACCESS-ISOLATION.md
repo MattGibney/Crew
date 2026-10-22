@@ -1,11 +1,15 @@
 # Native access and project execution — #89 / #90
 
-`CodexRuntimeAccessProvider.open` now implements a concrete macOS process boundary.
-It starts the installed Codex app-server through an outer Seatbelt policy, checks the
-actual effective native configuration, and uses native `account/read` to distinguish
+`CodexRuntimeAccessProvider.open` launches the pinned Codex app-server as a trusted host
+with a native model-tool permission profile. It checks the actual effective native
+configuration and uses native `account/read` to distinguish
 signed-in subscription access from a required owner action. It never copies personal
 authentication, reads tokens, or supplies an API-key fallback. Empty construction
 remains blocked. A new home or an owner setting alone cannot produce `ready`.
+
+This replacement is draft implementation pending #88's actual native handoff proof and
+the composed application walkthrough. Isolated candidate validation is authorized;
+configuration and disposable command checks do not establish complete model-tool isolation.
 
 ## Owner setup
 
@@ -22,9 +26,8 @@ the browser ceremony; Crew checks `subscriptionStatus()` afterward. `cancelSignI
 cancels only this pending Crew login. No personal account is logged out or replaced.
 Authorization URLs are transient owner UI state, never tickets, logs or repository content.
 
-Only the dedicated owner browser-login process can bind and accept connections at
-`localhost:1455`. Normal model, status and history launches retain their original network
-policy. The app-server owns callback verification and credential persistence; Crew never
+Only explicit owner browser sign-in requests the callback listener at `localhost:1455`.
+The pinned host owns callback verification and credential persistence; Crew never
 parses authorization codes or tokens. A busy callback port fails startup without killing
 another process. Browser startup/cancellation does not establish completed authentication.
 
@@ -39,13 +42,15 @@ failure closes only the owned attempt. Explicit cancellation is tracked by gener
 not inferred from error text. Completion success alone does not establish sign-in;
 a fresh account read must confirm the stored ChatGPT account.
 
-Authentication is stored by Codex in the new native home using its supported file
+Authentication is stored by Codex in its existing Crew native home using its supported file
 credential store. Native account state is distinct from Crew service connections and
 the encrypted vault. Subscription availability is not model entitlement: a real completed
 turn is still needed to verify inference. In the coordinated 22 October 2026 owner run,
 the UI track confirmed a fresh native `account/read` reported signed in after the owner
 completed browser OAuth. This establishes the owner sign-in path, not a subscription-backed
-model response or the proposed native model-tool permission boundary.
+model response or the proposed native model-tool permission boundary. The storage marker
+and `crew.codex.broker-only.v1` configuration reference remain compatible; this change
+does not replace, import, reset or copy the existing authentication directory.
 
 ## Confirmed native process shutdown
 
@@ -65,39 +70,40 @@ lifecycle acceptance.
 
 ## Native boundary
 
-`native-boundary.mts` denies access by default and permits only system runtime files,
-the owned native directory, and exact selected skill directories. Personal homes,
-service configuration, keychain services, other processes and host Unix sockets are
-outside the allowed boundary. Every descendant retains the outer policy, including
-commands that would otherwise receive native escalation.
+The previous outer Seatbelt policy prevented native nested sandbox helpers from loading
+a resumed local environment. The provider now launches the exact pinned executable
+directly. The host is trusted with its own model authentication; native named permissions
+constrain model tools. Host RPCs such as filesystem readers and process spawning are not
+model-safe interfaces and must never be exposed through Crew tools. The retained model
+proxy is a fixed OpenAI transport route, not an operating-system boundary around this
+trusted host.
 
-The only network destinations are exact loopback ports for the session's authenticated
-Crew foundation and service MCP endpoints and a model-transport proxy. That proxy only accepts TLS CONNECT to
-the fixed OpenAI host catalogue, rejects private DNS answers, pins the resolved public
-address, and never decrypts TLS or injects a credential. It is not a generic service proxy.
-The explicit child environment contains no inherited service tokens, SSH agent socket,
-Git helper configuration or personal CLI configuration. The Crew session token authorizes
-only that native session at the Crew gateway; it is not a provider secret.
+Each launch gets one `crew-model-v2-<roots-hash>` profile extending `:read-only`, with
+filesystem default deny, minimal system reads, explicit personal-home/native-root deny,
+and read access only to its neutral workspace and selected immutable skill directories.
+Network is disabled and global native escalation is `never`. Shell/JS/apps/plugins and
+other unrelated surfaces remain disabled, but feature flags alone are not enforcement.
+The host receives an explicit environment; model commands inherit none and have no
+explicit variable injection. Crew's session bearer identifies only the authenticated
+session and does not contain an upstream provider credential.
 
-Native TLS explicitly uses the macOS public CA bundle at `/private/etc/ssl/cert.pem`
-through Codex's supported `CODEX_CA_CERTIFICATE` environment setting. The isolated
-process cannot rely on personal keychain certificate discovery. An actual device-login
-request failed after successful proxy CONNECT without this setting and started with it;
-polling, cancellation and confirmed peer exit also passed. The policy and host allowlist
-remain unchanged, and the existing keychain/outside-file/network denials still pass.
-This historical check verified device-code issuance, not owner completion or token exchange.
+The verifier compares the complete effective profile: exact filesystem entries, no
+extra profiles, no network/socket allowances, no environment overrides and no escalation.
+Native normalized null defaults remain null. Canonical private storage directories and
+narrow skill roots are checked before launch. The resolver repeats the managed store's
+exact-revision/resource-manifest verification and rejects changed paths; private storage
+directory identities must remain the same. It rechecks session revocation after these
+asynchronous reads. Existing auth files are neither read nor rewritten by Crew. TLS
+retains the supported public CA bundle setting. New `native-permissions-evidence.json`
+records profile checks separately from historical outer-boundary evidence.
 
-The native model process has no project mounts or direct shell/JS tools. The adapter
-must also pass `environments: []` on supported native thread-start and turn requests so
-native filesystem tools have no selected environment, and verify the observed selection.
-The inspected resume schema does not support this field: passing an ignored field is
-not enforcement, and a resumed default local environment must fail closed until a
-supported disabling route is verified. A removed feature flag is not enforcement.
-Before skill discovery, the adapter sets the exact selected roots through supported
-`skills/extraRoots/set`; personal or repository skill roots are not imported.
-
-This restricted native route is a **bring-up and communication boundary**, not acceptance
-of full project work. The two execution boundaries below must be composed together.
+The trusted resolver returns `nativePermissions: { profileId, approvalPolicy: "never" }`.
+#88 selects that profile explicitly on start/resume/turn requests and verifies the
+returned profile, approval policy and exact local workspace. It must fail closed on
+missing or changed evidence. This replaces the earlier empty-environment requirement;
+the local environment is the neutral read-only workspace, never a real project root.
+Before discovery, selected skill roots are still sent through `skills/extraRoots/set`.
+Real project work remains behind the separately authorized executor below.
 
 ## Actual project work
 
@@ -170,7 +176,7 @@ Only these two authenticated servers set `default_tools_approval_mode="approve"`
 This supported native setting skips a redundant Codex MCP confirmation before Crew
 dispatch; it does not grant a Crew capability. Foundation authorization and the
 service broker still check the current caller, session, group or explicit grant at
-dispatch. Global native execution/escalation policy is unchanged. Preparation verifies
+dispatch. It does not relax the native profile's `never` escalation policy. Preparation verifies
 the exact server set, approval defaults and absence of per-tool overrides. Owner login
 and retained-history launches configure no MCP servers.
 
@@ -186,7 +192,8 @@ network/command I/O outside the mutex. Access-store projections remain the polic
 
 ## Evidence and remaining acceptance
 
-On macOS, bounded disposable checks exercised the actual installed CLI and outer policy:
+Historical macOS checks below exercised the earlier outer policy; they are not current
+trusted-host containment claims:
 native configuration/account read; permitted owned file read; denied synthetic outside
 service file; denied descendant read; other-process denial; keychain-list denial; denied
 host TCP and Unix socket access; allowed TLS to the model host and denied other-domain
@@ -236,7 +243,7 @@ the exact foundation and service URLs with bearer authentication. A mismatched e
 foundation URL failed configuration verification. This proves native transport discovery;
 the controlled endpoint catalogue is not the composed application's live tool catalogue.
 
-On installed CLI 0.163.0-alpha.11, the final provider source also read back
+Before the native-owned replacement, installed CLI 0.163.0-alpha.11 read back
 `default_tools_approval_mode="approve"` for both endpoints and retained global
 `approval_policy="on-request"`. Both authenticated endpoints discovered successfully;
 the verifier rejected missing approval mode, a per-tool override and a third server.
@@ -245,6 +252,22 @@ reported an actual subscription model call with per-tool `approval_mode="approve
 an allowed synthetic call reached Crew and a forbidden call was rejected by its broker
 while global policy remained `never`. That establishes the narrow approval-mode
 semantics, not final composed-app or server-default model acceptance.
+
+The current native-owned draft passed a separate unsigned-in/no-model check using the
+actual provider and installed runtime. Commands read the neutral workspace and selected
+skill, denied outside/native-private reads and workspace writes, inherited no synthetic
+tokens and failed to reach a loopback canary (zero received requests). Skill discovery
+and idle start, warm resume and fresh-process same-chat resume retained the exact profile,
+`never` approval and neutral local workspace, with zero turns. Twelve altered config
+readbacks were rejected. Replaced/symlinked workspace and skill paths and a mismatched
+managed directory reference were rejected. All owned peers exited. These are native
+command/configuration checks, not a claim that every model tool or realtime handoff is
+contained. #88 owns the real-model handoff evidence; #95 validates the isolated composed
+candidate. Final acceptance remains pending.
+
+A separate controlled resolver-state check emitted the exact trusted permissions for
+matched state, then denied launch when that session was released during asynchronous
+skill validation. It used a seeded binding and is not authenticated preparation evidence.
 
 Actual Electron 44.9.2 safeStorage plus the real vault passed synthetic store/read/rotate,
 second-process reopen, stale-reference denial and deletion. This proves host OS storage
