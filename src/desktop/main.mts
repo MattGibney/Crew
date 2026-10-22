@@ -53,6 +53,8 @@ import {
   ProjectRecoveryError,
 } from "./project-recovery.mjs";
 import { randomUUID } from "node:crypto";
+import { createUnifiedProjectBrowser } from "../browser/unified-browser.mjs";
+import { combineAgentToolExtensions } from "../agents/tool-extensions.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const desktopDirectory = join(
@@ -82,6 +84,7 @@ type ProjectHost = {
   voiceCommand: ReturnType<typeof createVoiceOwnerCommands>;
   imageCommand: ReturnType<typeof createImageOwnerCommands>;
   setup: Awaited<ReturnType<typeof openAgentSetup>>;
+  browser: ReturnType<typeof createUnifiedProjectBrowser>;
   unsubscribe: () => void;
 };
 const hosts = new Map<string, ProjectHost>(),
@@ -166,6 +169,7 @@ async function openProject(project: DesktopProject) {
   if (openings.has(project.id)) return openings.get(project.id);
   const opening = (async () => {
     let application: UnifiedApplication | undefined;
+    let browser: ReturnType<typeof createUnifiedProjectBrowser> | undefined;
     try {
       const stateDirectory = registry.stateDirectory(project.id);
       const skills = await ProjectSkillStore.open({
@@ -177,6 +181,18 @@ async function openProject(project: DesktopProject) {
           ...(process.env.CODEX_HOME ? [process.env.CODEX_HOME] : []),
         ],
       });
+      const projectBrowser = createUnifiedProjectBrowser({
+        projectId: project.id,
+        stateDirectory,
+        getWindow: () => surface?.native(),
+        getHostOrigin: () => renderer.origin,
+        getAgent: (id) =>
+          application?.foundation.store
+            .snapshot()
+            .agents.find((agent) => agent.id === id) ?? null,
+        publish: (event) => surface?.notify(event),
+      });
+      browser = projectBrowser;
       application = await startUnifiedApplication({
         stateDirectory,
         projectId: project.id,
@@ -185,22 +201,26 @@ async function openProject(project: DesktopProject) {
         nativeExecutable: await nativeExecutable(),
         vaultEncryption: createElectronCredentialEncryption(safeStorage),
         skills,
-        agentTools: ({ runAuthorized }) => ({
-          async list(caller) {
-            return createProjectSkillAgentTools({
-              store: skills,
-              caller,
-              runAuthorized,
-            }).list();
-          },
-          async call(caller, name, args) {
-            return createProjectSkillAgentTools({
-              store: skills,
-              caller,
-              runAuthorized,
-            }).call(name, args);
-          },
-        }),
+        agentTools: (context) =>
+          combineAgentToolExtensions([
+            {
+              async list(caller) {
+                return createProjectSkillAgentTools({
+                  store: skills,
+                  caller,
+                  runAuthorized: context.runAuthorized,
+                }).list();
+              },
+              async call(caller, name, args) {
+                return createProjectSkillAgentTools({
+                  store: skills,
+                  caller,
+                  runAuthorized: context.runAuthorized,
+                }).call(name, args);
+              },
+            },
+            projectBrowser.tools(context),
+          ]),
       });
       const composed = application;
       const voice = composed.voice;
@@ -326,6 +346,7 @@ async function openProject(project: DesktopProject) {
         voiceCommand: createVoiceOwnerCommands(voice, selectedVoice),
         imageCommand: createImageOwnerCommands(images),
         setup,
+        browser: projectBrowser,
         unsubscribe: () => {
           unsubscribe();
           unsubscribeVoice();
@@ -334,6 +355,7 @@ async function openProject(project: DesktopProject) {
       });
       failures.delete(project.id);
     } catch {
+      await browser?.close().catch(() => {});
       await application?.close().catch(() => {});
       failures.set(
         project.id,
@@ -356,6 +378,11 @@ async function disconnectVoice() {
   );
   if (results.some((result) => result.status === "rejected"))
     throw new Error("A native voice call did not confirm closure.");
+  const previews = await Promise.allSettled(
+    [...hosts.values()].map((host) => host.browser.close()),
+  );
+  if (previews.some((result) => result.status === "rejected"))
+    throw new Error("A project browser did not confirm closure.");
 }
 async function selectProject(projectId: string) {
   if (switching || quit.holding() || updates?.holding())
@@ -605,6 +632,7 @@ async function request(method: string, value: unknown) {
     return;
   }
   const host = requiredProject(text(input.projectId));
+  if (method === "browser") return host.browser.request(input);
   if (method === "ownerSnapshot") return host.application.ownerApi.snapshot();
   if (method === "ownerCommand")
     return ownerCommand(host, text(input.command), input.args);
@@ -636,6 +664,7 @@ async function start() {
           host.application.foundation.store.snapshot().preparation,
         async close(reservation) {
           await host.schedules.close();
+          await host.browser.close();
           await host.application.close(reservation.id);
           host.unsubscribe();
         },
