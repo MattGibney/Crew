@@ -13,12 +13,11 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
 import type {
-  Agent,
-  AgentCreationPreset,
   EnvironmentPolicy,
   RuntimeBinding,
 } from "../../../src/agents/contracts.mjs";
 import { OwnerAccessSettings } from "../access/OwnerAccessSettings";
+import { ServiceConnectionWizard } from "../access";
 import { ProjectSkillsPanel } from "../skills/ProjectSkillsPanel";
 import type { ProjectSkillsClient } from "../skills/client";
 import { SettingsToast } from "../manager/settings/SettingsToast";
@@ -33,8 +32,11 @@ import type {
   PrimaryVoiceEvent,
 } from "./voice/client";
 import type { ProjectPresentation } from "./DesktopApplication";
-import type { AgentsAppProps } from "./AgentsApp";
 import type { AgentsSnapshot } from "./client";
+import {
+  AgentSetupWizard,
+  type ConnectionWizardContext,
+} from "./AgentSetupWizard";
 
 type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
@@ -68,13 +70,6 @@ interface ProjectEvent {
   projectId?: string;
   event?: unknown;
 }
-interface SetupDraft {
-  presetId: string;
-  name: string;
-  selectedId: string;
-}
-type SetupContext = Parameters<NonNullable<AgentsAppProps["renderSetup"]>>[0];
-
 /** One presentation per project, backed by the desktop's authenticated owner
  * command channel. No render, navigation, or subscription starts an agent/call. */
 export function createProjectPresentation(
@@ -124,11 +119,37 @@ export function createProjectPresentation(
           listener(event.event);
       }),
   };
-  // Setup can leave its page to use the persistent Settings panels. This small
-  // non-secret form draft belongs to the project presentation across that visit.
-  const setupDraft: SetupDraft = { presetId: "", name: "", selectedId: "" };
+  const signIn = (visible: boolean, onStatus: (signedIn: boolean) => void) => (
+    <SubscriptionSettings
+      command={command}
+      subscribe={onOwnerChange}
+      visible={visible}
+      openLink={openLink}
+      onStatus={onStatus}
+    />
+  );
+  const connectionWizard = (context: ConnectionWizardContext) => (
+    <ServiceConnectionWizard {...context} isOwner />
+  );
   return {
     settingsPanels: [
+      {
+        id: "agent-setup",
+        label: "Agent setup",
+        icon: ShieldCheck,
+        description: "Create an agent or update its access with guided setup.",
+        render: ({ snapshot, refresh, visible }) => (
+          <AgentSetupWizard
+            snapshot={snapshot}
+            refresh={refresh}
+            command={command}
+            subscribe={onOwnerChange}
+            visible={visible}
+            renderSignIn={signIn}
+            renderConnectionWizard={connectionWizard}
+          />
+        ),
+      },
       {
         id: "subscription",
         label: "Model access",
@@ -222,7 +243,18 @@ export function createProjectPresentation(
         )
       )
         return null;
-      return <PrimarySetup {...context} command={command} draft={setupDraft} />;
+      return (
+        <AgentSetupWizard
+          snapshot={context.snapshot}
+          refresh={context.refresh}
+          command={command}
+          subscribe={onOwnerChange}
+          visible={context.visible}
+          firstUse
+          renderSignIn={signIn}
+          renderConnectionWizard={connectionWizard}
+        />
+      );
     },
     renderVoice: ({
       primaryAgent,
@@ -516,8 +548,7 @@ function PrimarySelection({
       </div>
       {!agents.length && (
         <p className="text-sm text-muted-foreground">
-          Approve a new agent preset below, then return to setup to create your
-          manager.
+          Use Agent setup to create your manager with guided access choices.
         </p>
       )}
       {stale && (
@@ -1113,11 +1144,13 @@ function SubscriptionSettings({
   subscribe,
   visible,
   openLink,
+  onStatus,
 }: {
   command: Command;
   subscribe: Subscribe;
   visible: boolean;
   openLink?: (url: string) => Promise<unknown>;
+  onStatus?: (signedIn: boolean) => void;
 }) {
   const [status, setStatus] = useState<SubscriptionStatus | null>(null);
   const [login, setLogin] = useState<SignIn | null>(null);
@@ -1147,6 +1180,7 @@ function SubscriptionSettings({
         throw new Error("Invalid subscription state");
       if (alive.current && request === sequence.current) {
         setStatus(next);
+        onStatus?.(next.state === "signed_in");
         setStatusError("");
         if (next.state === "signed_in") {
           setLogin(null);
@@ -1169,12 +1203,14 @@ function SubscriptionSettings({
         }
       }
     } catch {
-      if (alive.current && request === sequence.current)
+      if (alive.current && request === sequence.current) {
+        onStatus?.(false);
         setStatusError(
           "Subscription status could not be checked. Retry when the native connection is available.",
         );
+      }
     }
-  }, [command]);
+  }, [command, onStatus]);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -1396,247 +1432,4 @@ function provisioningProblem(snapshot: AgentsSnapshot, agentId: string) {
   ).provisioning;
   const entry = rows?.find((item) => item.agentId === agentId);
   return Boolean(entry && entry.state !== "ready");
-}
-
-function PrimarySetup({
-  snapshot,
-  refresh,
-  openSettings,
-  command,
-  draft: retained,
-}: SetupContext & { command: Command; draft: SetupDraft }) {
-  const [draft, setDraft] = useState({ ...retained });
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
-  const lock = useRef(false);
-  const change = (patch: Partial<SetupDraft>) => {
-    Object.assign(retained, patch);
-    setDraft((value) => ({ ...value, ...patch }));
-  };
-  const presets = (snapshot.creationPresets ?? []).filter(
-    (preset) => preset.enabled && preset.projectId === snapshot.projectId,
-  );
-  const preset = presets.find((item) => item.id === draft.presetId);
-  const agents = snapshot.agents.filter((agent) => !agent.archivedAt);
-  const selected = agents.find((agent) => agent.id === draft.selectedId);
-  async function choose(agentId: string) {
-    const revision = snapshot.projectSettings?.revision;
-    if (!revision) throw new Error("Project settings unavailable");
-    await command("setPrimaryAgent", { agentId, expectedRevision: revision });
-  }
-  async function run(operation: () => Promise<void>, failure: string) {
-    if (lock.current) return;
-    lock.current = true;
-    setBusy(true);
-    setError("");
-    try {
-      await operation();
-    } catch {
-      setError(failure);
-    } finally {
-      await refresh().catch(() =>
-        setError(
-          "Project setup could not be refreshed. Your saved work is retained.",
-        ),
-      );
-      lock.current = false;
-      setBusy(false);
-    }
-  }
-  async function create(preset: AgentCreationPreset) {
-    const created = await command<Agent>("createAgent", {
-      input: {
-        presetId: preset.id,
-        expectedPresetRevision: preset.revision,
-        ...(draft.name.trim() ? { name: draft.name.trim() } : {}),
-      },
-    });
-    if (created.projectId !== snapshot.projectId)
-      throw new Error("Project mismatch");
-    change({ selectedId: created.id });
-    try {
-      await choose(created.id);
-    } catch {
-      throw new Error("Agent created; primary selection needs refresh");
-    }
-  }
-  return (
-    <div className="mx-auto max-w-3xl space-y-8 px-5 py-10 sm:px-8">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Set up your manager
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Choose your primary agent and the access it can use. Agents stay
-          stopped until you explicitly Start them.
-        </p>
-      </div>
-      <div className="divide-y border-y">
-        <div className="flex flex-wrap items-start justify-between gap-4 py-6">
-          <div className="max-w-lg">
-            <h2 className="font-medium">Model subscription</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Connect your ChatGPT subscription through Crew's supported
-              sign-in.
-            </p>
-          </div>
-          <Button
-            variant="link"
-            className="h-auto p-0 font-semibold"
-            onClick={() => openSettings("subscription")}
-          >
-            Configure
-          </Button>
-        </div>
-        <div className="flex flex-wrap items-start justify-between gap-4 py-6">
-          <div className="max-w-lg">
-            <h2 className="font-medium">Connections and approved presets</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Create permission groups and approve the profile and access for
-              new agents. Add external connections only when you need them; a
-              tracker is optional.
-            </p>
-          </div>
-          <Button
-            variant="link"
-            className="h-auto p-0 font-semibold"
-            onClick={() => openSettings("access")}
-          >
-            Configure
-          </Button>
-        </div>
-      </div>
-      <section className="space-y-5">
-        <h2 className="font-semibold tracking-tight">
-          Create your primary agent
-        </h2>
-        {!presets.length ? (
-          <p className="text-sm text-muted-foreground">
-            Approve a new agent preset in Connections & access first, then
-            return here. Crew uses that saved profile and access without manual
-            per-worker credential setup.
-          </p>
-        ) : (
-          <>
-            <div className="space-y-2">
-              <Label htmlFor="setup-agent-preset">Approved preset</Label>
-              <NativeSelect
-                id="setup-agent-preset"
-                value={draft.presetId}
-                disabled={busy}
-                onChange={(event) => change({ presetId: event.target.value })}
-              >
-                <option value="">Choose an approved preset</option>
-                {presets.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-                {draft.presetId && !preset && (
-                  <option value={draft.presetId} disabled>
-                    Preset unavailable
-                  </option>
-                )}
-              </NativeSelect>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="setup-agent-name">Name (optional)</Label>
-              <Input
-                id="setup-agent-name"
-                value={draft.name}
-                maxLength={200}
-                placeholder={preset?.profile.name ?? "Use the preset name"}
-                onChange={(event) => change({ name: event.target.value })}
-              />
-            </div>
-            <Button
-              disabled={busy || !preset}
-              onClick={() =>
-                preset &&
-                void run(
-                  () => create(preset),
-                  "The manager was not fully configured. Refresh and inspect any retained agent below before creating another; you can retry its setup or select it once ready.",
-                )
-              }
-            >
-              {busy ? "Saving…" : "Create and select manager"}
-            </Button>
-          </>
-        )}
-      </section>
-      {agents.length > 0 && (
-        <section className="space-y-4 border-t pt-6">
-          <h2 className="font-semibold tracking-tight">
-            Use an existing agent
-          </h2>
-          <div className="flex flex-wrap items-end gap-3">
-            <div className="min-w-0 flex-1 space-y-2">
-              <Label htmlFor="setup-existing-agent">Agent</Label>
-              <NativeSelect
-                id="setup-existing-agent"
-                value={draft.selectedId}
-                disabled={busy}
-                onChange={(event) => change({ selectedId: event.target.value })}
-              >
-                <option value="">Choose an agent</option>
-                {agents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.profile.name}
-                    {provisioningProblem(snapshot, agent.id)
-                      ? " (setup needs attention)"
-                      : ""}
-                  </option>
-                ))}
-              </NativeSelect>
-            </div>
-            {selected && provisioningProblem(snapshot, selected.id) ? (
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    await command("retryProvisioning", {
-                      agentId: selected.id,
-                    });
-                  }, "Agent access is still incomplete. Check the approved preset and groups in Connections & access.")
-                }
-              >
-                Retry agent setup
-              </Button>
-            ) : (
-              <Button
-                variant="outline"
-                disabled={busy || !selected}
-                onClick={() =>
-                  selected &&
-                  void run(
-                    () => choose(selected.id),
-                    "The primary-agent choice changed or could not be saved. Refresh and try again.",
-                  )
-                }
-              >
-                Use as manager
-              </Button>
-            )}
-          </div>
-        </section>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      <Button
-        variant="ghost"
-        disabled={busy}
-        onClick={() =>
-          void refresh().catch(() =>
-            setError("Project setup could not be refreshed."),
-          )
-        }
-      >
-        Refresh setup
-      </Button>
-    </div>
-  );
 }

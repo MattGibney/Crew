@@ -94,6 +94,7 @@ export interface AgentsAppProps {
     snapshot: AgentsSnapshot;
     refresh: () => Promise<void>;
     openSettings: (pageId: string) => void;
+    visible: boolean;
   }) => ReactNode;
   /** Mounted once. Visibility controls presentation only; the app owns call lifetime. */
   renderVoice?: (context: {
@@ -287,7 +288,12 @@ export function AgentsApp({
     setView("settings");
   };
   const setup = snapshot
-    ? renderSetup?.({ snapshot, refresh, openSettings })
+    ? renderSetup?.({
+        snapshot,
+        refresh,
+        openSettings,
+        visible: view !== "settings",
+      })
     : null;
   const setupVisible = Boolean(setup) && view !== "settings";
   const attentionCount =
@@ -526,8 +532,13 @@ export function AgentsApp({
       )}
       {snapshot && (
         <>
-          {setupVisible && (
-            <section className="min-h-0 flex-1 overflow-auto">{setup}</section>
+          {setup && (
+            <section
+              hidden={!setupVisible}
+              className="min-h-0 flex-1 overflow-auto"
+            >
+              {setup}
+            </section>
           )}
           <main
             ref={workspace}
@@ -646,6 +657,16 @@ export function AgentsApp({
               aria-label="Project workers"
               className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${view === "conversation" ? "hidden lg:block" : "block"}`}
             >
+              <div className="mb-4 flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openSettings("agent-setup")}
+                >
+                  <Plus />
+                  Create agent / update access
+                </Button>
+              </div>
               <AgentWorkerList
                 snapshot={snapshot}
                 client={client}
