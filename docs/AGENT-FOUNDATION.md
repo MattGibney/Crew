@@ -93,6 +93,27 @@ After native acceptance it removes the message body and keeps a compact receipt 
 digest. Reusing that message ID with changed intent is rejected without retaining another chat.
 Codex history stays authoritative; renderer history is disposable. Private reasoning is omitted.
 
+The conversation reads full native turn pages and applies owner visibility using durable
+agent/thread/turn provenance, including receipts from prior logical sessions. Restart and profile
+compaction keep that identity. A refresh re-reads the displayed window through its oldest loaded
+item, so incoming updates do not discard earlier pages or indefinitely retain obsolete projected
+rows. Session changes trigger a fresh read; late responses from an old binding are ignored.
+Reads are serialized and streaming refresh requests coalesce into a trailing refresh.
+
+Initial and earlier-history reads follow up to ten filtered/non-display pages per interaction.
+If more pages remain, the cursor advances and the view offers Load earlier history without
+claiming the conversation is empty. Refresh allows the prior native page depth plus ten pages;
+an unavailable old boundary produces an explicit error while the last loaded messages remain
+marked as stale. Retry preserves the window. Show latest history explicitly reloads a smaller
+window from native storage. Neither action resets the chat or persists another transcript.
+
+Live voice transcripts remain call-scoped and this limitation is shown in the conversation.
+The pinned native runtime can retain context from a voice handoff without supplying the exact
+public coding-turn linkage required for safe owner history. Those transcripts cannot currently
+be restored by this renderer fix. Recovery needs supported native transcript readback or an
+exact authoritative promotion; speech timing, text matching and private/unknown turn disclosure
+are not substitutes. Typed-history validation does not close the owner's voice-history case.
+
 The state file is owner-only and written atomically under a non-stealing single-writer lock. A
 retained lock needs explicit ownership recovery; unknown ownership never expires by age. Invalid
 or foreign state is rejected. `close()` drains persistence before releasing its owned lock. Store
