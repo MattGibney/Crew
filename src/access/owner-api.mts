@@ -44,6 +44,11 @@ export interface AccessOwnerApiOptions {
   verifyConnection?(connectionId: string): Promise<void>;
   connectionSetup?: OwnerConnectionSetupService;
   rememberVerifiedConnection?(connectionId: string): Promise<void>;
+  /** Resolve an immutable project template pin; never prepares or runs commands. */
+  resolveEnvironmentTemplate?(pin: {
+    id: string;
+    revision: number;
+  }): Promise<void>;
 }
 function object(value: unknown, keys?: string[]): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -379,6 +384,7 @@ export function createAccessOwnerApi(
               "configRef",
               "permissionGroupIds",
               "serviceConnectionIds",
+              "environmentTemplate",
             ]);
             const configuredAgents = await options.listAgents();
             const current =
@@ -405,6 +411,18 @@ export function createAccessOwnerApi(
               throw new Error(
                 "Choose the configured project runtime or an existing agent template.",
               );
+            if (draft.environmentTemplate !== undefined) {
+              const pin = object(draft.environmentTemplate, ["id", "revision"]);
+              const pinRevision = expected(pin.revision);
+              if (pinRevision === null || !options.resolveEnvironmentTemplate)
+                throw new Error(
+                  "An exact owner-approved environment template is required.",
+                );
+              await options.resolveEnvironmentTemplate({
+                id: id(pin.id),
+                revision: pinRevision,
+              });
+            }
             return authorization.savePreset(
               actor,
               {

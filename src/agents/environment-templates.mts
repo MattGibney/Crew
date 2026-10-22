@@ -27,10 +27,16 @@ export interface EnvironmentTemplateDraft {
   readableDirectories: string[];
   /** Nonsecret owner configuration only; never ambient process environment. */
   environment: Record<string, string>;
+  /** Owner-approved host-wide Docker authority, including daemon-wide control
+   * and host mounts beyond this workspace. Never supplies Docker credentials. */
+  hostDocker?: { socketPath: string; hostAccessAcknowledged: true };
   capabilities: {
     packageDownloads: boolean;
     network: boolean;
     localhostPorts: number[];
+    /** Explicit incoming TCP on these ports on ALL interfaces, independent of
+     * outbound network access. Omission means none; retain old revision bytes. */
+    inboundPorts?: number[];
   };
   preparation: { instructions: string; commands: string[][] };
 }
@@ -202,6 +208,7 @@ export function validateEnvironmentTemplateDraft(
     "executableDirectories",
     "readableDirectories",
     "environment",
+    "hostDocker",
     "capabilities",
     "preparation",
   ]);
@@ -244,10 +251,30 @@ export function validateEnvironmentTemplateDraft(
       );
     boundedText(entry, 4096);
   }
+  if (draft.hostDocker !== undefined) {
+    const docker = object(draft.hostDocker, [
+      "socketPath",
+      "hostAccessAcknowledged",
+    ]);
+    boundedText(docker.socketPath, 4096, false);
+    if (
+      docker.hostAccessAcknowledged !== true ||
+      !isAbsolute(docker.socketPath) ||
+      docker.socketPath === "/" ||
+      docker.socketPath
+        .split(/[\\/]/)
+        .some((part) => part === "." || part === "..") ||
+      /[\u0000-\u001f\u007f]/.test(docker.socketPath)
+    )
+      throw new Error(
+        "Host Docker requires an explicit absolute socket path and acknowledgement of host-wide authority.",
+      );
+  }
   const capabilities = object(draft.capabilities, [
     "packageDownloads",
     "network",
     "localhostPorts",
+    "inboundPorts",
   ]);
   if (
     typeof capabilities.packageDownloads !== "boolean" ||
@@ -258,7 +285,15 @@ export function validateEnvironmentTemplateDraft(
       capabilities.localhostPorts.length ||
     capabilities.localhostPorts.some(
       (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
-    )
+    ) ||
+    (capabilities.inboundPorts !== undefined &&
+      (!Array.isArray(capabilities.inboundPorts) ||
+        capabilities.inboundPorts.length > 16 ||
+        new Set(capabilities.inboundPorts).size !==
+          capabilities.inboundPorts.length ||
+        capabilities.inboundPorts.some(
+          (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
+        )))
   )
     throw new Error("Invalid optional environment capabilities.");
   const preparation = object(draft.preparation, ["instructions", "commands"]);
@@ -411,6 +446,7 @@ export class ProjectEnvironmentTemplateCatalogue {
         "executableDirectories",
         "readableDirectories",
         "environment",
+        "hostDocker",
         "capabilities",
         "preparation",
       ]);
@@ -505,12 +541,14 @@ export class ProjectEnvironmentTemplateCatalogue {
       await unlink(path).catch(() => {});
     }
   }
-  private transaction<T>(change: (state: CatalogueState) => T): Promise<T> {
+  private transaction<T>(
+    change: (state: CatalogueState) => T | Promise<T>,
+  ): Promise<T> {
     const operation = this.tail.then(async () => {
       if (this.closed || this.failed)
         throw new Error("Template catalogue requires recovery.");
       const state = structuredClone(this.state),
-        result = change(state);
+        result = await change(state);
       this.validateState(state);
       if (Buffer.byteLength(JSON.stringify(state)) > MAX_BYTES)
         throw new Error("Template catalogue capacity reached.");
@@ -638,8 +676,8 @@ export class ProjectEnvironmentTemplateCatalogue {
         : !identifier(input.templateId) || !isRevision(input.templateRevision))
     )
       throw new Error("Invalid exact template assignment.");
-    await this.verifyAgent(input.agentId);
-    return this.transaction((state) => {
+    return this.transaction(async (state) => {
+      await this.verifyAgent(input.agentId);
       const previous = state.assignments.find(
         (row) => row.agentId === input.agentId,
       );
@@ -665,6 +703,55 @@ export class ProjectEnvironmentTemplateCatalogue {
       };
       if (previous) Object.assign(previous, assignment);
       else state.assignments.push(assignment);
+      return assignment;
+    });
+  }
+  /** Trusted owner preset application only. A retry may observe its exact pin,
+   * but cannot replace or undo a later explicit owner assignment. */
+  async assignPreset(
+    actor: Actor,
+    input: { agentId: string; templateId: string; templateRevision: number },
+  ): Promise<EnvironmentTemplateAssignment> {
+    this.owner(actor);
+    input = structuredClone(input);
+    object(input, ["agentId", "templateId", "templateRevision"]);
+    if (
+      !identifier(input.agentId) ||
+      !identifier(input.templateId) ||
+      !isRevision(input.templateRevision)
+    )
+      throw new Error("Invalid exact preset template assignment.");
+    return this.transaction(async (state) => {
+      await this.verifyAgent(input.agentId);
+      if (
+        !state.versions.some(
+          (row) =>
+            row.id === input.templateId &&
+            row.revision === input.templateRevision,
+        )
+      )
+        throw new Error("Exact template revision is unavailable.");
+      const current = state.assignments.find(
+        (row) => row.agentId === input.agentId,
+      );
+      if (current) {
+        if (
+          current.templateId === input.templateId &&
+          current.templateRevision === input.templateRevision
+        )
+          return current;
+        throw new Error(
+          "Owner template assignment changed; preserve the current choice.",
+        );
+      }
+      const assignment: EnvironmentTemplateAssignment = {
+        agentId: input.agentId,
+        templateId: input.templateId,
+        templateRevision: input.templateRevision,
+        revision: 1,
+        updatedAt: new Date().toISOString(),
+      };
+      state.assignments.push(assignment);
       return assignment;
     });
   }

@@ -310,3 +310,132 @@ test("inspection preserves unknown states and settlement receipts rather than im
   assert.equal(unavailable.processesSettled, undefined);
   assert.equal(unavailable.processEvidenceComplete, undefined);
 });
+
+test("incoming TCP ports are explicit and additive without changing old template revision bytes", async (t) => {
+  const f = await fixture(t);
+  const old = await f.catalogue.saveTemplate(owner, {
+    id: null,
+    expectedRevision: null,
+    draft: draft(),
+  });
+  const originalBytes = JSON.stringify(old);
+  await f.catalogue.assign(owner, {
+    agentId: "one",
+    expectedRevision: null,
+    templateId: old.id,
+    templateRevision: 1,
+  });
+  const configured = {
+    ...draft(),
+    capabilities: { ...draft().capabilities, inboundPorts: [43123] },
+  };
+  const updated = await f.catalogue.saveTemplate(owner, {
+    id: old.id,
+    expectedRevision: 1,
+    draft: configured,
+  });
+  assert.deepEqual(updated.capabilities.inboundPorts, [43123]);
+  assert.equal(updated.capabilities.network, false);
+  assert.deepEqual(updated.capabilities.localhostPorts, []);
+  for (const inboundPorts of [
+    [80],
+    [65536],
+    [43123, 43123],
+    Array.from({ length: 17 }, (_, index) => 43000 + index),
+    null,
+  ]) {
+    await assert.rejects(
+      f.catalogue.saveTemplate(owner, {
+        id: null,
+        expectedRevision: null,
+        draft: {
+          ...configured,
+          capabilities: { ...configured.capabilities, inboundPorts },
+        },
+      }),
+      /capabilities/,
+    );
+  }
+  await f.catalogue.close();
+  f.catalogue = await ProjectEnvironmentTemplateCatalogue.open(f.options);
+  assert.equal(
+    JSON.stringify(f.catalogue.resolvePinned(old.id, 1)),
+    originalBytes,
+  );
+  assert.equal(
+    Object.hasOwn(
+      f.catalogue.resolvePinned(old.id, 1).capabilities,
+      "inboundPorts",
+    ),
+    false,
+  );
+  assert.equal(f.catalogue.assignment("one").templateRevision, 1);
+  assert.deepEqual(
+    f.catalogue.resolvePinned(old.id, 2).capabilities.inboundPorts,
+    [43123],
+  );
+});
+
+test("host Docker authority requires explicit acknowledgement and never changes old revision pins", async (t) => {
+  const f = await fixture(t);
+  const old = await f.catalogue.saveTemplate(owner, {
+    id: null,
+    expectedRevision: null,
+    draft: draft(),
+  });
+  const originalBytes = JSON.stringify(old);
+  await f.catalogue.assign(owner, {
+    agentId: "one",
+    expectedRevision: null,
+    templateId: old.id,
+    templateRevision: 1,
+  });
+  const socketPath = join(f.root, "owner-daemon.sock");
+  for (const hostDocker of [
+    { socketPath, hostAccessAcknowledged: false },
+    { socketPath },
+    { socketPath: "relative/docker.sock", hostAccessAcknowledged: true },
+    {
+      socketPath: join(f.root, "child") + "/../docker.sock",
+      hostAccessAcknowledged: true,
+    },
+  ]) {
+    await assert.rejects(
+      f.catalogue.saveTemplate(owner, {
+        id: null,
+        expectedRevision: null,
+        draft: { ...draft(), hostDocker },
+      }),
+      /Host Docker/,
+    );
+  }
+  const updated = await f.catalogue.saveTemplate(owner, {
+    id: old.id,
+    expectedRevision: 1,
+    draft: {
+      ...draft(),
+      hostDocker: { socketPath, hostAccessAcknowledged: true },
+    },
+  });
+  assert.deepEqual(updated.hostDocker, {
+    socketPath,
+    hostAccessAcknowledged: true,
+  });
+  // Saving the owner choice does not connect to or create a daemon socket.
+  await assert.rejects(access(socketPath), { code: "ENOENT" });
+  await f.catalogue.close();
+  f.catalogue = await ProjectEnvironmentTemplateCatalogue.open(f.options);
+  assert.equal(
+    JSON.stringify(f.catalogue.resolvePinned(old.id, 1)),
+    originalBytes,
+  );
+  assert.equal(
+    Object.hasOwn(f.catalogue.resolvePinned(old.id, 1), "hostDocker"),
+    false,
+  );
+  assert.equal(f.catalogue.assignment("one").templateRevision, 1);
+  assert.equal(
+    f.catalogue.resolvePinned(old.id, 2).hostDocker.hostAccessAcknowledged,
+    true,
+  );
+});

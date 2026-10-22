@@ -196,50 +196,258 @@ function validEvidence(value: unknown, ref: string): value is ProcessEvidence {
   );
 }
 
-/** Fresh, read-only confirmation. No command replay, process signals, filesystem
- * writes, or inference that root exit implies its children exited. Missing,
- * incomplete or malformed evidence remains unsettled. The caller retains the ref. */
-export async function reconcileMacWorkspaceCommand(
+async function readEvidence(
   privateDirectory: string,
   processEvidenceRef: string,
-): Promise<WorkspaceProcessSettlement> {
+): Promise<ProcessEvidence> {
   const match =
     typeof processEvidenceRef === "string"
       ? refPattern.exec(processEvidenceRef)
       : null;
-  const failure: WorkspaceProcessSettlement = {
-    processesSettled: false,
-    processEvidenceRef: match ? processEvidenceRef : null,
-    checkedAt: null,
-  };
-  if (process.platform !== "darwin" || !match) return failure;
+  if (process.platform !== "darwin" || !match)
+    throw new Error("Invalid process receipt.");
+  const directory = await evidenceDirectory(privateDirectory);
+  const file = await open(
+    join(directory, `${match[1]}.json`),
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  let contents: string;
   try {
-    const directory = await evidenceDirectory(privateDirectory);
-    const file = await open(
-      join(directory, `${match[1]}.json`),
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
-    let contents: string;
-    try {
-      const stat = await file.stat();
-      if (
-        !stat.isFile() ||
-        stat.size > maxEvidenceBytes ||
-        (stat.mode & 0o077) !== 0 ||
-        stat.uid !== process.getuid?.() ||
-        stat.nlink !== 1
-      )
-        return failure;
-      contents = await file.readFile("utf8");
-    } finally {
-      await file.close();
-    }
-    const evidence: unknown = JSON.parse(contents);
-    if (!validEvidence(evidence, processEvidenceRef)) return failure;
-    return settlement(evidence, await processSnapshot());
-  } catch {
-    return failure;
+    const stat = await file.stat();
+    if (
+      !stat.isFile() ||
+      stat.size > maxEvidenceBytes ||
+      (stat.mode & 0o077) !== 0 ||
+      stat.uid !== process.getuid?.() ||
+      stat.nlink !== 1
+    )
+      throw new Error("Private process receipt unavailable.");
+    contents = await file.readFile("utf8");
+  } finally {
+    await file.close();
   }
+  const evidence: unknown = JSON.parse(contents);
+  if (!validEvidence(evidence, processEvidenceRef))
+    throw new Error("Invalid process receipt.");
+  return evidence;
+}
+
+/** Fresh, read-only confirmation. Missing or incomplete evidence remains unsettled. */
+export async function reconcileMacWorkspaceCommand(
+  privateDirectory: string,
+  processEvidenceRef: string,
+): Promise<WorkspaceProcessSettlement> {
+  try {
+    return settlement(
+      await readEvidence(privateDirectory, processEvidenceRef),
+      await processSnapshot(),
+    );
+  } catch {
+    return {
+      processesSettled: false,
+      processEvidenceRef: refPattern.test(processEvidenceRef)
+        ? processEvidenceRef
+        : null,
+      checkedAt: null,
+    };
+  }
+}
+
+export interface WorkspaceBackgroundStatus extends WorkspaceProcessSettlement {
+  state: "running" | "exited" | "unknown";
+  /** Metadata only. Arguments and environment values never leave the controller. */
+  processes: Array<{
+    pid: number;
+    pgid: number;
+    start: string;
+    commandHash: string;
+  }>;
+  listeningPorts: Array<{ pid: number; address: string; port: number }>;
+  portsObserved: boolean;
+}
+export interface WorkspaceStopResult extends WorkspaceBackgroundStatus {
+  stopRequested: boolean;
+  signalledPids: number[];
+}
+
+async function listeners(
+  pids: number[],
+): Promise<{
+  listeningPorts: WorkspaceBackgroundStatus["listeningPorts"];
+  portsObserved: boolean;
+}> {
+  if (!pids.length) return { listeningPorts: [], portsObserved: true };
+  try {
+    const result = await exec(
+      "/usr/sbin/lsof",
+      ["-nP", "-a", "-p", pids.join(","), "-iTCP", "-sTCP:LISTEN", "-Fpn"],
+      {
+        timeout: 5000,
+        maxBuffer: 256 * 1024,
+        env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+      },
+    ).catch((error) => {
+      if (error.code === 1 && !error.stdout && !error.stderr)
+        return { stdout: "" };
+      throw error;
+    });
+    let pid = 0;
+    const listeningPorts: WorkspaceBackgroundStatus["listeningPorts"] = [];
+    for (const line of result.stdout.split("\n")) {
+      if (line.startsWith("p")) pid = Number(line.slice(1));
+      if (line.startsWith("n") && pids.includes(pid)) {
+        const match = /^(.*):(\d+)$/.exec(line.slice(1));
+        if (!match) throw new Error("Incomplete listener metadata.");
+        listeningPorts.push({
+          pid,
+          address: match[1]!,
+          port: Number(match[2]),
+        });
+      }
+    }
+    return { listeningPorts, portsObserved: true };
+  } catch {
+    return { listeningPorts: [], portsObserved: false };
+  }
+}
+
+export async function inspectMacWorkspaceProcess(
+  privateDirectory: string,
+  processEvidenceRef: string,
+): Promise<WorkspaceBackgroundStatus> {
+  try {
+    const evidence = await readEvidence(privateDirectory, processEvidenceRef);
+    const rows = await processSnapshot();
+    const current = evidence.observed.flatMap((owned) => {
+      const row = rows.get(owned.pid);
+      return row?.start === owned.start &&
+        row.pgid === owned.pgid &&
+        row.commandHash === owned.commandHash
+        ? [
+            {
+              pid: row.pid,
+              pgid: row.pgid,
+              start: row.start,
+              commandHash: row.commandHash,
+            },
+          ]
+        : [];
+    });
+    const portEvidence = await listeners(current.map((row) => row.pid));
+    // lsof is asynchronous. Never attribute a reused PID's listening sockets to
+    // the owned process; validate the exact identities again before returning.
+    const finalRows = await processSnapshot();
+    const finalResult = settlement(evidence, finalRows);
+    const stable = current.every((owned) => {
+      const row = finalRows.get(owned.pid);
+      return (
+        row?.start === owned.start &&
+        row.pgid === owned.pgid &&
+        row.commandHash === owned.commandHash
+      );
+    });
+    const unrecognizedGroup = [...finalRows.values()].some(
+      (row) =>
+        row.pgid === evidence.launch?.pgid &&
+        !current.some((owned) => owned.pid === row.pid),
+    );
+    const changedOwnedIdentity = evidence.observed.some((owned) => {
+      const row = finalRows.get(owned.pid);
+      return (
+        row?.start === owned.start &&
+        (row.pgid !== owned.pgid || row.commandHash !== owned.commandHash)
+      );
+    });
+    const verified =
+      stable &&
+      !unrecognizedGroup &&
+      !changedOwnedIdentity &&
+      evidence.observationsComplete;
+    return {
+      ...finalResult,
+      state: finalResult.processesSettled
+        ? "exited"
+        : current.length && verified
+          ? "running"
+          : "unknown",
+      processes: stable && !finalResult.processesSettled ? current : [],
+      listeningPorts:
+        verified && !finalResult.processesSettled
+          ? portEvidence.listeningPorts
+          : [],
+      portsObserved:
+        finalResult.processesSettled ||
+        (verified && portEvidence.portsObserved),
+    };
+  } catch {
+    return {
+      state: "unknown",
+      processesSettled: false,
+      processEvidenceRef: refPattern.test(processEvidenceRef)
+        ? processEvidenceRef
+        : null,
+      checkedAt: null,
+      processes: [],
+      listeningPorts: [],
+      portsObserved: false,
+    };
+  }
+}
+
+/** Caller must freshly authorize the exact receipt. Never signals a discovered or
+ * reused PID/group: every target must match persisted PID/start/command identity.
+ * TERM is a request; no force escalation or claim of arbitrary daemon cleanup. */
+export async function stopMacWorkspaceProcess(
+  privateDirectory: string,
+  processEvidenceRef: string,
+  options: { timeoutMs?: number } = {},
+): Promise<WorkspaceStopResult> {
+  const timeout = options.timeoutMs ?? 3000;
+  if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 10000)
+    throw new Error("Invalid process stop timeout.");
+  const signalledPids: number[] = [];
+  try {
+    const evidence = await readEvidence(privateDirectory, processEvidenceRef);
+    // One fresh bounded snapshot, then synchronous exact-identity signals with
+    // no intervening await. Never run thousands of sequential ps subprocesses.
+    const candidates = [...evidence.observed].sort(
+      (a, b) =>
+        Number(a.pid === evidence.launch?.pid) -
+        Number(b.pid === evidence.launch?.pid),
+    );
+    const rows = await processSnapshot();
+    for (const owned of candidates) {
+      const fresh = rows.get(owned.pid);
+      if (
+        !fresh ||
+        fresh.start !== owned.start ||
+        fresh.pgid !== owned.pgid ||
+        fresh.commandHash !== owned.commandHash
+      )
+        continue;
+      try {
+        process.kill(owned.pid, "SIGTERM");
+        signalledPids.push(owned.pid);
+      } catch {
+        /* Fresh exit is checked below. */
+      }
+    }
+  } catch {
+    /* Invalid/uncertain receipt is observation only. */
+  }
+  const deadline = Date.now() + timeout;
+  let result = await inspectMacWorkspaceProcess(
+    privateDirectory,
+    processEvidenceRef,
+  );
+  while (!result.processesSettled && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    result = await inspectMacWorkspaceProcess(
+      privateDirectory,
+      processEvidenceRef,
+    );
+  }
+  return { ...result, stopRequested: signalledPids.length > 0, signalledPids };
 }
 
 /** One invocation owns this writer; only the controller can mount its directory. */
@@ -323,6 +531,26 @@ export class WorkspaceProcessRecorder {
     })().finally(() => {
       this.observing = null;
     });
+  }
+
+  /** Persist observed identity before returning a background launch receipt. */
+  async checkpoint(
+    privateDirectory: string,
+  ): Promise<WorkspaceBackgroundStatus> {
+    await this.observing;
+    this.capture();
+    await this.observing;
+    if (this.persistenceFailed)
+      return {
+        state: "unknown",
+        processesSettled: false,
+        processEvidenceRef: null,
+        checkedAt: null,
+        processes: [],
+        listeningPorts: [],
+        portsObserved: false,
+      };
+    return inspectMacWorkspaceProcess(privateDirectory, this.evidence.ref);
   }
 
   async finish(privateDirectory: string): Promise<WorkspaceProcessSettlement> {

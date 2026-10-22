@@ -305,18 +305,43 @@ export class AgentFoundation implements AgentLifecycle {
     principal: FoundationPrincipal,
     input: {
       agentId: string;
-      action: "create" | "attach" | "execute" | "dispose";
+      action:
+        | "create"
+        | "attach"
+        | "execute"
+        | "dispose"
+        | "prepare"
+        | "start"
+        | "status"
+        | "stop";
       requestId: string;
       arguments: import("./contracts.mjs").JsonObject;
     },
   ) {
     if (principal.type !== "agent")
       throw new Error("Authenticated agent environment request required.");
-    if (!["create", "attach", "execute", "dispose"].includes(input.action))
+    if (
+      ![
+        "create",
+        "attach",
+        "execute",
+        "dispose",
+        "prepare",
+        "start",
+        "status",
+        "stop",
+      ].includes(input.action)
+    )
       throw new Error("Unknown environment action.");
     await this.records.authorize(
       principal,
-      `environments.${input.action}`,
+      input.action === "status"
+        ? "environments.read"
+        : input.action === "prepare" ||
+            input.action === "start" ||
+            input.action === "stop"
+          ? "environments.execute"
+          : `environments.${input.action}`,
       input.action === "create"
         ? { type: "project" }
         : { type: "agent", agentId: input.agentId },
