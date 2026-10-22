@@ -423,7 +423,7 @@ async function selectProject(projectId: string) {
   }
 }
 function refreshTray() {
-  if (!tray || !registry) return;
+  if (!tray || tray.isDestroyed() || !registry) return;
   const pending = [...hosts.values()].reduce((sum, host) => {
     const state = host.application.foundation.store.snapshot();
     return (
@@ -461,6 +461,11 @@ function refreshTray() {
       { label: "Quit Crew…", click: () => attempt(prepareQuit) },
     ]),
   );
+}
+function destroyTray() {
+  const current = tray;
+  tray = undefined;
+  if (current && !current.isDestroyed()) current.destroy();
 }
 async function prepareQuit() {
   if (registry.snapshot().projects.length === 0) {
@@ -734,11 +739,11 @@ async function start() {
     projects: () => lifecycleProjects(true),
     changed,
     async finish() {
-      quitting = true;
       await disconnectVoice();
       surface.destroy();
-      tray?.destroy();
+      destroyTray();
       await renderer.close();
+      quitting = true;
       app.quit();
     },
   });
@@ -754,10 +759,10 @@ async function start() {
     changed,
     async beforeInstall() {
       await disconnectVoice();
-      quitting = true;
       surface.destroy();
-      tray?.destroy();
+      destroyTray();
       await renderer.close();
+      quitting = true;
     },
   });
   renderer = await startDesktopRenderer(

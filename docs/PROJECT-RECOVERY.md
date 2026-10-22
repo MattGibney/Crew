@@ -11,3 +11,7 @@ A failed project no longer necessarily traps the entire app in Quit. Quit can in
 Recovery does not fix an incompatible/missing Codex installation, malformed saved data, unavailable encryption or a live second controller. It preserves the data and reports that recovery could not proceed. It never removes an unknown file or guesses that an inaccessible process has exited.
 
 Implementation: `src/desktop/project-recovery.mts`, desktop owner IPC, and the unavailable-project view. Ticket: [#106](https://github.com/MattGibney/Crew/issues/106). Native Quit follow-up: [#39](https://github.com/MattGibney/Crew/issues/39).
+
+## Native Quit follow-up
+
+A packaged first-use check found that final shutdown notifications tried to refresh an already destroyed menu-bar tray. That raised `Tray is destroyed`, and the ordinary native Quit handler displayed an error dialog while the app was shutting down. The desktop now drops the tray reference before destruction and ignores any destroyed tray during refresh. The final native quit flag is set only after resource cleanup succeeds. A native `app.quit()`/process-exit check is required; an automation driver's close method or a forced test cleanup is not evidence of normal Quit.
