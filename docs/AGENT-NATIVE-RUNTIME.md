@@ -613,3 +613,9 @@ This restores live text only. On the pinned runtime, timeline/item pagination is
 turn pagination omits voice transcript segments. Reopening the app therefore cannot restore this
 live transcript. The absent promotion still prevents attributing the server-created coding turn
 to owner voice; private and unknown turns remain hidden by the existing history filter.
+
+The transcript controller waits for native started with a nonnull realtime session ID before
+accepting item transcripts, then requires exact item/session identity. Deltas require a role
+registered by an accepted item in that call. Delayed prior-call items cannot be relabeled with
+the pending call's host identity. A bounded synthetic fail-before/pass-after check covers the
+old-call completion before new started, null native identity, old/unknown deltas and valid new text.
