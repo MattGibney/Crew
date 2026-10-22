@@ -13,6 +13,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   CallToolRequestSchema,
+  CallToolResultSchema,
   ListToolsRequestSchema,
   isInitializeRequest,
 } from "@modelcontextprotocol/sdk/types.js";
@@ -29,6 +30,7 @@ import { createGatewayMcpServer } from "../gateway/mcp.mjs";
 import { jsonObject, normalizeArguments } from "../gateway/json.mjs";
 
 export interface AgentToolExtension {
+  subscribe?(listener: () => void): () => void;
   list(
     caller: CallerContext,
   ): Promise<{ name: string; description: string; inputSchema: JsonObject }[]>;
@@ -197,7 +199,21 @@ export async function startAgentMcpHost(options: {
                 request.params.name,
                 arguments_,
               );
+          const upstream =
+            result && typeof result === "object" && "crewMcpResult" in result
+              ? CallToolResultSchema.parse(result.crewMcpResult)
+              : null;
           await store.settle(receipt.key, "completed", result);
+          if (upstream) {
+            return {
+              ...upstream,
+              _meta: {
+                ...upstream._meta,
+                "crew/invocationId": receipt.invocationId,
+                "crew/state": "completed",
+              },
+            };
+          }
           return {
             content: [
               { type: "text" as const, text: JSON.stringify(result ?? null) },

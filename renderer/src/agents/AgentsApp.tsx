@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   GitBranch,
+  Globe,
   Keyboard,
   Mic,
   Layers,
@@ -86,6 +87,7 @@ export interface AgentSettingsPanel {
   }): ReactNode;
 }
 export interface AgentsAppProps {
+  renderBrowser?: (context: { snapshot: AgentsSnapshot; selectedAgent: Agent | null; client: AgentsClient; visible: boolean }) => ReactNode;
   client: AgentsClient;
   /** #89 supplies access, connections and approval panels; foundation owns navigation. */
   settingsPanels?: AgentSettingsPanel[];
@@ -122,6 +124,7 @@ type Action = (
   success?: string,
 ) => Promise<boolean>;
 type View =
+  | "browser"
   | "conversation"
   | "agents"
   | "scratchpad"
@@ -139,6 +142,7 @@ const statusLabels: Record<JobStatus, string> = {
 };
 
 export function AgentsApp({
+  renderBrowser,
   client,
   settingsPanels = [],
   banner,
@@ -399,7 +403,7 @@ export function AgentsApp({
   const detailVisible = view === "agents" && selectedId !== null;
   const normalView =
     !setupVisible &&
-    (view === "conversation" || view === "agents" || view === "scratchpad") &&
+    (view === "conversation" || view === "agents" || view === "scratchpad" || view === "browser") &&
     !detailVisible;
   return (
     <div className="agents-app flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -441,6 +445,7 @@ export function AgentsApp({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {renderBrowser && <Button variant={view === "browser" ? "secondary" : "ghost"} aria-pressed={view === "browser"} onClick={() => setView("browser")}><Globe /><span className="hidden sm:inline">Browser</span><span className="sr-only sm:hidden">Browser</span></Button>}
           <Button
             variant={view === "settings" ? "secondary" : "ghost"}
             aria-pressed={view === "settings"}
@@ -676,6 +681,7 @@ export function AgentsApp({
               />
             </aside>
           </main>
+          {renderBrowser?.({ snapshot, selectedAgent: snapshot.agents.find(agent => agent.id === selectedId) ?? primary, client, visible: !setupVisible && view === "browser" })}
           {snapshot.agents
             .filter(
               (agent) => visitedIds.has(agent.id) && agent.id !== primary?.id,

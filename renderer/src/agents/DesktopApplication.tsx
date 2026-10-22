@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { AgentsApp } from "./AgentsApp";
+import { ProjectBrowser } from "./ProjectBrowser";
 import {
   createDesktopClient,
   type DesktopBridge,
@@ -289,6 +290,7 @@ export function DesktopApplication({
         <AgentsApp
           key={projectId}
           client={transport.client}
+          renderBrowser={(context) => <ProjectBrowser {...context} />}
           nativeWindow={bridge.integratedTitlebar}
           headerActions={header}
           headerUpdates={headerUpdates}
