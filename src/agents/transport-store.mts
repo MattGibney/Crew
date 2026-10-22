@@ -1,5 +1,13 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rename, rm } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  rename,
+  rm,
+  unlink,
+  type FileHandle,
+} from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import type { CallerContext, JsonObject } from "./contracts.mjs";
@@ -44,6 +52,7 @@ export class NativeTransportStore {
     private directory: string,
     private projectId: string,
     private records: NativeToolReceipt[],
+    private lease: FileHandle,
   ) {}
 
   static async open(
@@ -64,7 +73,6 @@ export class NativeTransportStore {
         "Transport store must be private and owned by the controller.",
       );
     const lease = await open(join(directory, "transport.lock"), "wx", 0o600);
-    await lease.close();
     try {
       let records: NativeToolReceipt[] = [];
       try {
@@ -138,18 +146,54 @@ export class NativeTransportStore {
       } catch (failure) {
         if ((failure as NodeJS.ErrnoException).code !== "ENOENT") throw failure;
       }
-      const store = new NativeTransportStore(directory, projectId, records);
+      const store = new NativeTransportStore(
+        directory,
+        projectId,
+        records,
+        lease,
+      );
       // A previous process may have dispatched before it lost its reply.
       for (const receipt of records)
         if (receipt.state === "attempted") receipt.state = "uncertain";
       await store.persist(records);
       return store;
     } catch {
-      await rm(join(directory, "transport.lock"));
+      try {
+        await NativeTransportStore.releaseLease(directory, lease);
+      } finally {
+        // Failed opening returns no store to retry; retain any unresolved lock,
+        // but do not leak this process's file descriptor.
+        await lease.close().catch(() => {});
+      }
       throw new Error(
         "Transport state could not be opened; preserve it for recovery.",
       );
     }
+  }
+
+  private static async releaseLease(
+    directory: string,
+    lease: FileHandle,
+  ): Promise<void> {
+    const path = join(directory, "transport.lock");
+    let current;
+    try {
+      current = await lstat(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      await lease.close();
+      return;
+    }
+    const held = await lease.stat();
+    if (
+      current.isFile() &&
+      current.dev === held.dev &&
+      current.ino === held.ino
+    )
+      await unlink(path);
+    // A failed unlink retains the handle for ownership verification on retry.
+    // A replacement belongs to another writer and is never removed here.
+    await lease.close();
   }
 
   private static key(
@@ -296,9 +340,13 @@ export class NativeTransportStore {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
-    this.closing = this.tail.then(() =>
-      rm(join(this.directory, "transport.lock")),
+    const operation = this.tail.then(() =>
+      NativeTransportStore.releaseLease(this.directory, this.lease),
     );
-    return this.closing;
+    this.closing = operation;
+    void operation.catch(() => {
+      if (this.closing === operation) this.closing = null;
+    });
+    return operation;
   }
 }
