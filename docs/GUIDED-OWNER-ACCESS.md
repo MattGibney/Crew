@@ -114,3 +114,21 @@ in the implementation PR; controlled tool invocation and real native model use
 are reported separately. Current-token dispatch, revocation and uncertain-outcome
 semantics remain those in [access controls](ACCESS-CONTROLS.md) and
 [the gateway](AGENT-GATEWAY.md).
+
+The actual isolated browser flow through the real owner API, setup service,
+encrypted vault and controlled provider/MCP passed invalid-to-corrected-token
+retry, Back/account edits, selected group/capability/agent save, concurrent group
+revision recovery, an identical retry after a lost committed-save response,
+in-flight verification cancellation and local-only Skip. The provider fixture
+recorded no service tool calls, execution admissions or external destinations.
+Separate real-store checks covered assignment conflicts, saved/revoked response
+replay, durable reopen and malformed state. Authenticated environment-tool calls
+through Foundation and the macOS executor passed selected-folder reads, explicitly
+enabled writes, read-only and outside/symlink denial, and immediate grant removal.
+
+The prepared genuine native-model folder harness did not launch: preflight found
+another acceptance process using the approved isolated model home. This work
+therefore does not yet establish normal-language model selection of the folder
+tools or the combined project-onboarding walkthrough. Those checks need an idle
+approved model home and the combined candidate; no new sign-in or competing
+process was used to manufacture acceptance.
