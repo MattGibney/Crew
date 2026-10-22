@@ -21,12 +21,15 @@ import type {
   ServiceConnectionView,
   Skill,
 } from "../../../src/agents/contracts.mjs";
+import type { VoiceArtifactPage } from "../../../src/agents/owner-api.mjs";
 
 /** Disposable renderer projection. Native history is read separately, never persisted here. */
 export interface AgentsSnapshot {
   projectId: Id;
   projectName: string;
   ownerId: Id;
+  /** null/absent means this host has no retained voice artifact capability. */
+  voiceArtifactsRevision?: number | null;
   /** Explicit project selection; absence is setup, never inferred from agent order. */
   primaryAgentId?: Id | null;
   projectSettings?: ProjectAgentSettings;
@@ -83,6 +86,10 @@ export type AgentsClientEvent =
 /** Owner control plane. The server authenticates the owner; no actor is supplied by forms. */
 export interface AgentsClient {
   readSnapshot(): Promise<AgentsSnapshot>;
+  readVoiceArtifacts?(
+    agentId: Id,
+    cursor?: string,
+  ): Promise<RuntimeResult<VoiceArtifactPage>>;
   subscribe(listener: (event: AgentsClientEvent) => void): () => void;
   readHistory(
     agentId: Id,

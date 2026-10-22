@@ -27,6 +27,7 @@ import {
   type PrimaryAgentVoice,
 } from "./voice-composition.mjs";
 import { createOwnerApi } from "./owner-api.mjs";
+import { VoiceTranscriptArtifacts } from "./voice-artifacts.mjs";
 import { OwnerConnectionSetupService } from "../access/connection-setup.mjs";
 import {
   AccessStore,
@@ -102,6 +103,24 @@ export async function startUnifiedApplication(
   let foundation: AgentFoundation | undefined;
   let environments: ProjectEnvironmentService | undefined;
   let voice: PrimaryAgentVoice | undefined;
+  let voiceArtifacts: VoiceTranscriptArtifacts | undefined;
+  let voiceArtifactRevision = 0;
+  const voiceArtifactListeners = new Set<() => void>();
+  const voiceArtifactWarnings = new Map<string, string>();
+  const failedVoiceArtifactCalls = new Set<string>();
+  const voiceArtifactKey = (
+    binding: Pick<RuntimeBinding, "agentId" | "threadId">,
+  ) => JSON.stringify([binding.agentId, binding.threadId]);
+  const voiceArtifactsChanged = () => {
+    voiceArtifactRevision++;
+    for (const listener of voiceArtifactListeners) {
+      try {
+        listener();
+      } catch {
+        /* Owner projection only. */
+      }
+    }
+  };
   let closing = false;
   let closeReservationId: string | undefined;
   let closeStarted = false;
@@ -409,6 +428,17 @@ export async function startUnifiedApplication(
       },
     });
     await foundation.recover();
+    // The foundation writer lock owns this artifact store's entire lifetime.
+    // Damage to optional voice display evidence must not hide existing agents.
+    try {
+      voiceArtifacts = await VoiceTranscriptArtifacts.open({
+        directory: join(root, "voice-artifacts"),
+        projectId: options.projectId,
+        ownerUserId: options.ownerUserId,
+      });
+    } catch {
+      /* Owner reads surface unavailable recovery explicitly. */
+    }
     voice = createPrimaryAgentVoice({
       ownerUserId: options.ownerUserId,
       authenticatedUserId: options.ownerUserId,
@@ -437,6 +467,52 @@ export async function startUnifiedApplication(
       recordPublicVoiceTurn: (binding, input) =>
         foundation!.recordPublicVoiceTurn(binding, input),
       flush: () => foundation!.flush(),
+      recordVoiceTranscript: async (record) => {
+        const callKey = JSON.stringify([
+          record.binding.agentId,
+          record.binding.threadId,
+          record.callId,
+        ]);
+        if (failedVoiceArtifactCalls.has(callKey)) return;
+        try {
+          if (!voiceArtifacts)
+            throw new Error("Unavailable voice artifact storage.");
+          await voiceArtifacts.record(record);
+        } catch {
+          failedVoiceArtifactCalls.add(callKey);
+          voiceArtifactWarnings.set(
+            voiceArtifactKey(record.binding),
+            "Some voice transcript text could not be saved. The saved call may be incomplete.",
+          );
+          // Retain an honest terminal marker where storage still permits it;
+          // later calls remain independent and audio cleanup stays available.
+          await voiceArtifacts
+            ?.closeCall(record.binding, record.callId, true)
+            .catch(() => {});
+        } finally {
+          voiceArtifactsChanged();
+        }
+      },
+      closeVoiceTranscript: async (binding, callId) => {
+        try {
+          if (!voiceArtifacts)
+            throw new Error("Unavailable voice artifact storage.");
+          await voiceArtifacts.closeCall(
+            binding,
+            callId,
+            failedVoiceArtifactCalls.has(
+              JSON.stringify([binding.agentId, binding.threadId, callId]),
+            ),
+          );
+        } catch {
+          voiceArtifactWarnings.set(
+            voiceArtifactKey(binding),
+            "Voice transcript closure could not be saved. Its completion state is unavailable.",
+          );
+        } finally {
+          voiceArtifactsChanged();
+        }
+      },
     });
     const publishPolicy = async (policyId: string) => {
       const workspace = environments!
@@ -547,6 +623,41 @@ export async function startUnifiedApplication(
         projectName: options.projectName,
         defaultModelAccessId: modelAccess.id,
         defaultRuntimeConfigRef: unifiedRuntimeDefaults.configRef,
+        voiceArtifacts: {
+          revision: () => voiceArtifactRevision,
+          subscribe: (listener) => {
+            voiceArtifactListeners.add(listener);
+            return () => {
+              voiceArtifactListeners.delete(listener);
+            };
+          },
+          read: async (agentId, threadId, cursor) => {
+            try {
+              if (!voiceArtifacts)
+                throw new Error("Unavailable voice artifact storage.");
+              const page = await voiceArtifacts.list(agentId, threadId, cursor);
+              return {
+                state: "acknowledged",
+                value: {
+                  ...page,
+                  warning:
+                    voiceArtifactWarnings.get(
+                      voiceArtifactKey({ agentId, threadId }),
+                    ) ?? null,
+                },
+              };
+            } catch {
+              return {
+                state: "failed",
+                error: {
+                  code: "runtime_error",
+                  message:
+                    "Saved voice transcripts could not be read. Existing native chat history has been retained.",
+                },
+              };
+            }
+          },
+        },
         catalog: async () => ({
           skills: await options.skills.list(),
           serviceConnections: (
@@ -743,6 +854,9 @@ export async function startUnifiedApplication(
               for (const stop of cleanupSubscriptions) stop();
             });
             await finishStep("voice", () => voice!.dispose());
+            await finishStep("voiceArtifacts", async () => {
+              await voiceArtifacts?.dispose();
+            });
             await finishStep("mcp", () => mcp!.close());
             await finishStep("nativeAccess", () => nativeAccess!.close());
             await finishStep("environments", () => environments!.close());
@@ -760,6 +874,7 @@ export async function startUnifiedApplication(
   } catch (error) {
     for (const stop of cleanupSubscriptions) stop();
     await voice?.dispose().catch(() => {});
+    await voiceArtifacts?.dispose().catch(() => {});
     await mcp?.close().catch(() => {});
     await nativeAccess?.close().catch(() => {});
     await environments?.close().catch(() => {});

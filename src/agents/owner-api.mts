@@ -8,12 +8,29 @@ import type {
 } from "./contracts.mjs";
 import { AgentFoundation, type SendInput } from "./foundation.mjs";
 import type { CreateJobInput, FoundationPrincipal } from "./records.mjs";
+import type { VoiceTranscriptArtifact } from "./voice-artifacts.mjs";
+import type { RuntimeResult } from "./contracts.mjs";
+
+export interface VoiceArtifactPage {
+  artifacts: VoiceTranscriptArtifact[];
+  nextCursor: string | null;
+  warning: string | null;
+}
 
 export interface OwnerApiOptions {
   foundation: AgentFoundation;
   projectName: string;
   defaultModelAccessId: string;
   defaultRuntimeConfigRef: string;
+  voiceArtifacts?: {
+    revision(): number;
+    read(
+      agentId: string,
+      threadId: string,
+      cursor?: string,
+    ): Promise<RuntimeResult<VoiceArtifactPage>>;
+    subscribe(listener: () => void): () => void;
+  };
   catalog(): Promise<{
     skills: Skill[];
     serviceConnections: ServiceConnectionView[];
@@ -57,6 +74,7 @@ export function createOwnerApi(
         projectId: state.projectId,
         projectName: options.projectName,
         ownerId: state.ownerUserId,
+        voiceArtifactsRevision: options.voiceArtifacts?.revision() ?? null,
         agents: await foundation.agentViews(),
         projectSettings: state.projectSettings,
         provisioning: state.provisioning,
@@ -88,6 +106,9 @@ export function createOwnerApi(
       };
     },
     subscribe(listener: (event: unknown) => void): () => void {
+      const artifacts = options.voiceArtifacts?.subscribe(() =>
+        listener({ kind: "changed" }),
+      );
       const state = foundation.store.subscribe(() =>
         listener({ kind: "changed" }),
       );
@@ -114,6 +135,7 @@ export function createOwnerApi(
       return () => {
         state();
         runtime();
+        artifacts?.();
       };
     },
     async command(name: string, value: unknown): Promise<unknown> {
@@ -121,6 +143,35 @@ export function createOwnerApi(
       // Records validate their exact runtime input shape and every persisted DTO.
       // The casts below bridge decoded JSON only; they grant no authority.
       switch (name) {
+        case "readVoiceArtifacts": {
+          const agentId = text(args.agentId);
+          await foundation.records.authorize(principal, "history.read", {
+            type: "agent",
+            agentId,
+          });
+          const agent = foundation.store
+            .snapshot()
+            .agents.find((row) => row.id === agentId);
+          if (!options.voiceArtifacts)
+            return {
+              state: "failed",
+              error: {
+                code: "unsupported",
+                message:
+                  "Saved voice transcripts are unavailable in this host.",
+              },
+            };
+          if (!agent?.runtime.threadId)
+            return {
+              state: "acknowledged",
+              value: { artifacts: [], nextCursor: null, warning: null },
+            };
+          return options.voiceArtifacts.read(
+            agentId,
+            agent.runtime.threadId,
+            args.cursor === undefined ? undefined : text(args.cursor),
+          );
+        }
         case "readHistory":
           return foundation.history(
             principal,

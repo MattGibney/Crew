@@ -107,12 +107,12 @@ an unavailable old boundary produces an explicit error while the last loaded mes
 marked as stale. Retry preserves the window. Show latest history explicitly reloads a smaller
 window from native storage. Neither action resets the chat or persists another transcript.
 
-Live voice transcripts remain call-scoped and this limitation is shown in the conversation.
-The pinned native runtime can retain context from a voice handoff without supplying the exact
-public coding-turn linkage required for safe owner history. Those transcripts cannot currently
-be restored by this renderer fix. Recovery needs supported native transcript readback or an
-exact authoritative promotion; speech timing, text matching and private/unknown turn disclosure
-are not substitutes. Typed-history validation does not close the owner's voice-history case.
+The live voice projection remains call-scoped. For #107, validated public native transcript
+items are also saved as explicitly owned voice-call artifacts, displayed separately in the
+conversation after the call ends. They are never replayed into native chat/model context and
+do not publicize an unknown coding turn. See [voice artifact ownership](AGENT-VOICE-ARTIFACTS.md).
+Legacy transcripts that were never captured remain unavailable while native timeline retrieval
+is unsupported. Speech timing and text similarity never establish a coding-turn association.
 
 The state file is owner-only and written atomically under a non-stealing single-writer lock. A
 retained lock needs explicit ownership recovery; unknown ownership never expires by age. Invalid

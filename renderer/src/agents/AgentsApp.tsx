@@ -38,6 +38,7 @@ import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
+import { SavedVoiceArtifacts } from "./SavedVoiceArtifacts";
 import { WorkerReference } from "../manager/worker/WorkerReference";
 import { WebLink } from "../manager/WebLink";
 import { Input } from "@/components/ui/input";
@@ -1388,7 +1389,7 @@ function Conversation({
                   />
                 </MessageScrollerItem>
               ))}
-              {hasVoice && !readOnly && (
+              {hasVoice && !readOnly && snapshot.voiceArtifactsRevision == null && (
                 <MessageScrollerItem messageId="voice-history-limit">
                   <p className="text-xs text-muted-foreground">
                     Live voice transcripts are currently available only during
@@ -1398,6 +1399,11 @@ function Conversation({
               )}
               {!readOnly && (
                 <div ref={transcriptTarget} className="empty:hidden" />
+              )}
+              {snapshot.voiceArtifactsRevision != null && client.readVoiceArtifacts && (
+                <MessageScrollerItem messageId="saved-voice-artifacts">
+                  <SavedVoiceArtifacts key={`${agent.id}:${agent.runtime.threadId}`} agent={agent} client={client} revision={snapshot.voiceArtifactsRevision} visible={visible} />
+                </MessageScrollerItem>
               )}
               {(intents.length > 0 || receipts.length > 0) && (
                 <MessageScrollerItem messageId="delivery-activity">

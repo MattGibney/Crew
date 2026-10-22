@@ -48,6 +48,8 @@ export type CodexRealtimeEvent = {
       done: boolean;
       delta: boolean;
       itemId: string | null;
+      /** Native session validated by the controller; never inferred from timing. */
+      realtimeSessionId: string | null;
     }
   | {
       kind: "handoff";
@@ -549,6 +551,7 @@ export class CodexRealtimeController {
           done: method.endsWith("/done"),
           delta: method.endsWith("/delta"),
           itemId: null,
+          realtimeSessionId: call.realtimeSessionId,
         });
       }
     } else if (
@@ -588,6 +591,7 @@ export class CodexRealtimeController {
           done: method.endsWith("/completed"),
           delta: false,
           itemId: item.id,
+          realtimeSessionId: item.realtimeSessionId,
         });
       } else if (
         item.type === "bemItemPromoted" &&
@@ -627,6 +631,7 @@ export class CodexRealtimeController {
           done: false,
           delta: true,
           itemId: params.itemId,
+          realtimeSessionId: call.realtimeSessionId,
         });
     }
     this.changed();
