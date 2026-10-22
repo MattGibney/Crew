@@ -30,12 +30,7 @@ import {
   type CodexLaunch,
 } from "../agents/codex-peer.mjs";
 import type { CodexLaunchResolution } from "../agents/codex-runtime.mjs";
-import {
-  boundedProcess,
-  nativeSeatbeltPolicy,
-  openModelEgress,
-  verifyNativeBoundary,
-} from "./native-boundary.mjs";
+import { boundedProcess, openModelEgress } from "./native-boundary.mjs";
 
 export interface NativeGatewayBinding {
   /** Service gateway endpoint. Both endpoints come from one authenticated host. */
@@ -51,6 +46,8 @@ export interface CodexRuntimeAccessOptions {
   executable: string;
   runtimeConfigRef?: string;
   gatewayFor(caller: CallerContext): Promise<NativeGatewayBinding>;
+  /** Trusted managed-skill store: verify the exact revision and all resource
+   * manifests on every call. Called again immediately before native launch. */
   resolveSkills(
     skills: Skill[],
   ): Promise<{ id: string; revision: number; nativePath: string }[]>;
@@ -165,15 +162,17 @@ type Bound = {
   launch: CodexLaunch;
   skills: { id: string; revision: number; nativePath: string }[];
   gateway: NativeGatewayBinding;
+  nativePermissions: { profileId: string; approvalPolicy: "never" };
 };
 
-/** Concrete macOS process containment. No boolean/callback can attest readiness.
- * Actual native config/account reads and synthetic boundary probes must succeed.
+/** The pinned native host is trusted with its own subscription authentication.
+ * Native named permissions constrain model tools; they do not sandbox host RPCs.
  * Owner sign-in is explicit. The environment executor is a separate boundary. */
 export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   private options: CodexRuntimeAccessOptions | null = null;
   private root = "";
   private binary = "";
+  private readonly storageIdentities = new Map<string, string>();
   private egress: Awaited<ReturnType<typeof openModelEgress>> | null = null;
   private bindings = new Map<string, Bound>();
   private releasedSessions = new Set<string>();
@@ -220,6 +219,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     )
       throw new Error("Native home must be private and controller owned.");
     result.root = await realpath(options.directory);
+    result.storageIdentities.set(result.root, `${stat.dev}:${stat.ino}`);
     if (unconfirmedNativePeers.get(result.root)?.size)
       throw new Error(pendingExitMessage);
     if (
@@ -265,18 +265,33 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         );
       await writeFile(marker, expected, { flag: "wx", mode: 0o600 });
     }
-    for (const directory of ["home", "codex", "tmp", "workspace", "policies"])
-      await mkdir(join(result.root, directory), {
+    // The marker above remains storage identity for existing Crew auth homes;
+    // policy evidence below is separate and never imports or resets credentials.
+    for (const directory of ["home", "codex", "tmp", "workspace", "policies"]) {
+      const path = join(result.root, directory);
+      await mkdir(path, {
         recursive: true,
         mode: 0o700,
       });
+      const entry = await lstat(path);
+      if (
+        !entry.isDirectory() ||
+        entry.isSymbolicLink() ||
+        entry.uid !== process.getuid?.() ||
+        entry.mode & 0o077 ||
+        (await realpath(path)) !== path
+      )
+        throw new Error(
+          "Native storage paths must remain private and canonical.",
+        );
+      result.storageIdentities.set(path, `${entry.dev}:${entry.ino}`);
+    }
     result.egress = await openModelEgress();
     try {
       const launch = await result.launch("owner", null, []);
-      await verifyNativeBoundary(launch.args[1]!, result.root, launch.env);
       const version = await boundedProcess(
-        launch.executable,
-        ["-f", launch.args[1]!, result.binary, "--version"],
+        result.binary,
+        ["--version"],
         launch.env,
         launch.cwd,
       );
@@ -294,21 +309,14 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         await result.stopPeer(peer);
       }
       await writeFile(
-        join(result.root, "boundary-evidence.json"),
+        join(result.root, "native-permissions-evidence.json"),
         JSON.stringify({
           checkedAt: new Date().toISOString(),
           nativeVersion: version.stdout.trim(),
-          policy: "macos-broker-only-v1",
-          checks: [
-            "owned-file-read",
-            "outside-file-denied",
-            "descendant-denied",
-            "other-process-denied",
-            "keychain-denied",
-            "host-tcp-denied",
-            "host-unix-socket-denied",
-            "native-config-verified",
-          ],
+          policy: "macos-native-model-permissions-v2",
+          trustedNativeHost: true,
+          modelToolProfile: result.permissionProfile([]).profileId,
+          checks: ["native-version-pinned", "native-config-verified"],
         }),
         { mode: 0o600 },
       );
@@ -318,15 +326,67 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       throw error;
     }
   }
+  private async verifyStoragePaths(): Promise<void> {
+    for (const [path, identity] of this.storageIdentities) {
+      const entry = await lstat(path);
+      if (
+        !entry.isDirectory() ||
+        entry.isSymbolicLink() ||
+        entry.uid !== process.getuid?.() ||
+        entry.mode & 0o077 ||
+        `${entry.dev}:${entry.ino}` !== identity ||
+        (await realpath(path)) !== path
+      )
+        throw new Error("Prepared native storage changed.");
+    }
+  }
+  private async selectedSkills(
+    configuration: ConfigurationSnapshot,
+  ): Promise<Bound["skills"]> {
+    if (!this.options) throw new Error("Native boundary is unavailable.");
+    const skills = await this.options.resolveSkills(configuration.skills);
+    if (
+      skills.length !== configuration.skills.length ||
+      new Set(skills.map((skill) => skill.id)).size !== skills.length ||
+      configuration.skills.some(
+        (skill) =>
+          !skills.some(
+            (item) =>
+              item.id === skill.id &&
+              item.revision === skill.revision &&
+              item.nativePath === join(skill.directoryRef, "SKILL.md"),
+          ),
+      )
+    )
+      throw new Error("Selected managed skill revisions unavailable.");
+    return skills;
+  }
+  private permissionProfile(skills: Bound["skills"]) {
+    const filesystem: Record<string, "deny" | "read"> = {
+      ":root": "deny",
+      ":minimal": "read",
+      [homedir()]: "deny",
+      [this.root]: "deny",
+      [join(this.root, "workspace")]: "read",
+    };
+    for (const root of [
+      ...new Set(skills.map((skill) => dirname(skill.nativePath))),
+    ].sort())
+      filesystem[root] = "read";
+    return {
+      profileId: `crew-model-v2-${hash(filesystem).slice(0, 20)}`,
+      filesystem,
+    };
+  }
   private async launch(
-    label: string,
+    _label: string,
     gateway: NativeGatewayBinding | null,
     skills: Bound["skills"],
   ): Promise<CodexLaunch> {
     this.assertLaunchable();
     if (!this.options || !this.egress)
       throw new Error("Native boundary is unavailable.");
-    const ports = [this.egress.port];
+    await this.verifyStoragePaths();
     if (gateway) {
       for (const endpoint of [gateway.url, gateway.foundationUrl]) {
         const url = new URL(endpoint);
@@ -344,14 +404,12 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
           throw new Error(
             "Trusted authenticated loopback Crew endpoints are required.",
           );
-        if (!ports.includes(Number(url.port))) ports.push(Number(url.port));
       }
       if (gateway.url === gateway.foundationUrl)
         throw new Error(
           "Foundation and service gateway endpoints must be distinct.",
         );
     }
-    const readRoots: string[] = [];
     for (const skill of skills) {
       if (
         !isAbsolute(skill.nativePath) ||
@@ -360,48 +418,59 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       )
         throw new Error("Selected skills need exact immutable native paths.");
       const root = dirname(skill.nativePath);
+      const entry = await lstat(root);
+      const file = await lstat(skill.nativePath);
       if (
-        root === homedir() ||
-        root.startsWith(join(homedir(), ".codex") + "/") ||
-        root.startsWith(join(homedir(), ".ssh") + "/")
+        !entry.isDirectory() ||
+        entry.isSymbolicLink() ||
+        entry.uid !== process.getuid?.() ||
+        entry.mode & 0o022 ||
+        !file.isFile() ||
+        file.isSymbolicLink() ||
+        file.uid !== process.getuid?.() ||
+        file.mode & 0o022 ||
+        root === dirname(root) ||
+        root === this.root ||
+        root.startsWith(this.root + "/") ||
+        this.root.startsWith(root + "/") ||
+        homedir() === root ||
+        homedir().startsWith(root + "/") ||
+        [".codex", ".ssh", ".aws", ".config"].some(
+          (name) =>
+            root === join(homedir(), name) ||
+            root.startsWith(join(homedir(), name) + "/"),
+        )
       )
-        throw new Error("Personal skill roots are not permitted.");
-      readRoots.push(root);
+        throw new Error(
+          "Skills must use narrow immutable roots outside private native storage.",
+        );
     }
-    const profile = join(
-      this.root,
-      "policies",
-      `${hash([label, ports, readRoots])}.sb`,
-    );
-    await writeFile(
-      profile,
-      nativeSeatbeltPolicy({
-        root: this.root,
-        executable: this.binary,
-        ports,
-        readRoots,
-        ownerSignInCallback:
-          label === "owner-browser-sign-in" &&
-          gateway === null &&
-          skills.length === 0,
-      }),
-      { mode: 0o600 },
-    );
+    const profile = this.permissionProfile(skills);
     const overrides = [
       'cli_auth_credentials_store="file"',
       'mcp_oauth_credentials_store="file"',
       'forced_login_method="chatgpt"',
-      'sandbox_mode="read-only"',
-      'approval_policy="on-request"',
+      `default_permissions=${JSON.stringify(profile.profileId)}`,
+      'approval_policy="never"',
       'web_search="disabled"',
       "allow_login_shell=false",
-      'shell_environment_policy.inherit="none"',
+      'shell_environment_policy={inherit="none",set={},include_only=[]}',
       "features.code_mode.enabled=false",
       "include_apps_instructions=false",
       ...FEATURES.map((feature) => `features.${feature}=false`),
       "mcp_servers={}",
       "plugins={}",
       "marketplaces={}",
+      "permissions={}",
+      `permissions.${profile.profileId}.extends=":read-only"`,
+      `permissions.${profile.profileId}.filesystem={${Object.entries(
+        profile.filesystem,
+      )
+        .map(
+          ([path, mode]) => `${JSON.stringify(path)}=${JSON.stringify(mode)}`,
+        )
+        .join(",")}}`,
+      `permissions.${profile.profileId}.network.enabled=false`,
     ];
     if (gateway) {
       for (const [name, url] of Object.entries({
@@ -421,7 +490,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       PATH: "/usr/bin:/bin",
       HOME: join(this.root, "home"),
       CODEX_HOME: join(this.root, "codex"),
-      // Native TLS must not depend on personal keychain access inside Seatbelt.
+      // Native TLS must not depend on personal keychain configuration.
       // Codex supports this explicit public system CA bundle for login/model TLS.
       CODEX_CA_CERTIFICATE: "/private/etc/ssl/cert.pem",
       CFFIXED_USER_HOME: join(this.root, "home"),
@@ -435,11 +504,8 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     if (gateway) env.CREW_SESSION_TOKEN = gateway.bearerToken;
     this.assertLaunchable();
     return {
-      executable: "/usr/bin/sandbox-exec",
+      executable: this.binary,
       args: [
-        "-f",
-        profile,
-        this.binary,
         "app-server",
         "--listen",
         "stdio://",
@@ -499,12 +565,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     disconnected: () => void = () => {},
   ): Promise<CodexPeer> {
     this.assertLaunchable();
-    const peer = new CodexPeer(
-      launch,
-      receive,
-      disconnected,
-      15_000,
-    );
+    const peer = new CodexPeer(launch, receive, disconnected, 15_000);
     this.trackPeer(peer);
     try {
       await peer.rpc("initialize", {
@@ -525,6 +586,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   private async verifyConfiguration(
     peer: CodexPeer,
     gateway: NativeGatewayBinding | null,
+    skills: Bound["skills"] = [],
   ): Promise<void> {
     const response = record(
       await peer.rpc("config/read", { includeLayers: true }),
@@ -535,12 +597,49 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       FEATURES.some((feature) => features[feature] !== false) ||
       config.forced_login_method !== "chatgpt" ||
       config.cli_auth_credentials_store !== "file" ||
+      config.mcp_oauth_credentials_store !== "file" ||
       config.web_search !== "disabled" ||
       config.allow_login_shell !== false
     )
       throw new Error(
         "Native configuration did not retain the broker-only restrictions.",
       );
+    const expected = this.permissionProfile(skills);
+    const permissions = record(config.permissions);
+    const profile = record(permissions[expected.profileId]);
+    const filesystem = record(profile.filesystem);
+    const network = record(profile.network);
+    const environment = record(config.shell_environment_policy);
+    if (
+      config.default_permissions !== expected.profileId ||
+      config.approval_policy !== "never" ||
+      Object.keys(permissions).join(",") !== expected.profileId ||
+      profile.extends !== ":read-only" ||
+      Object.entries(profile).some(
+        ([name, value]) =>
+          !["extends", "filesystem", "network"].includes(name) &&
+          value !== null,
+      ) ||
+      filesystem.glob_scan_max_depth != null ||
+      Object.keys(filesystem).filter((name) => name !== "glob_scan_max_depth")
+        .length !== Object.keys(expected.filesystem).length ||
+      Object.entries(expected.filesystem).some(
+        ([path, mode]) => filesystem[path] !== mode,
+      ) ||
+      network.enabled !== false ||
+      Object.entries(network).some(
+        ([name, value]) => name !== "enabled" && value !== null,
+      ) ||
+      environment.inherit !== "none" ||
+      Object.keys(record(environment.set ?? {})).length !== 0 ||
+      !Array.isArray(environment.include_only) ||
+      environment.include_only.length !== 0 ||
+      Object.entries(environment).some(
+        ([name, value]) =>
+          !["inherit", "set", "include_only"].includes(name) && value !== null,
+      )
+    )
+      throw new Error("Native model permission profile changed.");
     const servers = record(config.mcp_servers);
     if (
       Object.keys(servers).sort().join(",") !== (gateway ? "crew,services" : "")
@@ -744,7 +843,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         throw new Error("Crew sign-in was cancelled.");
       this.signing.loginId = login.loginId;
       if (earlyCompletionOverflow)
-        throw new Error("Native sign-in completion correlation exceeded its bound.");
+        throw new Error(
+          "Native sign-in completion correlation exceeded its bound.",
+        );
       const earlySuccess = earlyCompletions.get(login.loginId);
       if (earlySuccess !== undefined)
         complete({ loginId: login.loginId, success: earlySuccess });
@@ -772,7 +873,8 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       throw new Error(
         this.closed || generation !== this.signInGeneration
           ? "Crew sign-in was cancelled."
-          : this.signInStatus?.reason ?? "Native browser sign-in could not start.",
+          : (this.signInStatus?.reason ??
+              "Native browser sign-in could not start."),
       );
     } finally {
       earlyCompletions.clear();
@@ -866,24 +968,12 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
           );
         let gateway: NativeGatewayBinding | null = null;
         try {
-          const skills = await this.options.resolveSkills(configuration.skills);
-          if (
-            skills.length !== configuration.skills.length ||
-            configuration.skills.some(
-              (skill) =>
-                !skills.some(
-                  (item) =>
-                    item.id === skill.id && item.revision === skill.revision,
-                ),
-            )
-          )
-            throw new Error("Selected skill revisions unavailable.");
+          const skills = await this.selectedSkills(configuration);
           gateway = await this.options.gatewayFor(caller);
           const launch = await this.launch(key(caller), gateway, skills);
-          await verifyNativeBoundary(launch.args[1]!, this.root, launch.env);
           const peer = await this.peer(launch);
           try {
-            await this.verifyConfiguration(peer, gateway);
+            await this.verifyConfiguration(peer, gateway, skills);
           } finally {
             await this.stopPeer(peer);
           }
@@ -902,6 +992,10 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
             launch,
             skills,
             gateway,
+            nativePermissions: {
+              profileId: this.permissionProfile(skills).profileId,
+              approvalPolicy: "never",
+            },
           });
           return {
             state: "ready",
@@ -941,11 +1035,39 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
             "No exact prepared native access binding exists for this session.",
         },
       };
-    return {
-      state: "ready",
-      launch: structuredClone(bound.launch),
-      skills: structuredClone(bound.skills),
-    };
+    try {
+      const skills = await this.selectedSkills(input.configuration);
+      if (hash(skills) !== hash(bound.skills))
+        throw new Error("Prepared skill revisions changed.");
+      const launch = await this.launch(
+        key(input.caller),
+        bound.gateway,
+        skills,
+      );
+      if (
+        hash(launch) !== hash(bound.launch) ||
+        this.closed ||
+        this.releasedSessions.has(key(input.caller)) ||
+        this.bindings.get(key(input.caller)) !== bound
+      )
+        throw new Error("Prepared native session changed.");
+      const resolution = {
+        state: "ready" as const,
+        launch,
+        skills: structuredClone(skills),
+        nativePermissions: structuredClone(bound.nativePermissions),
+      };
+      return resolution;
+    } catch {
+      return {
+        state: "blocked",
+        error: {
+          code: "isolation_blocked",
+          message:
+            "Prepared native paths or skill revisions changed. No runtime launch was authorized.",
+        },
+      };
+    }
   };
   /** Trusted host-only retained-history launch. The host must first match this
    * binding against its durable agent/thread record. No service session is reopened. */
