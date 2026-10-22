@@ -55,6 +55,9 @@ Do not introduce a second editable membership store. `AccessCatalogue.hasOperati
 reads #90's discovered operations. Gateway validates/normalizes JSON and computes the
 canonical RFC 8785 fingerprint before calling policy; access does not hash a separate
 serialization. IDs and fingerprints arriving from agents are not trusted identities.
+Discover capabilities before entering the access-store transaction and supply a trusted
+catalogue snapshot. `hasOperation` must not call back into access connection lookups or
+gateway discovery that acquires the same store lock; that would deadlock authorization.
 
 The trusted composition binds caller and owner actors from authenticated transport.
 Never expose the store, owner administration, vault, permit or settlement methods as

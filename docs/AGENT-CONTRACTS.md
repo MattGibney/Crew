@@ -6,6 +6,16 @@ Design authority: [#86](https://github.com/MattGibney/Crew/issues/86), with doma
 [#89](https://github.com/MattGibney/Crew/issues/89), [#90](https://github.com/MattGibney/Crew/issues/90).
 The owner approved this boundary in PR #91, merged into `codex/unified-agent-platform`.
 The contracts alone do not establish a working replacement runtime.
+
+Integration checkpoint, 22 October 2026: PRs #92, #93 and #94 are consolidated on the
+shared feature branch. Combined type-check/build and a disposable flow using the real
+foundation, access, vault and gateway implementations passed. The flow caught and fixed
+broker-only `createdAt` metadata leaking into the strict authorization input. Once
+approval, execution, duplicate/reopen handling, revocation, Stop expiry and record
+persistence were exercised with synthetic runtime/access and test-only encryption.
+This is not native or installed-app acceptance. Production desktop composition, native
+credential isolation and atomic Quit/update admission remain unfinished under #86.
+The owner withdrew the local-install request; no installation or main merge is included.
 Import using `import type { Agent } from "../agents/contracts.mjs"` (adjust relative path).
 Renderer consumers can import types from the same source; do not copy DTOs into renderer contracts.
 

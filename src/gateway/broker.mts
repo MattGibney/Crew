@@ -212,7 +212,11 @@ export class DurableOperationBroker implements OperationBroker {
 
     if (record.receipt.reservationId === null) {
       const decision =
-        await this.options.authorization.authorizeAndReserve(invocation);
+        await this.options.authorization.authorizeAndReserve({
+          caller: invocation.caller,
+          jobId: invocation.jobId,
+          operation: invocation.operation,
+        });
       if (decision.state !== "allowed") {
         record.result =
           decision.state === "approval_required"
