@@ -1,5 +1,9 @@
 # Delivery policy
 
+## Crew 0.16.1 release scope
+
+Continues the authorized TypeScript delivery below. The v0.16.0 workflow stopped before signing/publication on a test snapshot race (660/661 passed). The execution-timing test now waits for native thread identity as well as correlated process liveness before comparing retained conversations. Production implementation is unchanged. Preserve the failed tag/run and use 0.16.1 for publication; see [REL-0.16.1](../tickets/REL-0.16.1.md).
+
 ## Crew 0.16.0 release scope
 
 The human explicitly authorized merging [PR #57](https://github.com/MattGibney/Crew/pull/57) and publishing the next stable version, with hands-on testing afterward. Version 0.16.0 follows verified public 0.15.0. The migration is merged at da297b83 with a tree identical to validated production commit a4a247c. This supersedes historical TypeScript pause/no-publication guidance for this named release only. The release preparation changes metadata and documentation, preserving the validated implementation.
