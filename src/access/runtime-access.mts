@@ -412,6 +412,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
           `mcp_servers.${name}.url=${JSON.stringify(url)}`,
           `mcp_servers.${name}.bearer_token_env_var="CREW_SESSION_TOKEN"`,
           `mcp_servers.${name}.required=true`,
+          // Crew checks current grants at authenticated dispatch; avoid a second
+          // native MCP approval without changing execution/escalation policy.
+          `mcp_servers.${name}.default_tools_approval_mode="approve"`,
         );
     }
     const env: Record<string, string> = {
@@ -552,7 +555,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         if (
           server.url !== url ||
           server.bearer_token_env_var !== "CREW_SESSION_TOKEN" ||
-          server.required !== true
+          server.required !== true ||
+          server.default_tools_approval_mode !== "approve" ||
+          Object.keys(record(server.tools ?? {})).length !== 0
         )
           throw new Error("Crew native endpoint binding changed.");
       }
