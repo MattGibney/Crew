@@ -60,8 +60,11 @@ Git helper configuration or personal CLI configuration. The Crew session token a
 only that native session at the Crew gateway; it is not a provider secret.
 
 The native model process has no project mounts or direct shell/JS tools. The adapter
-must also pass `environments: []` on native thread start/resume and every turn so native
-filesystem tools have no selected environment. A removed feature flag is not enforcement.
+must also pass `environments: []` on supported native thread-start and turn requests so
+native filesystem tools have no selected environment, and verify the observed selection.
+The inspected resume schema does not support this field: passing an ignored field is
+not enforcement, and a resumed default local environment must fail closed until a
+supported disabling route is verified. A removed feature flag is not enforcement.
 Before skill discovery, the adapter sets the exact selected roots through supported
 `skills/extraRoots/set`; personal or repository skill roots are not imported.
 
