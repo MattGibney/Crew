@@ -70,7 +70,10 @@ export async function handleUpdateRoute(
       hold();
       updateAdmission.hold();
       try {
-        await updatePlan.begin({ targetVersion: input.targetVersion });
+        await updatePlan.begin({
+          targetVersion: input.targetVersion,
+          purpose: input.purpose,
+        });
       } finally {
         synchronizePlan(updatePlan.status());
       }

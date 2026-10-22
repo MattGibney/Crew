@@ -1,3 +1,4 @@
+import { createPreparationQuit } from "./preparation-quit.mjs";
 import { app } from "electron";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
@@ -41,6 +42,7 @@ interface ApplicationUpdateContext {
   lease: ReturnType<typeof createInstallLease>;
   restartHandoff: ReturnType<typeof createRestartHandoff>;
   changed(): void;
+  finishQuit(): void;
   attempt(operation: () => unknown): void;
   reservationPending(): Promise<boolean>;
   recordReservationFailure(error: unknown): Promise<void>;
@@ -223,6 +225,36 @@ export async function createApplicationUpdates(
       plan: await workspacePause.markBlocked(input.reason, input),
     }),
   });
+  const quitPreparation = createPreparationQuit({
+    currentVersion: app.getVersion(),
+    group: workspacePause,
+    async assertCanBegin() {
+      if (
+        context.transition ||
+        context.quitting ||
+        context.hosts().some((host) => host.busy())
+      )
+        throw Error("Finish project setup or switching before preparing Quit.");
+      if (
+        context.updateRecoveryError ||
+        (await reservationPending()) ||
+        gate.isReserved()
+      )
+        throw Error(
+          "Resolve the existing update reservation before preparing Quit.",
+        );
+    },
+    showProgress: () => selected().openWindow(),
+    activity: () => workspaceUpdateActivity(projectHosts()),
+    lease,
+    setQuitting: (value) => {
+      context.quitting = value;
+    },
+    async stopOwnedControllers() {
+      for (const host of context.hosts()) await host.quit();
+    },
+    finish: () => context.finishQuit(),
+  });
   updater = {
     getStatus: () => ({
       ...native.getStatus(),
@@ -262,8 +294,12 @@ export async function createApplicationUpdates(
         if (action === "resume-paused-work")
           await workspacePause.resumeAfterCancel();
         else await workspacePause.releaseForReview();
-      } else if (action === "restart") await pauseCoordinator.restart();
-      else await native.request(action);
+      } else if (action === "restart") {
+        const plan = workspacePause.status();
+        if (plan?.purpose === "quit" && plan.phase !== "complete")
+          throw Error("Quit preparation cannot install an update.");
+        await pauseCoordinator.restart();
+      } else await native.request(action);
       publish();
       return updater.getStatus();
     },
@@ -271,10 +307,13 @@ export async function createApplicationUpdates(
       if (refreshPending) return refreshPending;
       refreshPending = (async () => {
         try {
-          await native.refresh();
+          if (workspacePause.status()?.purpose !== "quit")
+            await native.refresh();
           if (!context.updateRecoveryError) {
             await workspacePause.tick();
-            await pauseCoordinator.advancePlan();
+            if (workspacePause.status()?.purpose === "quit")
+              await quitPreparation.advance();
+            else await pauseCoordinator.advancePlan();
           }
           return updater.getStatus();
         } finally {
@@ -297,7 +336,7 @@ export async function createApplicationUpdates(
     repeat.unref();
   }
 
-  return { updater, workspacePause, updateReservation };
+  return { updater, workspacePause, updateReservation, quitPreparation };
 }
 class UnavailableUpdater extends EventEmitter implements NativeUpdater {
   autoDownload = false;

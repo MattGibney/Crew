@@ -1,3 +1,4 @@
+import { createRunnerPreparation } from "./runner-preparation.mjs";
 import { createRunnerControl } from "./runner-control.mjs";
 import { createWorkerPeer } from "./worker-peer.mjs";
 import {
@@ -127,6 +128,33 @@ const requestContext = () => ({
   taskId: config.taskId,
   runId: config.runId,
 });
+let preparationActive = false;
+const observePreparation = createRunnerPreparation({
+  stateDir: config.stateDir,
+  actor: {
+    role: "worker",
+    taskId: config.taskId,
+    runId: config.runId,
+    projectId: config.project?.id,
+  },
+  snapshot: () => ({
+    threadId,
+    turnId,
+    acknowledged: modelTurnAcknowledged && !turnStartPending,
+    ending: ending || Boolean(nativeTurnStatus),
+  }),
+  steer: ({ threadId, expectedTurnId, requestId, text }) =>
+    rpc("turn/steer", {
+      threadId,
+      expectedTurnId,
+      clientUserMessageId: requestId,
+      input: [{ type: "text", text }],
+    }),
+  onPreparing: () => {
+    preparationActive = true;
+    clearTimeout(timeout);
+  },
+});
 const runnerControl = createRunnerControl({
   runDir,
   runId: config.runId,
@@ -138,6 +166,7 @@ const runnerControl = createRunnerControl({
   interruptTurn,
   finish,
   capture,
+  observePreparation,
   onCooperative: () => clearTimeout(timeout),
   onError: (message) => {
     errorMessage = errorMessage || message;
@@ -330,7 +359,11 @@ async function handle(message: WorkerNativeMessage, replayModelEvent = false) {
     if (!params.turn) throw new Error("Native turn start has no identity.");
     turnId = params.turn.id;
     await saveRuntime();
-    if (currentStopRequest()?.cooperative) interruptTurn();
+    if (
+      currentStopRequest()?.cooperative &&
+      !currentStopRequest()?.settleNaturally
+    )
+      interruptTurn();
   }
   if (method === "model/rerouted" && selectedModel)
     await applyModelReroute(params);
@@ -527,7 +560,11 @@ const bootstrap = (async () => {
     turnStartPending = false;
     await saveRuntime();
     if (finishPending) await finish();
-    else if (currentStopRequest()?.cooperative) interruptTurn();
+    else if (
+      currentStopRequest()?.cooperative &&
+      !currentStopRequest()?.settleNaturally
+    )
+      interruptTurn();
   } catch (error) {
     turnStartPending = false;
     modelTurnAcknowledged = false;
@@ -574,7 +611,8 @@ const checkTimeout = () => {
   timeout = setTimeout(() => {
     void (async () => {
       await acceptControl().catch(() => {});
-      if (runnerControl.isCooperative()) return;
+      await observePreparation().catch(() => {});
+      if (preparationActive || runnerControl.isCooperative()) return;
       if (nativeRequests.size) {
         checkTimeout();
         return;

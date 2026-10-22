@@ -71,10 +71,40 @@ export function createWorkspacePauseUpdate({
       consent: true,
       id: active().id,
       targetVersion: active().targetVersion,
+      purpose: active().purpose || "update",
       fromVersion: active().fromVersion,
       phase: active().phase,
       createdAt: active().createdAt,
       updatedAt: active().updatedAt,
+      ...(active().projects.some((project) => project.preparation)
+        ? {
+            preparation: {
+              schema: 1 as const,
+              id: active().id,
+              projectId: "all-projects",
+              purpose: active().purpose || "update",
+              phase:
+                active().phase === "complete"
+                  ? ("complete" as const)
+                  : active().phase === "canceled"
+                    ? ("canceled" as const)
+                    : active().phase === "ready"
+                      ? ("ready" as const)
+                      : ("preparing" as const),
+              createdAt: active().createdAt,
+              updatedAt: active().updatedAt,
+              participants: active().projects.flatMap((project) =>
+                (project.preparation?.participants || []).map(
+                  (participant) => ({
+                    ...participant,
+                    projectId: project.id,
+                    projectName: project.name,
+                  }),
+                ),
+              ),
+            },
+          }
+        : {}),
       targets: active().projects.flatMap((project) =>
         (project.targets || []).map((target) => ({
           taskId: target.taskId,
@@ -89,7 +119,16 @@ export function createWorkspacePauseUpdate({
         phase: project.phase || "pending",
         ready: project.phase === "ready",
       })),
-      reasons: [...active().reasons],
+      reasons: [
+        ...new Set([
+          ...active().reasons,
+          ...active().projects.flatMap((project) =>
+            (project.reasons || []).map(
+              (reason) => `Project ${project.name}: ${reason}`,
+            ),
+          ),
+        ]),
+      ],
       manager: {
         interrupted: active().projects.some(
           (project) => project.managerInterrupted === true,
@@ -177,12 +216,16 @@ export function createWorkspacePauseUpdate({
     if (
       !journal ||
       terminal(journal) ||
-      ["blocked", "canceled", "marking", "installing"].includes(active().phase)
+      ["marking", "installing"].includes(active().phase)
     )
       return publicStatus();
     try {
       const values = await matchingProjects();
       await refresh(values);
+      // Retained holds still observe exact child identities and late pause
+      // confirmations. Refreshing never clears a block or installs/resumes.
+      if (["blocked", "canceled"].includes(active().phase))
+        return publicStatus();
       const bad = active().projects.find((project) =>
         ["blocked", "canceled"].includes(project.phase || ""),
       );
@@ -242,18 +285,24 @@ export function createWorkspacePauseUpdate({
     status: () => clone(publicStatus()),
     isHolding: () =>
       !initialized || beginning || Boolean(journal && !terminal(journal)),
-    begin(input: { targetVersion: string }) {
+    begin(input: { targetVersion: string; purpose?: "update" | "quit" }) {
       beginning = true;
       return enqueue(async () => {
         try {
           const targetVersion = input?.targetVersion;
+          const purpose = input.purpose || "update";
           if (
             !VERSION.test(targetVersion || "") ||
-            targetVersion === currentVersion
+            (targetVersion === currentVersion && purpose !== "quit") ||
+            !["update", "quit"].includes(purpose)
           )
             throw new Error("A different valid target version is required.");
           if (journal && !terminal(journal)) {
-            if (active().targetVersion === targetVersion) return publicStatus();
+            if (
+              active().targetVersion === targetVersion &&
+              (active().purpose || "update") === purpose
+            )
+              return publicStatus();
             throw new Error(
               "Resolve the current grouped update before starting another.",
             );
@@ -265,6 +314,7 @@ export function createWorkspacePauseUpdate({
             id: randomUUID(),
             fromVersion: currentVersion,
             targetVersion,
+            purpose,
             phase: "draining",
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -303,9 +353,12 @@ export function createWorkspacePauseUpdate({
               await save();
               const result = await hostFor(values, project).updateToken(
                 "update-plan-begin",
-                { targetVersion },
+                { targetVersion, purpose },
               );
-              if (!approved(result?.plan, targetVersion))
+              if (
+                !approved(result?.plan, targetVersion) ||
+                (result.plan.purpose || "update") !== purpose
+              )
                 throw new Error("Child plan was not confirmed.");
               project.childPlanId = result.plan.id;
               remember(project, result.plan);
@@ -531,6 +584,15 @@ export function createWorkspacePauseUpdate({
               "Installation was interrupted before every project committed. Review retained work before continuing.",
             );
           if (active().phase === "installing") {
+            if (active().purpose === "quit") {
+              await refresh(values);
+              active().phase = "canceled";
+              active().reasons = [
+                "Crew was prepared for shutdown. Review retained continuation and explicitly return to work or resume eligible paused workers.",
+              ];
+              await save();
+              return publicStatus();
+            }
             if (currentVersion !== active().targetVersion)
               return blockChildren(
                 values,

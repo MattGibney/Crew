@@ -60,6 +60,8 @@ export function validatePersistedTask(input: unknown, expectedId: string) {
             !ID.test(request.id) ||
             !LIFECYCLE_ACTIONS.has(request.action) ||
             !LIFECYCLE_STATES.has(request.status) ||
+            (request.settleNaturally === true &&
+              (request.cooperative !== true || request.action !== "pause")) ||
             !Number.isFinite(Date.parse(request.at)) ||
             (request.expectedRunId != null &&
               (typeof request.expectedRunId !== "string" ||

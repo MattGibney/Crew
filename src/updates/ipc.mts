@@ -46,7 +46,7 @@ export function acceptUpdateStatus(value: unknown): UpdateStatus {
     workspacePlan:
       value.workspacePlan &&
       typeof value.workspacePlan === "object" &&
-      Buffer.byteLength(JSON.stringify(value.workspacePlan)) <= 131072
+      Buffer.byteLength(JSON.stringify(value.workspacePlan)) <= 2097152
         ? structuredClone(value.workspacePlan)
         : null,
     supported: value.supported,

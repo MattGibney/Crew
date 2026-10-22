@@ -48,9 +48,21 @@ export function updateActivity({
   else {
     if (work.voiceActive || work.voiceConnecting)
       reasons.push("Disconnect voice before restarting to update.");
-    if (work.activeTurnId || work.workStarting || !idleManager.has(work.status))
+    if (work.activeTurnId)
       reasons.push(
-        "The manager is still working or its state is unverified. Wait for completion, or use Stop manager for work you want to cancel.",
+        "The manager has an active native turn. Wait for its confirmed completion or interruption; use Stop manager if you want to cancel it.",
+      );
+    if (work.workStarting)
+      reasons.push(
+        "A manager request is still starting. Wait for its native turn or cancellation to be confirmed.",
+      );
+    if (
+      !work.activeTurnId &&
+      !work.workStarting &&
+      !idleManager.has(work.status)
+    )
+      reasons.push(
+        "The manager has no confirmed terminal state. Review its connection and retained conversation before updating.",
       );
     if (!Array.isArray(work.approvals) || work.approvals.length)
       reasons.push("Resolve the manager’s pending input before updating.");

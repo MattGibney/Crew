@@ -1,5 +1,6 @@
 import { record } from "./validation.mjs";
 import type { DesktopApiReply } from "./host-contracts.mjs";
+import { parseObservedPreparation } from "../preparation/observed.mjs";
 
 export function parseControllerReply(input: unknown): DesktopApiReply {
   const value = record(input, "Local controller response");
@@ -85,8 +86,19 @@ export function parseControllerReply(input: unknown): DesktopApiReply {
         kind: plan.kind,
         consent: plan.consent,
         targetVersion: plan.targetVersion,
+        ...(plan.purpose === undefined
+          ? {}
+          : { purpose: preparationPurpose(plan.purpose) }),
+        ...(plan.preparation === undefined
+          ? {}
+          : { preparation: parseObservedPreparation(plan.preparation) }),
       };
     }
   }
   return reply;
+}
+function preparationPurpose(value: unknown): "update" | "quit" {
+  if (value !== "update" && value !== "quit")
+    throw new Error("Invalid controller preparation purpose.");
+  return value;
 }

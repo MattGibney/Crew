@@ -152,6 +152,7 @@ export function parseWorkerMessage(value: unknown): WorkerNativeMessage {
   return value;
 }
 export interface NativeResult {
+  turnId?: string;
   account?: { type?: string } | null;
   thread?: NativeThread;
   turn?: NativeTurn;
@@ -189,7 +190,15 @@ export function parseWorkerResult(
     throw new Error(
       "Native model continuation did not acknowledge a turn identity; selection was not confirmed.",
     );
+  if (
+    method === "turn/steer" &&
+    (typeof value.turnId !== "string" || !value.turnId)
+  )
+    throw new Error(
+      "Native preparation steering did not acknowledge its turn identity.",
+    );
   return {
+    turnId: typeof value.turnId === "string" ? value.turnId : undefined,
     account: isRecord(value.account)
       ? {
           type:
@@ -221,6 +230,7 @@ export interface WorkerStopRequest {
   requestId: string;
   action: string;
   cooperative?: boolean;
+  settleNaturally?: boolean;
 }
 export function parseWorkerStopRequest(
   value: unknown,
@@ -229,7 +239,11 @@ export function parseWorkerStopRequest(
     !isRecord(value) ||
     typeof value.runId !== "string" ||
     typeof value.requestId !== "string" ||
-    typeof value.action !== "string"
+    typeof value.action !== "string" ||
+    (value.settleNaturally !== undefined &&
+      typeof value.settleNaturally !== "boolean") ||
+    (value.settleNaturally === true &&
+      (value.cooperative !== true || value.action !== "pause"))
   )
     return null;
   return {
@@ -237,5 +251,6 @@ export function parseWorkerStopRequest(
     requestId: value.requestId,
     action: value.action,
     cooperative: value.cooperative === true,
+    settleNaturally: value.settleNaturally === true,
   };
 }

@@ -11,6 +11,8 @@ export interface UpdateEvidence {
   hooks: HookVerdict[];
 }
 export interface ManagerActivity {
+  lifecycleState?: string;
+  threadId?: string | null;
   status: string;
   voiceActive: boolean;
   voiceConnecting: boolean;
@@ -20,6 +22,9 @@ export interface ManagerActivity {
 }
 export interface TaskActivity {
   id: string;
+  threadId?: string | null;
+  title?: string;
+  ticket?: string;
   status: string;
   runId?: string | null;
   runDir?: string | null;
@@ -46,6 +51,8 @@ export interface TaskActivity {
     status: string;
     action: string;
     expectedRunId?: string | null;
+    cooperative?: boolean;
+    settleNaturally?: boolean;
   }[];
 }
 export interface ActivityView {
@@ -73,6 +80,8 @@ export interface PausePlan {
   consent: true;
   id: string;
   targetVersion: string;
+  purpose?: "update" | "quit";
+  preparation?: import("../preparation/coordinator.mjs").ObservedPreparation;
   fromVersion: string;
   phase: string;
   createdAt: string;

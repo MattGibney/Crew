@@ -190,3 +190,109 @@ test('unconfirmed active or unknown target cannot silently finish explicit resum
     await f.engine.resumeAfterCancel(); assert.equal(f.engine.status().phase,'blocked'); assert.equal(f.data.requests.length,0);
   }
 });
+
+test('manager finishing during awaited worker pause does not block; exact pause and process evidence still gate readiness', async t => {
+  let entered, release;
+  const enqueued = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  const f = await fixture(t, {
+    requestAction: async request => {
+      f.data.requests.push(request);
+      entered();
+      await pending;
+    },
+    interruptManager: async ({ expectedTurnId }) => {
+      f.data.interrupts++;
+      assert.equal(f.data.manager.activeTurnId, expectedTurnId, 'never interrupt a turn that naturally finished');
+    },
+  });
+  f.data.manager = { status:'working', workStarting:false, activeTurnId:'finishing-turn', approvals:[] };
+  const task = running('worker1'); f.data.tasks.push(task); f.data.safe = false;
+  await f.engine.begin({targetVersion:'1.1.0'});
+  const ticking = f.engine.tick();
+  await enqueued;
+  f.data.manager.activeTurnId = null; f.data.manager.status = 'completed';
+  task.status = 'paused';
+  release();
+  await ticking;
+  assert.equal(f.engine.status().phase,'draining'); assert.equal(f.data.interrupts,0);
+  await f.engine.tick(); assert.equal(f.engine.status().phase,'draining','card status is not lifecycle confirmation');
+  task.lifecycleRequests.push({...f.data.requests[0],id:f.data.requests[0].actionId,status:'completed'});
+  await f.engine.tick(); assert.equal(f.engine.status().phase,'draining','completed pause without stopped process is insufficient');
+  task.execution = {live:false,stopConfirmed:true}; f.data.safe = true;
+  await f.engine.tick(); assert.equal(f.engine.status().phase,'ready');
+  assert.equal(f.engine.status().targets[0].pauseConfirmed,true); assert.equal(f.data.interrupts,0);
+  assert.equal(f.engine.status().manager.interrupted,false,'natural completion is not claimed as interruption');
+});
+
+test('manager completing after final recheck permits fresh terminal evidence when interrupt rejects', async t => {
+  const f = await fixture(t, { interruptManager: async ({expectedTurnId}) => {
+    assert.equal(expectedTurnId,'finishing-turn'); f.data.interrupts++;
+    f.data.manager.activeTurnId=null; f.data.manager.status='completed';
+    throw new Error('Native turn already completed');
+  }});
+  f.data.manager = {status:'working',workStarting:false,activeTurnId:'finishing-turn',approvals:[]};
+  await beginDrain(f,{targetVersion:'1.1.0'});
+  assert.notEqual(f.engine.status().phase,'blocked'); assert.equal(f.data.interrupts,1);
+  await f.engine.tick(); assert.equal(f.engine.status().phase,'ready');
+});
+
+for (const replacement of ['new-turn','approval']) test(`manager ${replacement} appearing during worker enqueue is preserved without interrupting it`, async t => {
+  const f = await fixture(t,{requestAction:async request=>{
+    f.data.requests.push(request);
+    if(replacement==='new-turn') f.data.manager.activeTurnId='different-turn';
+    else f.data.manager.approvals=[{id:'new-human-decision'}];
+  }});
+  f.data.manager={status:'working',workStarting:false,activeTurnId:'captured-turn',approvals:[]};
+  f.data.tasks.push(running('worker1')); f.data.safe=false;
+  await beginDrain(f,{targetVersion:'1.1.0'});
+  assert.equal(f.data.interrupts,0); assert.equal(isUpdatePlanHolding(f.engine.status()),true);
+  if(replacement==='new-turn') { assert.equal(f.engine.status().phase,'blocked'); assert.equal(f.data.manager.activeTurnId,'different-turn'); }
+  else { assert.notEqual(f.engine.status().phase,'ready'); assert.deepEqual(f.data.manager.approvals,[{id:'new-human-decision'}]); }
+});
+
+for (const replacement of ['new-turn','approval','unknown']) test(`rejected manager interrupt retains hold for ${replacement} instead of assuming completion`, async t => {
+  const f = await fixture(t,{interruptManager:async()=>{
+    f.data.interrupts++;
+    if(replacement==='new-turn') f.data.manager.activeTurnId='different-turn';
+    else if(replacement==='approval') {f.data.manager.activeTurnId=null;f.data.manager.status='completed';f.data.manager.approvals=[{id:'pending-human-decision'}];}
+    else {f.data.manager.activeTurnId=null;f.data.manager.status='connection lost';}
+    throw new Error('Native interruption could not be confirmed');
+  }});
+  f.data.manager={status:'working',workStarting:false,activeTurnId:'captured-turn',approvals:[]};
+  await beginDrain(f,{targetVersion:'1.1.0'});
+  assert.equal(f.engine.status().phase,'blocked'); assert.equal(isUpdatePlanHolding(f.engine.status()),true);
+  assert.equal(f.data.interrupts,1);
+  if(replacement==='approval') assert.deepEqual(f.data.manager.approvals,[{id:'pending-human-decision'}]);
+  if(replacement==='new-turn') assert.equal(f.data.manager.activeTurnId,'different-turn');
+  if(replacement==='unknown') assert.equal(f.data.manager.status,'connection lost');
+});
+
+for (const phase of ['blocked','canceled']) test(`${phase} update observes later exact worker pause proof without releasing hold or executing recovery`, async t => {
+  const f=await fixture(t); f.data.safe=false;
+  f.data.manager={status:'working',workStarting:false,activeTurnId:'retained-manager-turn',approvals:[]};
+  const task=running('worker1'); f.data.tasks.push(task);
+  await beginDrain(f,{targetVersion:'1.1.0'});
+  if(phase==='blocked') {f.data.time+=120001;await f.engine.tick();}
+  else await f.engine.cancel();
+  const retained=f.engine.status(),requests=structuredClone(f.data.requests),interrupts=f.data.interrupts,voiceStops=f.data.voiceStops;
+  assert.equal(retained.phase,phase); assert.equal(retained.targets[0].progress,'pause-requested');
+  task.status='paused';
+  await f.engine.tick(); assert.equal(f.engine.status().targets[0].pauseConfirmed,false,'a paused card alone is insufficient');
+  task.lifecycleRequests.push({...requests[0],id:requests[0].actionId,status:'completed'});
+  task.updateEvidence={worker:'unknown',runtime:'absent',hooks:[]};
+  await f.engine.tick(); assert.equal(f.engine.status().targets[0].pauseConfirmed,false,'unknown process ownership still blocks confirmation');
+  task.execution={live:false,stopConfirmed:true};task.updateEvidence.worker='stopped';f.data.safe=true;
+  await f.engine.tick();
+  for(const engine of [f.engine,await f.restart('1.0.0')]) {
+    await engine.tick();await engine.tick();
+    const observed=engine.status();
+    assert.equal(observed.phase,phase);assert.equal(isUpdatePlanHolding(observed),true);
+    assert.deepEqual(observed.reasons,retained.reasons,'observation must not clear the explicit recovery blocker');
+    assert.equal(observed.targets[0].progress,'paused');assert.equal(observed.targets[0].pauseConfirmed,true);
+    assert.equal(observed.targets[0].pauseActionId,retained.targets[0].pauseActionId);
+    assert.deepEqual(observed.manager,retained.manager,'worker proof never fabricates manager interruption');
+    assert.deepEqual(f.data.requests,requests,'no additional pause or resume is authorized by observation');
+    assert.equal(f.data.interrupts,interrupts);assert.equal(f.data.voiceStops,voiceStops);
+  }
+});

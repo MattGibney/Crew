@@ -248,10 +248,81 @@ const settingsSchema = object(
   },
   ["managerProfile", "managerLifecycle", "manager", "worker"],
 );
+const preparationParticipant = object(
+  {
+    id: string,
+    role: { enum: ["manager", "worker"] },
+    taskId: nullable(string),
+    taskLabel: string,
+    runId: nullable(string),
+    threadId: nullable(string),
+    requestId: string,
+    required: { type: "boolean" },
+    message: string,
+    projectId: string,
+    projectName: string,
+    delivery: object(
+      {
+        state: {
+          enum: ["pending", "attempted", "acknowledged", "failed", "uncertain"],
+        },
+        at: string,
+        nativeTurnId: string,
+        error: string,
+      },
+      ["state", "at"],
+    ),
+    response: nullable(
+      object(
+        {
+          responseId: string,
+          state: { enum: ["preparing", "ready", "needs-input", "blocked"] },
+          note: string,
+          continuation: string,
+          at: string,
+        },
+        ["responseId", "state", "note", "at"],
+      ),
+    ),
+    settled: { type: "boolean" },
+    settlementReason: string,
+  },
+  [
+    "id",
+    "role",
+    "taskId",
+    "runId",
+    "threadId",
+    "requestId",
+    "required",
+    "message",
+    "delivery",
+    "response",
+  ],
+);
+const updatePlanSchema = object(
+  {
+    id: string,
+    phase: string,
+    purpose: { enum: ["update", "quit"] },
+    preparation: nullable(
+      object(
+        {
+          id: string,
+          purpose: { enum: ["update", "quit"] },
+          phase: string,
+          participants: array(preparationParticipant),
+        },
+        ["id", "purpose", "phase", "participants"],
+      ),
+    ),
+  },
+  ["phase"],
+);
 const updateSchema = object({
   phase: string,
-  plan: nullable(object({ phase: string }, ["phase"])),
-  workspacePlan: nullable(object({ phase: string }, ["phase"])),
+  plan: nullable(updatePlanSchema),
+  workspacePlan: nullable(updatePlanSchema),
 });
 const prepare = object({ state: workSchema, plan: string });
 const schemas: Record<keyof ApiResults, Schema> = {
@@ -352,7 +423,7 @@ const eventValidator = compile<ManagerEvent>({
     object(
       {
         type: { const: "update-plan-state" },
-        plan: nullable(object({ phase: string }, ["phase"])),
+        plan: nullable(updatePlanSchema),
       },
       ["type", "plan"],
     ),

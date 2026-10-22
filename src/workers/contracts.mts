@@ -118,6 +118,7 @@ export interface LifecycleRequest {
   at: string;
   expectedRunId?: string | null;
   cooperative?: boolean;
+  settleNaturally?: boolean;
   handledAt?: string;
   error?: string;
   reviewHash?: string;

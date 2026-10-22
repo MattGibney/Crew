@@ -376,12 +376,14 @@ export async function requestWorkerAction(
     action,
     expectedRunId,
     cooperative = false,
+    settleNaturally = false,
   }: {
     taskId: string;
     actionId: string;
     action: string;
     expectedRunId?: string | null;
     cooperative?: boolean;
+    settleNaturally?: boolean;
   },
 ) {
   identifier(taskId);
@@ -402,6 +404,11 @@ export async function requestWorkerAction(
     throw new Error(
       "Cooperative interruption is supported only for pause requests",
     );
+  if (
+    typeof settleNaturally !== "boolean" ||
+    (settleNaturally && (!cooperative || action !== "pause"))
+  )
+    throw new Error("Natural settlement requires a cooperative pause");
   if (expectedRunId !== undefined && expectedRunId !== null)
     text(expectedRunId, "expected run ID", 160);
   return updateTask(dir, taskId, (task) => {
@@ -411,6 +418,7 @@ export async function requestWorkerAction(
       // An exact retry remains valid even after the controller advances to a new run.
       if (
         Boolean(existing.cooperative) !== cooperative ||
+        Boolean(existing.settleNaturally) !== settleNaturally ||
         existing.action !== action ||
         (expectedRunId !== undefined &&
           existing.expectedRunId !== expectedRunId)
@@ -437,6 +445,7 @@ export async function requestWorkerAction(
       id: actionId,
       action,
       ...(cooperative ? { cooperative: true } : {}),
+      ...(settleNaturally ? { settleNaturally: true } : {}),
       expectedRunId: task.runId || null,
       status: "pending",
       at: now(),

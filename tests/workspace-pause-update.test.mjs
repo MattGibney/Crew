@@ -13,7 +13,7 @@ async function fixture(t,{childPhase='ready'}={}){
   const configPath=join(directory,id+'.json');await writeFile(configPath,'{}');children.set(id,null);activity.set(id,{safe:true,reasons:[]});
   const host={api:async route=>{calls.push(`${id}:${route}`);return route==='update-plan-status'?{plan:structuredClone(children.get(id))}:activity.get(id);},updateToken:async(route,input)=>{
    calls.push(`${id}:${route}`);assert.equal(paused,true,'global hold precedes child mutation');let child=children.get(id);
-   if(route==='update-plan-begin'){const journal=JSON.parse(await readFile(path,'utf8'));assert.equal(journal.captureComplete,true);assert.equal(journal.projects.length,values.length);child={id:randomUUID(),kind:'pause-update',consent:true,targetVersion:input.targetVersion,phase:childPhase,targets:[{taskId:id+'-worker',progress:'paused'}],manager:{interrupted:id==='beta'}};children.set(id,child);return {plan:structuredClone(child)};}
+   if(route==='update-plan-begin'){const journal=JSON.parse(await readFile(path,'utf8'));assert.equal(journal.captureComplete,true);assert.equal(journal.projects.length,values.length);child={id:randomUUID(),kind:'pause-update',consent:true,targetVersion:input.targetVersion,purpose:input.purpose||'update',phase:childPhase,targets:[{taskId:id+'-worker',progress:'paused'}],manager:{interrupted:id==='beta'}};children.set(id,child);return {plan:structuredClone(child)};}
    assert.equal(input.planId,child.id);assert.equal(input.targetVersion,child.targetVersion);
    if(route==='update-plan-installing'){if(child.phase!=='ready')return {marked:false,plan:structuredClone(child)};child.phase='installing';return {marked:true,plan:structuredClone(child)};}
    if(route==='update-plan-blocked'){if(!['complete','canceled'].includes(child.phase))child.phase='blocked';return {plan:structuredClone(child)};}
@@ -121,4 +121,38 @@ test('cancel after partial recovery skips complete children and retains hold for
  const f=await fixture(t);await f.engine.begin({targetVersion:'1.1.0'});const normal=f.values[1].host.updateToken;
  f.values[1].host.updateToken=async(route,input)=>route==='update-plan-installing'?{marked:false}:normal(route,input);const plan=f.engine.status();await f.engine.markInstalling({planId:plan.id,targetVersion:plan.targetVersion});
  f.children.get('alpha').phase='complete';await f.engine.cancel();assert.equal(f.engine.status().phase,'canceled');assert.equal(f.children.get('alpha').phase,'complete');assert.equal(f.children.get('beta').phase,'canceled');assert.equal(f.paused,true);
+});
+
+test('blocked grouped status refreshes exact child pause proof and shows the concrete project blocker without releasing holds',async t=>{
+ const f=await fixture(t,{childPhase:'draining'});await f.engine.begin({targetVersion:'1.1.0'});
+ const child=f.children.get('beta');child.phase='blocked';child.reasons=['Resolve pending manager approval before updating.'];child.targets[0].progress='pause-requested';
+ await f.engine.tick();assert.equal(f.engine.status().phase,'blocked');
+ assert.match(f.engine.status().reasons.join(),/Hidden.*pending manager approval/);
+ const mutations=f.calls.filter(call=>call.includes(':update-plan-')&&!call.endsWith('update-plan-status')).length;
+ child.targets[0].progress='paused';child.manager.interrupted=true;await f.engine.tick();
+ assert.equal(f.engine.status().targets.find(target=>target.projectId==='beta').progress,'paused');assert.equal(f.engine.status().manager.interrupted,true);
+ assert.equal(f.engine.status().phase,'blocked');assert.equal(f.paused,true);assert.equal(f.calls.includes('global:false'),false);
+ assert.equal(f.calls.filter(call=>call.includes(':update-plan-')&&!call.endsWith('update-plan-status')).length,mutations,'observation never repeats pause, resume or installation');
+ const reopened=await f.make('1.0.0');await reopened.tick();assert.equal(reopened.status().targets.find(target=>target.projectId==='beta').progress,'paused');assert.match(reopened.status().reasons.join(),/pending manager approval/);assert.equal(f.paused,true);
+});
+
+test('Quit shares all-project preparation but reopening preserves held continuation without automatic resume',async t=>{
+ const f=await fixture(t);const plan=await f.engine.begin({purpose:'quit',targetVersion:'1.0.0'});assert.equal(plan.purpose,'quit');assert.equal(plan.phase,'ready');assert.ok([...f.children.values()].every(child=>child.purpose==='quit'));const marked=await f.engine.markInstalling({planId:plan.id,targetVersion:plan.targetVersion});assert.equal(marked.marked,true);
+ for(const child of f.children.values())child.phase='canceled';const reopened=await f.make('1.0.0');await reopened.recover();assert.equal(reopened.status().phase,'canceled');assert.equal(reopened.status().purpose,'quit');assert.equal(f.paused,true);assert.equal(f.calls.some(call=>call.endsWith('update-plan-resume')),false);assert.equal(f.calls.includes('global:false'),false);
+ await reopened.releaseForReview();assert.equal(f.paused,false);assert.equal(f.calls.some(call=>call.endsWith('update-plan-resume')),false);
+});
+
+test('large child preparation histories stay authoritative locally while the grouped journal keeps a bounded restartable latest-state summary',async t=>{
+ const f=await fixture(t);await f.engine.begin({targetVersion:'1.1.0'});
+ const fullEvidence=new Map();
+ for(const [id,child]of f.children){
+  const responses=Array.from({length:40},(_,index)=>({responseId:`response-${index}`,state:'ready',note:'N'.repeat(12000),continuation:'C'.repeat(20000),at:new Date().toISOString()}));
+  child.preparation={schema:1,id:child.id,projectId:id,purpose:'update',phase:'ready',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),participants:[{id:'manager',role:'manager',taskId:null,runId:null,threadId:id+'-thread',requestId:id+'-request',required:true,message:'M'.repeat(12000),delivery:{state:'acknowledged',nativeTurnId:id+'-turn',at:new Date().toISOString()},response:responses.at(-1),responses,settled:true,settlementReason:'S'.repeat(2000)}]};
+  const original=JSON.stringify(child.preparation);assert.ok(Buffer.byteLength(original)>1048576);fullEvidence.set(id,original);
+ }
+ await f.engine.tick();assert.equal(f.engine.status().phase,'ready');
+ const serialized=await readFile(f.path,'utf8');assert.ok(Buffer.byteLength(serialized)<20000,'group cache contains latest state instead of duplicated long history');
+ const restarted=await f.make('1.0.0');assert.equal(restarted.status().phase,'ready');assert.equal(restarted.isHolding(),true);
+ for(const participant of restarted.status().preparation.participants){assert.equal(participant.response.state,'ready');assert.equal(participant.responses.length,1);assert.equal(participant.response.continuation,undefined);assert.ok(participant.response.note.length<=400);assert.ok(participant.message.length<=240);assert.equal(participant.required,true);assert.equal(participant.settled,true);}
+ for(const [id,child]of f.children)assert.equal(JSON.stringify(child.preparation),fullEvidence.get(id),'the complete child evidence was never mutated or replaced');
 });

@@ -21,3 +21,9 @@ test('retained unanswered and blocked tasks require fresh shutdown evidence and 
  const work={status:'completed',activeTurnId:null,workStarting:false,voiceActive:false,voiceConnecting:false,approvals:[]};
  for(const status of ['awaiting_answer','blocked']){const task={id:'retained-question',status,question:{id:'unanswered'},updateEvidence:{worker:'stopped',runtime:'absent',hooks:[]}};assert.equal(updateActivity({work,view:{tasks:[task]}}).safe,true);for(const state of ['live','unknown']){task.updateEvidence.worker=state;assert.equal(updateActivity({work,view:{tasks:[task]}}).safe,false);}delete task.updateEvidence;assert.equal(updateActivity({work,view:{tasks:[task]}}).safe,false);}
 });
+
+test('manager blockers distinguish active native turn, pending start, approval and unavailable terminal evidence',()=>{
+ for(const [change,expected] of [[{activeTurnId:'active-turn',status:'working'},/active native turn/],[{workStarting:true},/request is still starting/],[{approvals:[{id:'retained-approval'}]},/pending input/],[{status:'working'},/no confirmed terminal state/]]){
+  const value=idle();Object.assign(value.work,change);const before=structuredClone(value);const result=updateActivity(value);assert.equal(result.safe,false);assert.match(result.reasons.join(),expected);assert.deepEqual(value,before);
+ }
+});
