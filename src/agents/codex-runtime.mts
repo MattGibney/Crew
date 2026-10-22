@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type {
-  Actor,
+  MessageSender,
   AgentContent,
   AgentRuntimeAdapter,
+  CallerContext,
   DeliveryAttempt,
   DeliveryResult,
   JsonObject,
@@ -12,6 +13,7 @@ import type {
   RuntimeDeliveryInput,
   RuntimeError,
   RuntimeEvent,
+  RuntimeHistoryItem,
   RuntimeResult,
   RuntimeStartAcknowledgement,
   RuntimeStartInput,
@@ -52,8 +54,19 @@ export type CodexLaunchResolution =
 export type CodexLaunchResolver = (
   input: RuntimeStartInput,
 ) => Promise<CodexLaunchResolution>;
+export type CodexHistoryLaunchResolution =
+  | { state: "ready"; launch: CodexLaunch }
+  | { state: "blocked"; error: RuntimeError };
 export interface CodexRuntimeOptions {
   resolveLaunch: CodexLaunchResolver;
+  /** Durably record this owned launch before any initialize/thread request.
+   * Failure prevents native dispatch; host recovery must fail closed without evidence. */
+  onProcessStarted?: (caller: CallerContext, pid: number) => Promise<void>;
+  /** Trusted retained-thread lookup, including stopped/controller-recovered agents.
+   * Must resolve isolated storage without reopening an expired tool session. */
+  resolveHistoryLaunch?: (
+    binding: RuntimeBinding,
+  ) => Promise<CodexHistoryLaunchResolution>;
   lookupSender?: CodexSenderLookup;
   /** Resolve an authorized artifact reference; no implicit arbitrary local-file access. */
   resolveAttachment?: (
@@ -72,7 +85,7 @@ type Approval = {
 };
 type Send = {
   fingerprint: string;
-  sender: Actor;
+  sender: MessageSender;
   result: DeliveryResult | null;
 };
 type Session = {
@@ -332,6 +345,14 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
       };
       session = current;
       this.sessions.set(key(input.caller), current);
+      const pid = current.peer.child.pid;
+      if (!Number.isSafeInteger(pid) || pid === undefined || pid <= 1)
+        throw new CodexRpcError(
+          "Native launch has no verified owned process ID.",
+          -32602,
+          false,
+        );
+      await this.options.onProcessStarted?.(structuredClone(input.caller), pid);
       await current.peer.rpc("initialize", {
         clientInfo: {
           name: "crew_unified_agents",
@@ -429,6 +450,26 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
         );
       }
       safeToClose = true;
+      if (input.thread.mode === "create") {
+        // Native naming materializes an unused persistent thread in the inspected
+        // runtime. It creates no model input; the same ID survives an idle Stop.
+        const name =
+          input.configuration.profile.name.trim() || input.caller.agentId;
+        await current.peer.rpc("thread/name/set", { threadId, name });
+        const named = record(
+          record(
+            await current.peer.rpc("thread/read", {
+              threadId,
+              includeTurns: false,
+            }),
+          ).thread,
+        );
+        if (named.id !== threadId || named.name !== name)
+          throw new CodexRpcError(
+            "Native thread name was not acknowledged.",
+            -32602,
+          );
+      }
       // New threads use Codex's default mode; retained threads must expose their exact effective mode.
       // A no-op settings/update emits no event in 0.163.0-alpha.11, so it is not a read API.
       if (input.thread.mode === "resume" && !object(opened.collaborationMode))
@@ -1085,67 +1126,176 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
     }
   }
 
-  async readHistory(binding: RuntimeBinding, cursor?: string) {
+  private async historyPage(
+    binding: RuntimeBinding,
+    peer: CodexPeer,
+    cursor: string | undefined,
+    liveSession?: Session,
+  ): Promise<
+    RuntimeResult<{ items: RuntimeHistoryItem[]; nextCursor: string | null }>
+  > {
+    let page: Record<string, unknown>;
     try {
-      const session = this.get(binding);
-      let page: Record<string, unknown>;
-      try {
-        page = record(
-          await session.peer.rpc("thread/turns/list", {
-            threadId: binding.threadId,
-            limit: 50,
-            itemsView: "full",
-            sortDirection: "desc",
-            ...(cursor ? { cursor } : {}),
-          }),
-        );
-      } catch (error) {
-        if (
-          !cursor &&
-          !session.historyObserved &&
-          error instanceof CodexRpcError &&
-          error.code === -32600 &&
-          error.message ===
-            `thread ${binding.threadId} is not materialized yet; thread/turns/list is unavailable before first user message`
-        )
-          return {
-            state: "acknowledged" as const,
-            value: { items: [], nextCursor: null },
-          };
-        throw error;
-      }
-      if (
-        !Array.isArray(page.data) ||
-        !(page.nextCursor === null || typeof page.nextCursor === "string") ||
-        (page.nextCursor && page.nextCursor === cursor)
-      )
-        throw new CodexRpcError("Malformed native history page.");
-      const items = [];
-      for (const raw of [...page.data].reverse()) {
-        const turn = record(raw);
-        const turnId = string(turn.id);
-        if (!Array.isArray(turn.items) || turn.itemsView !== "full")
-          throw new CodexRpcError("Native history did not include full items.");
-        for (const native of turn.items) {
-          const item = projectCodexItem(
-            binding,
-            native,
-            turnId,
-            (b, clientId) =>
-              session.deliveries.get(clientId)?.sender ??
-              this.options.lookupSender?.(b, clientId) ??
-              null,
-          );
-          if (item) items.push(item);
-        }
-      }
-      return {
-        state: "acknowledged" as const,
-        value: { items, nextCursor: page.nextCursor },
-      };
+      page = record(
+        await peer.rpc("thread/turns/list", {
+          threadId: binding.threadId,
+          limit: 50,
+          itemsView: "full",
+          sortDirection: "desc",
+          ...(cursor ? { cursor } : {}),
+        }),
+      );
     } catch (error) {
-      return { state: "failed" as const, error: nativeError(error) };
+      if (
+        liveSession &&
+        !cursor &&
+        !liveSession.historyObserved &&
+        error instanceof CodexRpcError &&
+        error.code === -32600 &&
+        error.message ===
+          `thread ${binding.threadId} is not materialized yet; thread/turns/list is unavailable before first user message`
+      )
+        return {
+          state: "acknowledged",
+          value: { items: [], nextCursor: null },
+        };
+      throw error;
     }
+    if (
+      !Array.isArray(page.data) ||
+      !(page.nextCursor === null || typeof page.nextCursor === "string") ||
+      (page.nextCursor && page.nextCursor === cursor)
+    )
+      throw new CodexRpcError("Malformed native history page.");
+    const items: RuntimeHistoryItem[] = [];
+    for (const raw of [...page.data].reverse()) {
+      const turn = record(raw);
+      const turnId = string(turn.id);
+      if (!Array.isArray(turn.items) || turn.itemsView !== "full")
+        throw new CodexRpcError("Native history did not include full items.");
+      for (const native of turn.items) {
+        const item = projectCodexItem(
+          binding,
+          native,
+          turnId,
+          (b, clientId) =>
+            liveSession?.deliveries.get(clientId)?.sender ??
+            this.options.lookupSender?.(b, clientId) ??
+            null,
+        );
+        if (item) items.push(item);
+      }
+    }
+    return {
+      state: "acknowledged",
+      value: { items, nextCursor: page.nextCursor },
+    };
+  }
+
+  async readHistory(binding: RuntimeBinding, cursor?: string) {
+    let reader: CodexPeer | null = null;
+    let result: RuntimeResult<{
+      items: RuntimeHistoryItem[];
+      nextCursor: string | null;
+    }>;
+    try {
+      const session = this.sessions.get(key(binding));
+      if (session?.binding && !same(session.binding, binding))
+        return {
+          state: "failed" as const,
+          error: failure(
+            "identity_mismatch",
+            "Native history binding does not match the retained session.",
+          ),
+        };
+      if (session?.binding && session.peer.connected)
+        return await this.historyPage(binding, session.peer, cursor, session);
+      if (!this.options.resolveHistoryLaunch)
+        return {
+          state: "failed" as const,
+          error: failure(
+            "unsupported",
+            "Stopped native history requires a trusted isolated history reader.",
+          ),
+        };
+      const resolved = await this.options.resolveHistoryLaunch(
+        structuredClone(binding),
+      );
+      if (resolved.state === "blocked")
+        return { state: "failed" as const, error: resolved.error };
+      const { launch } = resolved;
+      if (
+        !isAbsolute(launch.executable) ||
+        !isAbsolute(launch.cwd) ||
+        !launch.args.includes("app-server") ||
+        ["OPENAI_API_KEY", "CODEX_API_KEY"].some((name) =>
+          Boolean(launch.env[name]),
+        )
+      )
+        return {
+          state: "failed" as const,
+          error: failure(
+            "isolation_blocked",
+            "History reader requires an explicit isolated native launch without API credentials.",
+          ),
+        };
+      let unsupportedRequest = false;
+      const peer = new CodexPeer(
+        launch,
+        (envelope) => {
+          if (envelope.id === undefined) return;
+          if (envelope.method === "currentTime/read")
+            peer.send({
+              id: envelope.id,
+              result: { currentTimeAt: Math.floor(Date.now() / 1000) },
+            });
+          else unsupportedRequest = true; // No approvals or authentication are supplied by a history read.
+        },
+        () => {},
+        this.options.acknowledgementTimeoutMs,
+      );
+      reader = peer;
+      await peer.rpc("initialize", {
+        clientInfo: {
+          name: "crew_native_history",
+          title: "Crew",
+          version: "0.18.0",
+        },
+        capabilities: { experimentalApi: true },
+      });
+      peer.send({ method: "initialized", params: {} });
+      const read = record(
+        await peer.rpc("thread/read", {
+          threadId: binding.threadId,
+          includeTurns: false,
+        }),
+      );
+      if (record(read.thread).id !== binding.threadId)
+        throw new CodexRpcError(
+          "Native history returned a different thread.",
+          -32602,
+        );
+      result = await this.historyPage(binding, peer, cursor);
+      if (unsupportedRequest)
+        result = {
+          state: "failed",
+          error: failure(
+            "unsupported",
+            "The native history reader unexpectedly requested a privileged interaction; none was supplied.",
+          ),
+        };
+    } catch (error) {
+      result = { state: "failed", error: nativeError(error) };
+    }
+    if (reader && !(await reader.close()))
+      return {
+        state: "failed" as const,
+        error: failure(
+          "disconnected",
+          "The read-only native process has not confirmed exit. No agent was started or process force-stopped.",
+        ),
+      };
+    return result;
   }
 
   async reconcileDelivery(
@@ -1166,8 +1316,11 @@ export class CodexAgentRuntime implements AgentRuntimeAdapter {
       attempt.id,
     );
     try {
-      const session = this.get(binding);
-      const known = session.deliveries.get(clientId)?.result;
+      const session = this.sessions.get(key(binding));
+      const known =
+        session?.binding && same(session.binding, binding)
+          ? session.deliveries.get(clientId)?.result
+          : undefined;
       if (known?.state === "acknowledged" || known?.state === "not_sent")
         return known;
       let cursor: string | undefined;
