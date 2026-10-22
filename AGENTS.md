@@ -8,6 +8,9 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 # Working scope and durable engineering guidance
 
+- Unified app integration (#95) must preserve Crew's established interface and design language. Reuse the existing conversation/worker surfaces, layout, navigation, typography, spacing, approved branding, shadcn components and canonical theme tokens. Add setup, skills, access and readiness views within those patterns; the standalone unified-agent library renderer is not approval for a product redesign. Verify desktop and narrow layouts against the existing app, with screenshots outside Git.
+- Profile pictures retain the existing choose/remove/preview interaction. Resolve opaque storage references behind the interface and render the selected image in messages and worker cards. Routine message correlation belongs in diagnostics; expose it in conversation only when it helps explain a delivery problem.
+
 - Settings response schemas must preserve backend-supported null optional execution-plan phases. An unused setup/start/resume/readiness/stop/teardown phase is not a malformed command. Test real saved environment output through the renderer decoder, including save/reload, while retaining rejection of malformed non-null hooks; never reset user configuration to work around decoder drift (GH-74).
 
 - The annotation-preview setup is explicitly exempt from ticket creation. Keep its Vite scenario harness developer-only, use the real Crew renderer/components/theme, and stub all effects before rendering. No physical media, native lifecycle, auth/model/worker operations or installed-profile changes. Preserve the running preview for direct user annotations; subsequent product changes still follow separately agreed scope and delivery policy.
