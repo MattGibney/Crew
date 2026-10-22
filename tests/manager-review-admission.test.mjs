@@ -317,3 +317,24 @@ for (const gate of ['stopped', 'voice', 'approval', 'update']) test(`combined pr
   if (gate === 'stopped') assert.equal(f.manager.view().state, 'stopped');
   if (gate === 'voice') await f.bridge.stopVoice();
 });
+
+test('new scheduled inputs and assistant commentary stay absent from bridge state live and after reconnect', async t => {
+ const f=await fixture(t);
+ const result=await f.bridge.startWork('Scheduled instruction', 'private-review', {background:true,origin:{source:'scheduled-review',operationId:'review'}});
+ const turnId=result.turn.id;
+ await f.notify('item/started',{turnId,item:{id:'internal-user',type:'userMessage',content:[{type:'text',text:'Scheduled instruction'}]}});
+ await f.notify('item/started',{turnId,item:{id:'internal-assistant',type:'agentMessage',text:'Checking my tasks.'}});
+ await f.notify('item/agentMessage/delta',{turnId,itemId:'internal-assistant',delta:' Still checking.'});
+ await until(()=>f.bridge.state().activeTurnId===turnId);
+ await delay(50);
+ assert.deepEqual(f.bridge.state().messages,[]);
+ await f.notify('turn/completed',{turn:{id:turnId,status:'completed',items:[]}});
+ await until(()=>!f.bridge.state().activeTurnId);
+ await f.bridge.shutdown();await f.bridge.ensureThread();
+ assert.deepEqual(f.bridge.state().messages,[]);
+ const human=await f.bridge.startWork('Scheduled instruction','real-human');
+ await f.notify('item/completed',{turnId:human.turn.id,item:{id:'real-human-native',type:'userMessage',content:[{type:'text',text:'Scheduled instruction'}]}});
+ await f.notify('item/completed',{turnId:human.turn.id,item:{id:'real-reply',type:'agentMessage',text:'Your requested answer.'}});
+ await until(()=>f.bridge.state().messages.length===2);
+ assert.deepEqual(f.bridge.state().messages.map(m=>m.text),['Scheduled instruction','Your requested answer.']);
+});

@@ -4,6 +4,7 @@ import { resourceURL } from "../../shared/paths.mjs";
 import { createVoiceSession } from "./voice-session.mjs";
 import { readThreadReference } from "./thread-reference.mjs";
 import { openManagerThread } from "./thread-opening.mjs";
+import { createApplicationOrigins } from "./origins.mjs";
 import { createWorkDelivery } from "./work-delivery.mjs";
 import { observeNotification } from "./observation.mjs";
 import type { NativeObservationState } from "./observation.mjs";
@@ -41,7 +42,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { createConversationTimeline } from "../conversation/timeline.mjs";
-import { managerAttention } from "../attention.mjs";
+import { managerAttention, managerAttentionMessage } from "../attention.mjs";
 import { buildManagerInstructions } from "../instructions/settings.mjs";
 import { workerApprovalResponse } from "../../workers/approval-store.mjs";
 export { safeError } from "./redaction.mjs";
@@ -90,6 +91,7 @@ export function createBridge({
   const approvals = new Map<string, ManagerApproval>(),
     items = new Map<string, BridgeWorkItem>();
   const timeline = createConversationTimeline();
+  const origins = createApplicationOrigins(statePath);
   let activeManagerInstructions: string | null = null;
   let loadingHistory = false,
     journalThreadId: string | null = null,
@@ -136,7 +138,7 @@ export function createBridge({
     connectorError,
     approvals: [...approvals.values()].map((r) => ({ ...r, id: String(r.id) })),
     items: [...items.values()].slice(-40),
-    messages: timeline.snapshot(),
+    messages: timeline.snapshot().filter((message) => !origins.hidden(message)),
   });
   const emit = (type: string, data: Record<string, unknown> = {}) =>
     onEvent({ type, ...data });
@@ -185,6 +187,13 @@ export function createBridge({
     options?: TimelineOptions,
   ) {
     timeline.record(item, turnId, options);
+    const attentionMessage = managerAttentionMessage(item);
+    if (
+      attentionMessage &&
+      origins.hidden({ id: item.id, turnId, role: "assistant", text: "" })
+    )
+      timeline.restore([attentionMessage]);
+    for (const message of timeline.snapshot()) origins.observed(message);
     if (item.type === "commandExecution")
       items.set(item.id, {
         id: item.id,
@@ -335,6 +344,7 @@ export function createBridge({
     }
   }
   async function ensureThread() {
+    await origins.ready;
     await prepare();
     if (threadPromise) return threadPromise;
     if (threadReady) return threadId;
@@ -624,6 +634,12 @@ export function createBridge({
       changed();
     },
     completed: (id) => completedTurns.has(id),
+    provenance: {
+      begin: (requestId, origin, turnId) =>
+        origins.begin(requestId, origin, turnId, timeline.snapshot()),
+      acknowledged: origins.acknowledged,
+      failed: origins.failed,
+    },
   });
   const startWork = workDelivery.start;
   const cancelPendingWork = workDelivery.cancel;
