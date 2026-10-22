@@ -574,12 +574,8 @@ export async function startUnifiedApplication(
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
         setupChoices: async () => registry.setupChoices(),
-        capabilities: async (id) => {
-          const connection = await authorization.getConnection(id);
-          if (!connection) throw new Error("Connection unavailable.");
-          registry.assertConnection(connection);
-          return gateway.catalogue.snapshot(connection);
-        },
+        catalogueSnapshot: (connection) =>
+          gateway.catalogue.projection(connection),
         verifyConnection: async (id) => {
           const connection = await authorization.getConnection(id);
           if (!connection) throw new Error("Connection unavailable.");
