@@ -16,6 +16,7 @@ import type {
   GroupDraft,
   GroupSave,
   OwnerPanelProps,
+  WorkspacePermissionChoice,
 } from "./types";
 import {
   AccessSection,
@@ -32,6 +33,7 @@ export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   capabilities: readonly ServiceCapability[];
   crewCapabilities: readonly CrewPermissionChoice[];
   agents: readonly Agent[];
+  workspaces?: readonly WorkspacePermissionChoice[];
   onSave: (change: GroupSave) => Promise<void>;
 }
 
@@ -91,7 +93,8 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
                       (count, service) => count + service.capabilities.length,
                       0,
                     )}{" "}
-                    service capabilities
+                    service capabilities ·{" "}
+                    {group.grants.environmentPolicyIds.length} workspaces
                   </p>
                 </div>
                 <Button
@@ -190,6 +193,17 @@ function GroupEditor({
         capability,
       })),
   );
+  const workspaces = props.workspaces ?? [];
+  const setWorkspace = (policyId: string, selected: boolean) =>
+    setDraft((current) => ({
+      ...current,
+      grants: {
+        ...current.grants,
+        environmentPolicyIds: selected
+          ? [...new Set([...current.grants.environmentPolicyIds, policyId])]
+          : current.grants.environmentPolicyIds.filter((id) => id !== policyId),
+      },
+    }));
   return (
     <form
       className="space-y-5"
@@ -420,13 +434,53 @@ function GroupEditor({
               ))}
           </div>
         </details>
-        {draft.grants.environmentPolicyIds.length > 0 && (
-          <p className="text-xs text-muted-foreground">
-            {draft.grants.environmentPolicyIds.length} existing environment
-            policies will be retained. Runtime isolation is configured
-            separately.
+        <fieldset className="space-y-3 border-t pt-4">
+          <legend className="text-sm font-medium">Workspaces</legend>
+          <p className="text-sm text-muted-foreground">
+            Choose the approved folders agents in this group can use. Configure
+            folders in Workspace settings.
           </p>
-        )}
+          {workspaces.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              No approved workspaces are available.
+            </p>
+          )}
+          {workspaces.map((workspace) => (
+            <Choice
+              key={workspace.policy.id}
+              checked={draft.grants.environmentPolicyIds.includes(
+                workspace.policy.id,
+              )}
+              onChange={(checked) => setWorkspace(workspace.policy.id, checked)}
+              description={workspace.description}
+            >
+              {workspace.label}
+            </Choice>
+          ))}
+          {draft.grants.environmentPolicyIds
+            .filter(
+              (id) =>
+                !workspaces.some((workspace) => workspace.policy.id === id),
+            )
+            .map((id) => (
+              <div
+                key={id}
+                className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+              >
+                <span className="break-all">
+                  {id} · workspace unavailable; existing permission retained
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setWorkspace(id, false)}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+        </fieldset>
       </fieldset>
       <ErrorMessage>{action.error}</ErrorMessage>
       <FormActions

@@ -9,7 +9,7 @@ The package entry, development entry and `crew start` open `src/desktop/main.mts
 - Skills are project-owned native `SKILL.md` bundles with immutable selected revisions. The composition's authorization/admission wrapper governs their agent tools. See [Project skills](PROJECT-SKILLS.md).
 - Voice uses the composition-owned primary voice service. The desktop adapts validated owner commands; it does not create another handoff, turn or settlement authority. One mounted renderer hook owns media while controls move between presentation modes. Explicit Connect is required; automated validation uses synthetic media.
 - Per-agent schedules reuse the existing cadence/checkpoint engine and have no default occurrence. Their private delivery contract requires a final current-state check at atomic runtime admission. The current app checkpoint still awaits that hook; preliminary desktop eligibility alone does not establish schedule correctness.
-- Project setup uses subscription status, access-owner operations and the environment-owner API. Approving a workspace and granting its policy to an agent are separate steps. The access settings policy selector is a dependent access-track change; do not infer usable project execution merely from an approved path.
+- Project setup uses subscription status, access-owner operations and the environment-owner API. Approve a folder in Workspace settings, then select that folder in a permission group and assign the group to the agent. The group editor displays paths and read/write access from current project workspace records. Approval of a path alone does not grant an agent access or prove actual project execution.
 
 ## Native lifecycle
 
