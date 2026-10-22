@@ -451,3 +451,17 @@ test('HTTP command edits survive restart as agent context without automatic boot
   const calls=await f.calls();assert.ok(calls.some(call=>call.method==='thread/resume'&&call.params.threadId===first.threadId));assert.equal(calls.some(call=>call.method==='thread/realtime/start'),false);
   await f.stop();
 });
+
+test('manager schedules save through actual project settings without starting work and persist while stopped',async t=>{
+ const f=await fixture(t);await f.start();
+ const initial=await f.request('/api/settings',{method:'GET'});assert.equal(initial.status,200);assert.equal(initial.value.managerSchedules.schedules[0].id,'commitment-review');
+ await f.request('/api/manager/lifecycle',{body:{action:'stop'}});
+ const schedule={id:'project-check',name:'Check configured work',instruction:'Review only my explicitly assigned work.',enabled:true,timing:{kind:'interval',minutes:1}};
+ const denied=await f.request('/api/settings/manager-schedules',{method:'PUT',requestOrigin:'https://elsewhere.invalid',body:{expectedRevision:initial.value.managerSchedules.revision,schedules:[schedule]}});assert.equal(denied.status,403);
+ const saved=await f.request('/api/settings/manager-schedules',{method:'PUT',body:{expectedRevision:initial.value.managerSchedules.revision,schedules:[schedule]}});assert.equal(saved.status,200,JSON.stringify(saved.value));assert.equal(saved.value.managerSchedules.schedules[0].instruction,schedule.instruction);
+ const stale=await f.request('/api/settings/manager-schedules',{method:'PUT',body:{expectedRevision:initial.value.managerSchedules.revision,schedules:[]}});assert.notEqual(stale.status,200);
+ assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,0,'Saving does not run the instruction');
+ await f.stop();await writeFile(join(f.stateDir,'manager-schedule-runs.json'),JSON.stringify({'project-check':{nextAt:Date.now()-60000}}));await f.start();
+ let current;const deadline=Date.now()+5000;do{current=await f.request('/api/settings',{method:'GET'});if(current.value.managerSchedules.schedules[0].run.status==='deferred')break;await delay(50);}while(Date.now()<deadline);
+ assert.equal(current.value.managerLifecycle.state,'stopped');assert.equal(current.value.managerSchedules.schedules[0].name,schedule.name);assert.equal(current.value.managerSchedules.schedules[0].run.status,'deferred');assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,0,'A due schedule never wakes the stopped manager');await f.stop();
+});
