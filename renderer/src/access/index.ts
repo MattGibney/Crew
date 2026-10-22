@@ -4,6 +4,8 @@ export { AgentAccessPanel } from "./AgentAccessPanel";
 export type { AgentAccessPanelProps } from "./AgentAccessPanel";
 export { ServiceConnectionsPanel } from "./ServiceConnectionsPanel";
 export type { ServiceConnectionsPanelProps } from "./ServiceConnectionsPanel";
+export { ServiceConnectionWizard } from "./ServiceConnectionWizard";
+export type { ServiceConnectionWizardProps } from "./ServiceConnectionWizard";
 export { AccessRequestsPanel } from "./AccessRequestsPanel";
 export type { AccessRequestsPanelProps } from "./AccessRequestsPanel";
 export { ApprovalGrantsPanel } from "./ApprovalGrantsPanel";

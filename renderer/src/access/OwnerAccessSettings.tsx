@@ -4,6 +4,7 @@ import { PermissionGroupsPanel } from "./PermissionGroupsPanel";
 import { CreationPresetsPanel } from "./CreationPresetsPanel";
 import { AgentAccessPanel } from "./AgentAccessPanel";
 import { ServiceConnectionsPanel } from "./ServiceConnectionsPanel";
+import { ServiceConnectionWizard } from "./ServiceConnectionWizard";
 import { AccessRequestsPanel } from "./AccessRequestsPanel";
 import { ApprovalGrantsPanel } from "./ApprovalGrantsPanel";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -27,6 +28,7 @@ export function OwnerAccessSettings({
   workspaces?: readonly WorkspacePermissionChoice[];
 }) {
   const [selectedId, setSelectedId] = useState("");
+  const [connecting, setConnecting] = useState(false);
   if (!isOwner) return <OwnerRequired />;
   const common = { isOwner, onNotify };
   const agent =
@@ -36,21 +38,37 @@ export function OwnerAccessSettings({
   };
   return (
     <div className="min-w-0 divide-y">
-      <ServiceConnectionsPanel
-        {...common}
-        connections={snapshot.connections}
-        setupChoices={snapshot.setupChoices}
-        onVerify={
-          snapshot.canVerifyConnections
-            ? (connectionId, expectedRevision) =>
-                command("verifyConnection", { connectionId, expectedRevision })
-            : undefined
-        }
-        onSave={(change) => command("saveConnection", change)}
-        onRemove={(connectionId, expectedRevision) =>
-          command("removeConnection", { connectionId, expectedRevision })
-        }
-      />
+      {connecting ? (
+        <ServiceConnectionWizard
+          {...common}
+          snapshot={snapshot}
+          onCommand={onCommand}
+          onCancel={() => setConnecting(false)}
+          onComplete={() => setConnecting(false)}
+        />
+      ) : (
+        <ServiceConnectionsPanel
+          {...common}
+          onConnect={
+            snapshot.canGuideConnections ? () => setConnecting(true) : undefined
+          }
+          connections={snapshot.connections}
+          setupChoices={snapshot.setupChoices}
+          onVerify={
+            snapshot.canVerifyConnections
+              ? (connectionId, expectedRevision) =>
+                  command("verifyConnection", {
+                    connectionId,
+                    expectedRevision,
+                  })
+              : undefined
+          }
+          onSave={(change) => command("saveConnection", change)}
+          onRemove={(connectionId, expectedRevision) =>
+            command("removeConnection", { connectionId, expectedRevision })
+          }
+        />
+      )}
       {snapshot.catalogue
         .filter((item) => item.state !== "available")
         .map((item) => {
