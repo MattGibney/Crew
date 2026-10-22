@@ -271,6 +271,18 @@ export function DesktopApplication({
           <Button onClick={() => void act("selectProject", { projectId })}>
             Retry project
           </Button>
+          <Button
+            variant="outline"
+            disabled={pending}
+            onClick={() => void act("recoverProject", { projectId })}
+          >
+            Recover interrupted project
+          </Button>
+          <p className="text-sm text-muted-foreground">
+            Recovery checks that the previous controller and recorded native
+            agents have exited, then preserves abandoned ownership records in a
+            private archive. It keeps your sign-in, agents and chat history.
+          </p>
           {preparation}
         </div>
       ) : (

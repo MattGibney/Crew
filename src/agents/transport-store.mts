@@ -74,6 +74,10 @@ export class NativeTransportStore {
       );
     const lease = await open(join(directory, "transport.lock"), "wx", 0o600);
     try {
+      await lease.writeFile(
+        JSON.stringify({ pid: process.pid, token: randomUUID() }),
+      );
+      await lease.sync();
       let records: NativeToolReceipt[] = [];
       try {
         const file = await open(

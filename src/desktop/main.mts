@@ -47,6 +47,12 @@ import {
 import { createUnifiedUpdates } from "./unified-updates.mjs";
 import { openWebLink } from "./external-links.mjs";
 import { AgentSetupError, openAgentSetup } from "./agent-setup.mjs";
+import {
+  recoverInterruptedProject,
+  verifyUnavailableProjectIdle,
+  ProjectRecoveryError,
+} from "./project-recovery.mjs";
+import { randomUUID } from "node:crypto";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const desktopDirectory = join(
@@ -331,7 +337,7 @@ async function openProject(project: DesktopProject) {
       await application?.close().catch(() => {});
       failures.set(
         project.id,
-        "Crew could not open this project's isolated runtime. Check the installed Codex app and retained project state, then retry.",
+        "Crew could not open this project's isolated runtime. If Crew was interrupted, recover the project to check for abandoned ownership records. Saved agents, sign-in and chats will be retained.",
       );
     } finally {
       changed();
@@ -569,6 +575,35 @@ async function request(method: string, value: unknown) {
     }
   }
   if (method === "selectProject") return selectProject(text(input.projectId));
+  if (method === "recoverProject") {
+    const projectId = text(input.projectId);
+    if (
+      switching ||
+      openings.size ||
+      hosts.has(projectId) ||
+      quit.holding() ||
+      updates?.holding()
+    )
+      throw new ProjectRecoveryError(
+        "Finish the current project transition before recovery.",
+      );
+    const project = registry
+      .snapshot()
+      .projects.find((row) => row.id === projectId);
+    if (!project || !failures.has(projectId))
+      throw new ProjectRecoveryError(
+        "Only an unavailable project can be recovered.",
+      );
+    switching = true;
+    try {
+      await recoverInterruptedProject(registry.stateDirectory(projectId));
+      await updates.withStartupLease(() => openProject(project));
+      changed();
+    } finally {
+      switching = false;
+    }
+    return;
+  }
   const host = requiredProject(text(input.projectId));
   if (method === "ownerSnapshot") return host.application.ownerApi.snapshot();
   if (method === "ownerCommand")
@@ -585,26 +620,75 @@ async function start() {
     throw new Error("Crew storage must be absolute.");
   await mkdir(desktopDirectory, { recursive: true, mode: 0o700 });
   registry = await openUnifiedRegistry(desktopDirectory);
-  const lifecycleProjects = (): DesktopLifecycleProject[] => {
-    if (failures.size || openings.size || switching)
+  const lifecycleProjects = (
+    includeUnavailable = false,
+  ): DesktopLifecycleProject[] => {
+    if ((!includeUnavailable && failures.size) || openings.size || switching)
       throw new Error(
         "Every project must be available for the shutdown check.",
       );
-    return [...hosts.values()].map((host) => ({
-      id: host.project.id,
-      name: host.project.name,
-      lifecycle: host.application.foundation,
-      observePreparation: () =>
-        host.application.foundation.store.snapshot().preparation,
-      async close(reservation) {
-        await host.schedules.close();
-        await host.application.close(reservation.id);
-        host.unsubscribe();
-      },
-    }));
+    const available: DesktopLifecycleProject[] = [...hosts.values()].map(
+      (host) => ({
+        id: host.project.id,
+        name: host.project.name,
+        lifecycle: host.application.foundation,
+        observePreparation: () =>
+          host.application.foundation.store.snapshot().preparation,
+        async close(reservation) {
+          await host.schedules.close();
+          await host.application.close(reservation.id);
+          host.unsubscribe();
+        },
+      }),
+    );
+    if (includeUnavailable) {
+      for (const project of registry
+        .snapshot()
+        .projects.filter((row) => failures.has(row.id))) {
+        const verify = () =>
+          verifyUnavailableProjectIdle(registry.stateDirectory(project.id));
+        const unavailable = async (): Promise<never> => {
+          throw new ProjectRecoveryError(
+            "Recover this project before starting an agent.",
+          );
+        };
+        available.push({
+          id: project.id,
+          name: project.name,
+          lifecycle: {
+            start: unavailable,
+            stop: unavailable,
+            restart: unavailable,
+            async prepare() {
+              await verify();
+              return [];
+            },
+            async reserveExecution(projectId, reason) {
+              if (projectId !== project.id || reason !== "quit")
+                throw new Error("Invalid unavailable-project shutdown.");
+              await verify();
+              return {
+                state: "reserved",
+                reservation: {
+                  id: randomUUID(),
+                  projectId,
+                  reason,
+                  acquiredAt: new Date().toISOString(),
+                },
+              };
+            },
+            async releaseExecution() {},
+          },
+          async close() {
+            await verify();
+          },
+        });
+      }
+    }
+    return available;
   };
   quit = createUnifiedQuit({
-    projects: lifecycleProjects,
+    projects: () => lifecycleProjects(true),
     changed,
     async finish() {
       quitting = true;
@@ -664,7 +748,9 @@ async function start() {
         return { ok: true, value: await request(method, value) };
       } catch (error) {
         const detail =
-          error instanceof ProjectSkillError || error instanceof AgentSetupError
+          error instanceof ProjectSkillError ||
+          error instanceof AgentSetupError ||
+          error instanceof ProjectRecoveryError
             ? { code: error.code, message: error.message }
             : {
                 code: "failed",

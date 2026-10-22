@@ -9,6 +9,7 @@ const allowed = new Set([
   "chooseProjectDirectory",
   "createProject",
   "selectProject",
+  "recoverProject",
   "renameProject",
   "ownerSnapshot",
   "ownerCommand",
