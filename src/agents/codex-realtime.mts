@@ -534,6 +534,8 @@ export class CodexRealtimeController {
     ) {
       const text = method.endsWith("/done") ? params.text : params.delta;
       if (
+        call.started &&
+        identity(call.realtimeSessionId) &&
         call.transcriptMode !== "item" &&
         (params.role === "user" || params.role === "assistant") &&
         typeof text === "string" &&
@@ -554,12 +556,15 @@ export class CodexRealtimeController {
       method === "thread/realtime/item/completed"
     ) {
       const item = params.item;
+      // A pending call must not adopt a delayed item from its predecessor.
+      // Only the native started event establishes this call's session identity.
       if (
+        !call.started ||
+        !identity(call.realtimeSessionId) ||
         !object(item) ||
         !identity(item.id) ||
         !identity(item.realtimeSessionId) ||
-        (call.realtimeSessionId &&
-          item.realtimeSessionId !== call.realtimeSessionId)
+        item.realtimeSessionId !== call.realtimeSessionId
       )
         return;
       if (
@@ -605,6 +610,8 @@ export class CodexRealtimeController {
       }
     } else if (
       method === "thread/realtime/item/transcript/delta" &&
+      call.started &&
+      identity(call.realtimeSessionId) &&
       call.transcriptMode === "item" &&
       typeof params.itemId === "string" &&
       typeof params.delta === "string" &&
