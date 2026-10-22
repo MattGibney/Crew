@@ -749,6 +749,9 @@ export async function openAgentSetup(options: Options) {
       throw new AgentSetupError(
         "Sign in to ChatGPT in Crew before creating this agent. Your draft is saved.",
       );
+    // A resumed applying phase can contain an unacknowledged mutation. Only
+    // this invocation's known pre-access failures may return to editable setup.
+    let accessMayHaveChanged = journal.record.phase === "applying";
     await update((next) => {
       next.record.phase = "applying";
       next.record.error = null;
@@ -812,6 +815,7 @@ export async function openAgentSetup(options: Options) {
             ))
         )
           throw stale();
+        accessMayHaveChanged = true;
         const group =
           existing ??
           ((await options.application.accessOwnerApi.command("saveGroup", {
@@ -824,6 +828,7 @@ export async function openAgentSetup(options: Options) {
         });
       }
       if (draft.mode === "repair") {
+        accessMayHaveChanged = true;
         await update((next) => {
           next.checkpoint.agentId = draft.agentId;
         });
@@ -892,6 +897,7 @@ export async function openAgentSetup(options: Options) {
             } = existing;
             if (revision !== 1 || !same(fields, presetDraft)) throw stale();
           }
+          accessMayHaveChanged = true;
           const preset =
             existing ??
             ((await options.application.accessOwnerApi.command("savePreset", {
@@ -1021,10 +1027,20 @@ export async function openAgentSetup(options: Options) {
       });
     } catch (error) {
       await update((next) => {
+        if (!accessMayHaveChanged) {
+          // Folder preparation is idempotent and assigns no group or agent.
+          // Retain any unassigned policy in its authority, but let the owner
+          // correct/review their choices after a proven pre-access failure.
+          next.record.phase = "draft";
+          next.record.review = null;
+          next.checkpoint = checkpoint();
+        }
         next.record.error =
           error instanceof AgentSetupError
             ? error.message.slice(0, 800)
-            : "Setup needs reconciliation. Its completed steps are retained.";
+            : accessMayHaveChanged
+              ? "Setup needs reconciliation. Its completed steps are retained."
+              : "Setup preparation failed before access changes began. Your choices are retained; review or correct them before retrying.";
       });
     }
   };

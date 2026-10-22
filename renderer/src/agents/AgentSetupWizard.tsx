@@ -416,9 +416,13 @@ export function AgentSetupWizard(props: Props) {
           <Button
             variant="outline"
             size="sm"
-            disabled={busy}
+            disabled={busy || saving}
             onClick={() =>
               void run(async () => {
+                if (!conflict) {
+                  await reload();
+                  return;
+                }
                 const next = await command<AgentSetupRecord | null>(
                   "setup.read",
                   {},
@@ -430,7 +434,9 @@ export function AgentSetupWizard(props: Props) {
               })
             }
           >
-            {conflict ? "Reload saved setup" : "Refresh saved progress"}
+            {conflict
+              ? "Discard typed choices and reload"
+              : "Refresh saved progress"}
           </Button>
           {dirty && !conflict && (
             <Button
@@ -533,7 +539,7 @@ export function AgentSetupWizard(props: Props) {
                   <span
                     className={`flex size-5 items-center justify-center rounded-full ${draft.step === index ? "bg-primary text-primary-foreground" : "bg-muted"}`}
                   >
-                    {index < draft.step ? (
+                    {index < draft.step && (index !== 0 || signedIn) ? (
                       <Check className="size-3" />
                     ) : (
                       index + 1

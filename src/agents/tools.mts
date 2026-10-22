@@ -12,7 +12,8 @@ const string = { type: "string" };
 const id = { type: "string", minLength: 1, maxLength: 512 };
 const environmentAgentId = {
   ...id,
-  description: 'Use "self" for your authenticated agent, or an authorized agent ID. No team-discovery permission is needed to address yourself.',
+  description:
+    'Use "self" for your authenticated agent, or an authorized agent ID. No team-discovery permission is needed to address yourself.',
 };
 const object = (
   properties: JsonObject,
@@ -471,14 +472,19 @@ export function createFoundationAgentTools(
             args.markdown as string,
           );
         case "environment_action":
-          return foundation.environment(
-            principal,
-            { ...args, agentId: args.agentId === "self" ? caller.agentId : identifier(args.agentId) } as unknown as Parameters<typeof foundation.environment>[1],
-          );
+          return foundation.environment(principal, {
+            ...args,
+            agentId:
+              args.agentId === "self"
+                ? caller.agentId
+                : identifier(args.agentId),
+          } as unknown as Parameters<typeof foundation.environment>[1]);
         case "scratchpad_read":
         case "environments_read": {
-          const agentId = name === "environments_read" && args.agentId === "self"
-            ? caller.agentId : identifier(args.agentId);
+          const agentId =
+            name === "environments_read" && args.agentId === "self"
+              ? caller.agentId
+              : identifier(args.agentId);
           await records.authorize(
             principal,
             name === "scratchpad_read"

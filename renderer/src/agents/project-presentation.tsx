@@ -17,6 +17,7 @@ import type {
   RuntimeBinding,
 } from "../../../src/agents/contracts.mjs";
 import { OwnerAccessSettings } from "../access/OwnerAccessSettings";
+import { ServiceConnectionWizard } from "../access";
 import { ProjectSkillsPanel } from "../skills/ProjectSkillsPanel";
 import type { ProjectSkillsClient } from "../skills/client";
 import { SettingsToast } from "../manager/settings/SettingsToast";
@@ -32,7 +33,10 @@ import type {
 } from "./voice/client";
 import type { ProjectPresentation } from "./DesktopApplication";
 import type { AgentsSnapshot } from "./client";
-import { AgentSetupWizard } from "./AgentSetupWizard";
+import {
+  AgentSetupWizard,
+  type ConnectionWizardContext,
+} from "./AgentSetupWizard";
 
 type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
@@ -124,6 +128,9 @@ export function createProjectPresentation(
       onStatus={onStatus}
     />
   );
+  const connectionWizard = (context: ConnectionWizardContext) => (
+    <ServiceConnectionWizard {...context} isOwner />
+  );
   return {
     settingsPanels: [
       {
@@ -139,6 +146,7 @@ export function createProjectPresentation(
             subscribe={onOwnerChange}
             visible={visible}
             renderSignIn={signIn}
+            renderConnectionWizard={connectionWizard}
           />
         ),
       },
@@ -244,6 +252,7 @@ export function createProjectPresentation(
           visible={context.visible}
           firstUse
           renderSignIn={signIn}
+          renderConnectionWizard={connectionWizard}
         />
       );
     },

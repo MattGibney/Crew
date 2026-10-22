@@ -4,6 +4,61 @@ import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openAgentSetup } from "../src/desktop/agent-setup.mts";
+import { createFoundationAgentTools } from "../src/agents/tools.mts";
+
+test("folder self-addressing preserves authenticated identity and target authorization", async () => {
+  const caller = {
+    projectId: "project",
+    agentId: "current-agent",
+    sessionId: "session",
+  };
+  const admitted = [];
+  const foundation = {
+    executionAllowed: () => true,
+    records: {
+      authorize: async (principal, action, target) => {
+        assert.deepEqual(principal.caller, caller);
+        if (target.agentId !== caller.agentId) throw new Error("Denied target");
+        admitted.push({ action, target });
+      },
+    },
+    store: { snapshot: () => ({ agents: [{ id: caller.agentId }] }) },
+    environmentList: async (_principal, agentId) => ({ agentId }),
+    environment: async (principal, input) => {
+      await foundation.records.authorize(
+        principal,
+        `environments.${input.action}`,
+        { type: "agent", agentId: input.agentId },
+      );
+      return input;
+    },
+  };
+  const tools = createFoundationAgentTools(foundation, caller);
+  assert.deepEqual(await tools.call("environments_read", { agentId: "self" }), {
+    agentId: caller.agentId,
+  });
+  const result = await tools.call("environment_action", {
+    agentId: "self",
+    action: "attach",
+    requestId: "one",
+    arguments: { policyId: "approved" },
+  });
+  assert.equal(result.agentId, caller.agentId);
+  assert.equal(admitted.length, 2);
+  await assert.rejects(
+    tools.call("environments_read", { agentId: "another-agent" }),
+    /Denied target/,
+  );
+  await assert.rejects(
+    tools.call("environment_action", {
+      agentId: "another-agent",
+      action: "attach",
+      requestId: "two",
+      arguments: { policyId: "approved" },
+    }),
+    /Denied target/,
+  );
+});
 
 const copy = (value) => structuredClone(value);
 async function fixture(t, failure = null) {
@@ -196,6 +251,76 @@ test("unknown creation with no provenance stays blocked across reload without du
     }),
     /Reconcile/,
   );
+});
+
+test("folder preparation failure leaves choices editable before access mutations", async (t) => {
+  const f = await fixture(t),
+    setup = await f.open();
+  const prepare = f.application.environmentOwnerApi.prepareFolderAccess;
+  f.application.environmentOwnerApi.prepareFolderAccess = async () => {
+    throw new Error("Untrusted provider failure details");
+  };
+  const review = await reviewed(setup);
+  let state = await setup.command("setup.complete", {
+    expectedRevision: review.revision,
+  });
+  assert.equal(state.phase, "draft");
+  assert.equal(state.review, null);
+  assert.match(state.error, /before access changes began/);
+  assert.deepEqual(state.draft, review.draft);
+  assert.equal(f.access.groups.length, 0);
+  assert.equal(f.access.presets.length, 0);
+  assert.equal(f.creates(), 0);
+  const reopened = await f.open();
+  state = await reopened.command("setup.save", {
+    expectedRevision: state.revision,
+    draft: { ...state.draft, name: "Corrected manager" },
+  });
+  f.application.environmentOwnerApi.prepareFolderAccess = prepare;
+  state = await reopened.command("setup.review", {
+    expectedRevision: state.revision,
+  });
+  state = await reopened.command("setup.complete", {
+    expectedRevision: state.revision,
+  });
+  assert.equal(state.phase, "complete");
+  assert.equal(f.creates(), 1);
+});
+
+test("lost group-save response stays locked and recovers the exact committed group", async (t) => {
+  const f = await fixture(t),
+    setup = await f.open();
+  const command = f.application.accessOwnerApi.command;
+  let lost = false;
+  f.application.accessOwnerApi.command = async (name, args) => {
+    const result = await command(name, args);
+    if (name === "saveGroup" && !lost) {
+      lost = true;
+      throw new Error("Response lost after group commit");
+    }
+    return result;
+  };
+  const review = await reviewed(setup);
+  let state = await setup.command("setup.complete", {
+    expectedRevision: review.revision,
+  });
+  assert.equal(state.phase, "applying");
+  assert.equal(f.access.groups.length, 1);
+  assert.equal(f.creates(), 0);
+  const reopened = await f.open();
+  await assert.rejects(
+    reopened.command("setup.save", {
+      expectedRevision: state.revision,
+      draft: { ...state.draft, name: "Unsafe replacement" },
+    }),
+    /reconcile/,
+  );
+  state = await reopened.command("setup.complete", {
+    expectedRevision: state.revision,
+  });
+  assert.equal(state.phase, "complete");
+  assert.equal(f.access.groups.length, 1);
+  assert.equal(f.creates(), 1);
 });
 
 test("reviewed group revision conflict rejects before any creation", async (t) => {
