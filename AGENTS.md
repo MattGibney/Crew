@@ -336,3 +336,7 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Unpublished 0.17.1 thread-observation correction
 
 - Hosted 0.17.1 run 39755188666 completed 749/751 and stopped before signing/publication. Preserve its immutable tag at f4c244d and failed gate evidence. Two retained-context tests captured execution.live before native thread identity arrived; a nonempty correlated thread and current-run report are required before snapshotting conversation continuity. This strengthens observation without weakening the identity assertions, timeouts or product behavior. Deliver the authorized grouped features as 0.17.2; use an unsigned hosted candidate to validate corrected tests before creating the new signed-release tag.
+
+## Authorized Settings hotfix release (GitHub #74)
+
+- The human explicitly authorized merging PR75 and publishing the next signed stable patch, 0.17.3 after 0.17.2. This supersedes GH74's original PR-only boundary for this named delivery; no unrelated features or PR54. Verify real saved null lifecycle phases through packaged Settings open/save/reload/relaunch. Preserve strict validation of populated project commands and direct hooks; never reset valid user configuration to hide renderer contract drift. Preserve existing tags, profiles/auth/workers, physical microphone and business-service boundaries; manual native continuity does not prove automatic portable-root updater relaunch.
