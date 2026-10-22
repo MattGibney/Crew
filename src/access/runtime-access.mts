@@ -1,44 +1,699 @@
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import type {
   CallerContext,
   ConfigurationSnapshot,
+  RuntimeAccessBinding,
   RuntimeAccessProvider,
+  RuntimeBinding,
+  RuntimeError,
   RuntimeIsolationResult,
+  RuntimeStartInput,
+  Skill,
 } from "../agents/contracts.mjs";
+import {
+  CodexPeer,
+  object,
+  record,
+  type CodexLaunch,
+} from "../agents/codex-peer.mjs";
+import type { CodexLaunchResolution } from "../agents/codex-runtime.mjs";
+import {
+  boundedProcess,
+  nativeSeatbeltPolicy,
+  openModelEgress,
+  verifyNativeBoundary,
+} from "./native-boundary.mjs";
 
-/**
- * The #89 native-runtime feasibility decision, not a claim about every Codex
- * version or a substitute for observing a future isolation implementation.
- * See docs/ACCESS-ISOLATION.md for installed-runtime evidence and acceptance.
- */
-const limitations: readonly string[] = Object.freeze([
-  "No verified runtime boundary excludes personal filesystem credentials, OS keychain access, process access, Git/SSH helpers and agent sockets while preserving native approvals.",
-  "A separate Codex home, private workspace, filtered environment or permission profile does not by itself prove that personal MCP, apps, plugins, CLI configuration and shell startup cannot supply service authority.",
-  "Native ChatGPT sign-in is supported, but subscription sign-in inside the required isolation boundary has not been verified. Personal auth files and tokens must not be copied or extracted; API-key fallback is not permitted.",
-  "The inspected Codex 0.163.0-alpha.11 schema marks chatgptAuthTokens for OpenAI internal use only. It is not a supported credential-transfer route for this implementation.",
-  "No session-bound gateway connection and environment policy have been observed together with enforced denial of direct service access across ordinary, approved and resumed execution.",
-]);
+export interface NativeGatewayBinding {
+  /** Service gateway endpoint. Both endpoints come from one authenticated host. */
+  url: string;
+  foundationUrl: string;
+  bearerToken: string;
+  bindingRef: string;
+  release(): Promise<void>;
+}
+export interface CodexRuntimeAccessOptions {
+  directory: string;
+  projectId: string;
+  executable: string;
+  runtimeConfigRef?: string;
+  gatewayFor(caller: CallerContext): Promise<NativeGatewayBinding>;
+  resolveSkills(
+    skills: Skill[],
+  ): Promise<{ id: string; revision: number; nativePath: string }[]>;
+}
+export type SubscriptionStatus =
+  | { state: "signed_in"; plan: string | null }
+  | { state: "sign_in_required" }
+  | { state: "blocked"; reason: string };
+const key = (caller: CallerContext) =>
+  JSON.stringify([caller.projectId, caller.agentId, caller.sessionId]);
+const hash = (value: unknown) =>
+  createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const FEATURES = [
+  "shell_tool",
+  "unified_exec",
+  "shell_snapshot",
+  "js_repl",
+  "multi_agent",
+  "apps",
+  "plugins",
+  "remote_plugin",
+  "remote_control",
+  "hooks",
+  "memories",
+  "browser_use",
+  "computer_use",
+  "image_generation",
+];
+const blocked = (reason: string): RuntimeIsolationResult => ({
+  state: "blocked",
+  reason,
+  limitations: [
+    "Native access is restricted to Crew-brokered tools. Actual project work requires the separately authorized environment executor; chat and broker access alone do not establish usable project work.",
+    "Owner ChatGPT sign-in in Crew's separate native home is required. Personal authentication is never copied.",
+  ],
+});
+type Bound = {
+  binding: RuntimeAccessBinding;
+  configurationHash: string;
+  launch: CodexLaunch;
+  skills: { id: string; revision: number; nativePath: string }[];
+  gateway: NativeGatewayBinding;
+};
 
-/**
- * Fail closed until a supported, observed isolation route is implemented.
- *
- * Construction and prepare never discover/read personal configuration, resolve
- * credential references, launch a process, create a workspace or change native
- * approvals. Configuration snapshots and opaque references are not evidence.
- * There is deliberately no boolean, callback or option that can mint `ready`.
- */
+/** Concrete macOS process containment. No boolean/callback can attest readiness.
+ * Actual native config/account reads and synthetic boundary probes must succeed.
+ * Owner sign-in is explicit. The environment executor is a separate boundary. */
 export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
-  async prepare(
-    _caller: CallerContext,
-    _configuration: ConfigurationSnapshot,
-  ): Promise<RuntimeIsolationResult> {
+  private options: CodexRuntimeAccessOptions | null = null;
+  private root = "";
+  private binary = "";
+  private egress: Awaited<ReturnType<typeof openModelEgress>> | null = null;
+  private bindings = new Map<string, Bound>();
+  private releasedSessions = new Set<string>();
+  private signing: { peer: CodexPeer; loginId: string | null } | null = null;
+  private signInStarting = false;
+  private signInGeneration = 0;
+  private closed = false;
+  private tail: Promise<unknown> = Promise.resolve();
+  // Empty construction remains safely blocked for callers awaiting configuration.
+  constructor() {}
+  static async open(
+    options: CodexRuntimeAccessOptions,
+  ): Promise<CodexRuntimeAccessProvider> {
+    if (process.platform !== "darwin")
+      throw new Error("The current native boundary requires macOS.");
+    if (
+      !isAbsolute(options.directory) ||
+      !isAbsolute(options.executable) ||
+      !options.projectId
+    )
+      throw new Error("Trusted absolute native paths are required.");
+    const result = new CodexRuntimeAccessProvider();
+    result.options = options;
+    await mkdir(options.directory, { recursive: true, mode: 0o700 });
+    const stat = await lstat(options.directory);
+    if (
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      stat.mode & 0o077 ||
+      stat.uid !== process.getuid?.()
+    )
+      throw new Error("Native home must be private and controller owned.");
+    result.root = await realpath(options.directory);
+    if (
+      result.root === homedir() ||
+      result.root === join(homedir(), ".codex") ||
+      homedir().startsWith(result.root + "/")
+    )
+      throw new Error("Personal home cannot be the Crew native boundary.");
+    result.binary = await realpath(options.executable);
+    const binary = await lstat(result.binary);
+    if (!binary.isFile() || binary.mode & 0o022)
+      throw new Error(
+        "Codex executable must be trusted and not writable by other users.",
+      );
+    const marker = join(result.root, "crew-native.json");
+    const expected = JSON.stringify({
+      version: 1,
+      projectId: options.projectId,
+      policy: "macos-broker-only-v1",
+    });
+    try {
+      const file = await open(
+        marker,
+        constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+      try {
+        if ((await file.readFile("utf8")) !== expected)
+          throw new Error("Native home belongs to another project or policy.");
+      } finally {
+        await file.close();
+      }
+    } catch (error) {
+      if (!(
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ))
+        throw error;
+      if ((await readdir(result.root)).length)
+        throw new Error(
+          "Choose an empty Crew native home; existing files are not imported.",
+        );
+      await writeFile(marker, expected, { flag: "wx", mode: 0o600 });
+    }
+    for (const directory of ["home", "codex", "tmp", "workspace", "policies"])
+      await mkdir(join(result.root, directory), {
+        recursive: true,
+        mode: 0o700,
+      });
+    result.egress = await openModelEgress();
+    try {
+      const launch = await result.launch("owner", null, []);
+      await verifyNativeBoundary(launch.args[1]!, result.root, launch.env);
+      const version = await boundedProcess(
+        launch.executable,
+        ["-f", launch.args[1]!, result.binary, "--version"],
+        launch.env,
+        launch.cwd,
+      );
+      if (
+        version.code !== 0 ||
+        version.stdout.trim() !== "codex-cli 0.163.0-alpha.11"
+      )
+        throw new Error(
+          "This Codex version has not passed the native policy contract; validate it before use.",
+        );
+      const peer = await result.peer(launch);
+      try {
+        await result.verifyConfiguration(peer, null);
+      } finally {
+        await peer.close();
+      }
+      await writeFile(
+        join(result.root, "boundary-evidence.json"),
+        JSON.stringify({
+          checkedAt: new Date().toISOString(),
+          nativeVersion: version.stdout.trim(),
+          policy: "macos-broker-only-v1",
+          checks: [
+            "owned-file-read",
+            "outside-file-denied",
+            "descendant-denied",
+            "other-process-denied",
+            "keychain-denied",
+            "host-tcp-denied",
+            "host-unix-socket-denied",
+            "native-config-verified",
+          ],
+        }),
+        { mode: 0o600 },
+      );
+      return result;
+    } catch (error) {
+      await result.close();
+      throw error;
+    }
+  }
+  private async launch(
+    label: string,
+    gateway: NativeGatewayBinding | null,
+    skills: Bound["skills"],
+  ): Promise<CodexLaunch> {
+    if (!this.options || !this.egress || this.closed)
+      throw new Error("Native boundary is unavailable.");
+    const ports = [this.egress.port];
+    if (gateway) {
+      for (const endpoint of [gateway.url, gateway.foundationUrl]) {
+        const url = new URL(endpoint);
+        if (
+          url.protocol !== "http:" ||
+          url.hostname !== "127.0.0.1" ||
+          !url.port ||
+          url.username ||
+          url.password ||
+          url.search ||
+          url.hash ||
+          !gateway.bearerToken ||
+          !gateway.bindingRef
+        )
+          throw new Error(
+            "Trusted authenticated loopback Crew endpoints are required.",
+          );
+        if (!ports.includes(Number(url.port))) ports.push(Number(url.port));
+      }
+      if (gateway.url === gateway.foundationUrl)
+        throw new Error(
+          "Foundation and service gateway endpoints must be distinct.",
+        );
+    }
+    const readRoots: string[] = [];
+    for (const skill of skills) {
+      if (
+        !isAbsolute(skill.nativePath) ||
+        (await realpath(skill.nativePath)) !== skill.nativePath ||
+        !skill.nativePath.endsWith("/SKILL.md")
+      )
+        throw new Error("Selected skills need exact immutable native paths.");
+      const root = dirname(skill.nativePath);
+      if (
+        root === homedir() ||
+        root.startsWith(join(homedir(), ".codex") + "/") ||
+        root.startsWith(join(homedir(), ".ssh") + "/")
+      )
+        throw new Error("Personal skill roots are not permitted.");
+      readRoots.push(root);
+    }
+    const profile = join(
+      this.root,
+      "policies",
+      `${hash([label, ports, readRoots])}.sb`,
+    );
+    await writeFile(
+      profile,
+      nativeSeatbeltPolicy({
+        root: this.root,
+        executable: this.binary,
+        ports,
+        readRoots,
+      }),
+      { mode: 0o600 },
+    );
+    const overrides = [
+      'cli_auth_credentials_store="file"',
+      'mcp_oauth_credentials_store="file"',
+      'forced_login_method="chatgpt"',
+      'sandbox_mode="read-only"',
+      'approval_policy="on-request"',
+      'web_search="disabled"',
+      "allow_login_shell=false",
+      'shell_environment_policy.inherit="none"',
+      "features.code_mode.enabled=false",
+      "include_apps_instructions=false",
+      ...FEATURES.map((feature) => `features.${feature}=false`),
+      "mcp_servers={}",
+      "plugins={}",
+      "marketplaces={}",
+    ];
+    if (gateway) {
+      for (const [name, url] of Object.entries({
+        crew: gateway.foundationUrl,
+        services: gateway.url,
+      }))
+        overrides.push(
+          `mcp_servers.${name}.url=${JSON.stringify(url)}`,
+          `mcp_servers.${name}.bearer_token_env_var="CREW_SESSION_TOKEN"`,
+          `mcp_servers.${name}.required=true`,
+        );
+    }
+    const env: Record<string, string> = {
+      PATH: "/usr/bin:/bin",
+      HOME: join(this.root, "home"),
+      CODEX_HOME: join(this.root, "codex"),
+      CFFIXED_USER_HOME: join(this.root, "home"),
+      TMPDIR: join(this.root, "tmp"),
+      HTTPS_PROXY: `http://127.0.0.1:${this.egress.port}`,
+      HTTP_PROXY: `http://127.0.0.1:${this.egress.port}`,
+      ALL_PROXY: `http://127.0.0.1:${this.egress.port}`,
+      NO_PROXY: "127.0.0.1",
+      LANG: "en_US.UTF-8",
+    };
+    if (gateway) env.CREW_SESSION_TOKEN = gateway.bearerToken;
     return {
-      state: "blocked",
-      reason:
-        "Agent Start is blocked: Crew has not verified subscription-backed Codex execution without personal service credential inheritance. See docs/ACCESS-ISOLATION.md.",
-      limitations: [...limitations],
+      executable: "/usr/bin/sandbox-exec",
+      args: [
+        "-f",
+        profile,
+        this.binary,
+        "app-server",
+        "--listen",
+        "stdio://",
+        ...overrides.flatMap((value) => ["-c", value]),
+      ],
+      cwd: join(this.root, "workspace"),
+      env,
     };
   }
-
-  /** No resources are allocated by this provider, including failed prepares. */
-  async release(_caller: CallerContext): Promise<void> {}
+  private async peer(launch: CodexLaunch): Promise<CodexPeer> {
+    const peer = new CodexPeer(
+      launch,
+      () => {},
+      () => {},
+      15_000,
+    );
+    try {
+      await peer.rpc("initialize", {
+        clientInfo: {
+          name: "crew_native_access",
+          title: "Crew",
+          version: "0.18.0",
+        },
+        capabilities: { experimentalApi: true },
+      });
+      peer.send({ method: "initialized", params: {} });
+      return peer;
+    } catch {
+      await peer.close();
+      throw new Error("Native access initialization failed.");
+    }
+  }
+  private async verifyConfiguration(
+    peer: CodexPeer,
+    gateway: NativeGatewayBinding | null,
+  ): Promise<void> {
+    const response = record(
+      await peer.rpc("config/read", { includeLayers: true }),
+    );
+    const config = record(response.config);
+    const features = record(config.features);
+    if (
+      FEATURES.some((feature) => features[feature] !== false) ||
+      config.forced_login_method !== "chatgpt" ||
+      config.cli_auth_credentials_store !== "file" ||
+      config.web_search !== "disabled" ||
+      config.allow_login_shell !== false
+    )
+      throw new Error(
+        "Native configuration did not retain the broker-only restrictions.",
+      );
+    const servers = record(config.mcp_servers);
+    if (
+      Object.keys(servers).sort().join(",") !== (gateway ? "crew,services" : "")
+    )
+      throw new Error("Unexpected native MCP configuration.");
+    if (gateway) {
+      for (const [name, url] of Object.entries({
+        crew: gateway.foundationUrl,
+        services: gateway.url,
+      })) {
+        const server = record(servers[name]);
+        if (
+          server.url !== url ||
+          server.bearer_token_env_var !== "CREW_SESSION_TOKEN" ||
+          server.required !== true
+        )
+          throw new Error("Crew native endpoint binding changed.");
+      }
+    }
+    for (const field of ["plugins", "marketplaces", "model_providers"])
+      if (Object.keys(record(config[field] ?? {})).length)
+        throw new Error("Unexpected native provider/plugin configuration.");
+    if (config.model_provider !== null && config.model_provider !== "openai")
+      throw new Error("Only native subscription access is permitted.");
+  }
+  async subscriptionStatus(): Promise<SubscriptionStatus> {
+    try {
+      const peer = await this.peer(await this.launch("owner", null, []));
+      try {
+        await this.verifyConfiguration(peer, null);
+        const response = record(
+          await peer.rpc("account/read", { refreshToken: false }),
+        );
+        if (object(response.account) && response.account.type === "chatgpt") {
+          const signing = this.signing;
+          this.signing = null;
+          this.signInGeneration++;
+          this.signInStarting = false;
+          if (signing) await signing.peer.close();
+          return {
+            state: "signed_in",
+            plan:
+              typeof response.account.planType === "string"
+                ? response.account.planType
+                : null,
+          };
+        }
+        return response.account === null
+          ? { state: "sign_in_required" }
+          : {
+              state: "blocked",
+              reason:
+                "Crew requires native ChatGPT subscription sign-in, without an API-key fallback.",
+            };
+      } finally {
+        await peer.close();
+      }
+    } catch {
+      return {
+        state: "blocked",
+        reason:
+          "Crew could not verify its isolated native subscription configuration.",
+      };
+    }
+  }
+  /** Mount only on authenticated owner ingress, invoked by explicit owner action. */
+  async beginSignIn(): Promise<{
+    loginId: string;
+    verificationUrl: string;
+    userCode: string;
+  }> {
+    if (this.signing || this.signInStarting)
+      throw new Error("A Crew sign-in is already pending.");
+    this.signInStarting = true;
+    const generation = ++this.signInGeneration;
+    let peer: CodexPeer | null = null;
+    try {
+      peer = await this.peer(await this.launch("owner", null, []));
+      if (this.closed || generation !== this.signInGeneration)
+        throw new Error("Crew sign-in was cancelled.");
+      this.signing = { peer, loginId: null };
+      await this.verifyConfiguration(peer, null);
+      const login = record(
+        await peer.rpc("account/login/start", { type: "chatgptDeviceCode" }),
+      );
+      if (
+        login.type !== "chatgptDeviceCode" ||
+        typeof login.loginId !== "string" ||
+        typeof login.userCode !== "string" ||
+        login.verificationUrl !== "https://auth.openai.com/codex/device"
+      )
+        throw new Error("Unsupported native sign-in response.");
+      if (
+        this.closed ||
+        generation !== this.signInGeneration ||
+        this.signing?.peer !== peer
+      )
+        throw new Error("Crew sign-in was cancelled.");
+      this.signing.loginId = login.loginId;
+      return {
+        loginId: login.loginId,
+        verificationUrl: login.verificationUrl,
+        userCode: login.userCode,
+      };
+    } catch {
+      if (generation === this.signInGeneration) this.signing = null;
+      await peer?.close();
+      throw new Error(
+        "Native device sign-in could not start. Check network access and try again.",
+      );
+    } finally {
+      if (generation === this.signInGeneration) this.signInStarting = false;
+    }
+  }
+  async cancelSignIn(): Promise<void> {
+    this.signInGeneration++;
+    this.signInStarting = false;
+    const signing = this.signing;
+    this.signing = null;
+    if (!signing) return;
+    try {
+      if (signing.loginId)
+        await signing.peer.rpc("account/login/cancel", {
+          loginId: signing.loginId,
+        });
+    } catch {
+      /* Already completed or disconnected; never retry sign-in automatically. */
+    } finally {
+      await signing.peer.close();
+    }
+  }
+  async prepare(
+    caller: CallerContext,
+    configuration: ConfigurationSnapshot,
+  ): Promise<RuntimeIsolationResult> {
+    const operation = this.tail.then(
+      async (): Promise<RuntimeIsolationResult> => {
+        if (
+          !this.options ||
+          this.closed ||
+          this.releasedSessions.has(key(caller)) ||
+          caller.projectId !== this.options.projectId
+        )
+          return blocked(
+            "A verified active Crew native access boundary is required.",
+          );
+        if (
+          configuration.runtimeConfig.id !==
+          (this.options.runtimeConfigRef ?? "crew.codex.broker-only.v1")
+        )
+          return blocked(
+            "The selected runtime policy is not supported by this boundary.",
+          );
+        const existing = this.bindings.get(key(caller));
+        if (existing)
+          return existing.configurationHash === hash(configuration)
+            ? {
+                state: "ready",
+                runtimeAccess: structuredClone(existing.binding),
+                checkedAt: new Date().toISOString(),
+                evidenceRef: `native-boundary:${hash(existing.binding)}`,
+              }
+            : blocked(
+                "Prepared configuration changed; release it before preparing again.",
+              );
+        const status = await this.subscriptionStatus();
+        if (status.state !== "signed_in")
+          return blocked(
+            status.state === "blocked"
+              ? status.reason
+              : "Sign in to ChatGPT in Crew Subscription settings. This uses a separate native home and does not copy personal Codex sign-in.",
+          );
+        let gateway: NativeGatewayBinding | null = null;
+        try {
+          const skills = await this.options.resolveSkills(configuration.skills);
+          if (
+            skills.length !== configuration.skills.length ||
+            configuration.skills.some(
+              (skill) =>
+                !skills.some(
+                  (item) =>
+                    item.id === skill.id && item.revision === skill.revision,
+                ),
+            )
+          )
+            throw new Error("Selected skill revisions unavailable.");
+          gateway = await this.options.gatewayFor(caller);
+          const launch = await this.launch(key(caller), gateway, skills);
+          await verifyNativeBoundary(launch.args[1]!, this.root, launch.env);
+          const peer = await this.peer(launch);
+          try {
+            await this.verifyConfiguration(peer, gateway);
+          } finally {
+            await peer.close();
+          }
+          const binding: RuntimeAccessBinding = {
+            caller: structuredClone(caller),
+            environmentPolicies: [],
+            runtimeConfigRef: configuration.runtimeConfig.id,
+            privateWorkspaceRef: `native-workspace:${randomUUID()}`,
+            brokerBindingRef: gateway.bindingRef,
+          };
+          if (this.closed || this.releasedSessions.has(key(caller)))
+            throw new Error("Native session was closed during preparation.");
+          this.bindings.set(key(caller), {
+            binding,
+            configurationHash: hash(configuration),
+            launch,
+            skills,
+            gateway,
+          });
+          return {
+            state: "ready",
+            runtimeAccess: structuredClone(binding),
+            checkedAt: new Date().toISOString(),
+            evidenceRef: `native-boundary:${hash(binding)}`,
+          };
+        } catch {
+          await gateway?.release();
+          return blocked(
+            "Native access preparation failed. No runtime launch was authorized.",
+          );
+        }
+      },
+    );
+    this.tail = operation.catch(() => {});
+    return operation;
+  }
+  readonly resolveLaunch = async (
+    input: RuntimeStartInput,
+  ): Promise<CodexLaunchResolution> => {
+    const bound = this.bindings.get(key(input.caller));
+    if (
+      this.closed ||
+      !bound ||
+      hash(input.access) !== hash(bound.binding) ||
+      hash(input.configuration) !== bound.configurationHash
+    )
+      return {
+        state: "blocked",
+        error: {
+          code: "isolation_blocked",
+          message:
+            "No exact prepared native access binding exists for this session.",
+        },
+      };
+    return {
+      state: "ready",
+      launch: structuredClone(bound.launch),
+      skills: structuredClone(bound.skills),
+    };
+  };
+  /** Trusted host-only retained-history launch. The host must first match this
+   * binding against its durable agent/thread record. No service session is reopened. */
+  readonly resolveHistoryLaunch = async (
+    binding: RuntimeBinding,
+  ): Promise<
+    | { state: "ready"; launch: CodexLaunch }
+    | { state: "blocked"; error: RuntimeError }
+  > => {
+    if (
+      !this.options ||
+      this.closed ||
+      binding.projectId !== this.options.projectId ||
+      !binding.agentId ||
+      !binding.threadId ||
+      !binding.sessionId
+    )
+      return {
+        state: "blocked",
+        error: {
+          code: "identity_mismatch",
+          message:
+            "Retained history requires a matching Crew project identity.",
+        },
+      };
+    try {
+      return {
+        state: "ready",
+        launch: await this.launch(`history:${key(binding)}`, null, []),
+      };
+    } catch {
+      return {
+        state: "blocked",
+        error: {
+          code: "isolation_blocked",
+          message: "The isolated native history launch is unavailable.",
+        },
+      };
+    }
+  };
+  async release(caller: CallerContext): Promise<void> {
+    this.releasedSessions.add(key(caller));
+    const bound = this.bindings.get(key(caller));
+    this.bindings.delete(key(caller));
+    await bound?.gateway.release();
+  }
+  async close(): Promise<void> {
+    this.closed = true;
+    await this.tail;
+    await this.cancelSignIn();
+    for (const bound of this.bindings.values()) await bound.gateway.release();
+    this.bindings.clear();
+    await this.egress?.close();
+    this.egress = null;
+  }
 }
