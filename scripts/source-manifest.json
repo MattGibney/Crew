@@ -276,6 +276,7 @@
     "src/application/agent-schedules.mts",
     "src/application/agent-voice.mts",
     "src/browser/contracts.mts",
+    "src/browser/local-origin.mts",
     "src/browser/mcp-client.mts",
     "src/browser/unified-browser.mts",
     "src/cli.mts",

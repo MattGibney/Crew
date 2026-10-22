@@ -205,7 +205,13 @@ export function createUnifiedProjectBrowser(options: {
         options.getHostOrigin,
         changed,
       );
-      await browser.request({ action: "open" });
+      try {
+        await browser.request({ action: "open" });
+      } catch (cause) {
+        await browser.close();
+        browser = undefined;
+        throw cause;
+      }
       const toolsHome = join(options.stateDirectory, "browser-tools");
       await mkdir(toolsHome, { recursive: true, mode: 0o700 });
     }
@@ -278,9 +284,19 @@ export function createUnifiedProjectBrowser(options: {
     const viewport = image.getSize();
     if (viewport.width > 1280) image = image.resize({ width: 1280 });
     const png = image.toPNG();
-    if (!viewport.width || !viewport.height || !png.length || png.length > 5 * 1024 * 1024)
-      throw Error("The preview capture is empty or too large. Keep the browser visible and retry.");
-    if (contents.isLoading() || contents.getURL() !== capturedUrl) throw Error("The page changed during capture. Review it and send the annotation again.");
+    if (
+      !viewport.width ||
+      !viewport.height ||
+      !png.length ||
+      png.length > 5 * 1024 * 1024
+    )
+      throw Error(
+        "The preview capture is empty or too large. Keep the browser visible and retry.",
+      );
+    if (contents.isLoading() || contents.getURL() !== capturedUrl)
+      throw Error(
+        "The page changed during capture. Review it and send the annotation again.",
+      );
     const id = randomUUID(),
       directory = join(options.stateDirectory, "browser-artifacts");
     await mkdir(directory, { recursive: true, mode: 0o700 });

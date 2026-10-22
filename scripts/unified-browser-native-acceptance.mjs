@@ -8,6 +8,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { WebSocketServer } from "ws";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 const { _electron } = await import(
@@ -31,12 +32,16 @@ const until = async (read, test, label) => {
   }
   throw Error("Timed out " + label);
 };
+const requestHosts = [];
 const server = http.createServer((_req, res) => {
+  requestHosts.push(_req.headers.host);
   res.setHeader("Content-Type", "text/html");
   res.end(
-    '<!doctype html><title>Unified shared preview</title><style>body{font:18px system-ui;padding:35px;background:#eef7f1}input,button{font:inherit;padding:12px}label{display:block;margin:15px 0}</style><h1 id="heading">Unified browser preview</h1><label>Preview note <input aria-label="Preview note"></label><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">Apply note</button><output></output>',
+    '<!doctype html><title>Unified shared preview</title><style>body{font:18px system-ui;padding:35px;background:#eef7f1}input,button{font:inherit;padding:12px}label{display:block;margin:15px 0}</style><h1 id="heading">Unified browser preview</h1><label>Preview note <input aria-label="Preview note"></label><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">Apply note</button><output></output><script>const hmr=new WebSocket("ws://"+location.host+"/hmr");hmr.onmessage=event=>document.body.dataset.hmr=event.data;</script>',
   );
 });
+const devSockets = new WebSocketServer({ server });
+devSockets.on("connection", (socket) => socket.send("hmr-connected"));
 // Register owned cleanup before first wait; no installed state or physical media.
 async function cleanup() {
   await client?.close();
@@ -44,11 +49,12 @@ async function cleanup() {
     await electron.evaluate(async () => global.cleanup?.()).catch(() => {});
     await electron.close();
   }
+  await new Promise((r) => devSockets.close(r));
   await new Promise((r) => server.close(r));
 }
 try {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const url = `http://127.0.0.1:${server.address().port}`;
+  const url = `http://${process.env.CREW_BROWSER_TEST_HOST || "127.0.0.1"}:${server.address().port}`;
   const main = path.join(dir, "main.cjs");
   await writeFile(
     main,
@@ -98,6 +104,40 @@ global.cleanup=async()=>{await browser.close();await host.close();await renderer
     .getByRole("heading", { name: "Unified browser preview" })
     .waitFor();
   check("Actual unified Crew renderer and native preview open");
+  check(
+    "Selected hostname and HTTP Host routing are preserved",
+    requestHosts.includes(new URL(url).host) && preview.url().startsWith(url),
+  );
+  await until(
+    () => preview.evaluate(() => document.body.dataset.hmr),
+    (v) => v === "hmr-connected",
+    "same-origin dev websocket",
+  );
+  check("Same approved hostname and port supports dev WebSocket traffic");
+  const alternate = new URL(url);
+  alternate.protocol = "ws:";
+  alternate.hostname =
+    alternate.hostname === "localhost" ? "127.0.0.1" : "localhost";
+  check(
+    "WebSocket to another loopback hostname is blocked",
+    await preview.evaluate(
+      (address) =>
+        new Promise((resolve) => {
+          const ws = new WebSocket(address);
+          ws.onopen = () => {
+            ws.close();
+            resolve(false);
+          };
+          ws.onerror = () => resolve(true);
+          setTimeout(() => {
+            ws.close();
+            resolve(false);
+          }, 3000);
+        }),
+      alternate.href,
+    ),
+  );
+
   const binding = await electron.evaluate(() => global.binding);
   client = new Client(
     { name: "crew56-fixture-agent-tools", version: "1" },

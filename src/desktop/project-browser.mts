@@ -4,22 +4,12 @@ import { randomUUID } from "node:crypto";
 import { createBrowserCdp } from "./browser-cdp.mjs";
 import { record } from "./validation.mjs";
 
-export function experimentURL(value: string, hostOrigin?: string) {
-  const url = new URL(value);
-  const host = hostOrigin ? new URL(hostOrigin) : undefined;
-  if (
-    url.protocol !== "http:" ||
-    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
-    url.username ||
-    url.password ||
-    url.origin === hostOrigin ||
-    (host && url.port === host.port)
-  )
-    throw Error(
-      "This experiment accepts its configured local HTTP preview origin only.",
-    );
-  return url;
-}
+export { parseLocalPreviewURL as experimentURL } from "../browser/local-origin.mjs";
+import {
+  parseLocalPreviewURL as experimentURL,
+  requireLoopbackResolution,
+  isLocalPreviewRequest,
+} from "../browser/local-origin.mjs";
 
 export function createProjectBrowser(
   window: BrowserWindow,
@@ -52,9 +42,31 @@ export function createProjectBrowser(
   partition.setPermissionCheckHandler(() => false);
   partition.on("will-download", (event) => event.preventDefault());
   // Restrict the whole preview session, including redirects and subresources.
-  partition.webRequest.onBeforeRequest((details, callback) =>
-    callback({ cancel: !allowed(details.url) }),
-  );
+  const verifyHost = () =>
+    requireLoopbackResolution(initial.hostname, (name) =>
+      partition.resolveHost(name, {
+        source: "system",
+        cacheUsage: "disallowed",
+        secureDnsPolicy: "disable",
+      }),
+    );
+  partition.webRequest.onBeforeRequest((details, callback) => {
+    if (
+      !isLocalPreviewRequest(
+        details.url,
+        initial.origin,
+        hostOrigin(),
+        details.resourceType,
+      )
+    ) {
+      callback({ cancel: true });
+      return;
+    }
+    void verifyHost().then(
+      () => callback({ cancel: false }),
+      () => callback({ cancel: true }),
+    );
+  });
   const state = () => {
     const contents = view?.webContents;
     return {
@@ -90,6 +102,10 @@ export function createProjectBrowser(
     if (closing) await closing;
     if (view) return;
     error = undefined;
+    // Local previews must never be sent through an inherited remote proxy.
+    // Preserve the selected URL/Host; no redirects or hostname rewrites.
+    await partition.setProxy({ mode: "direct" });
+    await verifyHost();
     const next = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
