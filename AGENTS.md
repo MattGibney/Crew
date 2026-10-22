@@ -340,3 +340,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Authorized Settings hotfix release (GitHub #74)
 
 - The human explicitly authorized merging PR75 and publishing the next signed stable patch, 0.17.3 after 0.17.2. This supersedes GH74's original PR-only boundary for this named delivery; no unrelated features or PR54. Verify real saved null lifecycle phases through packaged Settings open/save/reload/relaunch. Preserve strict validation of populated project commands and direct hooks; never reset valid user configuration to hide renderer contract drift. Preserve existing tags, profiles/auth/workers, physical microphone and business-service boundaries; manual native continuity does not prove automatic portable-root updater relaunch.
+
+## Prompt manager-to-worker steering (GitHub #50 correction)
+
+- Ordinary directions steer an active acknowledged native turn promptly in the same run/thread/worktree. Never wait for assignment completion or cancel/restart to deliver input. Idle directions continue the retained conversation. Keep current assignment, question and approval identities intact during steering.
+- Persist ordered pending/attempted/acknowledged/uncertain/rejected/failed delivery evidence. Native acknowledgement is not model-consumption or completion evidence. Never blindly replay attempted or uncertain input after transport or controller recovery. A definite no-active-turn rejection may continue only after confirmed native closure. Keep approvals and lifecycle control responsive during steering acknowledgement waits.

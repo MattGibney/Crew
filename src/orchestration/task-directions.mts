@@ -91,6 +91,7 @@ export async function requestWorkerFollowup(
       expectedAssignmentId,
       enqueuedRunId: task.runId || null,
       enqueuedAssignmentId: task.currentAssignmentId,
+      delivery: { state: "pending", at: now() },
       status: "queued",
       createdAt: now(),
       runIds: [],

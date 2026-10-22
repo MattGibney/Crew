@@ -95,7 +95,7 @@ function WorkerCard({
         </h3>
         {queued > 0 && (
           <p className="mt-1 text-[11px] text-muted-foreground">
-            {queued} follow-up{queued === 1 ? "" : "s"} queued
+            {queued} direction{queued === 1 ? "" : "s"} pending
           </p>
         )}
         {!compact && (

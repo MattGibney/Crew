@@ -358,6 +358,14 @@ export interface StorageLike {
 }
 
 export interface WorkerAssignment {
+  delivery?: {
+    state: string;
+    at?: string;
+    error?: string;
+    runId?: string;
+    threadId?: string;
+    turnId?: string;
+  };
   id: string;
   ticket?: string;
   brief?: string;

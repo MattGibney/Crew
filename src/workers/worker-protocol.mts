@@ -7,6 +7,7 @@ import type {
 import type { ApprovalParams } from "./approvals.mjs";
 import { isRecord } from "./errors.mjs";
 export interface WorkerConfiguration {
+  globalCapacityDir?: string;
   assignmentId?: string;
   taskId: string;
   runId: string;
@@ -41,6 +42,7 @@ const configShape = ajv.compile<WorkerConfiguration>({
     "brief",
   ],
   properties: {
+    globalCapacityDir: { type: "string" },
     taskId: { type: "string" },
     runId: { type: "string" },
     stateDir: { type: "string" },
@@ -194,9 +196,7 @@ export function parseWorkerResult(
     method === "turn/steer" &&
     (typeof value.turnId !== "string" || !value.turnId)
   )
-    throw new Error(
-      "Native preparation steering did not acknowledge its turn identity.",
-    );
+    throw new Error("Native steering did not acknowledge its turn identity.");
   return {
     turnId: typeof value.turnId === "string" ? value.turnId : undefined,
     account: isRecord(value.account)

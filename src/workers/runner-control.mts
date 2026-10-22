@@ -30,6 +30,7 @@ interface RunnerControlOptions {
   interruptTurn: () => void;
   finish: () => Promise<void>;
   capture: () => Promise<void>;
+  observeDirections?: () => Promise<void>;
   observePreparation?: () => Promise<void>;
   onCooperative: () => void;
   onError: (message: string) => void;
@@ -53,6 +54,7 @@ export function createRunnerControl({
   finish,
   capture,
   observePreparation,
+  observeDirections,
   onCooperative,
   onError,
   requestContext,
@@ -166,6 +168,13 @@ export function createRunnerControl({
         await acceptControl();
         stage = "agent preparation read";
         await observePreparation?.();
+        stage = "worker direction read";
+        // A slow steering acknowledgement must not delay native approvals or stop.
+        void observeDirections?.().catch((error) =>
+          retainProtocolFailure(error, "worker direction delivery").catch(
+            () => {},
+          ),
+        );
         stage = "native decision read";
         for (const decision of await workerRequestDecisions(requestContext())) {
           const request = nativeRequests.get(decision.approvalId);

@@ -143,6 +143,20 @@ export async function createWorkerPeer(
     params: Record<string, unknown> = {},
   ): Promise<NativeResult> {
     return new Promise((resolve, reject) => {
+      if (
+        worker.stdin.destroyed ||
+        worker.stdin.writableEnded ||
+        worker.exitCode !== null ||
+        worker.signalCode !== null
+      )
+        return reject(
+          Object.assign(
+            new Error("Native worker request channel is closed before send."),
+            {
+              nativeNotSent: true,
+            },
+          ),
+        );
       const id = ++nextId,
         timer = setTimeout(() => {
           pending.delete(id);
@@ -159,7 +173,12 @@ export async function createWorkerPeer(
     pending.delete(message.id);
     if (!entry) return true;
     clearTimeout(entry.timer);
-    if (message.error) entry.reject(new Error(message.error.message));
+    if (message.error)
+      entry.reject(
+        Object.assign(new Error(message.error.message), {
+          nativeRejected: true,
+        }),
+      );
     else
       try {
         entry.resolve(parseWorkerResult(entry.method, message.result));

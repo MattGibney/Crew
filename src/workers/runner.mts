@@ -1,3 +1,4 @@
+import { createRunnerDirections } from "./runner-directions.mjs";
 import { createRunnerPreparation } from "./runner-preparation.mjs";
 import { createRunnerControl } from "./runner-control.mjs";
 import { createWorkerPeer } from "./worker-peer.mjs";
@@ -155,6 +156,24 @@ const observePreparation = createRunnerPreparation({
     clearTimeout(timeout);
   },
 });
+const directions = createRunnerDirections({
+  globalCapacityDir: config.globalCapacityDir,
+  ...requestContext(),
+  snapshot: () => ({
+    threadId,
+    turnId,
+    acknowledged: modelTurnAcknowledged && !turnStartPending,
+    ending:
+      ending || Boolean(nativeTurnStatus) || Boolean(currentStopRequest()),
+  }),
+  steer: ({ threadId, expectedTurnId, requestId, text }) =>
+    rpc("turn/steer", {
+      threadId,
+      expectedTurnId,
+      clientUserMessageId: requestId,
+      input: [{ type: "text", text }],
+    }),
+});
 const runnerControl = createRunnerControl({
   runDir,
   runId: config.runId,
@@ -167,6 +186,7 @@ const runnerControl = createRunnerControl({
   finish,
   capture,
   observePreparation,
+  observeDirections: directions.observe,
   onCooperative: () => clearTimeout(timeout),
   onError: (message) => {
     errorMessage = errorMessage || message;
@@ -660,6 +680,7 @@ else if (tree) {
 if (control.stopPromise && control.stopPromise !== observedStop)
   ownership = await control.stopPromise;
 peer.rejectPending();
+await directions.drain();
 await bootstrap;
 await peer.drain();
 await writes;

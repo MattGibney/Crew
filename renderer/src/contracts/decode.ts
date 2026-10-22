@@ -81,7 +81,11 @@ const directHook = object(
 // Backend execution plans retain null for phases that are not configured.
 const projectHook = nullable(
   object(
-    { command: string, source: environmentSource, timeoutMs: { type: "number" } },
+    {
+      command: string,
+      source: environmentSource,
+      timeoutMs: { type: "number" },
+    },
     ["command", "source", "timeoutMs"],
   ),
 );
@@ -150,6 +154,17 @@ const taskSchema = object(
           id: string,
           ticket: string,
           brief: string,
+          delivery: object(
+            {
+              state: string,
+              at: string,
+              error: string,
+              runId: string,
+              threadId: string,
+              turnId: string,
+            },
+            ["state"],
+          ),
           status: string,
           result: object({ message: string }),
           runIds: array(string),
