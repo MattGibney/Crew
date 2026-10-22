@@ -1262,6 +1262,7 @@ export async function openAgentSetup(options: Options) {
       let snapshot = await assertCurrent();
       const agentId = journal!.checkpoint.agentId!;
       if (
+        draft.mode === "create" &&
         draft.makePrimary &&
         snapshot.owner.projectSettings.primaryAgentId !== agentId
       ) {

@@ -233,6 +233,52 @@ async function reviewed(setup) {
   return setup.command("setup.review", { expectedRevision: initial.revision });
 }
 
+test("editing a retained former-manager draft cannot restore an old manager selection", async (t) => {
+  const f = await fixture(t),
+    setup = await f.open();
+  for (const id of ["former", "current"]) {
+    f.owner.agents.push({
+      id,
+      archivedAt: null,
+      profile: {
+        name: id,
+        personality: "",
+        pictureRef: null,
+        systemPrompt: "",
+        revision: 1,
+      },
+      skills: [],
+    });
+    f.access.assignments.push({
+      agentId: id,
+      revision: 1,
+      permissionGroupIds: [],
+      serviceConnectionIds: [],
+    });
+  }
+  f.owner.projectSettings.primaryAgentId = "former";
+  let state = await setup.command("setup.open", {
+    expectedRevision: null,
+    mode: "repair",
+    agentId: "former",
+  });
+  assert.equal(state.draft.makePrimary, true);
+  f.owner.projectSettings = { revision: 2, primaryAgentId: "current" };
+  state = await setup.command("setup.save", {
+    expectedRevision: state.revision,
+    draft: { ...state.draft, name: "Edited former" },
+  });
+  state = await setup.command("setup.review", {
+    expectedRevision: state.revision,
+  });
+  state = await setup.command("setup.complete", {
+    expectedRevision: state.revision,
+  });
+  assert.equal(state.phase, "complete");
+  assert.equal(f.owner.projectSettings.primaryAgentId, "current");
+  assert.equal(f.owner.agents[0].profile.name, "Edited former");
+});
+
 test("lost create response recovers exact retained agent, makes primary, and never starts", async (t) => {
   const f = await fixture(t, "after"),
     setup = await f.open();

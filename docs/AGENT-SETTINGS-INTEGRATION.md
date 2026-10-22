@@ -14,6 +14,11 @@ Existing runtime references are retained. This version supports the configured
 isolated Codex/ChatGPT subscription binding; it does not offer speculative model
 or authentication providers.
 
+Existing-agent edits never change the manager selection. This prevents reopening
+an old manager's draft from silently restoring its former role after the owner
+selects another manager. Creation can explicitly choose the new manager; later
+role changes use the table's revision-checked selector.
+
 `setup.open` resumes a retained draft for the exact create/edit target, preserving
 its original profile and assignment baselines. The intent journal is private,
 bounded and revision checked. Switching agents preserves their drafts. Explicit
@@ -71,7 +76,28 @@ connection or read credentials.
 
 ## Acceptance record
 
-Implementation and focused validation are recorded in the PR. Private screenshots
-and disposable fixture data stay outside Git. Controlled UI/catalogue fixtures
-are not evidence of actual native allowance, voice catalogue or call acceptance.
-Root integration must wire the adapters above before combined native acceptance.
+- Typecheck and the runtime/renderer build passed. Sixteen focused checks cover
+  setup recovery, retained drafts/profile baselines, role selection, legacy voice
+  migration, exact voice attribution and usage read/update/disposal boundaries.
+- A compiled browser fixture used the actual desktop settings presentation,
+  setup component and durable coordinator, with isolated synthetic owner/access
+  ports and a controlled native catalogue. It edited name/personality/instructions,
+  skill selection and voice; switched to a second draft and resumed the first;
+  saved the selected profile; changed manager through the table; and created a
+  stopped third agent through the same editor.
+- Fixture readback confirmed both retained chat references and the second agent's
+  saved profile were preserved. No lifecycle, sign-in, voice or execution command
+  was sent by the flow. This is controlled UI/coordinator evidence, not a native
+  model or call test.
+- The usage view displayed returned window durations and local reset times,
+  correct used/remaining percentages, authoritative reset count and an expired
+  detail row. A partial response displayed unavailable fields; an error retained
+  the successful snapshot with a stale label. The native usage reader is the
+  separate runtime track's implementation at `b2e723e`, retained in this branch.
+
+Private screenshots and disposable fixture data stay outside Git. Root integration
+must wire the adapters above before combined native acceptance. Actual voice
+catalogue/call adoption, retained-project migration and real account display parity
+still require that combined application check. The environment-template selector
+will use #108's owner API when its shared contract is available; no duplicate
+template authority is introduced here.

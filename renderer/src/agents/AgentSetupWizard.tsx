@@ -889,27 +889,21 @@ export function AgentSetupWizard(props: Props) {
                   </p>
                 )}
               </fieldset>
-              <Choice
-                checked={draft.makePrimary}
-                disabled={
-                  locked ||
-                  (draft.mode === "repair" &&
-                    draft.agentId ===
-                      (snapshot.projectSettings?.primaryAgentId ??
-                        snapshot.primaryAgentId))
-                }
-                onChange={(value) => change({ makePrimary: value })}
-                description={
-                  draft.mode === "repair" &&
-                  draft.agentId ===
-                    (snapshot.projectSettings?.primaryAgentId ??
-                      snapshot.primaryAgentId)
-                    ? "This agent is your manager. Choose a different manager from the Agents table when needed."
-                    : "The manager is the agent you talk to in the main conversation."
-                }
-              >
-                Use as my manager
-              </Choice>
+              {draft.mode === "create" ? (
+                <Choice
+                  checked={draft.makePrimary}
+                  disabled={locked}
+                  onChange={(value) => change({ makePrimary: value })}
+                  description="The manager is the agent you talk to in the main conversation."
+                >
+                  Use as my manager
+                </Choice>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Manager selection is managed in the Agents table. Saving this
+                  agent keeps that selection unchanged.
+                </p>
+              )}
             </section>
           )}
           {draft.step === 3 && access && (
@@ -1335,7 +1329,9 @@ function Review({
       <div className="py-4">
         <p className="text-sm font-medium">
           {draft.name}
-          {draft.makePrimary ? " · Your manager" : ""}
+          {draft.mode === "create" && draft.makePrimary
+            ? " · Your manager"
+            : ""}
         </p>
         <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
           {draft.personality || "No personality guidance."}

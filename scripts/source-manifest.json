@@ -551,6 +551,7 @@
     "tests/setup.test.mjs",
     "tests/state-lock.test.mjs",
     "tests/storage.test.mjs",
+    "tests/subscription-usage-owner.test.mjs",
     "tests/toolchain-update-integration.test.mjs",
     "tests/tracking.test.mjs",
     "tests/unified-desktop-boundaries.test.mjs",

@@ -14,6 +14,7 @@ export function createSubscriptionUsageOwnerAdapter(
   };
   let observation = 0,
     disposed = false;
+  let pendingRead: Promise<SubscriptionUsageState> | null = null;
   const listeners = new Set<(value: SubscriptionUsageState) => void>();
   const publish = (next: SubscriptionUsageState) => {
     if (disposed) return;
@@ -26,28 +27,37 @@ export function createSubscriptionUsageOwnerAdapter(
   });
   return {
     async read(): Promise<SubscriptionUsageState> {
-      const previousObservation = observation;
-      try {
-        const result = await subscription.usage();
-        if (disposed || observation !== previousObservation)
+      if (disposed) return structuredClone(state);
+      if (!pendingRead) {
+        const previousObservation = observation;
+        pendingRead = (async () => {
+          try {
+            const result = await subscription.usage();
+            if (disposed || observation !== previousObservation)
+              return structuredClone(state);
+            if (result.state === "acknowledged")
+              publish({ status: "available", snapshot: result.value });
+            else
+              publish({
+                status:
+                  result.error.code === "unsupported"
+                    ? "unsupported"
+                    : result.error.code === "disconnected"
+                      ? "disconnected"
+                      : "error",
+                snapshot: state.snapshot,
+              });
+          } catch {
+            if (observation === previousObservation)
+              publish({ status: "error", snapshot: state.snapshot });
+          }
           return structuredClone(state);
-        if (result.state === "acknowledged")
-          publish({ status: "available", snapshot: result.value });
-        else
-          publish({
-            status:
-              result.error.code === "unsupported"
-                ? "unsupported"
-                : result.error.code === "disconnected"
-                  ? "disconnected"
-                  : "error",
-            snapshot: state.snapshot,
-          });
-      } catch {
-        if (observation === previousObservation)
-          publish({ status: "error", snapshot: state.snapshot });
+        })().finally(() => {
+          pendingRead = null;
+        });
       }
-      return structuredClone(state);
+      // Every caller receives its own DTO even when sharing one native request.
+      return structuredClone(await pendingRead);
     },
     subscribe(listener: (value: SubscriptionUsageState) => void) {
       listeners.add(listener);
