@@ -1,5 +1,9 @@
 # Delivery policy
 
+## Crew 0.17.2 release gate recovery
+
+The unpublished 0.17.1 run completed 749/751 before signing/publication: two tests sampled process liveness before native thread identity. Conversation continuity snapshots now require correlated native identity and current-run evidence. Keep the original identity assertions and timeouts. Preserve v0.17.0 and v0.17.1 unchanged; deliver the one authorized stable release as 0.17.2 after hosted candidate and full signed gates. See [REL-0.17.2](../tickets/REL-0.17.2.md).
+
 ## Crew 0.17.1 release gate recovery
 
 The grouped feature release is delivered as 0.17.1, preserving unpublished v0.17.0 and both workflow attempts. The first attempt passed hosted tests, signing and notarization, then final ticket validation lost its Apple CloudKit connection. The second exposed a shared-capacity test cleanup race: another polling controller recreated a deleted state lock directory, causing ENOTEMPTY and aborting remaining fixture cleanup. Quiesce every controller before deleting any registered root, retain all cleanup failures, and print TAP diagnostics explicitly. Product readiness/ownership gates and timeouts are unchanged. See [REL-0.17.1](../tickets/REL-0.17.1.md).
