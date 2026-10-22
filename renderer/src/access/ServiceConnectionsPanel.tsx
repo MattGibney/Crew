@@ -24,6 +24,8 @@ import {
 export interface ServiceConnectionsPanelProps extends OwnerPanelProps {
   connections: readonly ServiceConnection[];
   setupChoices: readonly ConnectionSetupChoice[];
+  /** Mount the shared provider/account/verification wizard from Settings. */
+  onConnect?: () => void;
   onSave: (change: ConnectionSave) => Promise<void>;
   onRemove: (connectionId: string, expectedRevision: number) => Promise<void>;
   /** Trusted gateway discovery check, independent of saving metadata or reconnecting auth. */
@@ -61,18 +63,29 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
       title="Service connections"
       description="Connect a service identity for agents to use through approved operations. Credentials stay private to Crew's trusted service execution."
       action={
-        <Button
-          variant="outline"
-          disabled={
-            editing !== null || action.busy || !props.setupChoices.length
-          }
-          onClick={() => {
-            setRemoving(null);
-            setEditing("new");
-          }}
-        >
-          Add connection
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {props.onConnect && (
+            <Button
+              variant="outline"
+              disabled={editing !== null || action.busy}
+              onClick={props.onConnect}
+            >
+              Connect service
+            </Button>
+          )}
+          <Button
+            variant={props.onConnect ? "ghost" : "outline"}
+            disabled={
+              editing !== null || action.busy || !props.setupChoices.length
+            }
+            onClick={() => {
+              setRemoving(null);
+              setEditing("new");
+            }}
+          >
+            {props.onConnect ? "Advanced connection" : "Add connection"}
+          </Button>
+        </div>
       }
     >
       {!props.setupChoices.length && (

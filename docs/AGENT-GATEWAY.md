@@ -99,8 +99,8 @@ the actual operation schema immediately before admission. Catalogue presence nev
    Connection records contain references only. Do not reuse personal Codex connector sessions,
    read auth files, or put service secrets into runtime environment/configuration.
 2. Select a registered adapter from `registry.setupChoices()` and validate the saved connection with
-   `registry.assertConnection`. `createSupportedGatewayRegistry()` currently supplies Linear read-only
-   and standard Streamable HTTP, using owner-entered token authentication. Custom CLI registrations
+   `registry.assertConnection`. `createSupportedGatewayRegistry()` supplies Linear and GitHub read-only
+   and standard hosted MCP choices, using owner-entered token authentication. Custom CLI registrations
    belong to trusted host code via `TrustedGatewayRegistry`; no runtime/owner JSON endpoint accepts
    arbitrary commands, config paths or endpoints. Changing endpoint, service or acting identity uses
    a new connection ID so previous grants cannot silently retarget.
@@ -136,6 +136,25 @@ replaying an uncertain token rotation; reauthentication/revision replacement is 
 rotating refresh tokens and client authentication requirements. No interactive browser sign-in,
 dynamic registration, OAuth callback UI or automatic audience discovery is implemented in this track;
 #89 owner setup must supply a verified grant. This does not claim live Linear OAuth acceptance.
+
+### Guided GitHub and account verification
+
+The [guided owner flow](GUIDED-OWNER-ACCESS.md) uses verified official provider
+documentation and fixed endpoints for GitHub PAT and Linear API-key setup. The
+owner explicitly chooses a personal or dedicated account. The verification-only
+executor discovers the actual MCP catalogue and checks identity using fixed
+provider reads; it denies tool execution and cannot assign agents. Draft lookup
+is not wired into the runtime gateway. A final revision-checked access transaction
+grants only reviewed capabilities and selected assignments. Changed credentials,
+cancellation and unknown outcomes preserve the existing vault/admission boundary.
+
+GitHub's [remote server documentation](https://github.com/github/github-mcp-server/blob/main/docs/remote-server.md)
+defines its standard and read-only hosted endpoints. Its
+[host authentication guidance](https://github.com/github/github-mcp-server/blob/main/docs/host-integration.md)
+permits owner-provided PATs and does not supply a Crew OAuth registration. These
+registrations do not establish arbitrary MCP compatibility or live provider
+acceptance. Account intent remains an owner declaration, separate from the actual
+provider-verified identity and resource-specific provider authorization.
 
 ### Controlled CLI / Lunar boundary
 
