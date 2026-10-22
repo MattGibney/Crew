@@ -1,5 +1,9 @@
 # Delivery policy
 
+## Crew 0.17.3 Settings hotfix
+
+The human authorized PR75 and one signed patch after 0.17.2. Valid unused project lifecycle phases may be null; Settings now decodes them without rejecting the view, while configured commands and direct hooks retain structural validation. No user configuration reset or migration is required. All 753 current tests and strict typing pass; final packaged/publication evidence is tracked in [REL-0.17.3](../tickets/REL-0.17.3.md).
+
 ## Crew 0.17.2 production evidence
 
 [Crew 0.17.2](https://github.com/MattGibney/Crew/releases/tag/v0.17.2) is public/latest from immutable a6302234293db8b087ce86f571b385c002366865 after PRs 67–69, integration 70 and gate fixes 71/72. Hosted candidate and signed workflow each pass 752/752; local strict/fresh regression also passes 752/752. [Signed workflow 39757381433](https://github.com/MattGibney/Crew/actions/runs/39757381433) passes all signing/notarization/publication gates. Independent public six-asset/hash/feed/signature/staple/Gatekeeper/DMG verification and 386-file tagged-build parity pass.
