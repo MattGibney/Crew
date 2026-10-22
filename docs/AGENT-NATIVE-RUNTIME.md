@@ -159,6 +159,43 @@ explicit unsupported-state observation; it is not attributed to an invented turn
 `item/tool/requestUserInput` answer records are supported through the adapter; composing that form
 is a UI concern. A Crew service grant never substitutes for a native approval.
 
+## Explicit same-thread voice control
+
+The concrete `CodexAgentRuntime` implements `CodexRealtimePort`, exported from
+`codex-runtime.mts`. The foundation's generic adapter contract is unchanged. The application
+binds owner authentication and the primary agent before calling:
+
+- `listRealtimeVoices(binding)` reads the native v3 catalogue on an already started session.
+- `connectRealtime(binding, { transport, voice? })` accepts a WebRTC SDP offer or native websocket
+  transport. It returns the selected voice, a call-specific `voiceSessionId`, the native realtime
+  session reference and the SDP answer when relevant.
+- `appendRealtimeAudio(binding, voiceSessionId, audio)` accepts bounded native audio chunks only
+  for the exact active websocket call. WebRTC media stays with the browser transport.
+- `disconnectRealtime(binding, voiceSessionId)` waits for native closure; a stale call ID cannot
+  disconnect a later call.
+- `realtimeStatus(binding)` exposes closed/connecting/active/stopping/uncertain native state for
+  shared execution admission. `subscribeRealtime(listener)` observes typed transient events.
+
+These controls do not start an agent, connect automatically, acquire a microphone, or append a
+synthetic greeting or user utterance. Start requires the existing native thread/session and uses its
+acknowledged editable profile. `clientManagedHandoffs` stays false. Transcripts and native promoted
+items never invoke `turn/start`, `turn/steer`, `appendText` or `appendSpeech`. The renderer owns
+microphone permission, mute intent, track lifetime and audio playback. Repeated native started
+notifications do not generate another startup request.
+
+Native `bemItemPromoted` notifications produce a deduplicated `handoff` event containing the actual
+native realtime session, turn and item identities. The composition may use those exact references
+for public history correlation; overlapping ordinary turn events are not evidence of voice origin.
+Transcript deltas/final snapshots are transient display events, not a second persisted Crew chat.
+Unknown raw realtime payloads are not forwarded. Native history methods that omit realtime-only
+transcript segments remain an explicit display limitation rather than permission to mirror them.
+
+Connect and disconnect retain one outstanding call per owned peer. An ambiguous start or close
+remains uncertain and prevents reconnect until closure is confirmed. Audio acknowledgement failure
+never retries the chunk. Agent Stop first closes its native voice call cooperatively, then applies
+the existing native-turn/approval/exit checks; it does not kill independent work or resources.
+The host must include connecting/active/stopping/uncertain voice in final Quit/update admission.
+
 ## Installed-runtime evidence and limits
 
 Inspection on 22 October 2026 used the installed `codex-cli 0.163.0-alpha.11` bundled with the
@@ -202,6 +239,14 @@ PIDs are refused. A synthetic stdin peer verified that a rejected `onProcessStar
 closes the owned process without sending any native request. This checks durable recovery
 mechanics, not an installed-app crash/reopen flow. Type checking passed after these changes.
 
+The installed no-auth runtime returned 25 v3 voices from `thread/realtime/listVoices` with zero
+realtime connections and zero turns. A separate synthetic protocol peer exercised the concrete
+adapter's WebRTC negotiation, selected voice, websocket synthetic audio append/output, stale-call
+rejection, deduplicated native promotion, same-thread routing and cooperative voice closure during
+Agent Stop. No synthetic/user text was sent and no turn was started by those controls. Type
+checking passed. This is catalogue/protocol evidence, not subscription-backed voice generation,
+real WebRTC media, human acoustic acceptance or physical-microphone testing.
+
 Earlier focused validation: `npx tsc -p tsconfig.json --noEmit` passed. A separate short disposable **synthetic transport** flow
 passed idle start, exact profile event acknowledgement, enumerated approval validation/resolution,
 queue/steer correlation, lost-ack history reconciliation, sender attribution, interruption/exit and
@@ -213,3 +258,20 @@ native history pagination after model work, selected skill execution, credential
 operations and packaged application integration remain combined acceptance work. The resolver seam
 does not by itself make those capabilities ready. No personal profile/install, physical microphone,
 business service or repository worktree was modified by the native probe.
+
+
+## Installed-runtime resume restriction discovered during composition
+
+The installed 0.163.0-alpha.11 accepts `environments: []` on thread/start and
+turn/start. Its ThreadResumeParams has no environment selection field. A real
+fresh-process resume of an unused named native thread restores a local environment,
+even if an unknown `environments: []` field is supplied. Same-process resume alone
+missed this difference. The adapter now requires the loaded thread's environment
+selection to be exactly empty and blocks otherwise, retaining the same chat ID.
+It never invents input or creates a replacement chat to conceal the limitation.
+
+Selected project skills are exposed through supported `skills/extraRoots/set`
+before skills/list; exact SKILL.md parent directories are acknowledged in an
+unsigned-in native probe. No signed-in model turn or resumed voice inference has
+yet established the complete isolation/continuity milestone. The new restriction
+is an actual installed-runtime blocker in addition to owner subscription sign-in.

@@ -351,6 +351,7 @@ export class FoundationRecords {
         state.provisioning.push({
           agentId: agent.id,
           ...provisioning,
+          creator,
           state: "pending",
           error: null,
         });
