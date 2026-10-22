@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type {
   Agent,
+  Actor,
+  AgentProvisioning,
+  ExecutionAdmissionGate,
+  AgentEnvironmentService,
   AgentContent,
   AgentLifecycle,
   AgentMessage,
@@ -13,6 +17,7 @@ import type {
   ExecutionReservation,
   JsonValue,
   ModelAccess,
+  MessageSender,
   OperationBroker,
   PreparationReadiness,
   RuntimeAccessProvider,
@@ -59,6 +64,12 @@ export interface FoundationOptions {
   /** Must be wired to #89's fresh admission predicate before reservation is usable.
    * Existing admitted operations are then checked through broker.settlement. */
   admissionUsesFoundationBarrier: boolean;
+  admission?: ExecutionAdmissionGate;
+  provisioning?: AgentProvisioning;
+  environments?: AgentEnvironmentService;
+  confirmNativeExit?: (
+    caller: CallerContext,
+  ) => Promise<{ confirmed: boolean; detail: string }>;
 }
 
 export interface SendInput {
@@ -91,6 +102,190 @@ export class AgentFoundation implements AgentLifecycle {
       options.authorization,
       options.references,
     );
+  }
+
+  /** Reads current assignments from access; persisted empty fields are never authority. */
+  async agentViews(): Promise<Agent[]> {
+    const agents = this.store.snapshot().agents;
+    if (!this.options.provisioning) return agents;
+    return Promise.all(
+      agents.map(async (agent) => ({
+        ...agent,
+        access: await this.options.provisioning!.accessFor(agent.id),
+      })),
+    );
+  }
+
+  async creationPresets() {
+    return this.options.provisioning?.listPresets() ?? [];
+  }
+
+  async createFromPreset(
+    principal: FoundationPrincipal,
+    input: {
+      presetId: string;
+      expectedPresetRevision: number;
+      name?: string;
+      reportsTo?: Actor;
+    },
+  ): Promise<Agent> {
+    if (!this.options.provisioning)
+      throw new Error("Owner-approved creation presets are unavailable.");
+    if (
+      Object.keys(input).some(
+        (key) =>
+          !["presetId", "expectedPresetRevision", "name", "reportsTo"].includes(
+            key,
+          ),
+      )
+    )
+      throw new Error(
+        "Creation accepts only an approved preset and display name.",
+      );
+    const actor = await this.records.authorize(principal, "agents.create", {
+      type: "project",
+    });
+    const preset = (await this.options.provisioning.listPresets()).find(
+      (row) => row.id === input.presetId,
+    );
+    if (
+      !preset ||
+      !preset.enabled ||
+      preset.projectId !== this.store.snapshot().projectId ||
+      preset.revision !== input.expectedPresetRevision
+    )
+      throw new Error(
+        "Creation preset changed or is unavailable; refresh owner-approved choices.",
+      );
+    const agent = await this.records.createAgent(
+      principal,
+      {
+        profile: {
+          ...preset.profile,
+          ...(input.name === undefined ? {} : { name: input.name }),
+        },
+        modelAccessId: preset.modelAccessId,
+        configRef: preset.configRef,
+        skills: preset.skills,
+        ...(input.reportsTo === undefined
+          ? {}
+          : { reportsTo: input.reportsTo }),
+      },
+      { presetId: preset.id, presetRevision: preset.revision },
+    );
+    try {
+      const access = await this.admit(async () => {
+        if (this.store.snapshot().reservation) throw new Error("Execution is reserved.");
+        const current = await this.options.provisioning!.applyPreset({
+          actor, agentId: agent.id, presetId: preset.id, expectedPresetRevision: preset.revision,
+        });
+        await this.store.update(state => { state.provisioning.find(row => row.agentId === agent.id)!.state = "ready"; });
+        return current;
+      });
+      return { ...agent, access };
+    } catch {
+      await this.store.update((state) => {
+        const row = state.provisioning.find((row) => row.agentId === agent.id)!;
+        row.state = "failed";
+        row.error =
+          "Approved access could not be provisioned. Start is held; review the preset and retry provisioning.";
+      });
+      throw new Error(
+        "Agent retained with failed provisioning; it cannot Start until owner-approved access is applied.",
+      );
+    }
+  }
+
+  async retryProvisioning(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<void> {
+    if (
+      !this.options.provisioning ||
+      principal.type !== "owner" ||
+      principal.userId !== this.store.snapshot().ownerUserId
+    )
+      throw new Error("Owner provisioning recovery required.");
+    const row = this.store
+      .snapshot()
+      .provisioning.find((item) => item.agentId === agentId);
+    if (!row || row.state === "ready")
+      throw new Error("No incomplete provisioning to retry.");
+    await this.options.provisioning.applyPreset({
+      actor: { type: "user", userId: principal.userId },
+      agentId,
+      presetId: row.presetId,
+      expectedPresetRevision: row.presetRevision,
+    });
+    await this.store.update((state) => {
+      const current = state.provisioning.find(
+        (item) => item.agentId === agentId,
+      )!;
+      current.state = "ready";
+      current.error = null;
+    });
+  }
+
+  async setPrimary(
+    principal: FoundationPrincipal,
+    agentId: string | null,
+    expectedRevision: number,
+  ) {
+    const current = this.store.snapshot();
+    if (principal.type !== "owner" || principal.userId !== current.ownerUserId)
+      throw new Error(
+        "Only the authenticated owner selects the primary agent.",
+      );
+    return this.store.update((state) => {
+      if (state.projectSettings.revision !== expectedRevision)
+        throw new Error(
+          "Primary agent setting changed; refresh before saving.",
+        );
+      if (
+        agentId !== null &&
+        !state.agents.some((agent) => agent.id === agentId && !agent.archivedAt)
+      )
+        throw new Error("Choose an available agent in this project.");
+      state.projectSettings.primaryAgentId = agentId;
+      state.projectSettings.revision++;
+      return state.projectSettings;
+    });
+  }
+
+  async environment(
+    principal: FoundationPrincipal,
+    input: {
+      agentId: string;
+      action: "create" | "attach" | "execute" | "dispose";
+      requestId: string;
+      arguments: import("./contracts.mjs").JsonObject;
+    },
+  ) {
+    if (principal.type !== "agent")
+      throw new Error("Authenticated agent environment request required.");
+    if (!["create", "attach", "execute", "dispose"].includes(input.action))
+      throw new Error("Unknown environment action.");
+    await this.records.authorize(
+      principal,
+      `environments.${input.action}`,
+      input.action === "create"
+        ? { type: "project" }
+        : { type: "agent", agentId: input.agentId },
+    );
+    if (!this.options.environments)
+      throw new Error(
+        "Explicit environment integration is not configured. Messaging remains available.",
+      );
+    return this.options.environments.invoke({
+      ...input,
+      caller: principal.caller,
+    });
+  }
+
+  private admit<T>(operation: () => Promise<T>): Promise<T> {
+    return this.options.admission
+      ? this.options.admission.run(operation)
+      : operation();
   }
 
   subscribeRuntime(listener: (event: RuntimeEvent) => void): () => void {
@@ -217,6 +412,18 @@ export class AgentFoundation implements AgentLifecycle {
   private async startLocked(agentId: string): Promise<RuntimeStartResult> {
     const agent = this.agent(agentId);
     const previous = agent.runtime.session;
+    const provisioning = this.store
+      .snapshot()
+      .provisioning.find((row) => row.agentId === agentId);
+    if (this.options.provisioning && provisioning?.state !== "ready")
+      return {
+        state: "failed",
+        error: error(
+          "configuration_rejected",
+          "Owner-approved agent provisioning is incomplete.",
+        ),
+        retainedThreadId: agent.runtime.threadId,
+      };
     const reject = (
       code: RuntimeError["code"],
       message: string,
@@ -265,25 +472,27 @@ export class AgentFoundation implements AgentLifecycle {
       agentId,
       sessionId: randomUUID(),
     };
-    await this.store.update((state) => {
-      if (state.reservation) throw new Error("Execution is reserved.");
-      const current = state.agents.find((entry) => entry.id === agentId)!;
-      current.runtime.session = {
-        ...current.runtime.session,
-        sessionId: caller.sessionId,
-        desiredState: "started",
-        observedState: "starting",
-        activeTurnId: null,
-        startedAt: null,
-        lastObservedAt: now(),
-        lastError: null,
-      };
-      state.nativeStartAttempts.push({
-        agentId,
-        sessionId: caller.sessionId,
-        dispatched: false,
-      });
-    });
+    await this.admit(() =>
+      this.store.update((state) => {
+        if (state.reservation) throw new Error("Execution is reserved.");
+        const current = state.agents.find((entry) => entry.id === agentId)!;
+        current.runtime.session = {
+          ...current.runtime.session,
+          sessionId: caller.sessionId,
+          desiredState: "started",
+          observedState: "starting",
+          activeTurnId: null,
+          startedAt: null,
+          lastObservedAt: now(),
+          lastError: null,
+        };
+        state.nativeStartAttempts.push({
+          agentId,
+          sessionId: caller.sessionId,
+          dispatched: false,
+        });
+      }),
+    );
     let result: RuntimeStartResult;
     let nativeAttempted = false;
     try {
@@ -413,7 +622,10 @@ export class AgentFoundation implements AgentLifecycle {
     });
     try {
       await this.options.authorization.closeSession(caller, reason);
-      const settlement = await this.options.broker.settlement(agent.projectId);
+      const settlement = await this.options.broker.settlement(
+        agent.projectId,
+        caller,
+      );
       if (
         settlement.inFlightInvocationIds.length ||
         settlement.uncertainInvocationIds.length
@@ -469,6 +681,73 @@ export class AgentFoundation implements AgentLifecycle {
     }
   }
 
+  async cancelTurn(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<RuntimeResult<null>> {
+    await this.records.authorize(principal, "sessions.stop", {
+      type: "agent",
+      agentId,
+    });
+    const agent = this.agent(agentId);
+    const binding = this.binding(agent);
+    if (!binding || !agent.runtime.session.activeTurnId)
+      return failed("No acknowledged active turn to interrupt.");
+    return this.options.runtime.cancelTurn(
+      binding,
+      agent.runtime.session.activeTurnId,
+    );
+  }
+
+  /** Read-only proof of owned app-server exit, never a reset or process signal. */
+  async recoverSession(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<RuntimeResult<null>> {
+    if (
+      principal.type !== "owner" ||
+      principal.userId !== this.store.snapshot().ownerUserId
+    )
+      return failed("Owner recovery required.");
+    return this.serial(agentId, async () => {
+      const agent = this.agent(agentId);
+      const binding = this.binding(agent);
+      if (!binding || !this.options.confirmNativeExit)
+        return failed("Native identity or exit evidence is unavailable.");
+      const proof = await this.options.confirmNativeExit(binding);
+      if (!proof.confirmed) return failed(proof.detail);
+      const settlement = await this.options.broker.settlement(
+        agent.projectId,
+        binding,
+      );
+      if (
+        settlement.inFlightInvocationIds.length ||
+        settlement.uncertainInvocationIds.length
+      )
+        return failed("This session's broker operations remain unsettled.");
+      await this.options.authorization.closeSession(
+        binding,
+        "unverifiable_recovery",
+      );
+      await this.options.access.release(binding);
+      await this.store.update((state) => {
+        const session = state.agents.find((row) => row.id === agentId)!.runtime
+          .session;
+        if (session.sessionId !== binding.sessionId)
+          throw new Error("Recovery identity changed.");
+        session.desiredState = "stopped";
+        session.observedState = "stopped";
+        session.activeTurnId = null;
+        session.lastObservedAt = now();
+        session.lastError = null;
+        state.nativeApprovals = state.nativeApprovals.filter(
+          (row) => row.sessionId !== binding.sessionId,
+        );
+      });
+      return { state: "acknowledged", value: null };
+    });
+  }
+
   async restart(agentId: string): Promise<RuntimeStartResult> {
     const result = await this.serial(
       agentId,
@@ -509,6 +788,40 @@ export class AgentFoundation implements AgentLifecycle {
       type: "agent",
       agentId: input.recipientAgentId,
     });
+    return this.enqueue(actor, input, "public", principal);
+  }
+
+  /** Trusted scheduler/lifecycle ingress only, never exposed as an owner/model
+   * JSON command. Internal work cannot steer into a human conversation turn. */
+  async sendInternal(input: {
+    id: string;
+    source: "schedule" | "preparation";
+    sourceId: string;
+    recipientAgentId: string;
+    content: AgentContent[];
+  }) {
+    if (!["schedule", "preparation"].includes(input.source) || !input.sourceId)
+      throw new Error("An explicit internal source identity is required.");
+    return this.enqueue(
+      { type: "system", source: input.source, sourceId: input.sourceId },
+      {
+        id: input.id,
+        recipientAgentId: input.recipientAgentId,
+        content: input.content,
+        jobId: null,
+        replyToMessageId: null,
+        deliveryMode: "queue",
+      },
+      "private",
+    );
+  }
+
+  private async enqueue(
+    actor: MessageSender,
+    input: SendInput,
+    visibility: "public" | "private",
+    principal?: FoundationPrincipal,
+  ): Promise<AgentMessage | { messageId: string }> {
     if (
       !["queue", "steer"].includes(input.deliveryMode) ||
       !Array.isArray(input.content) ||
@@ -537,7 +850,7 @@ export class AgentFoundation implements AgentLifecycle {
     });
     const message = await this.store.update((state) => {
       if (
-        principal.type === "agent" &&
+        principal?.type === "agent" &&
         !state.agents.some(
           (entry) =>
             entry.id === principal.caller.agentId &&
@@ -597,6 +910,7 @@ export class AgentFoundation implements AgentLifecycle {
         id: messageId,
         projectId: state.projectId,
         sender: actor,
+        visibility,
         recipientAgentId: input.recipientAgentId,
         jobId: input.jobId,
         replyToMessageId: input.replyToMessageId,
@@ -649,11 +963,24 @@ export class AgentFoundation implements AgentLifecycle {
         )
           return;
         const active = agent.runtime.session.activeTurnId;
+        const activeVisibility = active
+          ? this.store
+              .snapshot()
+              .receipts.find(
+                (receipt) =>
+                  receipt.recipientAgentId === agentId &&
+                  receipt.threadId === binding.threadId &&
+                  receipt.turnId === active,
+              )?.visibility
+          : null;
         const message = pending.find(
           (entry) =>
             entry.delivery.state === "queued" &&
-            (!active || entry.deliveryMode === "steer"),
+            (!active ||
+              (entry.deliveryMode === "steer" &&
+                activeVisibility === entry.visibility)),
         );
+
         if (!message) return;
         if (active && !this.options.runtime.capabilities.activeTurnSteering) {
           await this.store.update((state) => {
@@ -669,22 +996,24 @@ export class AgentFoundation implements AgentLifecycle {
           continue;
         }
         const attemptId = randomUUID();
-        await this.store.update((state) => {
-          if (state.reservation) throw new Error("Execution is reserved.");
-          const current = state.messages.find(
-            (entry) => entry.id === message.id,
-          )!;
-          current.delivery.state = "sending";
-          current.delivery.attempts.push({
-            id: attemptId,
-            sessionId: binding.sessionId,
-            threadId: binding.threadId,
-            turnId: active,
-            attemptedAt: now(),
-            outcome: "pending",
-            runtimeMessageRef: null,
-          });
-        });
+        await this.admit(() =>
+          this.store.update((state) => {
+            if (state.reservation) throw new Error("Execution is reserved.");
+            const current = state.messages.find(
+              (entry) => entry.id === message.id,
+            )!;
+            current.delivery.state = "sending";
+            current.delivery.attempts.push({
+              id: attemptId,
+              sessionId: binding.sessionId,
+              threadId: binding.threadId,
+              turnId: active,
+              attemptedAt: now(),
+              outcome: "pending",
+              runtimeMessageRef: null,
+            });
+          }),
+        );
         let result: DeliveryResult;
         try {
           result = await this.options.runtime.deliver({
@@ -725,6 +1054,8 @@ export class AgentFoundation implements AgentLifecycle {
         state.receipts.push({
           messageId,
           sender: message.sender,
+          visibility: message.visibility,
+          turnId: result.turnId,
           recipientAgentId: message.recipientAgentId,
           jobId: message.jobId,
           sessionId: attempt.sessionId,
@@ -985,7 +1316,43 @@ export class AgentFoundation implements AgentLifecycle {
     });
     const binding = this.binding(this.agent(agentId));
     if (!binding) return failed("This agent has no native thread yet.");
-    return this.options.runtime.readHistory(binding, cursor);
+    const result = await this.options.runtime.readHistory(binding, cursor);
+    if (principal.type !== "owner" || result.state !== "acknowledged")
+      return result;
+    return {
+      ...result,
+      value: {
+        ...result.value,
+        items: result.value.items.filter(
+          (item) =>
+            item.turnId !== null &&
+            this.turnVisibility(
+              binding.agentId,
+              binding.threadId,
+              item.turnId,
+            ) === "public",
+        ),
+      },
+    };
+  }
+
+  turnVisibility(
+    agentId: string,
+    threadId: string,
+    turnId: string,
+  ): "public" | "private" | "unknown" {
+    const receipts = this.store
+      .snapshot()
+      .receipts.filter(
+        (row) =>
+          row.recipientAgentId === agentId &&
+          row.threadId === threadId &&
+          row.turnId === turnId,
+      );
+    if (receipts.some((row) => row.visibility === "private")) return "private";
+    return receipts.some((row) => row.visibility === "public")
+      ? "public"
+      : "unknown";
   }
 
   async respondToNativeApproval(
@@ -1200,12 +1567,24 @@ export class AgentFoundation implements AgentLifecycle {
     | { state: "reserved"; reservation: ExecutionReservation }
     | { state: "blocked"; reason: string }
   > {
-    if (!this.options.admissionUsesFoundationBarrier)
+    if (!this.options.admissionUsesFoundationBarrier || !this.options.admission)
       return {
         state: "blocked",
         reason:
           "Access/broker admission has not been wired to the foundation execution barrier.",
       };
+    return this.options.admission.run(() =>
+      this.reserveExecutionLocked(projectId, reason),
+    );
+  }
+
+  private async reserveExecutionLocked(
+    projectId: string,
+    reason: ExecutionReservation["reason"],
+  ): Promise<
+    | { state: "reserved"; reservation: ExecutionReservation }
+    | { state: "blocked"; reason: string }
+  > {
     let reservation: ExecutionReservation | undefined;
     try {
       reservation = await this.store.update((state) => {

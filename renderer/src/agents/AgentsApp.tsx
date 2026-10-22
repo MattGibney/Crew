@@ -2303,9 +2303,10 @@ function agentName(id: string, snapshot: AgentsSnapshot) {
   );
 }
 function actorLabel(
-  actor: { type: "user"; userId: string } | { type: "agent"; agentId: string },
+  actor: import("../../../src/agents/contracts.mjs").MessageSender,
   snapshot: AgentsSnapshot,
 ) {
+  if (actor.type === "system") return "Internal";
   return actor.type === "agent"
     ? agentName(actor.agentId, snapshot)
     : actor.userId === snapshot.ownerId
