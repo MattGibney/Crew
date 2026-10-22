@@ -1,3 +1,7 @@
+import {
+  pendingDirection,
+  recordDirectionDelivery,
+} from "./runner-directions.mjs";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -84,9 +88,7 @@ export function createWorkerDirections({
   ownedRunnerAlive,
   getProcessSnapshot,
 }: ControllerServices) {
-  // Directions are queued transport input, never a Crew permission decision.
-  // Wait only for the previous native connection to finish so one conversation
-  // cannot acquire duplicate turns. File/configuration history is informational.
+  // The existing supervisor steers live turns; only idle continuation opens a connection.
   async function nativeConnectionLive(
     task: TaskRecord,
     { ignoreLaunch = false }: { ignoreLaunch?: boolean } = {},
@@ -144,6 +146,28 @@ export function createWorkerDirections({
     if (!pending || !task.threadId || !task.worktree) return task;
     if (operations.has(task.id) || (await nativeConnectionLive(task)))
       return task;
+    // An attempted request may already be in model context. A dead supervisor
+    // cannot safely replay it, even with the same client message ID.
+    if (
+      pending.delivery &&
+      ["attempted", "uncertain", "failed"].includes(pending.delivery.state)
+    ) {
+      return updateTask(stateDir, task.id, (next) => {
+        const item = pendingDirection(next);
+        if (next.runId !== task.runId || item?.id !== pending.id) return;
+        if (item.delivery?.state === "attempted")
+          recordDirectionDelivery(item, {
+            ...item.delivery,
+            state: "uncertain",
+            at: now(),
+            error:
+              "Worker connection closed before delivery was confirmed. Not replayed.",
+          });
+        next.followupWait =
+          item.delivery?.error ||
+          "Direction delivery is unresolved. Not replayed.";
+      });
+    }
     // Terminal publication may land after this tick's reconciliation read. Save
     // the prior execution outcome before selecting another queued direction.
     // This is history settlement, never admission or project workflow inference.
@@ -226,7 +250,12 @@ export function createWorkerDirections({
         return;
       const assignments = ensureAssignments(n);
       const next = assignments.find((item) => item.id === pending.id);
-      if (next?.status !== "queued") return;
+      if (
+        next?.status !== "queued" ||
+        (next.delivery &&
+          !["pending", "rejected"].includes(next.delivery.state))
+      )
+        return;
       if (
         terminal &&
         terminal.runId === n.runId &&

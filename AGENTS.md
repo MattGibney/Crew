@@ -354,3 +354,7 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Disposable tests launched from Crew must not inherit the live `CREW_GLOBAL_CAPACITY_DIR`. Clear it or supply a fixture-owned ledger explicitly; otherwise synthetic servers can register temporary state in the live ledger and contend with real workers. Never clear live claims/registrations to make a test pass.
 
 - GH-78 worker-card clarification: show GitHub #number at the card top left before truncating repository context. Infer legacy display only from actual canonical issue URLs, preserve explicit null/local intent, and keep repository identity in title/accessibility so equal numbers remain distinguishable. Display derivation never rewrites retained task/assignment records.
+## Prompt manager-to-worker steering (GitHub #50 correction)
+
+- Ordinary directions steer an active acknowledged native turn promptly in the same run/thread/worktree. Never wait for assignment completion or cancel/restart to deliver input. Idle directions continue the retained conversation. Keep current assignment, question and approval identities intact during steering.
+- Persist ordered pending/attempted/acknowledged/uncertain/rejected/failed delivery evidence. Native acknowledgement is not model-consumption or completion evidence. Never blindly replay attempted or uncertain input after transport or controller recovery. A definite no-active-turn rejection may continue only after confirmed native closure. Keep approvals and lifecycle control responsive during steering acknowledgement waits.

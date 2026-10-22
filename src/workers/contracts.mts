@@ -335,6 +335,8 @@ export interface AssignmentAdoption {
   userDecision: string;
 }
 export interface WorkerAssignment {
+  delivery?: DirectionDelivery;
+  deliveryHistory?: DirectionDelivery[];
   stopReason?: string;
   id: string;
   ticket: string;
@@ -357,6 +359,20 @@ export interface WorkerAssignment {
   promptSnapshot?: PromptSnapshot;
   archivedQuestions?: TaskRecord["question"][];
   adoptions?: AssignmentAdoption[];
+}
+export interface DirectionDelivery {
+  state:
+    | "pending"
+    | "attempted"
+    | "acknowledged"
+    | "uncertain"
+    | "rejected"
+    | "failed";
+  at: string;
+  runId?: string;
+  threadId?: string;
+  turnId?: string;
+  error?: string;
 }
 export interface WorkflowEvent {
   progressPercent?: number | null;

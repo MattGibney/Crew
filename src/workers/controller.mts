@@ -317,6 +317,7 @@ export async function createController({
     report: ResultCandidate,
   ) => verifyWorkerCompletion({ stateDir, project, task, exit, report });
   const services = {
+    capacityDir: globalCapacity?.dir || path.join(stateDir, "capacity"),
     stateDir,
     sourceDir,
     executable,

@@ -13,6 +13,7 @@ export type NativeConnectionLive = (
 ) => Promise<boolean>;
 export type ActivateFollowup = (task: TaskRecord) => Promise<TaskRecord>;
 export interface ControllerServices {
+  capacityDir?: string;
   stateDir: string;
   sourceDir: string;
   executable: string;

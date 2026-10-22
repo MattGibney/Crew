@@ -72,6 +72,7 @@ export function createWorkerLauncher({
   workerPrompt,
   getWorkerPrompt,
   capacity,
+  capacityDir,
   launches,
   operations,
   startupQueued,
@@ -129,6 +130,7 @@ export function createWorkerLauncher({
         runDir = path.join(stateDir, "runs", task.id, runId);
       await mkdir(runDir, { recursive: true, mode: 0o700 });
       const config = {
+        globalCapacityDir: capacityDir,
         project,
         workerPrompt: saved.text,
         workerPromptVersion: saved.version,
@@ -390,6 +392,7 @@ export function createWorkerLauncher({
       }
       const assignment = currentAssignment(task);
       const config = {
+        globalCapacityDir: capacityDir,
         project,
         workerPrompt: saved.text,
         workerPromptVersion: saved.version,

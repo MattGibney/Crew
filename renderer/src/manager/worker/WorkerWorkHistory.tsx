@@ -56,19 +56,27 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
       </section>
       {queued.length > 0 && (
         <section
-          aria-label="Queued assignments"
+          aria-label="Pending directions"
           className="rounded-xl border p-5"
         >
           <h2 className="text-sm font-semibold">
-            Queued follow-ups ({queued.length})
+            Pending directions ({queued.length})
           </h2>
           <p className="mt-2 text-xs text-muted-foreground">
-            {task.followupWait || "Direction queued for native delivery."}
+            {task.followupWait ||
+              "Waiting for native delivery. Active turns receive steering promptly."}
           </p>
           <ol className="mt-3 space-y-3">
             {queued.map((item) => (
               <li key={item.id} className="text-sm">
                 <p className="font-medium">{item.ticket}</p>
+                <p className="text-xs text-muted-foreground">
+                  Native delivery:{" "}
+                  {item.delivery?.state === "attempted"
+                    ? "awaiting acknowledgement"
+                    : item.delivery?.state || "pending"}
+                  {item.delivery?.error && ` · ${item.delivery.error}`}
+                </p>
                 <p className="whitespace-pre-wrap break-words text-muted-foreground">
                   {item.brief}
                 </p>
@@ -85,7 +93,9 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
           aria-label="Assignment history"
           className="rounded-xl border p-5"
         >
-          <h2 className="text-sm font-semibold">Previous assignments</h2>
+          <h2 className="text-sm font-semibold">
+            Direction and assignment history
+          </h2>
           <div className="mt-3 space-y-3">
             {task.assignments
               ?.filter(
@@ -104,13 +114,24 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
                       {item.brief?.trim().split("\n")[0]}
                     </span>
                     <span className="ml-2 text-muted-foreground">
-                      {item.status === "completed" ? "Turn ended" : item.status}
+                      {item.status === "completed"
+                        ? "Turn ended"
+                        : item.status === "steered"
+                          ? "Native steering acknowledged"
+                          : item.status}
                     </span>
                   </summary>
                   <div className="mt-3 space-y-3">
                     <p className="whitespace-pre-wrap break-words text-muted-foreground">
                       {item.brief}
                     </p>
+                    {item.delivery?.state === "acknowledged" && (
+                      <p className="text-muted-foreground">
+                        Native input accepted in the existing turn. Worker
+                        reports and conversation provide evidence of any action
+                        taken.
+                      </p>
+                    )}
                     {item.result?.message && (
                       <Markdown>{item.result.message}</Markdown>
                     )}

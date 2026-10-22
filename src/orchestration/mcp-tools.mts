@@ -137,7 +137,7 @@ export function orchestrationTools(
           {
             name: "assign_worker_followup",
             description:
-              "Send new direction to the same retained worker and Codex conversation. Busy workers queue direction for supported serialized delivery. Completed, paused or questioning workers can receive fresh direction. Files, Git HEAD, prior scope and changed configuration do not require Crew review or adoption. Native Codex retains its normal execution policy and approvals. Reuse requestId for exact retries; queued is not delivered. Archive/disposal and missing resources remain truthful availability conditions.",
+              "Send new direction to the same retained worker and Codex conversation. Active workers receive prompt native turn/steer input in the same run; idle workers continue their retained conversation. Completed, paused or questioning workers can receive fresh direction. Files, Git HEAD, prior scope and changed configuration do not require Crew review or adoption. Native Codex retains its normal execution policy and approvals. Reuse requestId for exact retries; pending is not acknowledged; native acceptance is not proof the worker acted on content. Uncertain attempts are not automatically replayed. Archive/disposal and missing resources remain truthful availability conditions.",
             inputSchema: object(
               {
                 taskId: taskIdentifier,

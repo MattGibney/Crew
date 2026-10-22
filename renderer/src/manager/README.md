@@ -56,7 +56,7 @@ Combined acceptance uses an unsigned packaged candidate with separate portable s
 
 ## Retained work, archives and environment settings
 
-Worker directions target the same retained conversation and worktree through `assign_worker_followup`; busy workers queue directions. Dirty files, HEAD changes, prior completion and arbitrary project workflow labels do not create Crew adoption gates. Workflow is explicitly recorded visual data; execution connectivity, approvals and correlated native results remain separate observations. Settings exposes archived history restore and permanent deletion with a confirmation. A restore presents retained history and recovery requirements honestly; it does not recreate resources.
+Worker directions target the same retained conversation and worktree through `assign_worker_followup`; active workers receive prompt native steering in the same turn, while idle workers continue the retained conversation. Dirty files, HEAD changes, prior completion and arbitrary project workflow labels do not create Crew adoption gates. Workflow is explicitly recorded visual data; execution connectivity, approvals and correlated native results remain separate observations. Settings exposes archived history restore and permanent deletion with a confirmation. A restore presents retained history and recovery requirements honestly; it does not recreate resources.
 
 `WorkerEnvironment.tsx` edits saved lifecycle command context with a revision check. Saving runs nothing, and dispatch runs no project lifecycle commands. Project references, exact direct-command arguments and permission/environment provenance remain visible without rewriting project files or native Codex policy.
 
