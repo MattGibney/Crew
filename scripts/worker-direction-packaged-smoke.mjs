@@ -15,7 +15,7 @@ const port=Number(process.env.CREW_ACCEPTANCE_PORT||59181),taskId='packaged-smok
 console.log(JSON.stringify({event:'packaged-smoke-fixture',evidenceDir:dir,executable}));
 let electron,nativeProcess,stateDir;
 const until=async(fn,label)=>{const end=Date.now()+45000;while(Date.now()<end){const value=await fn();if(value)return value;await new Promise(resolve=>setTimeout(resolve,100));}throw Error('Timed out '+label);};
-async function quit(){if(nativeProcess?.exitCode===null&&nativeProcess?.signalCode===null){await electron.evaluate(({dialog,Menu})=>{dialog.showMessageBox=async()=>({response:1});Menu.getApplicationMenu().items[0].submenu.items.find(item=>item.label==='Quit Crew…').click();});await until(()=>nativeProcess.exitCode!==null||nativeProcess.signalCode!==null,'owned packaged Quit');}}
+async function quit(){if(nativeProcess?.exitCode===null&&nativeProcess?.signalCode===null){const page=electron.windows()[0];if(page){await page.evaluate(async()=>{const request=async action=>{const response=await fetch('/api/updates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});if(!response.ok)throw Error('Fixture preparation recovery failed');return response.json();};const status=await request('status');if(status.workspacePlan?.purpose==='quit'&&status.workspacePlan.phase==='canceled')await request('return-to-work');});}await electron.evaluate(({dialog,Menu})=>{dialog.showMessageBox=async()=>({response:1});Menu.getApplicationMenu().items[0].submenu.items.find(item=>item.label==='Quit Crew…').click();});await until(()=>nativeProcess.exitCode!==null||nativeProcess.signalCode!==null,'owned packaged Quit');}}
 try{
  await writeFile(binary,`#!${process.execPath}
 import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';import{execFileSync,spawnSync}from'node:child_process';
@@ -38,7 +38,10 @@ send({id:m.id,result});
 if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,turn:{id:m.params.turnId,status:'interrupted'}}});
 if(m.method==='turn/start'){
  let text;
- if(role==='worker'){
+ if(m.params.input[0].text.startsWith('Crew preparation request:')){
+  const response=call('get_preparation_request',{}),request=JSON.parse(response.content[0].text);if(!request)throw Error('Missing bound packaged preparation request');
+  call('report_preparation',{preparationId:request.preparationId,participantId:request.participantId,requestId:request.requestId,responseId:'packaged-ready-'+request.requestId,state:'ready',note:'Packaged fixture continuation is saved; ready for shutdown.',continuation:'Retained worker results, files and chat remain available.'});text='Final packaged preparation response received before shutdown.';
+ }else if(role==='worker'){
   const commandArgs=['--input-type=module','-e','import {sum} from "./src/totals.mjs";console.log(JSON.stringify({emptyActual:sum([]),sumActual:sum([1,2,3])}));'];
   const output=execFileSync(process.execPath,commandArgs,{encoding:'utf8'});
   send({method:'item/completed',params:{threadId,turnId,item:{id:'smoke-command',type:'commandExecution',command:[process.execPath,...commandArgs.map(arg=>JSON.stringify(arg))].join(' '),exitCode:0,aggregatedOutput:output}}});
@@ -76,5 +79,5 @@ if(m.method==='turn/start'){
  const after=await readTask(stateDir,taskId);for(const key of Object.keys(before))assert.deepEqual(after[key],before[key],key+' survives packaged relaunch');
  await page.getByRole('tab',{name:'Conversation',exact:true}).click();await detail().getByText('Packaged follow-up result retained.',{exact:true}).first().waitFor();await page.screenshot({path:path.join(dir,'packaged-history-after-relaunch.png')});
  const calls=(await readFile(protocol,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(calls.filter(call=>call.method==='thread/realtime/start').length,0);assert.equal(calls.filter(call=>call.role==='worker'&&call.method==='turn/start').length,2);assert.equal(calls.filter(call=>call.role==='worker'&&call.method==='thread/resume').length,1);assert.equal(await page.evaluate(()=>window.__smokeMicrophoneCalls),0);assert.deepEqual(errors,[]);
- const proof={pass:true,evidenceDir:dir,packagedExecutable:executable,syntheticNativePeer:true,physicalMicrophoneCalls:0,sameWorkerThread:after.threadId,sameWorktree:after.worktree,assignments:after.assignments.length,explicitWorkflow:after.workflowState.value,persistedHistory:true,draftPreserved:true,packagedMcpTools:true};await writeFile(path.join(dir,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
+ const proof={pass:true,evidenceDir:dir,packagedExecutable:executable,syntheticNativePeer:true,physicalMicrophoneCalls:0,sameWorkerThread:after.threadId,sameWorktree:after.worktree,assignments:after.assignments.length,explicitWorkflow:after.workflowState.value,persistedHistory:true,draftPreserved:true,packagedMcpTools:true,sharedQuitPreparation:true,preparationReports: calls.filter(call=>call.role==='manager'&&call.method==='turn/start'&&call.input?.startsWith('Crew preparation request:')).length};await writeFile(path.join(dir,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
 }catch(error){console.error('Packaged smoke evidence:',dir);for(const page of electron?.windows()||[])await page.screenshot({path:path.join(dir,'packaged-failure.png')}).catch(()=>{});throw error;}finally{await quit();}

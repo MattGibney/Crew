@@ -249,7 +249,7 @@ export function UpdateControls({
                   disabled={busy}
                   onClick={() => void request("pause-update")}
                 >
-                  Pause work and update
+                  Prepare and update
                 </Button>
               )}
             {planActive &&

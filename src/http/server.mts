@@ -295,20 +295,7 @@ const synchronizePlan = (plan: PausePlan | null) => {
   else updateAdmission.releaseHold();
   broadcast({ type: "update-plan-state", plan });
 };
-updatePlan = createUpdatePlan({
-  preparation: createPreparationCoordinator({
-    stateDir: orchestrationDir,
-    projectId: project.id,
-    sendManager: (text, requestId) => bridge.startWork(text, requestId),
-  }),
-  stateDir: orchestrationDir,
-  version,
-  getView: async () =>
-    inspectUpdateEvidence({
-      stateDir: orchestrationDir,
-      view: await controller.view(),
-    }),
-  getManager: () => {
+const managerPreparationActivity = () => {
     const state = bridge.state(),
       lifecycle = manager.view();
     return ["running", "stopped"].includes(lifecycle.state)
@@ -318,7 +305,22 @@ updatePlan = createUpdatePlan({
           status: `manager-lifecycle-${lifecycle.state}`,
           workStarting: true,
         };
-  },
+};
+updatePlan = createUpdatePlan({
+  preparation: createPreparationCoordinator({
+    stateDir: orchestrationDir,
+    projectId: project.id,
+    getManager: managerPreparationActivity,
+    sendManager: (text, requestId) => bridge.startWork(text, requestId),
+  }),
+  stateDir: orchestrationDir,
+  version,
+  getView: async () =>
+    inspectUpdateEvidence({
+      stateDir: orchestrationDir,
+      view: await controller.view(),
+    }),
+  getManager: managerPreparationActivity,
   stopVoice: () => bridge.stopVoice({ cooperative: true }),
   interruptManager: (input) => bridge.interrupt(input),
   requestAction: (input) => requestWorkerAction(orchestrationDir, input),
