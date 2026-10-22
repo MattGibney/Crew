@@ -25,7 +25,7 @@ Workers remain available through the compact worker panel and worker history. Th
 
 Project skills are saved in Crew's private project store and can include bounded text resources. Active native sessions retain immutable selected revisions until Restart. Skill instructions do not grant permissions. See [project skills](docs/PROJECT-SKILLS.md).
 
-Schedules are per agent and are empty in a fresh project. Their delivery contract uses private native turns: public conversation waits across a private turn, and private work waits across public work or connected voice. The scheduler never invents a human message or automatically starts a stopped agent. Final atomic schedule validation is still pending the runtime admission hook; the checkpoint is not schedule acceptance.
+Schedules are per agent and are empty in a fresh project. Their delivery contract uses private native turns: public conversation waits across a private turn, and private work waits across public work or connected voice. The scheduler never invents a human message or automatically starts a stopped agent. The runtime rechecks the current schedule at atomic admission; genuine signed-in overlap acceptance remains part of the final walkthrough.
 
 ## Native lifecycle
 
