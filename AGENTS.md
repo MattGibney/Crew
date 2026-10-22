@@ -477,3 +477,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Invalidate the prior instruction verification digest durably before a context refresh can dispatch. Failed or uncertain compaction may already have changed native context; reverting the saved text must not bypass verification using an older digest. Preserve the prior applied revision as history and require explicit Restart to establish a new verified digest.
 
 - A new voice call must not adopt delayed transcript items from the prior call. Until native started establishes a nonnull realtime session ID, fail closed; require exact item/session identity and accept deltas only for items admitted under that call. Renderer call IDs alone cannot establish native provenance because host publication stamps the current call.
+
+- Realtime flat events can arrive before typed transcript items. Exact-session typed items must supersede the flat fallback; suppress later flat duplicates, while preserving native identity checks and the desktop bridge's typed-only display.
