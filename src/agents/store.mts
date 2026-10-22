@@ -20,6 +20,7 @@ import type {
   JsonObject,
   MessageReceipt,
   PreparationReadiness,
+  ProjectAgentSettings,
 } from "./contracts.mjs";
 
 export interface FoundationState {
@@ -27,6 +28,14 @@ export interface FoundationState {
   projectId: string;
   ownerUserId: string;
   agents: Agent[];
+  projectSettings: ProjectAgentSettings;
+  provisioning: {
+    agentId: string;
+    presetId: string;
+    presetRevision: number;
+    state: "pending" | "ready" | "failed";
+    error: string | null;
+  }[];
   jobs: Job[];
   messages: AgentMessage[];
   /** Compact intent identity survives removal of acknowledged message bodies. */
@@ -273,10 +282,21 @@ const job = object({
     ],
   },
 });
+const sender = {
+  oneOf: [
+    ...actor.oneOf,
+    object({
+      type: choice("system"),
+      source: choice("schedule", "preparation"),
+      sourceId: id,
+    }),
+  ],
+};
 const message = object({
   id,
   projectId: id,
-  sender: actor,
+  sender,
+  visibility: choice("public", "private"),
   recipientAgentId: id,
   jobId: nullable(id),
   replyToMessageId: nullable(id),
@@ -330,7 +350,9 @@ const validate = new Ajv({
     receipts: array(
       object({
         messageId: id,
-        sender: actor,
+        sender,
+        visibility: choice("public", "private"),
+        turnId: id,
         recipientAgentId: id,
         jobId: nullable(id),
         sessionId: id,
@@ -352,6 +374,20 @@ const validate = new Ajv({
         state: choice("open", "answered", "escalated", "cancelled"),
         responseMessageId: nullable(id),
         createdAt: timestamp,
+      }),
+    ),
+    projectSettings: object({
+      projectId: id,
+      revision,
+      primaryAgentId: nullable(id),
+    }),
+    provisioning: array(
+      object({
+        agentId: id,
+        presetId: id,
+        presetRevision: revision,
+        state: choice("pending", "ready", "failed"),
+        error: nullable(text()),
       }),
     ),
     ownerInbox: array(object({ helpRequestId: id, content })),
@@ -500,6 +536,13 @@ function validateState(
     new Set(value.receipts.map((entry) => entry.messageId)).size ===
       value.receipts.length,
   );
+  assert(value.projectSettings.projectId === projectId);
+  checkAgent(value.projectSettings.primaryAgentId);
+  for (const entry of value.provisioning) checkAgent(entry.agentId);
+  assert(
+    new Set(value.provisioning.map((entry) => entry.agentId)).size ===
+      value.provisioning.length,
+  );
   for (const entry of value.agents) {
     assert(entry.projectId === projectId);
     checkActor(entry.reportsTo);
@@ -536,13 +579,13 @@ function validateState(
   }
   for (const entry of value.messages) {
     assert(entry.projectId === projectId);
-    checkActor(entry.sender);
+    if (entry.sender.type !== "system") checkActor(entry.sender);
     checkAgent(entry.recipientAgentId);
     checkJob(entry.jobId);
     checkMessage(entry.replyToMessageId);
   }
   for (const entry of value.receipts) {
-    checkActor(entry.sender);
+    if (entry.sender.type !== "system") checkActor(entry.sender);
     checkAgent(entry.recipientAgentId);
     checkJob(entry.jobId);
   }
@@ -598,6 +641,12 @@ export class FoundationStore {
       projectId: input.projectId,
       ownerUserId: input.ownerUserId,
       agents: [],
+      projectSettings: {
+        projectId: input.projectId,
+        revision: 1,
+        primaryAgentId: null,
+      },
+      provisioning: [],
       jobs: [],
       messages: [],
       intentFingerprints: {},

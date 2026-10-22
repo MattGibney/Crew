@@ -153,11 +153,13 @@ export type AgentContent =
   | { type: "file"; fileRef: string; name: string; mediaType: string }
   | { type: "data"; value: JsonValue }; // Sanitized structured tool result
 export type DeliveryMode = "queue" | "steer";
-export type MessageSender = Actor;
+export type MessageSender =
+  Actor | { type: "system"; source: "schedule" | "preparation"; sourceId: Id };
 export interface AgentMessage {
   id: Id;
   projectId: Id;
   sender: MessageSender;
+  visibility: "public" | "private";
   recipientAgentId: Id;
   jobId: Id | null;
   replyToMessageId: Id | null;
@@ -184,7 +186,9 @@ export interface DeliveryAttempt {
 }
 export interface MessageReceipt {
   messageId: Id;
-  sender: Actor;
+  sender: MessageSender;
+  visibility: "public" | "private";
+  turnId: string;
   recipientAgentId: Id;
   jobId: Id | null;
   sessionId: Id;
@@ -539,7 +543,7 @@ export interface OperationBroker {
   ): Promise<BrokerResult>;
   reconcile(caller: CallerContext, invocationId: Id): Promise<BrokerResult>;
   cancel(caller: CallerContext, invocationId: Id): Promise<BrokerResult>;
-  settlement(projectId: Id): Promise<BrokerSettlement>;
+  settlement(projectId: Id, caller?: CallerContext): Promise<BrokerSettlement>;
 }
 /** Trusted-only; one actual attempt. Broker, not executor, owns retries. */
 export interface ServiceExecutor {
@@ -680,7 +684,7 @@ export interface RuntimeHistoryItem {
   turnId: string | null;
   kind: "message" | "tool" | "approval" | "other";
   sender:
-    | Actor
+    | MessageSender
     | { type: "assistant"; agentId: Id }
     | { type: "system" }
     | { type: "unattributed_native"; nativeRole: string }
@@ -742,7 +746,6 @@ export interface AgentLifecycle {
   >;
   releaseExecution(reservationId: Id): Promise<void>;
 }
-
 
 // #88 usability amendments: one production composition, owner-approved creation.
 export interface ProjectAgentSettings {

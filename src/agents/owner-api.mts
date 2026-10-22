@@ -57,12 +57,24 @@ export function createOwnerApi(
         projectId: state.projectId,
         projectName: options.projectName,
         ownerId: state.ownerUserId,
-        agents: state.agents,
+        agents: await foundation.agentViews(),
+        projectSettings: state.projectSettings,
+        provisioning: state.provisioning,
+        creationPresets: await foundation.creationPresets(),
         jobs: state.jobs,
         skills: catalog.skills,
         serviceConnections: catalog.serviceConnections,
-        pendingMessages: state.messages,
-        receipts: state.receipts,
+        pendingMessages: state.messages.filter(
+          (row) => row.visibility === "public",
+        ),
+        internalDeliveries: state.messages
+          .filter((row) => row.visibility === "private")
+          .map((row) => ({
+            id: row.id,
+            recipientAgentId: row.recipientAgentId,
+            delivery: row.delivery,
+          })),
+        receipts: state.receipts.filter((row) => row.visibility === "public"),
         helpRequests: state.helpRequests,
         ownerInbox: state.ownerInbox,
         readiness: state.preparation?.readiness ?? [],
@@ -79,9 +91,26 @@ export function createOwnerApi(
       const state = foundation.store.subscribe(() =>
         listener({ kind: "changed" }),
       );
-      const runtime = foundation.subscribeRuntime((event) =>
-        listener({ kind: "runtime", event }),
-      );
+      const runtime = foundation.subscribeRuntime((event) => {
+        const turnId =
+          event.kind === "history"
+            ? event.item.turnId
+            : "turnId" in event
+              ? event.turnId
+              : null;
+        if (
+          turnId &&
+          foundation.turnVisibility(
+            event.binding.agentId,
+            event.binding.threadId,
+            turnId,
+          ) !== "public"
+        ) {
+          listener({ kind: "changed" });
+          return;
+        }
+        listener({ kind: "runtime", event });
+      });
       return () => {
         state();
         runtime();
@@ -98,15 +127,21 @@ export function createOwnerApi(
             text(args.agentId),
             args.cursor === undefined ? undefined : text(args.cursor),
           );
-        case "createAgent": {
-          const input = object(args.input);
-          return foundation.records.createAgent(principal, {
-            profile: input.profile as Omit<Agent["profile"], "revision">,
-            skills: input.skills as Agent["skills"],
-            modelAccessId: options.defaultModelAccessId,
-            configRef: options.defaultRuntimeConfigRef,
-          });
-        }
+        case "createAgent":
+          return foundation.createFromPreset(
+            principal,
+            object(args.input) as unknown as Parameters<
+              typeof foundation.createFromPreset
+            >[1],
+          );
+        case "setPrimaryAgent":
+          return foundation.setPrimary(
+            principal,
+            args.agentId === null ? null : text(args.agentId),
+            args.expectedRevision as number,
+          );
+        case "retryProvisioning":
+          return foundation.retryProvisioning(principal, text(args.agentId));
         case "saveProfile": {
           const input = object(args.input);
           const profile = object(input.profile);
@@ -125,7 +160,10 @@ export function createOwnerApi(
           throw new Error("Unknown session action.");
         }
         case "sendMessage":
-          return foundation.send(principal, args.input as SendInput);
+          return foundation.send(principal, {
+            deliveryMode: "steer",
+            ...object(args.input),
+          } as unknown as SendInput);
         case "reconcileMessage":
           return foundation.reconcileMessage(principal, text(args.messageId));
         case "retryMessage":
@@ -160,6 +198,17 @@ export function createOwnerApi(
           );
         case "archiveAgent":
           return foundation.records.archive(principal, text(args.agentId));
+        case "recoverSession":
+          return foundation.recoverSession(principal, text(args.agentId));
+        case "cancelTurn":
+          return foundation.cancelTurn(principal, text(args.agentId));
+        case "reserveExecution":
+          return foundation.reserveExecution(
+            foundation.store.snapshot().projectId,
+            text(args.reason) as ExecutionReservation["reason"],
+          );
+        case "releaseExecution":
+          return foundation.releaseExecution(text(args.reservationId));
         case "prepare":
           return foundation.prepare(
             foundation.store.snapshot().projectId,

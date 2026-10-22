@@ -1,5 +1,5 @@
 import type {
-  Actor,
+  MessageSender,
   AgentContent,
   JsonObject,
   RuntimeBinding,
@@ -10,7 +10,7 @@ import { object } from "./codex-peer.mjs";
 export type CodexSenderLookup = (
   binding: RuntimeBinding,
   clientId: string,
-) => Actor | null;
+) => MessageSender | null;
 
 /** Display projection only. Native history stays authoritative; private reasoning is omitted. */
 export function projectCodexItem(
