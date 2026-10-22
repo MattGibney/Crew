@@ -1,4 +1,12 @@
 #!/usr/bin/env node
+import {
+  getPreparationRequest,
+  reportPreparation,
+} from "../preparation/store.mjs";
+import type {
+  PreparationActor,
+  ReportPreparationInput,
+} from "../preparation/contracts.mjs";
 import { projectEnvironmentContext } from "./environment-context.mjs";
 import type { TaskRecord } from "../workers/contracts.mjs";
 import type { LoadedProject } from "../config/contracts.mjs";
@@ -73,6 +81,32 @@ async function callTool(name: unknown, input: unknown) {
   const tool = tools.find((item) => item.name === name);
   if (!tool) throw new Error("Unknown tool for this role");
   const argsFor = <T,>() => toolArguments<T>(tool, input);
+  if (name === "get_preparation_request" || name === "report_preparation") {
+    let actor: PreparationActor;
+    if (role === "manager") {
+      if (!project?.id)
+        throw new Error("Preparation requires the configured manager project");
+      actor = { role: "manager", projectId: project.id };
+    } else {
+      const task = await readTask(stateDir, taskId!);
+      if (task.runId !== runId) throw new Error("Stale worker preparation run");
+      actor = {
+        role: "worker",
+        projectId: task.projectId || undefined,
+        taskId,
+        runId,
+      };
+    }
+    if (name === "get_preparation_request") {
+      argsFor<Record<string, never>>();
+      return getPreparationRequest(stateDir, actor);
+    }
+    return reportPreparation(
+      stateDir,
+      actor,
+      argsFor<ReportPreparationInput>(),
+    );
+  }
   if (name === "update_work_notes") {
     const args = argsFor<{
       taskId?: string;
@@ -91,6 +125,7 @@ async function callTool(name: unknown, input: unknown) {
       taskId?: string;
       requestId: string;
       state: string;
+      progressPercent?: number | null;
     }>();
     const id = role === "worker" ? taskId! : args.taskId!;
     scoped(await readTask(stateDir, id));
@@ -98,6 +133,7 @@ async function callTool(name: unknown, input: unknown) {
       taskId: id,
       requestId: args.requestId,
       state: args.state,
+      progressPercent: args.progressPercent,
       actor: role,
       runId: role === "worker" ? runId : null,
     });

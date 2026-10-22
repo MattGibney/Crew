@@ -4,14 +4,21 @@
 import http from 'node:http';
 import { isArchivedTask } from '../runtime/shared/worker-archive.mjs';
 import {validateWorkerEnvironment} from '../runtime/config/index.mjs';
+import {managerAttentionMessage} from '../runtime/manager/attention.mjs';
 import { conversationMessage } from '../runtime/manager/conversation/message.mjs';
 import { createConversationTimeline } from '../runtime/manager/conversation/timeline.mjs';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import {createApplicationOrigins} from '../runtime/manager/bridge/origins.mjs';
+import {createManagerSchedules} from '../runtime/manager/reviews/schedules.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../runtime/', import.meta.url));
 const port = Number(process.argv[2] || 4342);
 const assetsRoot = path.resolve(process.argv[3] || path.join(root, 'renderer-dist'));
+const scheduleDirectory = await mkdtemp(path.join(tmpdir(), 'crew-browser-schedules-'));
+const scheduleStore = createManagerSchedules(scheduleDirectory);
+let activityOrigins = createApplicationOrigins(path.join(scheduleDirectory,'manager.json')); await activityOrigins.ready;
 const peers = new Set(), mediaPeers = new Set();
 const now = new Date().toISOString();
 const task = (id, status, extra = {}) => ({ id: `fixture-task-${id}`, runId: `fixture-run-${id}`, ticket: `AI-${140 + id}`, brief: `Review fixture area ${id}`, status, createdAt: now, updatedAt: now, revision: 1, progress: `Examining area ${id} with a bounded read-only check.`, repositoryId: 'fixture', projectId: 'crew-acceptance-fixture', worktree: `/tmp/crew-fixture/w${id}`, attention: [], ...extra });
@@ -36,7 +43,7 @@ const workerDetails = new Map(orchestration.tasks.map(item => [item.id, {
 let work = { threadId: 'fixture-manager', managerConnected: true, status: 'idle', approvals: [], connectors: [{ name: 'linear', status: 'connected' }], items: [], messages: [] };
 let workerApprovals = [];
 let conversation = createConversationTimeline();
-const conversationChanged = () => { work = { ...work, messages: conversation.snapshot() }; emit({ type: 'work-state', state: work }); };
+const conversationChanged = () => { work = { ...work, messages: conversation.snapshot().filter(message => !activityOrigins.hidden(message)) }; emit({ type: 'work-state', state: work }); };
 let managerLifecycle = { state: 'running' };
 const fixturePrompt = 'You are the Crew fixture manager. Help the user plan work and report verified progress.';
 let settings = { projectId: 'crew-acceptance-fixture', projectName: 'Crew acceptance fixture', manager: { saved: { text: fixturePrompt, version: 'manager-1' }, activeVersion: 'manager-1', pendingRestart: false, defaultText: fixturePrompt }, worker: { saved: { text: 'Complete the agreed fixture task and report evidence.', version: 'worker-1' }, defaultText: 'Complete the agreed fixture task and report evidence.' } };
@@ -57,7 +64,7 @@ const savedBehaviorVersion = () => {
   const {name = '', personality = ''} = profileView();
   return name || personality ? `${settings.manager.saved.version}:${JSON.stringify({name,personality})}` : settings.manager.saved.version;
 };
-const settingsView = () => ({ ...settings, workerEnvironment, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, savedBehaviorVersion:savedBehaviorVersion(), pendingRestart:settings.manager.activeVersion !== savedBehaviorVersion(), activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
+const settingsView = async () => ({ ...settings, managerSchedules: await scheduleStore.view(), workerEnvironment, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, savedBehaviorVersion:savedBehaviorVersion(), pendingRestart:settings.manager.activeVersion !== savedBehaviorVersion(), activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const server = http.createServer(async (req, res) => {
@@ -72,7 +79,7 @@ const server = http.createServer(async (req, res) => {
     }
     const workerMatch = url.pathname.match(/^\/api\/workers\/([^/]+)$/);
     if (workerMatch && req.method === 'GET') return workerDetails.has(decodeURIComponent(workerMatch[1])) ? send(workerDetails.get(decodeURIComponent(workerMatch[1]))) : send({ error: 'Worker not found in this project.' }, 404);
-    if (url.pathname === '/api/settings' && req.method === 'GET') return send(settingsView());
+    if (url.pathname === '/api/settings' && req.method === 'GET') return send(await settingsView());
     if (req.method === 'POST' || req.method === 'PUT') {
       let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > (url.pathname === '/api/settings/manager-profile' ? 1024 * 1024 : 100000)) throw Error('Too large'); }
       const body = JSON.parse(raw || '{}');
@@ -94,12 +101,17 @@ const server = http.createServer(async (req, res) => {
         }
         if (body.work) { if (body.work.messages) conversation.restore(body.work.messages); work = { ...work, ...body.work }; emit({ type: 'work-state', state: work }); }
         if (body.orchestration) { orchestration = body.orchestration; emit({ type: 'orchestration-state', state: orchestration }); }
+        if (body.beginActivity) await activityOrigins.begin(body.beginActivity.requestId, body.beginActivity.origin, body.beginActivity.turnId || null, conversation.snapshot());
+        if (body.acknowledgeActivity) await activityOrigins.acknowledged(body.acknowledgeActivity);
+        if (body.restoreActivity) { await activityOrigins.flush(); activityOrigins = createApplicationOrigins(path.join(scheduleDirectory,'manager.json')); await activityOrigins.ready; const saved=conversation.snapshot(); conversation=createConversationTimeline(); conversation.restore(saved); conversationChanged(); }
         if (body.protocol) {
           const { method, params = {} } = body.protocol;
           if (method === 'thread/realtime/item/started' || method === 'thread/realtime/item/completed') conversation.realtime(params.item, { status: method.endsWith('/started') ? 'streaming' : 'complete' });
           if (method === 'thread/realtime/item/transcript/delta' || method === 'item/agentMessage/delta') conversation.delta(params.itemId, params.delta);
           if (method === 'item/started' || method === 'item/completed') conversation.record(params.item, params.turnId, { status: method === 'item/started' ? 'streaming' : 'complete' });
           if (method === 'thread/realtime/closed') conversation.partial();
+          const attentionMessage=managerAttentionMessage(params.item); if(attentionMessage && activityOrigins.hidden({id:params.item.id,turnId:params.turnId,role:"assistant",text:""})) conversation.restore([attentionMessage]);
+          conversation.snapshot().forEach(activityOrigins.observed);
           conversationChanged();
         }
         if (body.workerApprovals) { workerApprovals = body.workerApprovals; emit({ type: 'worker-approval-state', requests: workerApprovals }); }
@@ -136,17 +148,18 @@ const server = http.createServer(async (req, res) => {
         return send({ taskId: target.id, action: 'delete', status: 'deleted' });
       }
       if (name === 'updates') return send({ phase: 'unsupported', error:null, plan:null, workspacePlan:null, message: 'Synthetic fixture; no update checks.' });
+      if (name === 'settings/manager-schedules') { await scheduleStore.save(body); return send(await settingsView()); }
       if (name === 'settings/worker-environment') {
         if (body.expectedRevision !== workerEnvironment.revision) return send({error:'Environment settings changed elsewhere; reload before saving.'},400);
         workerEnvironment = {...workerEnvironment,environment:validateWorkerEnvironment(body.environment,{mode:'repository'}),revision:`environment-${++promptRevision}`};
-        return send(settingsView());
+        return send(await settingsView());
       }
       if (name === 'settings/manager-profile') {
         if (body.expectedVersion !== profileView().version) return send({ error: 'Manager profile changed elsewhere.' }, 409);
         const current = profileView();
         const patch = Object.fromEntries(['voice','name','picture','personality'].filter(field => Object.hasOwn(body,field)).map(field => [field,body[field]]));
         managerProfiles.set(fixtureProjectName, { ...current, ...patch, configured: Object.hasOwn(body,'voice') || current.configured, version: `profile-${++promptRevision}` });
-        return send(settingsView());
+        return send(await settingsView());
       }
       if (name === 'settings/prompts') {
         if (promptSaveDelay) await new Promise(resolve => setTimeout(resolve, promptSaveDelay));
@@ -155,7 +168,7 @@ const server = http.createServer(async (req, res) => {
         if (body.expectedVersion !== item.saved.version) return send({ error: 'Saved instructions changed. Your draft is kept.' }, 409);
         item.saved = { text: body.text, version: `${body.role}-${++promptRevision}` };
         if (body.role === 'manager') item.pendingRestart = item.activeVersion !== item.saved.version;
-        return send(settingsView());
+        return send(await settingsView());
       }
       if (name === 'manager/lifecycle') {
         managerLifecycle = { state: body.action === 'stop' ? 'stopped' : 'running' };

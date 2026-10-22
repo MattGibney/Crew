@@ -28,7 +28,7 @@ interface ProjectApiContext {
   activity: () => Promise<ActivityResult>;
   publishWorkerApprovals: () => Promise<unknown>;
   hasClient: () => boolean;
-  shutdownRequest: () => void;
+  shutdownRequest: (options?: { prepared?: boolean }) => void;
 }
 export async function projectApi(
   url: string,
@@ -102,8 +102,20 @@ export async function projectApi(
   if (url === "/api/shutdown") {
     if (input.token !== shutdownToken)
       return send(403, { error: "Use this instance’s local stop command." });
+    const prepared =
+      updatePlan.status()?.phase === "installing" || updateAdmission.reserved;
+    if (prepared) {
+      const current = await activity();
+      if (!current.safe)
+        return send(409, {
+          error:
+            "Prepared shutdown activity changed; Crew remains open for review.",
+          reasons: current.reasons,
+        });
+      await bridge.shutdown({ cooperative: true });
+    }
     const reply = send(202, { stopping: true });
-    shutdownRequest();
+    shutdownRequest({ prepared });
     return reply;
   }
   if (url === "/api/prepare")

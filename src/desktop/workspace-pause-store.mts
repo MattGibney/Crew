@@ -1,6 +1,12 @@
-import { readFile, mkdir, open, rename, unlink } from "node:fs/promises";
+import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { parseObservedPreparation } from "../preparation/observed.mjs";
+function parsePurpose(value: unknown): "update" | "quit" {
+  if (value !== "update" && value !== "quit")
+    throw new Error("Invalid preparation purpose.");
+  return value;
+}
 import {
   record,
   parseJSON,
@@ -10,6 +16,7 @@ import {
 } from "./validation.mjs";
 import type { PauseTarget } from "./update-contracts.mjs";
 export interface SavedProject {
+  preparation?: import("../preparation/coordinator.mjs").ObservedPreparation;
   id: string;
   name: string;
   configPath: string;
@@ -19,8 +26,10 @@ export interface SavedProject {
   phase: string | null;
   targets: PauseTarget[];
   managerInterrupted?: boolean;
+  reasons?: string[];
 }
 export interface PauseJournal {
+  purpose?: "update" | "quit";
   schema: number;
   kind: string;
   consent: boolean;
@@ -35,6 +44,8 @@ export interface PauseJournal {
   reasons: string[];
   resumeMode?: string;
 }
+export const WORKSPACE_PAUSE_JOURNAL_BYTES = 1048576;
+
 const PHASES = new Set([
   "draining",
   "ready",
@@ -53,12 +64,17 @@ export async function writeWorkspacePauseJournal(
   path: string,
   journal: PauseJournal,
 ): Promise<void> {
+  const serialized = JSON.stringify(journal) + "\n";
+  if (Buffer.byteLength(serialized) > WORKSPACE_PAUSE_JOURNAL_BYTES)
+    throw new Error(
+      "Grouped preparation journal exceeds its byte bound. Full project evidence is retained; the prior grouped journal was not replaced.",
+    );
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${randomUUID()}.tmp`;
   let file;
   try {
     file = await open(temporary, "wx", 0o600);
-    await file.writeFile(JSON.stringify(journal) + "\n");
+    await file.writeFile(serialized);
     await file.sync();
     await file.close();
     file = null;
@@ -80,15 +96,21 @@ export async function readWorkspacePauseJournal(
   path: string,
 ): Promise<PauseJournal | null> {
   let raw;
+  let file;
   try {
-    raw = await readFile(path, "utf8");
+    file = await open(path, "r");
+    if ((await file.stat()).size > WORKSPACE_PAUSE_JOURNAL_BYTES)
+      throw new Error("Journal exceeds bound.");
+    raw = await file.readFile("utf8");
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
       return null;
     }
     throw error;
+  } finally {
+    await file?.close();
   }
-  if (Buffer.byteLength(raw) > 1048576)
+  if (Buffer.byteLength(raw) > WORKSPACE_PAUSE_JOURNAL_BYTES)
     throw new Error("Journal exceeds bound.");
   const value = decodeJournal(parseJSON(raw));
   if (
@@ -143,7 +165,9 @@ function decodeJournal(input: unknown): PauseJournal {
     const project = record(input);
     if (
       typeof project.beginRequested !== "boolean" ||
-      !Array.isArray(project.targets)
+      !Array.isArray(project.targets) ||
+      (project.reasons !== undefined &&
+        (!Array.isArray(project.reasons) || !project.reasons.every(isString)))
     )
       throw new Error("Invalid grouped project.");
     return {
@@ -171,10 +195,17 @@ function decodeJournal(input: unknown): PauseJournal {
         };
       }),
       managerInterrupted: project.managerInterrupted === true,
+      ...(project.reasons === undefined ? {} : { reasons: project.reasons }),
+      ...(project.preparation === undefined
+        ? {}
+        : { preparation: parseObservedPreparation(project.preparation) }),
     };
   });
   return {
     schema: value.schema,
+    ...(value.purpose === undefined
+      ? {}
+      : { purpose: parsePurpose(value.purpose) }),
     kind: string(value.kind, "Plan kind"),
     consent: value.consent,
     id: string(value.id, "Plan ID"),

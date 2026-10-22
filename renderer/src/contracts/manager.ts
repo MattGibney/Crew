@@ -107,8 +107,9 @@ export interface WorkerTask {
   currentAssignmentId?: string;
   assignments?: WorkerAssignment[];
   followupWait?: string;
-  workflowState?: { value?: string };
+  workflowState?: { value?: string; progressPercent?: number | null };
   workflowHistory?: {
+    progressPercent?: number | null;
     requestId?: string;
     value: string;
     actor?: string;
@@ -171,7 +172,23 @@ export interface PromptSnapshot {
   text: string;
   version: string;
 }
+export interface ManagerSchedule {
+  id: string;
+  name: string;
+  instruction: string;
+  enabled: boolean;
+  builtin?: boolean;
+  timing:
+    | { kind: "interval"; minutes: number }
+    | { kind: "daily"; time: string; timeZone: string };
+  run?: { nextAt: number; lastAt?: number; status?: string; error?: string };
+}
+export interface ManagerSchedules {
+  revision: string;
+  schedules: ManagerSchedule[];
+}
 export interface SettingsState {
+  managerSchedules?: ManagerSchedules;
   projectId?: string;
   projectName?: string;
   managerProfile: ManagerProfile;
@@ -193,7 +210,44 @@ export interface ProjectInfo {
   mode: string;
   readiness: { ready: boolean; issues: string[] };
 }
+export interface PreparationParticipant {
+  id: string;
+  role: "manager" | "worker";
+  taskId: string | null;
+  taskLabel?: string;
+  runId: string | null;
+  threadId: string | null;
+  requestId: string;
+  required: boolean;
+  message: string;
+  projectId?: string;
+  projectName?: string;
+  delivery: {
+    state: "pending" | "attempted" | "acknowledged" | "failed" | "uncertain";
+    at: string;
+    nativeTurnId?: string;
+    error?: string;
+  };
+  response: null | {
+    responseId: string;
+    state: "preparing" | "ready" | "needs-input" | "blocked";
+    note: string;
+    continuation?: string;
+    at: string;
+  };
+  settled?: boolean;
+  settlementReason?: string;
+}
+export interface AgentPreparation {
+  id: string;
+  purpose: "update" | "quit";
+  phase: string;
+  participants: PreparationParticipant[];
+}
 export interface UpdatePlan {
+  id?: string;
+  purpose?: "update" | "quit";
+  preparation?: AgentPreparation | null;
   phase: string;
   projects?: { id: string; name: string; phase?: string }[];
   targets?: {
@@ -271,6 +325,7 @@ export interface ApiResults {
   "settings/manager-profile": SettingsState;
   "settings/prompts": SettingsState;
   "settings/worker-environment": SettingsState;
+  "settings/manager-schedules": SettingsState;
   "archived-worker-action": JsonObject;
   config: { nativeAttentionSound?: boolean; project: ProjectInfo };
   state: WorkState;

@@ -1,5 +1,14 @@
 # Delivery policy
 
+## Crew 0.17.0 grouped release scope
+
+The human authorized integrating PRs #67, #68 and #69, testing their interactions, merging their histories and publishing one signed/notarized stable release after 0.16.2. This release adds one agent-reported worker status with optional progress, private configurable manager schedules, and shared agent-owned preparation for updates and explicit Quit. PR #54 and ticket-only ideas are excluded. See [REL-0.17.0](../tickets/REL-0.17.0.md).
+
+Progress and workflow labels never acknowledge preparation. Managers and workers must report readiness explicitly, final native messages and fresh owned execution must settle, and schedules respect stopped managers, approvals and preparation holds. Internal schedule/preparation traffic stays outside human chat; queued directions, prompt snapshots and retained history remain durable. Physical microphone and existing user installations/profiles are excluded from automated acceptance. The established portable-profile automatic relaunch and issue #39 evidence boundaries remain separate.
+
+Publication uses the existing manual signed/notarized workflow after combined validation. Version 0.17.0 is not published merely by this source change; the ticket records the actual workflow/public asset evidence when available.
+
+
 ## Crew 0.16.2 release scope
 
 The second hosted gate stopped before signing/publication on a multi-project test fixture that accepted historical reports as resumed readiness. Require current-run process and progress evidence before checking the native launch log. Production code is unchanged; preserve both failed tags/runs and use 0.16.2 for the authorized TypeScript publication. See [REL-0.16.2](../tickets/REL-0.16.2.md). Published [stable 0.16.2](https://github.com/MattGibney/Crew/releases/tag/v0.16.2) from 720c9633 after hosted 661/661 and signed/notarized gates. Independent unauthenticated public downloads pass checksums/feed, signature, stapler, Gatekeeper, DMG integrity and all 364 compiled runtime/resource comparisons. User installation/profile and microphone remain untouched; automatic installation/profile recovery is not claimed.

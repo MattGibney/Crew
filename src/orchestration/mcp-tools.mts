@@ -314,15 +314,19 @@ export function orchestrationTools(
   tools.push({
     name: "set_workflow_state",
     description:
-      "Set an explicit project workflow label, in the project own terms, for this worker. This never changes native execution status and is never inferred from reports, completion or process liveness. Reuse requestId for exact retries; prior labels remain in history.",
+      "Set the explicit agent-reported status and optional progress estimate for this worker, in the project own terms. This never changes native execution status and is never inferred from reports, completion or process liveness. Reuse requestId for exact retries; prior labels remain in history.",
     inputSchema: object(
       {
         ...(role === "manager" ? { taskId: taskIdentifier } : {}),
         requestId: taskIdentifier,
-        state: string(
-          "Arbitrary project workflow label, e.g. Ready for review",
-          400,
-        ),
+        progressPercent: {
+          type: ["number", "null"],
+          minimum: 0,
+          maximum: 100,
+          description:
+            "Optional agent-reported estimate, 0–100. May increase or decrease. Omit to retain the previous estimate; null clears it. Crew never calculates progress or infers completion.",
+        },
+        state: string("Arbitrary agent-set status, e.g. Ready for review", 400),
       },
       [...(role === "manager" ? ["taskId"] : []), "requestId", "state"],
     ),
@@ -344,6 +348,45 @@ export function orchestrationTools(
         markdown: string("Complete factual shared Markdown document", 60000),
       },
       [...(role === "manager" ? ["taskId"] : []), "updateId", "markdown"],
+    ),
+  });
+  tools.push({
+    name: "get_preparation_request",
+    description:
+      "Read the current explicit user preparation request for this bound manager or worker run. Update and Quit ask agents to preserve factual continuation and settle work naturally. This executes nothing; workflow labels do not acknowledge preparation. No secrets or private reasoning.",
+    inputSchema: object({}),
+  });
+  tools.push({
+    name: "report_preparation",
+    description:
+      "Durably report preparing, ready, needs-input or blocked for the exact preparation, participant and request returned by get_preparation_request. Use a stable responseId for exact retries; revise with a new responseId while open. Preserve factual continuation without secrets/private reasoning. Ready acknowledges your preparation, not execution settlement: finish your final response and end the turn normally. Crew never answers approvals automatically.",
+    inputSchema: object(
+      {
+        preparationId: string("Exact preparation ID", 160),
+        participantId: string("Exact bound participant ID", 160),
+        requestId: string("Exact preparation request ID", 160),
+        responseId: string("Stable unique response ID", 160),
+        state: {
+          type: "string",
+          enum: ["preparing", "ready", "needs-input", "blocked"],
+        },
+        note: string(
+          "Useful current preparation state and action needed",
+          12000,
+        ),
+        continuation: string(
+          "Optional factual context for continuing later; no secrets or private reasoning",
+          20000,
+        ),
+      },
+      [
+        "preparationId",
+        "participantId",
+        "requestId",
+        "responseId",
+        "state",
+        "note",
+      ],
     ),
   });
   return tools;

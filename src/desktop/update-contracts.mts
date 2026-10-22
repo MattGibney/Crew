@@ -28,6 +28,8 @@ export interface PauseTarget {
   projectName?: string;
 }
 export interface PausePlan {
+  purpose?: "update" | "quit";
+  preparation?: import("../preparation/coordinator.mjs").ObservedPreparation;
   id: string;
   kind: string;
   consent: boolean;

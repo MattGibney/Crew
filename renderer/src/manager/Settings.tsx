@@ -12,6 +12,7 @@ import {
   ProjectGeneral,
   GlobalSettings,
 } from "./settings/WorkspaceSettings.js";
+import { ManagerSchedules } from "./settings/ManagerSchedules.js";
 import { ManagerProfile } from "./settings/ManagerProfile.js";
 import { ManagerLifecycle } from "./settings/ManagerLifecycle.js";
 import { PromptEditor } from "./settings/PromptEditor.js";
@@ -62,6 +63,13 @@ export function Settings({ manager }: ManagerProps) {
       label: "Sessions",
       icon: Radio,
       description: "Manage the live manager session for this project.",
+    },
+    {
+      id: "schedules",
+      label: "Manager schedules",
+      icon: Radio,
+      description:
+        "Choose what your manager checks and when it runs in the background.",
     },
     {
       id: "manager",
@@ -194,6 +202,16 @@ export function Settings({ manager }: ManagerProps) {
               manager={manager}
             />
           )}
+          <div
+            hidden={page !== "schedules"}
+            aria-label="Manager schedule settings"
+          >
+            <ManagerSchedules
+              manager={manager}
+              onNotify={notify}
+              visible={page === "schedules"}
+            />
+          </div>
           <div hidden={page !== "sessions"} aria-label="Session settings">
             <section
               aria-labelledby="manager-lifecycle-heading"

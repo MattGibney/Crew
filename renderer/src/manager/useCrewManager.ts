@@ -236,6 +236,21 @@ export function useCrewManager() {
     },
     [],
   );
+  const saveManagerSchedules = useCallback(
+    async (
+      schedules: import("../contracts/manager.js").ManagerSchedule[],
+      expectedRevision: string,
+    ) => {
+      const result = await api(
+        "settings/manager-schedules",
+        { schedules, expectedRevision },
+        { method: "PUT" },
+      );
+      setSettings(result);
+      return result;
+    },
+    [],
+  );
   const changeManagerLifecycle = useCallback(
     async (action: ManagerAction) => {
       if (lifecycleLock.current) return;
@@ -298,6 +313,7 @@ export function useCrewManager() {
     loadSettings,
     savePrompt,
     saveWorkerEnvironment,
+    saveManagerSchedules,
     managerLifecycle,
     managerEnabled,
     changeManagerLifecycle,

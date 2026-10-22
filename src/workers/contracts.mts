@@ -118,6 +118,7 @@ export interface LifecycleRequest {
   at: string;
   expectedRunId?: string | null;
   cooperative?: boolean;
+  settleNaturally?: boolean;
   handledAt?: string;
   error?: string;
   reviewHash?: string;
@@ -353,6 +354,8 @@ export interface WorkerAssignment {
   adoptions?: AssignmentAdoption[];
 }
 export interface WorkflowEvent {
+  progressPercent?: number | null;
+  reportedProgressPercent?: number | null;
   value: string;
   requestId: string;
   actor: string;

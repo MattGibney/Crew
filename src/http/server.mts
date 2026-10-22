@@ -1,8 +1,10 @@
 import { openProjectEvents } from "./events.mjs";
+import { createPreparationCoordinator } from "../preparation/coordinator.mjs";
 import { readRequestBody } from "./request-body.mjs";
 import { runtimeRoot, resourceURL } from "../shared/paths.mjs";
 import { parseArchiveAction } from "./input.mjs";
 import { createScratchpadFeed } from "../manager/scratchpad-feed.mjs";
+import { createManagerSchedules } from "../manager/reviews/schedules.mjs";
 import { createManagerReviews } from "../manager/reviews/controller.mjs";
 import { createSettingsSave } from "./settings-save.mjs";
 import { createEnvironmentSettings } from "../projects/environment-settings.mjs";
@@ -250,7 +252,9 @@ const manager = await createManagerLifecycle({
   },
   onChange: (state) => broadcast({ type: "manager-lifecycle", state }),
 });
+const managerSchedules = createManagerSchedules(orchestrationDir);
 const settingsView = createSettingsView({
+  managerSchedules,
   prompts,
   manager,
   managerProfile,
@@ -294,7 +298,24 @@ const synchronizePlan = (plan: PausePlan | null) => {
   else updateAdmission.releaseHold();
   broadcast({ type: "update-plan-state", plan });
 };
+const managerPreparationActivity = () => {
+    const state = bridge.state(),
+      lifecycle = manager.view();
+    return ["running", "stopped"].includes(lifecycle.state)
+      ? { ...state, lifecycleState: lifecycle.state }
+      : {
+          ...state,
+          status: `manager-lifecycle-${lifecycle.state}`,
+          workStarting: true,
+        };
+};
 updatePlan = createUpdatePlan({
+  preparation: createPreparationCoordinator({
+    stateDir: orchestrationDir,
+    projectId: project.id,
+    getManager: managerPreparationActivity,
+    sendManager: (text, requestId, preparationId) => bridge.startWork(text, requestId, { origin: { source: 'preparation', operationId: preparationId } }),
+  }),
   stateDir: orchestrationDir,
   version,
   getView: async () =>
@@ -302,17 +323,7 @@ updatePlan = createUpdatePlan({
       stateDir: orchestrationDir,
       view: await controller.view(),
     }),
-  getManager: () => {
-    const state = bridge.state(),
-      lifecycle = manager.view();
-    return ["running", "stopped"].includes(lifecycle.state)
-      ? state
-      : {
-          ...state,
-          status: `manager-lifecycle-${lifecycle.state}`,
-          workStarting: true,
-        };
-  },
+  getManager: managerPreparationActivity,
   stopVoice: () => bridge.stopVoice({ cooperative: true }),
   interruptManager: (input) => bridge.interrupt(input),
   requestAction: (input) => requestWorkerAction(orchestrationDir, input),
@@ -333,6 +344,7 @@ updatePlanTimer = setInterval(
 );
 const scratchpadTimer = setInterval(() => void scratchpadFeed!.refresh(), 1000);
 const managerReview = createManagerReviews({
+  schedules: managerSchedules,
   stateDir: orchestrationDir,
   bridge,
   manager,
@@ -460,6 +472,10 @@ const server = http.createServer(async (req, res) => {
           "Crew is preparing an update across projects. Work admission is paused until you resume or return to work.",
       });
     if (req.method === "PUT") {
+      if (req.url === "/api/settings/manager-schedules") {
+        await managerSchedules.save(rawInput);
+        return send(200, await settingsView());
+      }
       if (req.url === "/api/settings/worker-environment") {
         const saved = await environmentSettings.save(rawInput);
         project.worker.environment = structuredClone(saved.environment);
@@ -511,8 +527,10 @@ const server = http.createServer(async (req, res) => {
       activity,
       publishWorkerApprovals,
       hasClient: () => clients.size > 0,
-      shutdownRequest: () => {
-        setImmediate(() => void shutdown().then(() => process.exit(0)));
+      shutdownRequest: ({ prepared = false } = {}) => {
+        setImmediate(
+          () => void shutdown({ prepared }).then(() => process.exit(0)),
+        );
       },
     });
     return send(reply.status, reply.body);
@@ -525,7 +543,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 let shuttingDown: Promise<void> | undefined;
-async function shutdown() {
+async function shutdown({ prepared = false } = {}) {
   managerReview.stop();
   clearInterval(scratchpadTimer);
   clearInterval(updatePlanTimer);
@@ -535,8 +553,10 @@ async function shutdown() {
     for (const client of clients) client.end();
     clients.clear();
     updates.close();
-    await bridge.stopVoice({ preserveWork: false });
-    await bridge.shutdown();
+    await bridge.stopVoice(
+      prepared ? { cooperative: true } : { preserveWork: false },
+    );
+    await bridge.shutdown({ cooperative: prepared });
     await controller.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     try {

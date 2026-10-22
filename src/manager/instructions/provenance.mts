@@ -27,10 +27,12 @@ export interface RetainedPrompts {
 }
 const previousDefaultVersions = {
   manager: new Set([
+    "6fdcf363de256eb79a9e57eff24e5fa3a6292b347688757a80af4b5922a10db6",
     "7080c0e4c9d9a6492e72530c1562b9bb6b547ae39903129f28b0268d93237aef",
     "4104031ce2d5130424cc649c52ae5d10347ae1e200fa534c6fff325ab4a14f7a",
   ]),
   worker: new Set([
+    "4bc29c36400bd9c6247bb7bb55d49447779d57ef0f6d87ed98dadbaef82cd3b9",
     "ccbf1e062e2f945eb3b1acc8581d1ae219e42ee2fab12c9639e2c198d1b37e45",
     "ee36c566b334978c7a21d72e401d373afe510087fb589a13d045847ce0cc2dd8",
   ]),

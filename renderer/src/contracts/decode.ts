@@ -154,11 +154,25 @@ const taskSchema = object(
         ["id"],
       ),
     ),
-    workflowState: object({ value: string }),
+    workflowState: object({
+      value: string,
+      progressPercent: { type: ["number", "null"], minimum: 0, maximum: 100 },
+    }),
     workflowHistory: array(
-      object({ requestId: string, value: string, actor: string, at: string }, [
-        "value",
-      ]),
+      object(
+        {
+          requestId: string,
+          value: string,
+          actor: string,
+          at: string,
+          progressPercent: {
+            type: ["number", "null"],
+            minimum: 0,
+            maximum: 100,
+          },
+        },
+        ["value"],
+      ),
     ),
     archiveRestoration: object({ requiresRecovery: { type: "boolean" } }),
     followupWait: string,
@@ -185,13 +199,130 @@ const settingsSchema = object(
     manager: object({ saved: prompt }, ["saved"]),
     worker: object({ saved: prompt }, ["saved"]),
     workerEnvironment: workerEnvironmentSettings,
+    managerSchedules: object(
+      {
+        revision: string,
+        schedules: array(
+          object(
+            {
+              id: string,
+              name: string,
+              instruction: string,
+              enabled: { type: "boolean" },
+              timing: {
+                anyOf: [
+                  object(
+                    {
+                      kind: { const: "interval" },
+                      minutes: { type: "integer" },
+                    },
+                    ["kind", "minutes"],
+                  ),
+                  object(
+                    {
+                      kind: { const: "daily" },
+                      time: string,
+                      timeZone: string,
+                    },
+                    ["kind", "time", "timeZone"],
+                  ),
+                ],
+              },
+              builtin: { type: "boolean" },
+              run: object(
+                {
+                  nextAt: { type: "number" },
+                  lastAt: { type: "number" },
+                  status: string,
+                  error: string,
+                },
+                ["nextAt"],
+              ),
+            },
+            ["id", "name", "instruction", "enabled", "timing"],
+          ),
+        ),
+      },
+      ["revision", "schedules"],
+    ),
   },
   ["managerProfile", "managerLifecycle", "manager", "worker"],
 );
+const preparationParticipant = object(
+  {
+    id: string,
+    role: { enum: ["manager", "worker"] },
+    taskId: nullable(string),
+    taskLabel: string,
+    runId: nullable(string),
+    threadId: nullable(string),
+    requestId: string,
+    required: { type: "boolean" },
+    message: string,
+    projectId: string,
+    projectName: string,
+    delivery: object(
+      {
+        state: {
+          enum: ["pending", "attempted", "acknowledged", "failed", "uncertain"],
+        },
+        at: string,
+        nativeTurnId: string,
+        error: string,
+      },
+      ["state", "at"],
+    ),
+    response: nullable(
+      object(
+        {
+          responseId: string,
+          state: { enum: ["preparing", "ready", "needs-input", "blocked"] },
+          note: string,
+          continuation: string,
+          at: string,
+        },
+        ["responseId", "state", "note", "at"],
+      ),
+    ),
+    settled: { type: "boolean" },
+    settlementReason: string,
+  },
+  [
+    "id",
+    "role",
+    "taskId",
+    "runId",
+    "threadId",
+    "requestId",
+    "required",
+    "message",
+    "delivery",
+    "response",
+  ],
+);
+const updatePlanSchema = object(
+  {
+    id: string,
+    phase: string,
+    purpose: { enum: ["update", "quit"] },
+    preparation: nullable(
+      object(
+        {
+          id: string,
+          purpose: { enum: ["update", "quit"] },
+          phase: string,
+          participants: array(preparationParticipant),
+        },
+        ["id", "purpose", "phase", "participants"],
+      ),
+    ),
+  },
+  ["phase"],
+);
 const updateSchema = object({
   phase: string,
-  plan: nullable(object({ phase: string }, ["phase"])),
-  workspacePlan: nullable(object({ phase: string }, ["phase"])),
+  plan: nullable(updatePlanSchema),
+  workspacePlan: nullable(updatePlanSchema),
 });
 const prepare = object({ state: workSchema, plan: string });
 const schemas: Record<keyof ApiResults, Schema> = {
@@ -206,6 +337,7 @@ const schemas: Record<keyof ApiResults, Schema> = {
   "settings/manager-profile": settingsSchema,
   "settings/prompts": settingsSchema,
   "settings/worker-environment": settingsSchema,
+  "settings/manager-schedules": settingsSchema,
   "archived-worker-action": object({}),
   config: object(
     {
@@ -291,7 +423,7 @@ const eventValidator = compile<ManagerEvent>({
     object(
       {
         type: { const: "update-plan-state" },
-        plan: nullable(object({ phase: string }, ["phase"])),
+        plan: nullable(updatePlanSchema),
       },
       ["type", "plan"],
     ),

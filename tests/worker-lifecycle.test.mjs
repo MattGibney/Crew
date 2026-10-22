@@ -84,7 +84,7 @@ test('manager lifecycle MCP is project-scoped; bound worker exposes messaging, w
  const foreignHistory=await rpc('manager',[runtime],'tools/call',{name:'get_status',arguments:{taskId:'worker-alpha'}});
  assert.match(foreignHistory.content[0].text,/another project/);
  const tools=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/list',{});
- assert.deepEqual(tools.tools.map(t=>t.name),['report','set_workflow_state','get_project_environment','update_work_notes']);
+ assert.deepEqual(tools.tools.map(t=>t.name),['report','set_workflow_state','get_project_environment','update_work_notes','get_preparation_request','report_preparation']);
  const workerDenied=await rpc('worker',['worker-alpha','run-worker-alpha'],'tools/call',{name:'worker_action',arguments:args});
  assert.equal(workerDenied.isError,true);assert.match(workerDenied.content[0].text,/Unknown tool/);
 });
