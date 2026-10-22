@@ -621,6 +621,12 @@ export class AgentFoundation implements AgentLifecycle {
               )
                 throw new Error("Instruction preparation identity changed.");
               session.instructionPreparation = structuredClone(preparation);
+              // A dispatched refresh can change native context even if its final
+              // acknowledgement is lost. Never reuse the old verification when
+              // saved instructions are later reverted. The prior revision remains
+              // historical provenance; only a successful Start supplies a new digest.
+              if (session.appliedConfiguration)
+                delete session.appliedConfiguration.instructionsDigest;
               session.activeTurnId =
                 preparation.state === "compacting" ||
                 preparation.state === "uncertain"

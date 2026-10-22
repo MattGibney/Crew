@@ -549,7 +549,10 @@ native launch. Legacy applied configurations without the optional digest remain 
 `AgentSession.instructionPreparation` exposes `compacting`, `completed`, `failed` or `uncertain`,
 the exact native thread and observed turn/item IDs, timestamps and a sanitized error. The session
 stays `starting` until verification succeeds; the previous applied configuration remains in place
-on failure. Controller recovery makes incomplete compaction uncertain and never replays it.
+on failure, with its instruction verification digest invalidated before compaction can dispatch.
+This prevents reverting saved instructions from reusing a stale digest after an uncertain refresh;
+the prior revision remains historical provenance, and another explicit Restart must verify context.
+Controller recovery makes incomplete compaction uncertain and never replays it.
 Preparation uses the existing permission/profile startup path, preserves readable history, and
 does not submit a synthetic work assignment. No token or monetary-cost estimate is exposed.
 
