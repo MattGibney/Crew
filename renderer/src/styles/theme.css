@@ -142,6 +142,20 @@
   }
 }
 
+/* GH-56 native browser experiment; the manager stays mounted beneath narrow layouts. */
+.crew-project-browser {
+  width: clamp(360px, 50%, 960px);
+  flex-shrink: 0;
+}
+@media (max-width: 767px) {
+  .crew-project-browser {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    width: 100%;
+  }
+}
+
 /* Native controls sit above the branding so its normal left alignment is preserved. */
 .crew-window-header {
   position: relative;

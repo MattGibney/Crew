@@ -9,6 +9,7 @@ import {
   Layers,
   NotebookPen,
   Settings2,
+  Globe,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,10 +23,12 @@ import { WorkerDetail } from "./WorkerDetail.js";
 import { ManagerCallBar } from "./ManagerCallBar.js";
 import { ProjectSwitcher } from "./ProjectSwitcher.js";
 import { ManagerScratchpad } from "./ManagerScratchpad.js";
+import { ProjectBrowser, useProjectBrowser } from "./ProjectBrowser.js";
 import crewMark from "../../../build/crew-mark.png";
 
 export function App() {
   const manager = useCrewManager();
+  const browser = useProjectBrowser();
   const [pane, setPane] = useState("conversation");
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [settingsReturn, setSettingsReturn] = useState("conversation");
@@ -138,6 +141,21 @@ export function App() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          {browser.available && (
+            <Button
+              variant={browser.state.open ? "secondary" : "ghost"}
+              aria-pressed={browser.state.open}
+              onClick={() =>
+                void browser.send({
+                  action: browser.state.open ? "close" : "open",
+                })
+              }
+            >
+              <Globe aria-hidden="true" />
+              <span className="hidden sm:inline">Browser</span>
+              <span className="sr-only sm:hidden">Browser</span>
+            </Button>
+          )}
           <Button
             variant={pane === "settings" ? "secondary" : "ghost"}
             aria-pressed={pane === "settings"}
@@ -205,140 +223,156 @@ export function App() {
           Scratchpad
         </Button>
       </nav>
-      <main
-        ref={workspace}
-        id="workspace-content"
-        style={
-          workerWidth === null
-            ? undefined
-            : ({ "--crew-worker-width": `${workerWidth}px` } as CSSProperties)
-        }
-        className={`${pane === "conversation" || pane === "workers" ? "grid" : "hidden"} min-h-0 flex-1 ${pane === "conversation" ? "manager-split" : ""}`}
-      >
-        <section
-          aria-label="Manager workspace"
-          className={`min-h-0 min-w-0 overflow-y-auto flex-col ${pane === "conversation" ? "flex" : "hidden"}`}
+      {browser.available && !browser.state.open && browser.error && (
+        <p
+          role="alert"
+          className="shrink-0 border-b px-5 py-2 text-sm text-destructive"
         >
-          <WorkChat manager={workspaceManager} />
-        </section>
-        <div
-          role="separator"
-          aria-label="Resize worker panel"
-          aria-orientation="vertical"
-          aria-valuemin={280}
-          aria-valuemax={maximumWorkerWidth}
-          aria-valuenow={Math.min(workerWidth || 560, maximumWorkerWidth)}
-          tabIndex={pane === "conversation" ? 0 : -1}
-          className={`${pane === "conversation" ? "hidden lg:block" : "hidden"} relative z-10 cursor-col-resize touch-none bg-border outline-none before:absolute before:inset-y-0 before:-left-1.5 before:w-3 hover:bg-primary focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring`}
-          onPointerDown={(event) => {
-            if (event.button !== 0) return;
-            event.preventDefault();
-            resizing.current = true;
-            event.currentTarget.setPointerCapture(event.pointerId);
-          }}
-          onPointerMove={(event) => {
-            if (resizing.current) {
-              event.preventDefault();
-              resizeWorkers(
-                (workspace.current?.getBoundingClientRect().right ||
-                  event.clientX) - event.clientX,
-              );
-            }
-          }}
-          onPointerUp={(event) => {
-            if (resizing.current)
-              resizeWorkers(
-                (workspace.current?.getBoundingClientRect().right ||
-                  event.clientX) - event.clientX,
-              );
-            resizing.current = false;
-            if (event.currentTarget.hasPointerCapture(event.pointerId))
-              event.currentTarget.releasePointerCapture(event.pointerId);
-          }}
-          onPointerCancel={() => {
-            resizing.current = false;
-          }}
-          onLostPointerCapture={() => {
-            resizing.current = false;
-          }}
-          onDoubleClick={() => setWorkerWidth(null)}
-          onKeyDown={(event) => {
-            const current =
-              workspace.current?.querySelector("aside")?.getBoundingClientRect()
-                .width || 560;
-            if (
-              ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
-            ) {
-              event.preventDefault();
-              resizeWorkers(
-                event.key === "Home"
-                  ? 280
-                  : event.key === "End"
-                    ? 720
-                    : current + (event.key === "ArrowLeft" ? 32 : -32),
-              );
-            }
-          }}
-        />
-        <aside
-          aria-label="Project workers"
-          className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${pane === "conversation" ? "hidden lg:block" : pane === "workers" ? "block" : "hidden"}`}
-        >
-          <WorkerAttention
-            compact={pane === "conversation"}
-            view={workerView}
-            onSelect={showWorker}
-          />
-        </aside>
-      </main>
-      <div
-        className={`${pane === "detail" ? "flex" : "hidden"} min-h-0 flex-1 flex-col`}
-      >
-        {selectedTask ? (
-          <WorkerDetail
-            key={selectedTask.id}
-            task={selectedTask}
-            manager={workspaceManager}
-            onBack={() => openPane("conversation")}
-            onManager={() => openPane("conversation")}
-          />
-        ) : (
-          <section className="flex-1 p-8">
-            <p>This worker is no longer available in this project.</p>
-            <Button onClick={() => openPane("conversation")}>
-              Back to manager
-            </Button>
-          </section>
-        )}
-      </div>
-      <div
-        className={`${pane === "scratchpad" ? "flex" : "hidden"} min-h-0 flex-1 flex-col`}
-      >
-        <ManagerScratchpad
-          scratchpad={manager.work.managerScratchpad}
-          scratchpadReadError={manager.work.managerScratchpadError}
-          eventReady={manager.eventReady}
-          tasks={tasks}
-          onSelectWorker={showWorker}
-        />
-      </div>
-      {pane !== "conversation" && pane !== "settings" && (
-        <ManagerCallBar
-          manager={manager}
-          onManager={() => openPane("conversation")}
-        />
+          {browser.error}
+        </p>
       )}
-      <audio
-        id="audio"
-        ref={manager.voice.audioRef}
-        autoPlay
-        className="hidden"
-        aria-label="Manager voice playback"
-      />
-      <div
-        className={`${pane === "settings" ? "flex" : "hidden"} min-h-0 flex-1`}
-      >
-        <Settings manager={manager} />
+      <div className="relative flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <main
+            ref={workspace}
+            id="workspace-content"
+            style={
+              workerWidth === null
+                ? undefined
+                : ({
+                    "--crew-worker-width": `${workerWidth}px`,
+                  } as CSSProperties)
+            }
+            className={`${pane === "conversation" || pane === "workers" ? "grid" : "hidden"} min-h-0 flex-1 ${pane === "conversation" && !browser.state.open ? "manager-split" : ""}`}
+          >
+            <section
+              aria-label="Manager workspace"
+              className={`min-h-0 min-w-0 overflow-y-auto flex-col ${pane === "conversation" ? "flex" : "hidden"}`}
+            >
+              <WorkChat manager={workspaceManager} />
+            </section>
+            <div
+              role="separator"
+              aria-label="Resize worker panel"
+              aria-orientation="vertical"
+              aria-valuemin={280}
+              aria-valuemax={maximumWorkerWidth}
+              aria-valuenow={Math.min(workerWidth || 560, maximumWorkerWidth)}
+              tabIndex={pane === "conversation" ? 0 : -1}
+              className={`${pane === "conversation" && !browser.state.open ? "hidden lg:block" : "hidden"} relative z-10 cursor-col-resize touch-none bg-border outline-none before:absolute before:inset-y-0 before:-left-1.5 before:w-3 hover:bg-primary focus-visible:bg-primary focus-visible:ring-2 focus-visible:ring-ring`}
+              onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                event.preventDefault();
+                resizing.current = true;
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={(event) => {
+                if (resizing.current) {
+                  event.preventDefault();
+                  resizeWorkers(
+                    (workspace.current?.getBoundingClientRect().right ||
+                      event.clientX) - event.clientX,
+                  );
+                }
+              }}
+              onPointerUp={(event) => {
+                if (resizing.current)
+                  resizeWorkers(
+                    (workspace.current?.getBoundingClientRect().right ||
+                      event.clientX) - event.clientX,
+                  );
+                resizing.current = false;
+                if (event.currentTarget.hasPointerCapture(event.pointerId))
+                  event.currentTarget.releasePointerCapture(event.pointerId);
+              }}
+              onPointerCancel={() => {
+                resizing.current = false;
+              }}
+              onLostPointerCapture={() => {
+                resizing.current = false;
+              }}
+              onDoubleClick={() => setWorkerWidth(null)}
+              onKeyDown={(event) => {
+                const current =
+                  workspace.current
+                    ?.querySelector("aside")
+                    ?.getBoundingClientRect().width || 560;
+                if (
+                  ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)
+                ) {
+                  event.preventDefault();
+                  resizeWorkers(
+                    event.key === "Home"
+                      ? 280
+                      : event.key === "End"
+                        ? 720
+                        : current + (event.key === "ArrowLeft" ? 32 : -32),
+                  );
+                }
+              }}
+            />
+            <aside
+              aria-label="Project workers"
+              className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${pane === "conversation" ? (browser.state.open ? "hidden" : "hidden lg:block") : pane === "workers" ? "block" : "hidden"}`}
+            >
+              <WorkerAttention
+                compact={pane === "conversation"}
+                view={workerView}
+                onSelect={showWorker}
+              />
+            </aside>
+          </main>
+          <div
+            className={`${pane === "detail" ? "flex" : "hidden"} min-h-0 flex-1 flex-col`}
+          >
+            {selectedTask ? (
+              <WorkerDetail
+                key={selectedTask.id}
+                task={selectedTask}
+                manager={workspaceManager}
+                onBack={() => openPane("conversation")}
+                onManager={() => openPane("conversation")}
+              />
+            ) : (
+              <section className="flex-1 p-8">
+                <p>This worker is no longer available in this project.</p>
+                <Button onClick={() => openPane("conversation")}>
+                  Back to manager
+                </Button>
+              </section>
+            )}
+          </div>
+          <div
+            className={`${pane === "scratchpad" ? "flex" : "hidden"} min-h-0 flex-1 flex-col`}
+          >
+            <ManagerScratchpad
+              scratchpad={manager.work.managerScratchpad}
+              scratchpadReadError={manager.work.managerScratchpadError}
+              eventReady={manager.eventReady}
+              tasks={tasks}
+              onSelectWorker={showWorker}
+            />
+          </div>
+          {pane !== "conversation" && pane !== "settings" && (
+            <ManagerCallBar
+              manager={manager}
+              onManager={() => openPane("conversation")}
+            />
+          )}
+          <audio
+            id="audio"
+            ref={manager.voice.audioRef}
+            autoPlay
+            className="hidden"
+            aria-label="Manager voice playback"
+          />
+          <div
+            className={`${pane === "settings" ? "flex" : "hidden"} min-h-0 flex-1`}
+          >
+            <Settings manager={manager} />
+          </div>
+        </div>
+        {browser.available && <ProjectBrowser browser={browser} />}
       </div>
     </div>
   );

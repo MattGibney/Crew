@@ -519,6 +519,7 @@ export function createProjectHost({
     stop: stopOwnedBackend,
     acceptsSetup: setup.acceptsSetup,
     acceptsWorkspace: surface.accepts,
+    browserRequest: surface.browserRequest,
     snapshot: () => ({
       id,
       name: config?.project.name,

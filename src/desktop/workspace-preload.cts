@@ -3,6 +3,32 @@ const {
   ipcRenderer,
 }: typeof import("electron") = require("electron");
 export {};
+if (process.argv.includes("--crew-browser-experiment"))
+  contextBridge.exposeInMainWorld(
+    "crewBrowser",
+    Object.freeze({
+      request: async (input: unknown) => {
+        try {
+          return await ipcRenderer.invoke("crew:browser", input);
+        } catch (error) {
+          throw new Error(
+            String(error instanceof Error ? error.message : error).replace(
+              /^Error invoking remote method '[^']+': Error: /,
+              "",
+            ),
+          );
+        }
+      },
+      onState: (listener: (state: unknown) => void) => {
+        if (typeof listener !== "function")
+          throw TypeError("A browser listener is required.");
+        const changed = (_event: Electron.IpcRendererEvent, state: unknown) =>
+          listener(state);
+        ipcRenderer.on("crew:browser:state", changed);
+        return () => ipcRenderer.removeListener("crew:browser:state", changed);
+      },
+    }),
+  );
 contextBridge.exposeInMainWorld(
   "crewWindow",
   Object.freeze({

@@ -5,6 +5,7 @@ import { isAppURL, permitsAudio } from "./lifecycle.mjs";
 import { webLink } from "../shared/web-links.mjs";
 import { openWebLink } from "./external-links.mjs";
 import { projectWindowChrome } from "./window-chrome.mjs";
+import { createProjectBrowser } from "./project-browser.mjs";
 
 /** Owns one disposable renderer and its project partition. Controller ownership
  * and process lifecycle stay with the project host; closing only releases voice. */
@@ -45,6 +46,7 @@ export function createProjectWindow({
   });
   let window: BrowserWindow | undefined,
     closing = false;
+  let browser: ReturnType<typeof createProjectBrowser> | undefined;
   const escape = (text: unknown) =>
     String(text).replace(
       /[&<>"']/g,
@@ -80,12 +82,15 @@ export function createProjectWindow({
         webSecurity: true,
         allowRunningInsecureContent: false,
         preload: join(root, "desktop/workspace-preload.cjs"),
+        additionalArguments: process.env.CREW_BROWSER_EXPERIMENT_URL ? ["--crew-browser-experiment"] : [],
         session: session.fromPath(
           join(desktopData, "Partitions", `instance-${key}`),
         ),
       },
     });
     window = next;
+    if (process.env.CREW_BROWSER_EXPERIMENT_URL)
+      browser = createProjectBrowser(next, process.env.CREW_BROWSER_EXPERIMENT_URL, getOrigin);
     next.webContents.setWindowOpenHandler((details) => {
       // Only the trusted project UI may send a validated web link to the external browser.
       if (
@@ -152,6 +157,11 @@ export function createProjectWindow({
     await statusChanged().catch(() => {});
   }
   return {
+    browserRequest(input: unknown) {
+      if (!browser) throw Error("Browser experiment is unavailable.");
+      return browser.request(input);
+    },
+    browserEndpoint: () => browser?.endpoint(),
     open: openWindow,
     configurePermissions() {
       const partition = session.fromPath(

@@ -457,6 +457,11 @@ const requests = createWorkspaceRequests({
 ipcMain.handle("crew:setup", requests.setup);
 ipcMain.handle("crew:clipboard-write", requests.clipboard);
 ipcMain.handle("crew:workspaces", requests.workspaces);
+ipcMain.handle("crew:browser", (event, input: unknown) => {
+  const host = selected();
+  if (!host.acceptsWorkspace(event)) throw Error("Browser request rejected.");
+  return host.browserRequest(input);
+});
 if (!locked) app.quit();
 else {
   app.on("second-instance", (_event, _argv, _cwd, data) =>

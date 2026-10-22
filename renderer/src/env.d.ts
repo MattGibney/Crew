@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type { SetupBridge, WorkspaceBridge } from "./contracts/setup.js";
+import type { BrowserBridge } from "./contracts/browser.js";
 declare global {
   interface Window {
     crewWindow?: {
@@ -8,5 +9,6 @@ declare global {
     };
     crewWorkspaces?: WorkspaceBridge;
     crewSetup?: SetupBridge;
+    crewBrowser?: BrowserBridge;
   }
 }
