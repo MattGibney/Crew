@@ -1,5 +1,7 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import type {
   ModelAccess,
   ProjectSkillSource,
@@ -22,6 +24,9 @@ import {
   type FolderAccessPreparation,
   type WorkspaceApproval,
 } from "./environments.mjs";
+import { ProjectEnvironmentTemplateCatalogue } from "./environment-templates.mjs";
+import { inspectEnvironmentTemplate } from "./environment-tool-inspector.mjs";
+import { withEnvironmentTemplateProvisioning } from "./environment-provisioning.mjs";
 import {
   createPrimaryAgentVoice,
   type PrimaryAgentVoice,
@@ -37,6 +42,9 @@ import {
   createAccessOwnerApi,
   runMacWorkspaceCommand,
   reconcileMacWorkspaceCommand,
+  startMacWorkspaceProcess,
+  inspectMacWorkspaceProcess,
+  stopMacWorkspaceProcess,
   type CredentialEncryptionBackend,
 } from "../access/index.mjs";
 import {
@@ -102,6 +110,7 @@ export async function startUnifiedApplication(
   let mcp: AgentMcpHost | undefined;
   let foundation: AgentFoundation | undefined;
   let environments: ProjectEnvironmentService | undefined;
+  let environmentTemplates: ProjectEnvironmentTemplateCatalogue | undefined;
   let voice: PrimaryAgentVoice | undefined;
   let voiceArtifacts: VoiceTranscriptArtifacts | undefined;
   let voiceArtifactRevision = 0;
@@ -206,6 +215,15 @@ export async function startUnifiedApplication(
       },
     });
     const owner = { type: "user" as const, userId: options.ownerUserId };
+    environmentTemplates = await ProjectEnvironmentTemplateCatalogue.open({
+      directory: join(root, "environment-templates"),
+      projectId: options.projectId,
+      ownerUserId: options.ownerUserId,
+      protectedDirectories: [root],
+      listAgents: async () => store.snapshot().agents,
+      inspect: (template) =>
+        inspectEnvironmentTemplate(template, join(root, "environments")),
+    });
     environments = await ProjectEnvironmentService.open({
       directory: join(root, "environments"),
       protectedDirectories: [root],
@@ -214,9 +232,34 @@ export async function startUnifiedApplication(
       admission: gate,
       execute: runMacWorkspaceCommand,
       observeExecution: reconcileMacWorkspaceCommand,
+      startExecution: startMacWorkspaceProcess,
+      inspectExecution: inspectMacWorkspaceProcess,
+      stopExecution: stopMacWorkspaceProcess,
+      runtimeDirectory: join(
+        homedir(),
+        ".crew",
+        "workspace-caches",
+        createHash("sha256").update(root).digest("hex").slice(0, 24),
+      ),
+      templateSource: {
+        resolvePreparation: (input) =>
+          environmentTemplates!.resolvePreparation(input),
+        resolvePinned: (id, revision) =>
+          environmentTemplates!.resolvePinned(id, revision),
+        assignment: (agentId) => environmentTemplates!.assignment(agentId),
+        inspect: (template) =>
+          environmentTemplates!.inspect(owner, {
+            templateId: template.id,
+            templateRevision: template.revision,
+          }),
+      },
       verifyExecution: async (caller) => {
         if (closing || !foundation?.executionAllowed(caller))
           throw new Error("This native session cannot admit workspace work.");
+      },
+      verifyOwnerExecution: async () => {
+        if (closing || store.snapshot().reservation)
+          throw new Error("Execution is reserved.");
       },
       noteExecutionAdmitted: (caller) =>
         foundation!.noteExecutionAdmitted(caller),
@@ -236,7 +279,11 @@ export async function startUnifiedApplication(
           );
         await foundation!.records.authorize(
           { type: "agent", caller },
-          `environments.${action}`,
+          action === "prepare" || action === "start" || action === "stop"
+            ? "environments.execute"
+            : action === "status"
+              ? "environments.read"
+              : `environments.${action}`,
           action === "create"
             ? { type: "project" }
             : { type: "agent", agentId },
@@ -329,7 +376,11 @@ export async function startUnifiedApplication(
       access: nativeAccess,
       authorization,
       broker: gateway.broker,
-      provisioning: authorization,
+      provisioning: withEnvironmentTemplateProvisioning(
+        authorization,
+        environmentTemplates,
+        owner,
+      ),
       admission: gate,
       admissionUsesFoundationBarrier: true,
       environments,
@@ -543,6 +594,29 @@ export async function startUnifiedApplication(
     };
     const environmentOwnerApi = {
       snapshot: () => environments!.ownerSnapshot(owner),
+      templates: {
+        snapshot: () => environmentTemplates!.ownerSnapshot(owner),
+        save: (
+          input: Parameters<
+            ProjectEnvironmentTemplateCatalogue["saveTemplate"]
+          >[1],
+        ) => {
+          if (closing) throw new Error("Crew is closing.");
+          return environmentTemplates!.saveTemplate(owner, input);
+        },
+        assign: (
+          input: Parameters<ProjectEnvironmentTemplateCatalogue["assign"]>[1],
+        ) => {
+          if (closing) throw new Error("Crew is closing.");
+          return environmentTemplates!.assign(owner, input);
+        },
+        inspect: async (
+          input: Parameters<ProjectEnvironmentTemplateCatalogue["inspect"]>[1],
+        ) => {
+          if (closing) throw new Error("Crew is closing.");
+          return environments!.inspectTemplate(owner, input);
+        },
+      },
       async prepareFolderAccess(input: FolderAccessPreparation) {
         if (closing) throw new Error("Crew is closing.");
         const prepared = await environments!.prepareFolderAccess(owner, input);
@@ -577,6 +651,9 @@ export async function startUnifiedApplication(
       publishPolicy,
       reconcileOperation: (operationId: string) =>
         environments!.reconcileOperation(owner, operationId),
+      // Read-only evidence stays available for failed-project Quit/recovery.
+      inspectOperation: (operationId: string) =>
+        environments!.inspectOperation(owner, operationId),
     };
     const additionalTools = options.agentTools?.({
       authorization,
@@ -708,6 +785,7 @@ export async function startUnifiedApplication(
           );
         stops.push(
           environments!.subscribe(() => listener({ kind: "changed" })),
+          environmentTemplates!.subscribe(() => listener({ kind: "changed" })),
         );
         return () => stops.forEach((stop) => stop());
       },
@@ -767,6 +845,9 @@ export async function startUnifiedApplication(
         },
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
+        resolveEnvironmentTemplate: async (pin) => {
+          environmentTemplates!.resolvePinned(pin.id, pin.revision);
+        },
         setupChoices: async () => registry.setupChoices(),
         catalogueSnapshot: (connection) =>
           gateway.catalogue.projection(connection),
@@ -860,6 +941,9 @@ export async function startUnifiedApplication(
             await finishStep("mcp", () => mcp!.close());
             await finishStep("nativeAccess", () => nativeAccess!.close());
             await finishStep("environments", () => environments!.close());
+            await finishStep("environmentTemplates", () =>
+              environmentTemplates!.close(),
+            );
             await finishStep("connectionSetup", () => connectionSetup.close());
             await finishStep("accessStore", () => accessStore!.close());
             closedSteps.add("resources");
@@ -878,6 +962,7 @@ export async function startUnifiedApplication(
     await mcp?.close().catch(() => {});
     await nativeAccess?.close().catch(() => {});
     await environments?.close().catch(() => {});
+    await environmentTemplates?.close().catch(() => {});
     if (foundation) await foundation.dispose().catch(() => {});
     else await store.close().catch(() => {});
     await accessStore?.close().catch(() => {});

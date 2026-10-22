@@ -25,11 +25,17 @@ export type {
 export {
   runMacWorkspaceCommand,
   reconcileMacWorkspaceCommand,
+  startMacWorkspaceProcess,
+  inspectMacWorkspaceProcess,
+  stopMacWorkspaceProcess,
 } from "./workspace-executor.mjs";
 export type {
   WorkspaceExecutionPolicy,
   WorkspaceCommandResult,
   WorkspaceProcessSettlement,
+  WorkspaceBackgroundResult,
+  WorkspaceBackgroundStatus,
+  WorkspaceStopResult,
 } from "./workspace-executor.mjs";
 export { createAccessOwnerApi } from "./owner-api.mjs";
 export type { AccessOwnerApi, AccessOwnerApiOptions } from "./owner-api.mjs";

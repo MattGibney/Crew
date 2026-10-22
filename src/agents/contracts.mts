@@ -791,6 +791,8 @@ export interface AgentCreationPreset {
   configRef: string;
   permissionGroupIds: Id[];
   serviceConnectionIds: Id[];
+  /** Exact owner-approved template revision; assigning it runs no preparation. */
+  environmentTemplate?: { id: Id; revision: Revision };
 }
 /** The same instance serializes native admission, permit redemption and the final
  * lifecycle reservation. Callbacks must not recursively acquire this gate. */
@@ -820,7 +822,15 @@ export interface AgentEnvironmentService {
   invoke(input: {
     caller: CallerContext;
     agentId: Id;
-    action: "create" | "attach" | "execute" | "dispose";
+    action:
+      | "create"
+      | "attach"
+      | "execute"
+      | "dispose"
+      | "prepare"
+      | "start"
+      | "status"
+      | "stop";
     requestId: Id;
     arguments: JsonObject;
   }): Promise<JsonValue>;

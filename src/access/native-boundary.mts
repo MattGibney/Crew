@@ -117,13 +117,36 @@ export function nativeSeatbeltPolicy(input: {
   writeRoots?: string[];
   /** Trusted owner-login launch only; never selected by agent/runtime input. */
   ownerSignInCallback?: boolean;
+  /** Exact owner-acknowledged host Docker endpoint: broad host authority. */
+  workspaceHostDockerSocket?: string;
+  /** Workspace shells may reopen only their own inherited descriptors/pipes. */
+  workspaceFileDescriptors?: boolean;
+  /** Workspace-only owner-approved template capabilities. */
+  workspaceNetwork?: {
+    outbound: boolean;
+    localhostPorts: number[];
+    inboundPorts?: number[];
+  };
 }): string {
   if (
-    input.ports.some(
+    [...input.ports, ...(input.workspaceNetwork?.localhostPorts ?? [])].some(
       (port) => !Number.isSafeInteger(port) || port < 1 || port > 65535,
     )
   )
     throw new Error("Invalid native endpoint.");
+  if (
+    input.workspaceNetwork?.inboundPorts !== undefined &&
+    (!Array.isArray(input.workspaceNetwork.inboundPorts) ||
+      input.workspaceNetwork.inboundPorts.length > 16 ||
+      input.workspaceNetwork.inboundPorts.some(
+        (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
+      ))
+  )
+    throw new Error("Invalid approved incoming TCP ports.");
+  if (input.workspaceNetwork?.localhostPorts.length)
+    throw new Error(
+      "Localhost servers require a transport that enforces loopback-only access.",
+    );
   return `(version 1)
 (deny default)
 (allow process-fork process-exec)
@@ -144,7 +167,11 @@ export function nativeSeatbeltPolicy(input: {
 (allow file-read* file-write* (subpath ${quote(input.root)}))
 ${input.writeRoots?.map((root) => `(allow file-read* file-write* (subpath ${quote(root)}))`).join("\n") ?? ""}
 (allow file-write* (literal "/dev/null"))
+${input.workspaceFileDescriptors ? '(allow file-read* file-write* (subpath "/dev/fd") (literal "/dev/stdin") (literal "/dev/stdout") (literal "/dev/stderr"))' : ""}
 ${input.ports.map((port) => `(allow network-outbound (remote tcp "localhost:${port}"))`).join("\n")}
+${input.workspaceNetwork?.outbound ? '(allow network-outbound (remote tcp "*:*"))\n(allow network-outbound (remote udp "*:53"))\n(allow mach-lookup (global-name "com.apple.mDNSResponder"))\n(allow file-read* (literal "/private/etc/hosts") (literal "/private/etc/resolv.conf") (literal "/private/var/run/resolv.conf"))\n(allow network-outbound (literal "/private/var/run/mDNSResponder"))' : ""}
+${(input.workspaceNetwork?.inboundPorts ?? []).map((port) => `(allow network-bind network-inbound (local tcp "*:${port}"))`).join("\n")}
+${input.workspaceHostDockerSocket ? `(allow network-outbound (literal ${quote(input.workspaceHostDockerSocket)}))` : ""}
 ${input.ownerSignInCallback ? '(allow network-bind network-inbound (local tcp "localhost:1455"))' : ""}
 `;
 }
