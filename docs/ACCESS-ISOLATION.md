@@ -86,6 +86,23 @@ no native subscription directory and no broker vault. Stdout and stderr have sep
 may already have produced effects and is never evidence for automatic retry. Root command
 exit does not prove independently launched project resources were removed.
 
+Results include `processesSettled` and `processEvidenceRef`. The executor records the
+actual detached process group, root exit and observed descendant PID/start/command hashes
+in a private receipt outside writable command scratch. It confirms fresh group and
+observed-process absence before setting `processesSettled: true`. Foreground completion
+can therefore release an execution reservation while background work remains unsettled.
+Workspace and tool roots may not overlap this private directory.
+
+The host persists every returned reference, including both creation and registration
+commands for a managed worktree. It can later call
+`reconcileMacWorkspaceCommand(privateDirectory, processEvidenceRef)` and use a fresh
+confirmed result to settle the original operation. Reconciliation reads evidence and OS
+process state only: it neither repeats commands nor sends stop signals. Missing, unsafe,
+incomplete or malformed evidence stays unsettled; retain the original reference on failure.
+The proof covers the launched group and observed descendants. It does not prove arbitrary
+unobserved daemonization or that databases, containers or other independent resources were
+removed. Those require their own explicit project lifecycle evidence.
+
 The initial executor has no network access. Package downloads, networked project setup,
 container sockets, development-server port binding and additional runtime libraries need
 explicit supported environment policy before they can work. Do not present the narrow
@@ -139,6 +156,14 @@ The separate workspace executor inspected a disposable script, edited it and ran
 successfully. It also denied an outside canary and read-only mutation, showed a clean
 environment, and reported timeout as possibly executed. These are actual process/file
 checks, not a completed agent-mediated project walkthrough.
+
+Actual process-settlement checks confirm foreground completion, a background sleep that
+blocks settlement, and later read-only confirmation after natural exit. Invalid evidence,
+private-root overlap and attempted receipt tampering fail closed. A component composition
+using the real access store, environment service, admission gate and sandbox executor
+confirms that foreground work clears execution settlement, a held final reservation
+rejects new commands, and running background work remains a settlement blocker. That check
+uses a controlled session identity; it does not establish a native agent turn.
 
 The installed native process also discovered two controlled SDK MCP servers using
 the exact foundation and service URLs with bearer authentication. A mismatched expected
