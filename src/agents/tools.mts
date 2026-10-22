@@ -24,8 +24,106 @@ const content = {
   type: "array",
   minItems: 1,
   maxItems: 100,
-  items: { type: "object" },
+  items: {
+    anyOf: [
+      object({ type: { const: "text" }, text: string }),
+      object({
+        type: { const: "image" },
+        fileRef: id,
+        caption: nullableString,
+      }),
+      object({
+        type: { const: "file" },
+        fileRef: id,
+        name: string,
+        mediaType: string,
+      }),
+      object({ type: { const: "data" }, value: {} }),
+    ],
+  },
 };
+const profileInput = object(
+  {
+    name: { type: "string", minLength: 1, maxLength: 1000 },
+    pictureRef: { anyOf: [id, { type: "null" }] },
+    personality: string,
+    systemPrompt: string,
+    skills: {
+      type: "array",
+      items: object({ skillId: id, enabled: { type: "boolean" } }),
+    },
+  },
+  [],
+);
+const jobInput = object(
+  {
+    work: {
+      anyOf: [
+        object({
+          type: { const: "local" },
+          title: { type: "string", minLength: 1, maxLength: 1000 },
+          objective: { type: "string", minLength: 1, maxLength: 200_000 },
+        }),
+        object({
+          type: { const: "ticket" },
+          ticket: object({
+            provider: { enum: ["linear", "github"] },
+            connectionId: id,
+            externalId: {
+              ...id,
+              description:
+                "GitHub: owner/repository#number. Linear: immutable issue UUID. Use the actual provider identity.",
+            },
+            url: {
+              ...string,
+              description: "Canonical HTTP(S) ticket URL without credentials.",
+            },
+          }),
+        }),
+      ],
+    },
+    assignedToAgentId: { anyOf: [id, { type: "null" }] },
+    instruction: nullableString,
+  },
+  ["work"],
+);
+const environmentInput = object({
+  agentId: id,
+  action: { enum: ["create", "attach", "execute", "dispose"] },
+  requestId: {
+    ...id,
+    description:
+      "Unique operation ID; reuse only to reconcile the exact same action and arguments.",
+  },
+  arguments: {
+    description:
+      "create: policyId and optional ref; attach: policyId; execute: environmentId and command, with optional relativeCwd/timeoutMs; dispose: environmentId. Read environments_read for existing IDs and approved policy IDs.",
+    anyOf: [
+      object({ policyId: id, ref: id }, ["policyId"]),
+      object(
+        {
+          environmentId: id,
+          command: {
+            type: "array",
+            minItems: 1,
+            maxItems: 256,
+            items: string,
+            description:
+              'Argument vector, for example ["/usr/bin/git", "status", "--short"].',
+          },
+          relativeCwd: {
+            ...string,
+            description:
+              "Directory relative to the environment, default '.'; no parent traversal.",
+          },
+          timeoutMs: { type: "integer", minimum: 100, maximum: 120_000 },
+        },
+        ["environmentId", "command"],
+      ),
+      object({ environmentId: id }),
+    ],
+  },
+});
 const tools: { name: string; description: string; inputSchema: JsonObject }[] =
   [
     {
@@ -68,7 +166,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: object({
         agentId: id,
         expectedRevision: { type: "integer", minimum: 1 },
-        input: { type: "object" },
+        input: profileInput,
       }),
     },
     {
@@ -140,12 +238,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       name: "environment_action",
       description:
         "Explicit environment action using the configured project integration. Does not change agent or chat identity.",
-      inputSchema: object({
-        agentId: id,
-        action: { enum: ["create", "attach", "execute", "dispose"] },
-        requestId: id,
-        arguments: { type: "object" },
-      }),
+      inputSchema: environmentInput,
     },
     {
       name: "environments_read",
@@ -163,7 +256,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       name: "job_create",
       description:
         "Create a thin ticket reference or local objective; no automatic assignment message, setup or workflow.",
-      inputSchema: object({ input: { type: "object" } }),
+      inputSchema: object({ input: jobInput }),
     },
     {
       name: "job_assign",

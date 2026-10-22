@@ -434,6 +434,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 ## Usable unified application delivery (#86, #88–#90, #34, #95)
 
+- MCP tool catalogues must describe nested payloads accepted by their record/environment validators. A real model failure caused by an opaque `type: object` is an integration defect; do not substitute manually teaching the missing JSON shape for fixing discovery. Keep caller identity and permission checks server-owned.
+
 - The owner authorized the remaining usability plan on 22 October 2026. Start separate implementation chats using GPT-6 Astra with Extra High reasoning. All work starts from and all implementation PRs target `codex/unified-agent-platform`; no main merge, release, installation or live-state reset is authorized. The prior install request remains cancelled.
 - No Crew content, tasks, references or documentation in Notion. This explicit project instruction supersedes general Notion documentation guidance. Use repository docs and private local operational evidence.
 - Owner setup defines permission groups, external connections and credentials, primary-agent access and preapproved new-agent defaults. Agents can apply approved creation defaults without administering groups or self-granting access. Credentials stay in connection-backed vault storage; membership and assignment have one access-store authority.
