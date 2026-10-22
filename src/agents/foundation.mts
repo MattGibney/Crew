@@ -1996,12 +1996,21 @@ export class AgentFoundation implements AgentLifecycle {
     void this.flush().catch(() => {});
   }
 
-  async dispose(): Promise<void> {
+  async dispose(completedReservationId?: string): Promise<void> {
     // Transport shutdown is not native Stop, service cleanup or destructive archive.
     this.disposed = true;
     this.listeners.clear();
     this.observers.clear();
     await Promise.allSettled([...this.locks.values()]);
+    // Only the composition's completed shutdown clears its reservation. Admission
+    // is already permanently closed; unlike releaseExecution this never pumps work.
+    if (completedReservationId && this.store.snapshot().reservation) {
+      await this.store.update((state) => {
+        if (state.reservation?.id !== completedReservationId)
+          throw new Error("Completed shutdown reservation does not match.");
+        state.reservation = null;
+      });
+    }
     await this.store.close();
   }
 }

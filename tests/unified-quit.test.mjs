@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createUnifiedQuit } from "../src/desktop/unified-quit.mts";
+import { AgentFoundation } from "../src/agents/foundation.mts";
 
 function fixture() {
   const calls = [],
@@ -152,7 +153,7 @@ test("late readiness is observed for the same preparation without issuing duplic
   );
 });
 
-test("partial close failure permanently retains recovery evidence and refuses return to work or another Quit", async () => {
+test("partial close failure retains reservations and retries only unresolved closures", async () => {
   const f = fixture();
   await f.coordinator.prepare();
   f.projects[1].failClose = true;
@@ -168,7 +169,7 @@ test("partial close failure permanently retains recovery evidence and refuses re
   assert.equal(f.coordinator.holding(), true);
   assert.deepEqual([...f.held].sort(), ["background", "selected"]);
   const calls = structuredClone(f.calls);
-  for (const action of ["cancel", "prepare", "quit"])
+  for (const action of ["cancel", "prepare"])
     await assert.rejects(f.coordinator[action](), /recovery is required/i);
   f.coordinator.observe();
   assert.deepEqual(f.coordinator.snapshot(), failed);
@@ -177,14 +178,43 @@ test("partial close failure permanently retains recovery evidence and refuses re
     f.calls.some(([action]) => action === "release" || action === "finish"),
     false,
   );
+  // A still-failing retry does not reacquire or release any reservation.
+  await f.coordinator.quit();
+  assert.deepEqual(f.calls.slice(calls.length), [["close", "background"]]);
+  assert.equal(f.coordinator.snapshot().recoveryRequired, true);
+  f.projects[1].failClose = false;
+  await f.coordinator.quit();
+  assert.deepEqual(f.calls.slice(calls.length), [
+    ["close", "background"],
+    ["close", "background"],
+    ["finish"],
+  ]);
+  assert.deepEqual(
+    f.coordinator.snapshot().projects.map((row) => row.closeState),
+    ["closed", "closed"],
+  );
+  assert.equal(f.coordinator.holding(), true, "retry never re-enables work");
 });
 
-test("failure after shutdown begins retains a recovery hold even with no project reservation", async () => {
+test("Quit recovery refuses a changed project set without closing or releasing anything", async () => {
+  const f = fixture();
+  await f.coordinator.prepare();
+  f.projects[1].failClose = true;
+  await f.coordinator.quit();
+  const calls = structuredClone(f.calls);
+  f.projects.pop();
+  await f.coordinator.quit();
+  assert.deepEqual(f.calls, calls);
+  assert.equal(f.coordinator.holding(), true);
+});
+
+test("failure after shutdown begins can retry finish without releasing the recovery hold", async () => {
+  let attempts = 0;
   const coordinator = createUnifiedQuit({
     projects: () => [],
     changed() {},
     finish: async () => {
-      throw new Error("App exit unconfirmed");
+      if (++attempts === 1) throw new Error("App exit unconfirmed");
     },
   });
   await coordinator.prepare();
@@ -194,4 +224,41 @@ test("failure after shutdown begins retains a recovery hold even with no project
   assert.equal(coordinator.holding(), true);
   await assert.rejects(coordinator.cancel(), /recovery is required/i);
   assert.equal(coordinator.snapshot().state, "recovery");
+  await coordinator.quit();
+  assert.equal(attempts, 2);
+  assert.equal(coordinator.holding(), true);
+});
+
+test("completed shutdown clears only its exact reservation after admission closes, without pumping work", async () => {
+  const state = {
+    projectId: "project",
+    agents: [],
+    reservation: { id: "held" },
+  };
+  const events = [];
+  const foundation = new AgentFoundation({
+    store: {
+      snapshot: () => structuredClone(state),
+      update: async (mutate) => {
+        assert.equal(
+          foundation.executionAllowed({ projectId: "project" }),
+          false,
+        );
+        mutate(state);
+        events.push("cleared");
+      },
+      close: async () => {
+        events.push("closed");
+      },
+    },
+  });
+  foundation.flush = async () => {
+    assert.fail("Shutdown must never pump input");
+  };
+  await assert.rejects(foundation.dispose("different"), /does not match/);
+  assert.equal(state.reservation.id, "held");
+  assert.deepEqual(events, []);
+  await foundation.dispose("held");
+  assert.equal(state.reservation, null);
+  assert.deepEqual(events, ["cleared", "closed"]);
 });

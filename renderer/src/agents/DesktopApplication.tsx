@@ -210,13 +210,13 @@ export function DesktopApplication({
           type="button"
           disabled={
             pending ||
-            snapshot?.quit.recoveryRequired ||
-            snapshot?.quit.state !== "ready" ||
+            (!snapshot?.quit.recoveryRequired &&
+              snapshot?.quit.state !== "ready") ||
             snapshot.updates?.holding
           }
           onClick={() => void act("quit")}
         >
-          Quit Crew
+          {snapshot?.quit.recoveryRequired ? "Retry Quit" : "Quit Crew"}
         </Button>
       </div>
     </div>

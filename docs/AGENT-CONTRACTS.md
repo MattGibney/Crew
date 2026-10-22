@@ -222,6 +222,15 @@ reconcile result delivery separately using native message/turn correlation.
 
 ## Quit, update and explicit cutover
 
+After a partial desktop Quit, **Retry Quit** keeps the original reservations and
+retries only projects whose closure is unconfirmed. Confirmed closures and
+successful cleanup stages are skipped. Each unresolved composition rechecks its
+reservation and current execution settlement; lost native Stop acknowledgements
+use the existing exact-process exit proof. Return to work remains blocked once
+shutdown starts. Reservations clear only after resource cleanup, with foundation
+admission already closed. Failed persistence or unavailable ownership evidence
+remains blocked; retry never resets state or grants permission to start work.
+
 #88 `prepare` collects agent readiness/continuation while communication remains available. Just before
 actual stop/restart/install, `reserveExecution` atomically blocks new turns/broker admissions, rechecks
 readiness, native execution, messages and `BrokerSettlement`; release on cancellation/failure. No long
