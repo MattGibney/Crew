@@ -340,3 +340,14 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Authorized Settings hotfix release (GitHub #74)
 
 - The human explicitly authorized merging PR75 and publishing the next signed stable patch, 0.17.3 after 0.17.2. This supersedes GH74's original PR-only boundary for this named delivery; no unrelated features or PR54. Verify real saved null lifecycle phases through packaged Settings open/save/reload/relaunch. Preserve strict validation of populated project commands and direct hooks; never reset valid user configuration to hide renderer contract drift. Preserve existing tags, profiles/auth/workers, physical microphone and business-service boundaries; manual native continuity does not prove automatic portable-root updater relaunch.
+
+## Text context menus and external links (GitHub #66)
+
+- Selected read-only conversation text offers Copy, never Cut. Use the shared Base UI/shadcn context-menu parts, snapshot selected text before menu focus changes, and retain normal field editing, native keyboard shortcuts and drafts. Leave touch text selection to the browser before offering context actions.
+- Manager/user/worker message Markdown and plain web URLs use the shared validated WebLink. Treat message links as untrusted data; only bounded explicit HTTP(S) URLs without credentials may open externally. Preserve project-origin checks, blocked foreign navigation, denied popups and the bounded write-only clipboard bridge.
+- macOS web activation uses explicit Safari through argv-based `open -a Safari`, without changing browser preferences; other platforms retain their default browser. Browser fixture assertions do not prove a native browser opened. Keep real Safari request evidence, native clipboard checks and screenshots outside Git; never test through the user's installed profile or physical microphone.
+
+## Isolated validation correction (GitHub #66)
+
+- Binding `CREW_GLOBAL_CAPACITY_DIR` to a fresh directory without `capacity.json` intentionally holds production admission. Before scheduling/full-suite validation, initialize only the disposable test ledger through `configureGlobalCapacity` and verify `globalAdmissionPaused` is false. Never weaken the fail-closed guard, alter live claims, or skip assertions to make fixtures proceed.
+- A clean-base cancellation under the same invalid environment does not prove a product baseline defect. Preserve that evidence and correct the conclusion when the harness cause is established. `scripts/issue66-isolated-validation.mjs` records initialized isolation, exact source hashes and focused/full logs outside Git.

@@ -1,3 +1,4 @@
+import { TextContextMenu } from "./TextContextMenu.js";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -92,7 +93,7 @@ export function App() {
       count + (task.attention || []).filter((item) => !item.ackedAt).length,
     0,
   );
-  return (
+  const content = (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <a
         href={
@@ -338,4 +339,5 @@ export function App() {
       </div>
     </div>
   );
+  return <TextContextMenu>{content}</TextContextMenu>;
 }
