@@ -186,8 +186,8 @@ export class TrustedServiceExecutor implements ServiceExecutor {
             admitted = true;
             // Cancellation after redemption but before dispatch is still conclusive non-execution.
             return (
-              !options.signal?.aborted &&
-              (await this.options.canDispatch(invocation))
+              (await this.options.canDispatch(invocation)) &&
+              !options.signal?.aborted
             );
           };
           if (config.type === "cli")
@@ -292,10 +292,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
           reason: "Connection unavailable for read-only verification.",
         };
       const config = await this.configuration(connection);
-      if (config.type === "cli") {
-        // A child can survive a controller crash. No recorded close for this exact attempt
-        // means no retry, even when a point-in-time provider lookup finds no effect yet.
-        const marker = jsonObject(
+      let cliMarker = null;
+      try {
+        cliMarker = jsonObject(
           JSON.parse(
             await readFile(
               this.cliMarker(receipt.caller, receipt.operation.invocationId),
@@ -303,9 +302,21 @@ export class TrustedServiceExecutor implements ServiceExecutor {
             ),
           ),
         );
+      } catch (error) {
+        if (!(
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ))
+          throw error;
+      }
+      if (cliMarker !== null || config.type === "cli") {
+        // A child can survive a controller crash. No recorded close for this exact attempt
+        // means no retry, even when a point-in-time provider lookup finds no effect yet.
         if (
-          marker.attemptId !== receipt.attempts.at(-1)?.id ||
-          marker.state !== "exited"
+          cliMarker?.attemptId !== receipt.attempts.at(-1)?.id ||
+          cliMarker?.state !== "exited"
         )
           return {
             state: "unknown",

@@ -31,9 +31,10 @@ export async function createGateway(options: {
   const executor = new TrustedServiceExecutor({
     ...options,
     canDispatch: async (invocation: BrokerInvocation) =>
+      (await options.validateCaller(invocation.caller, invocation.jobId)) &&
       !(await store.isCancelled(
         operationKey(invocation.caller, invocation.operation.invocationId),
-      )) && (await options.validateCaller(invocation.caller, invocation.jobId)),
+      )),
   });
   const broker = new DurableOperationBroker({
     ...options,
