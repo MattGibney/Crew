@@ -94,7 +94,7 @@ const signInFailure = (
     response:
       "Native sign-in returned an unsupported response. No code was accepted.",
     completion:
-      "Native sign-in did not complete successfully. Start a new sign-in attempt.",
+      "Crew could not confirm successful native sign-in. Start a new sign-in attempt.",
     transport:
       "The native sign-in connection ended before completion. Start a new sign-in attempt.",
   }[stage],
@@ -654,15 +654,31 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       peer = await this.peer(
         await this.launch("owner", null, []),
         (event) => {
+          if (event.method !== "account/login/completed") return;
           if (
-            event.method === "account/login/completed" &&
             typeof event.params.loginId === "string" &&
+            event.params.loginId &&
             typeof event.params.success === "boolean"
-          )
+          ) {
             complete({
               loginId: event.params.loginId,
               success: event.params.success,
             });
+            return;
+          }
+          // The native schema permits an omitted/null ID. That cannot prove
+          // exact completion; fail the owned attempt without guessing success.
+          const signing = this.signing;
+          if (
+            peer &&
+            signing?.peer === peer &&
+            signing.generation === this.signInGeneration &&
+            !signing.completed
+          ) {
+            signing.completed = true;
+            this.signInStatus = signInFailure("completion");
+            void this.stopPeer(peer).catch(() => {});
+          }
         },
         disconnected,
       );
