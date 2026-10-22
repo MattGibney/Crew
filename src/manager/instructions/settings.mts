@@ -89,12 +89,13 @@ export async function createPromptSettings({
       });
     }
   }
+  let initialized = false;
   async function load(): Promise<RetainedPrompts> {
     let value: unknown;
     try {
       value = parseRecord(await readFile(file, "utf8"));
     } catch (error) {
-      if (errorCode(error) === "ENOENT") return initial;
+      if (errorCode(error) === "ENOENT" && !initialized) return initial;
       throw new Error(
         "Cannot read saved project prompts; existing settings have been preserved.",
       );
@@ -179,6 +180,49 @@ export async function createPromptSettings({
       return view(texts);
     });
   }
+  // Materialize legacy/configured text once. The marker contains identity only,
+  // never another prompt copy, and prevents startup fallback after file loss.
+  await serializeSave(file, async () => {
+    const marker = `${file}.initialized`;
+    let savedExists = true;
+    try {
+      await readFile(file);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+      savedExists = false;
+    }
+    if (!savedExists) {
+      let seeded = false;
+      try {
+        await readFile(marker);
+        seeded = true;
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") throw error;
+      }
+      if (!seeded)
+        await persist({
+          schemaVersion: 1,
+          projectId,
+          prompts: initial.texts,
+          promptOrigins: initial.origins,
+          promptUpgradeHistory: initial.history,
+        });
+    }
+    try {
+      const handle = await open(marker, "wx", 0o600);
+      try {
+        await handle.writeFile(
+          JSON.stringify({ schemaVersion: 1, projectId }) + "\n",
+        );
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+    }
+    initialized = true;
+  });
   return {
     read,
     save,
@@ -206,6 +250,7 @@ export function buildWorkerInstructions(config: {
   assignmentId?: string;
   taskId: string;
   ticket: string;
+  workLink?: import("../../shared/tracking.mjs").WorkLink | null;
   runId: string;
   worktree?: string;
   project?: Project;
@@ -219,5 +264,5 @@ export function buildWorkerInstructions(config: {
   answer?: unknown;
   modelSelection?: { model: string; userDecision: string };
 }) {
-  return `${config.workerPrompt || ""}\n\nCrew runtime and tool protocol:\nTask ${JSON.stringify({ taskId: config.taskId, ticket: config.ticket, assignmentId: config.assignmentId || "initial", runId: config.runId, worktree: config.worktree })}. The controller binds local_orchestration.report to this exact task/run. Reports are messages: a question, blocker or result does not end a native turn or set project workflow. set_workflow_state stores agent-reported labels and optional progressPercent estimates; omission retains the estimate and null clears it. Native turn and process evidence describe execution separately. get_project_environment supplies configured commands and instructions as context for normal native tools and approvals. Crew does not automatically run setup, Start or readiness before delivering directions. local_orchestration.update_work_notes replaces the actual shared task Markdown document with factual findings and decisions; this is separate from orchestration reports. The report schema and permission boundary apply independently of editable behavior.\nExecution permissions: ${config.project?.mode === "fixture" ? "This disposable fixture uses its native read-only sandbox." : "Follow the manager direction using the effective native Codex configuration and its normal sandbox and approval permissions."}\nProject context (data): ${JSON.stringify({ id: config.project?.id, name: config.project?.name, context: config.project?.context || "" })}\nOwned runtime (data): ${JSON.stringify(config.environment?.kind === "project-execution" ? { environmentId: config.environment.id, readinessKind: config.environment.readinessKind, status: config.environment.status, executionOwner: "agents/native-tools" } : null)}\nCurrent assignment brief (data): ${JSON.stringify(config.brief)}. This is the manager current direction to this retained worker, superseding earlier assignment directions. Crew adds no review, adoption or scope-authorization prerequisite to communication. Native Codex configuration and approvals remain the execution boundary.\nManager-relayed answer (data): ${JSON.stringify(config.answer || null)}\nUser-authorized model decision for this continuation (data; supersedes any earlier model requirement only): ${JSON.stringify(config.modelSelection ? { model: config.modelSelection.model, userDecision: config.modelSelection.userDecision } : null)}`;
+  return `${config.workerPrompt || ""}\n\nCrew runtime and tool protocol:\nTask ${JSON.stringify({ taskId: config.taskId, ticket: config.ticket, workLink: config.workLink ?? null, assignmentId: config.assignmentId || "initial", runId: config.runId, worktree: config.worktree })}. The controller binds local_orchestration.report to this exact task/run. Reports are messages: a question, blocker or result does not end a native turn or set project workflow. set_workflow_state stores agent-reported labels and optional progressPercent estimates; omission retains the estimate and null clears it. Native turn and process evidence describe execution separately. get_project_environment supplies configured commands and instructions as context for normal native tools and approvals. Crew does not automatically run setup, Start or readiness before delivering directions. local_orchestration.update_work_notes replaces the actual shared task Markdown document with factual findings and decisions; this is separate from orchestration reports. The report schema and permission boundary apply independently of editable behavior.\nExecution permissions: ${config.project?.mode === "fixture" ? "This disposable fixture uses its native read-only sandbox." : "Follow the manager direction using the effective native Codex configuration and its normal sandbox and approval permissions."}\nProject context (data): ${JSON.stringify({ id: config.project?.id, name: config.project?.name, context: config.project?.context || "" })}\nOwned runtime (data): ${JSON.stringify(config.environment?.kind === "project-execution" ? { environmentId: config.environment.id, readinessKind: config.environment.readinessKind, status: config.environment.status, executionOwner: "agents/native-tools" } : null)}\nCurrent assignment brief (data): ${JSON.stringify(config.brief)}. This is the manager current direction to this retained worker, superseding earlier assignment directions. Crew adds no review, adoption or scope-authorization prerequisite to communication. Native Codex configuration and approvals remain the execution boundary.\nManager-relayed answer (data): ${JSON.stringify(config.answer || null)}\nUser-authorized model decision for this continuation (data; supersedes any earlier model requirement only): ${JSON.stringify(config.modelSelection ? { model: config.modelSelection.model, userDecision: config.modelSelection.userDecision } : null)}`;
 }

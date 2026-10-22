@@ -23,6 +23,9 @@ interface ConnectionBindings {
   setWork: Setter<WorkState>;
   setManagerLifecycle: Setter<ManagerLifecycle>;
   setSettings: Setter<SettingsState | null>;
+  loadSettings: () => Promise<SettingsState>;
+  bindSettingsProject: (id?: string) => void;
+  invalidateSettings: (id: string) => Promise<SettingsState | null>;
   setOrchestration: Setter<OrchestrationState>;
   setWorkerApprovals: Setter<WorkerApproval[]>;
   setWorkNotice: Setter<string>;
@@ -45,6 +48,9 @@ export function useManagerConnection({
   setWork,
   setManagerLifecycle,
   setSettings,
+  loadSettings,
+  bindSettingsProject,
+  invalidateSettings,
   setOrchestration,
   setWorkerApprovals,
   setWorkNotice,
@@ -60,7 +66,10 @@ export function useManagerConnection({
     let canceled = false;
     const events = new EventSource("/events");
     events.onopen = () => {
-      if (!canceled) setEventReady(true);
+      if (!canceled) {
+        setEventReady(true);
+        void loadSettings().catch(() => {});
+      }
     };
     events.onerror = () => {
       if (!canceled) {
@@ -73,6 +82,8 @@ export function useManagerConnection({
       try {
         const message = decodeManagerEvent(JSON.parse(event.data));
         if (!message) return;
+        if (message.type === "settings-invalidated")
+          void invalidateSettings(message.projectId).catch(() => {});
         if (message.type === "update-state") setUpdates(message.status);
         if (message.type === "work-state") {
           setWork(message.state);
@@ -119,6 +130,7 @@ export function useManagerConnection({
         const config = await api("config");
         if (!canceled) {
           nativeAttentionSound.current = config.nativeAttentionSound === true;
+          bindSettingsProject(config.project.id);
           setProjectInfo(config.project);
           setProject(
             `${config.project.name} · ${config.project.mode === "fixture" ? "disposable fixture" : "configured project"}${config.project.readiness.ready ? "" : " · setup needed: " + config.project.readiness.issues.join("; ")}`,
@@ -132,12 +144,8 @@ export function useManagerConnection({
       }
       if (canceled) return;
       try {
-        const nextSettings = await api("settings", {}, { method: "GET" });
+        const nextSettings = await loadSettings();
         bootstrapRunning = nextSettings.managerLifecycle.state === "running";
-        if (!canceled) {
-          setSettings(nextSettings);
-          setManagerLifecycle(nextSettings.managerLifecycle);
-        }
         const result =
           nextSettings.managerLifecycle.state === "running"
             ? await api("prepare")
@@ -151,11 +159,7 @@ export function useManagerConnection({
           );
           if (result.state) setWork(result.state);
         }
-        const refreshed = await api("settings", {}, { method: "GET" });
-        if (!canceled) {
-          setSettings(refreshed);
-          setManagerLifecycle(refreshed.managerLifecycle);
-        }
+        await loadSettings();
       } catch (failure) {
         if (!canceled) {
           setSettingsError(errorText(failure));
@@ -201,6 +205,9 @@ export function useManagerConnection({
     };
   }, [
     loadVoices,
+    loadSettings,
+    bindSettingsProject,
+    invalidateSettings,
     showError,
     voice.transportLost,
     voice.handleEvent,

@@ -187,7 +187,7 @@ async function callTool(name: unknown, input: unknown) {
         throw new Error("Fixture tasks do not accept repositoryId");
       return createTask(stateDir, {
         ...args,
-        ticket: args.ticket || "Project work",
+        ticket: args.ticket || "",
         projectId: project?.id || null,
       });
     }

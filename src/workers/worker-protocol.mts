@@ -1,3 +1,4 @@
+import { workLinkSchema, validateWorkLink, type WorkLink } from "../shared/tracking.mjs";
 import { Ajv } from "ajv";
 import type {
   Project,
@@ -7,6 +8,7 @@ import type {
 import type { ApprovalParams } from "./approvals.mjs";
 import { isRecord } from "./errors.mjs";
 export interface WorkerConfiguration {
+  globalCapacityDir?: string;
   assignmentId?: string;
   taskId: string;
   runId: string;
@@ -15,10 +17,12 @@ export interface WorkerConfiguration {
   executable: string;
   mcpScript: string;
   workerPrompt: string;
+  workerProfileSource?: { projectId: string } | null;
   workerPromptVersion?: string;
   sandbox?: string;
   timeoutMs?: number;
   ticket: string;
+  workLink?: WorkLink | null;
   brief: string;
   project: Project | null;
   environment?: EnvironmentEvidence | null;
@@ -41,16 +45,31 @@ const configShape = ajv.compile<WorkerConfiguration>({
     "brief",
   ],
   properties: {
+    globalCapacityDir: { type: "string" },
     taskId: { type: "string" },
     runId: { type: "string" },
     stateDir: { type: "string" },
     worktree: { type: "string" },
     executable: { type: "string" },
     mcpScript: { type: "string" },
+    workerProfileSource: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          required: ["projectId"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,63}$" },
+          },
+        },
+      ],
+    },
     workerPrompt: { type: "string" },
     sandbox: { type: "string" },
     timeoutMs: { type: "number" },
     ticket: { type: "string" },
+    workLink: workLinkSchema,
     brief: { type: "string" },
     project: { type: ["object", "null"] },
     environment: { type: ["object", "null"] },
@@ -61,6 +80,14 @@ const configShape = ajv.compile<WorkerConfiguration>({
 export function parseWorkerConfiguration(value: unknown): WorkerConfiguration {
   if (!configShape(value))
     throw new Error("Malformed worker runner configuration.");
+  validateWorkLink(value.workLink);
+  if (
+    value.workerProfileSource &&
+    value.workerProfileSource.projectId !== value.project?.id
+  )
+    throw new Error(
+      "Worker profile project does not match the native task project.",
+    );
   return value;
 }
 export interface NativeThread {
@@ -194,9 +221,7 @@ export function parseWorkerResult(
     method === "turn/steer" &&
     (typeof value.turnId !== "string" || !value.turnId)
   )
-    throw new Error(
-      "Native preparation steering did not acknowledge its turn identity.",
-    );
+    throw new Error("Native steering did not acknowledge its turn identity.");
   return {
     turnId: typeof value.turnId === "string" ? value.turnId : undefined,
     account: isRecord(value.account)

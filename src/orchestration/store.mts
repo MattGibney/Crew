@@ -1,3 +1,10 @@
+import {
+  validateWorkLink,
+  workLinkFromTicket,
+  retainedWorkLink,
+  sameWorkLink,
+  type WorkLink,
+} from "../shared/tracking.mjs";
 import { text, identifier } from "./task-fields.mjs";
 import {
   currentAssignment,
@@ -76,13 +83,15 @@ export async function createTask(
   dir: string,
   {
     requestId,
-    ticket,
+    ticket = "",
+    workLink: requestedLink,
     brief,
     projectId = null,
     repositoryId = null,
   }: {
     requestId: string;
-    ticket: string;
+    ticket?: string;
+    workLink?: WorkLink | null;
     brief: string;
     projectId?: string | null;
     repositoryId?: string | null;
@@ -95,7 +104,10 @@ export async function createTask(
     )
       throw new Error(`Invalid ${name}`);
   identifier(requestId);
-  text(ticket, "ticket", 120);
+  if (ticket) text(ticket, "ticket", 500);
+  const workLink = validateWorkLink(
+    requestedLink === undefined ? workLinkFromTicket(ticket) : requestedLink,
+  );
   text(brief, "brief");
   return withStateLock(dir, ".schedule.lock", async () => {
     const retired = await fs
@@ -109,6 +121,7 @@ export async function createTask(
     if (existing) {
       if (
         existing.ticket !== ticket ||
+        !sameWorkLink(retainedWorkLink(existing), workLink) ||
         existing.brief !== brief ||
         (existing.projectId || null) !== projectId ||
         (existing.repositoryId || null) !== repositoryId
@@ -130,6 +143,7 @@ export async function createTask(
       const task: TaskRecord = {
         id: requestId,
         ticket,
+        workLink,
         brief,
         projectId,
         repositoryId,
@@ -162,6 +176,7 @@ export async function updateTask(
       const identity = {
         id: task.id,
         ticket: task.ticket,
+        workLink: JSON.stringify(task.workLink),
         brief: task.brief,
         projectId: task.projectId,
         repositoryId: task.repositoryId,
@@ -177,6 +192,7 @@ export async function updateTask(
         !next ||
         next.id !== identity.id ||
         next.ticket !== identity.ticket ||
+        JSON.stringify(next.workLink) !== identity.workLink ||
         next.brief !== identity.brief ||
         next.projectId !== identity.projectId ||
         next.repositoryId !== identity.repositoryId ||

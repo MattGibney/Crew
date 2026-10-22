@@ -1,3 +1,5 @@
+import { createRunnerDirections } from "./runner-directions.mjs";
+import { readSavedWorkerProfile } from "../manager/instructions/worker-profile.mjs";
 import { createRunnerPreparation } from "./runner-preparation.mjs";
 import { createRunnerControl } from "./runner-control.mjs";
 import { createWorkerPeer } from "./worker-peer.mjs";
@@ -25,7 +27,10 @@ import {
   OwnedProcessTree,
   snapshotProcesses,
 } from "../processes/ownership.mjs";
-import { buildWorkerInstructions } from "../manager/instructions/settings.mjs";
+import {
+  buildWorkerInstructions,
+  promptSnapshot,
+} from "../manager/instructions/settings.mjs";
 import { waitOwnedNatural } from "../processes/cooperative.mjs";
 import {
   recordWorkerRequest,
@@ -51,14 +56,33 @@ await atomic("started.json", {
   at: new Date().toISOString(),
 });
 const finalFile = path.join(runDir, "final.txt");
-const fixturePrompt = `${buildWorkerInstructions({ ...config, project: config.project || undefined, environment: config.environment || undefined, modelSelection: config.modelSelection || undefined })}
-Disposable fixture acceptance procedure (task data): Inspect only this fixture worktree. Run node importing ./src/totals.mjs and print JSON {emptyActual:sum([]),sumActual:sum([1,2,3])}. Verify the Git root and tracked files with real commands. In the result report's evidence array include one JSON string {"emptyActual":NUMBER,"sumActual":NUMBER,"emptyExpected":NUMBER,"sumExpected":NUMBER,"finding":"initial_value_one"}. Expected additive totals are 0 and 6 unless the relayed answer explicitly selects a base fee of 1 (then 1 and 7). Explain the observed difference in the result. The controller independently checks these fixture values.`;
-const repositoryPrompt = buildWorkerInstructions({
-  ...config,
-  project: config.project || undefined,
-  environment: config.environment || undefined,
-  modelSelection: config.modelSelection || undefined,
-});
+const fixtureProcedure = `Disposable fixture acceptance procedure (task data): Inspect only this fixture worktree. Run node importing ./src/totals.mjs and print JSON {emptyActual:sum([]),sumActual:sum([1,2,3])}. Verify the Git root and tracked files with real commands. In the result report's evidence array include one JSON string {"emptyActual":NUMBER,"sumActual":NUMBER,"emptyExpected":NUMBER,"sumExpected":NUMBER,"finding":"initial_value_one"}. Expected additive totals are 0 and 6 unless the relayed answer explicitly selects a base fee of 1 (then 1 and 7). Explain the observed difference in the result. The controller independently checks these fixture values.`;
+async function currentWorkerProfile(boundary: string) {
+  const saved = config.workerProfileSource
+    ? await readSavedWorkerProfile(
+        config.stateDir,
+        config.workerProfileSource.projectId,
+      )
+    : promptSnapshot(config.workerPrompt); // standalone transport fixture compatibility
+  await appendFile(
+    path.join(runDir, "prompt-consumptions.jsonl"),
+    JSON.stringify({
+      taskId: config.taskId,
+      runId: config.runId,
+      projectId: config.project?.id,
+      boundary,
+      at: new Date().toISOString(),
+      source: config.workerProfileSource
+        ? "saved-project-settings"
+        : "standalone-config",
+      saved,
+    }) + "\n",
+    { mode: 0o600 },
+  );
+  return saved;
+}
+const profileContext = (text: string) =>
+  `Current saved Crew worker profile for this project. This text supersedes earlier Crew worker profile text in this retained conversation:\n${text}`;
 const selectedModel = config.modelSelection?.model || null;
 let modelWrites = Promise.resolve();
 const modelEvidence = (
@@ -83,8 +107,6 @@ const modelEvidence = (
   );
   return modelWrites;
 };
-const prompt =
-  config.project?.mode === "repository" ? repositoryPrompt : fixturePrompt;
 let modelTurnAcknowledged = false,
   modelEventBytes = 0;
 const pendingModelEvents: WorkerNativeMessage[] = [];
@@ -150,10 +172,36 @@ const observePreparation = createRunnerPreparation({
       clientUserMessageId: requestId,
       input: [{ type: "text", text }],
     }),
+  prepareText: async (text) =>
+    config.workerProfileSource
+      ? `${profileContext((await currentWorkerProfile("preparation")).text)}\n\n${text}`
+      : text,
   onPreparing: () => {
     preparationActive = true;
     clearTimeout(timeout);
   },
+});
+const directions = createRunnerDirections({
+  prepareText: async (text) =>
+    config.workerProfileSource
+      ? `${profileContext((await currentWorkerProfile("direction")).text)}\n\n${text}`
+      : text,
+  globalCapacityDir: config.globalCapacityDir,
+  ...requestContext(),
+  snapshot: () => ({
+    threadId,
+    turnId,
+    acknowledged: modelTurnAcknowledged && !turnStartPending,
+    ending:
+      ending || Boolean(nativeTurnStatus) || Boolean(currentStopRequest()),
+  }),
+  steer: ({ threadId, expectedTurnId, requestId, text }) =>
+    rpc("turn/steer", {
+      threadId,
+      expectedTurnId,
+      clientUserMessageId: requestId,
+      input: [{ type: "text", text }],
+    }),
 });
 const runnerControl = createRunnerControl({
   runDir,
@@ -167,6 +215,7 @@ const runnerControl = createRunnerControl({
   finish,
   capture,
   observePreparation,
+  observeDirections: directions.observe,
   onCooperative: () => clearTimeout(timeout),
   onError: (message) => {
     errorMessage = errorMessage || message;
@@ -520,6 +569,22 @@ const bootstrap = (async () => {
       await finish();
       return;
     }
+    const savedProfile = await currentWorkerProfile("turn/start");
+    const instructions = buildWorkerInstructions({
+      ...config,
+      workerPrompt: savedProfile.text,
+      project: config.project || undefined,
+      environment: config.environment || undefined,
+      modelSelection: config.modelSelection || undefined,
+    });
+    const prompt =
+      config.project?.mode === "repository"
+        ? instructions
+        : `${instructions}\n${fixtureProcedure}`;
+    if (ending || control.request) {
+      await finish();
+      return;
+    }
     turnStartPending = true;
     const result = await rpc("turn/start", {
       threadId,
@@ -660,6 +725,7 @@ else if (tree) {
 if (control.stopPromise && control.stopPromise !== observedStop)
   ownership = await control.stopPromise;
 peer.rejectPending();
+await directions.drain();
 await bootstrap;
 await peer.drain();
 await writes;

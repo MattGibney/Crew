@@ -213,6 +213,7 @@ const controller = await createController({
   project,
   workerPrompt,
   getWorkerPrompt: () => prompts.snapshot("worker"),
+  workerProfileSource: { projectId: project.id },
   globalCapacity: process.env.CREW_GLOBAL_CAPACITY_DIR
     ? { dir: process.env.CREW_GLOBAL_CAPACITY_DIR }
     : null,
@@ -474,21 +475,44 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "PUT") {
       if (req.url === "/api/settings/manager-schedules") {
         await managerSchedules.save(rawInput);
+        broadcast({ type: "settings-invalidated", projectId: project.id });
         return send(200, await settingsView());
       }
       if (req.url === "/api/settings/worker-environment") {
         const saved = await environmentSettings.save(rawInput);
         project.worker.environment = structuredClone(saved.environment);
+        broadcast({ type: "settings-invalidated", projectId: project.id });
         return send(200, await settingsView());
       }
       if (req.url === "/api/settings/manager-profile") {
         await settingsSave.profile(rawInput);
+        broadcast({ type: "settings-invalidated", projectId: project.id });
         return send(200, await settingsView());
       }
       if (req.url !== "/api/settings/prompts")
         return send(404, { error: "Not found." });
-      await settingsSave.prompts(rawInput);
-      return send(200, await settingsView());
+      const savedPrompts = await settingsSave.prompts(rawInput);
+      broadcast({ type: "settings-invalidated", projectId: project.id });
+      const current = await settingsView();
+      // A later save may finish before this response. Acknowledge this write's
+      // exact versions so newer drafts never adopt someone else's base version.
+      return send(200, {
+        ...current,
+        manager: {
+          ...current.manager,
+          saved: {
+            text: savedPrompts.manager.text,
+            version: savedPrompts.manager.version,
+          },
+        },
+        worker: {
+          ...current.worker,
+          saved: {
+            text: savedPrompts.worker.text,
+            version: savedPrompts.worker.version,
+          },
+        },
+      });
     }
     if (req.url === "/api/archived-worker-action")
       return send(

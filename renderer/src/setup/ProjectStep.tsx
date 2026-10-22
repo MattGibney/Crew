@@ -8,7 +8,7 @@ export function ProjectStep({ setup }: SetupProps) {
     <Panel
       data-step="3"
       title="Your project"
-      description="Choose its folder. Crew finds the project details, starting branch and available Linear teams, then saves your settings."
+      description="Choose its folder. Crew finds the project details, starting branch and optional tracking choices, then saves your settings."
     >
       <form
         aria-label="Project configuration"

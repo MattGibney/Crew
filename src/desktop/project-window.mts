@@ -1,7 +1,9 @@
-import { BrowserWindow, shell, session } from "electron";
+import { BrowserWindow, Menu, session } from "electron";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { isAppURL, isExternalHTTPS, permitsAudio } from "./lifecycle.mjs";
+import { isAppURL, permitsAudio } from "./lifecycle.mjs";
+import { webLink } from "../shared/web-links.mjs";
+import { openWebLink } from "./external-links.mjs";
 import { projectWindowChrome } from "./window-chrome.mjs";
 
 /** Owns one disposable renderer and its project partition. Controller ownership
@@ -85,19 +87,41 @@ export function createProjectWindow({
     });
     window = next;
     next.webContents.setWindowOpenHandler((details) => {
-      // Only the trusted local UI may send an HTTPS connector/login link to the OS browser.
+      // Only the trusted project UI may send a validated web link to the external browser.
       if (
         getOrigin() &&
         isAppURL(next.webContents.getURL(), getOrigin()) &&
-        isExternalHTTPS(details.url)
+        webLink(details.url)
       )
-        void shell
-          .openExternal(details.url)
-          .catch((error) => console.error(safe(error)));
+        void openWebLink(details.url).catch((error) =>
+          console.error(safe(error)),
+        );
       return { action: "deny" };
     });
     next.webContents.on("will-navigate", (event, url) => {
-      if (!getOrigin() || !isAppURL(url, getOrigin())) event.preventDefault();
+      if (!getOrigin() || !isAppURL(url, getOrigin())) {
+        event.preventDefault();
+        if (isAppURL(next.webContents.getURL(), getOrigin()) && webLink(url))
+          void openWebLink(url).catch((error) => console.error(safe(error)));
+      }
+    });
+    // Chromium in Electron supplies no default edit context menu. Keep native
+    // editing roles so undo/cut/paste/shortcuts target the focused field normally.
+    next.webContents.on("context-menu", (_event, params) => {
+      if (
+        !isAppURL(next.webContents.getURL(), getOrigin()) ||
+        !params.isEditable
+      )
+        return;
+      Menu.buildFromTemplate([
+        { role: "undo", enabled: params.editFlags.canUndo },
+        { role: "redo", enabled: params.editFlags.canRedo },
+        { type: "separator" },
+        { role: "cut", enabled: params.editFlags.canCut },
+        { role: "copy", enabled: params.editFlags.canCopy },
+        { role: "paste", enabled: params.editFlags.canPaste },
+        { role: "selectAll", enabled: params.editFlags.canSelectAll },
+      ]).popup({ window: next });
     });
     next.webContents.on("will-attach-webview", (event) =>
       event.preventDefault(),

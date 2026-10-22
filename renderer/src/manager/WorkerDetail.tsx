@@ -1,3 +1,4 @@
+import { WorkerReference } from "./worker/WorkerReference.js";
 import { WorkerNotes } from "./worker/WorkerNotes.js";
 import { WorkerLinks } from "./worker/WorkerLinks.js";
 import { WorkerOverview } from "./worker/WorkerOverview.js";
@@ -111,9 +112,11 @@ export function WorkerDetail({
             Back to manager
           </Button>
           <span className="hidden h-4 border-l sm:block" aria-hidden="true" />
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {assignment.ticket || task.id}
-          </span>
+          <WorkerReference
+            assignment={assignment}
+            fallback={task.id}
+            className="text-xs text-muted-foreground"
+          />
           <h1
             className="min-w-0 flex-1 truncate text-sm font-semibold"
             title={assignment.brief?.trim().split("\n")[0]}

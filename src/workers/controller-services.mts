@@ -13,11 +13,13 @@ export type NativeConnectionLive = (
 ) => Promise<boolean>;
 export type ActivateFollowup = (task: TaskRecord) => Promise<TaskRecord>;
 export interface ControllerServices {
+  capacityDir?: string;
   stateDir: string;
   sourceDir: string;
   executable: string;
   project: Project | null;
   workerPrompt: string;
+  workerProfileSource: { projectId: string } | null;
   getWorkerPrompt: (() => Promise<PromptSnapshot>) | null;
   capacity: Awaited<ReturnType<typeof createGlobalCapacity>>;
   launches: Map<string, Promise<void>>;

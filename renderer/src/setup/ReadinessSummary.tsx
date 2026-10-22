@@ -1,3 +1,4 @@
+import { trackingPreferences } from "../../../src/shared/tracking.mjs";
 import type { SetupProps } from "../contracts/setup.js";
 
 import { ArrowRight } from "lucide-react";
@@ -45,9 +46,23 @@ export function ReadinessSummary({
               value={Array.isArray(value) ? undefined : value}
             />
           ))}
-        {checks.tools?.linear && (
-          <Status name="Linear access" value={checks.tools.linear} />
-        )}
+        {setup.draft &&
+          trackingPreferences(setup.draft.project).providers.includes(
+            "linear",
+          ) &&
+          checks.tools?.linear && (
+            <Status name="Linear access" value={checks.tools.linear} />
+          )}
+        {setup.draft &&
+          trackingPreferences(setup.draft.project).providers.includes(
+            "github",
+          ) &&
+          checks.tools?.github && (
+            <Status
+              name="GitHub capability (not verified access)"
+              value={checks.tools.github}
+            />
+          )}
         <Status
           name="Microphone"
           value={{
@@ -82,8 +97,8 @@ export function ReadinessSummary({
       <p className="text-sm leading-relaxed">
         You can open the manager for setup discussion even with an incomplete
         project once local runtime and ChatGPT are available. Assigning work
-        requires a selected folder, starting branch, Linear team and an agreed
-        ticket. No task starts on opening.
+        requires a selected folder, starting branch and an agreed assignment.
+        External tracking is optional. No task starts on opening.
       </p>
       <Actions>
         <SetupButton

@@ -53,6 +53,7 @@ export function recordHistory(
           runId: null,
           assignmentId: assignment.id,
           ticket: assignment.ticket,
+          workLink: assignment.workLink,
           userDecision: assignment.userDecision,
         },
       );

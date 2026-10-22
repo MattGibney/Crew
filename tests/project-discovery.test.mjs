@@ -28,7 +28,7 @@ test('discovery returns loader-compatible settings, leaves mappings/ref unknown,
   assert.deepEqual(proposal.config.project.linear, { teamId: null, projectId: null, teamKey: null });
   assert.equal(proposal.config.project.repositories[0].baseRef, null);
   assert.equal(proposal.config.project.worker.sandbox, 'read-only');
-  assert.match(proposal.managerDraft, /never as permission/); assert.match(proposal.workerDraft, /Do not create other workers/);
+  assert.match(proposal.managerDraft, /never as permission/); assert.match(proposal.managerDraft, /Tracking is optional/); assert.match(proposal.managerDraft, /observed head commit/); assert.match(proposal.workerDraft, /optional confirmed external issue/); assert.match(proposal.workerDraft, /Do not create other workers/);
   const loaded = await loadAppConfig({ root: f.root, configPath: join(draftDir, 'config.proposal.json'), env: f.env, checkRuntime: false });
   assert.equal(loaded.project.readiness.ready, false);
   assert.equal(loaded.project.repositories[0].path, await realpath(f.repo));

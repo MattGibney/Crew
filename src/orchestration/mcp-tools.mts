@@ -1,3 +1,4 @@
+import { workLinkSchema } from "../shared/tracking.mjs";
 import type { ToolDefinition, ToolSchema } from "./mcp-contracts.mjs";
 export function orchestrationTools(
   role: string,
@@ -114,7 +115,15 @@ export function orchestrationTools(
             inputSchema: object(
               {
                 requestId: taskIdentifier,
-                ticket: string("Optional ticket or project-work label", 120),
+                ticket: string(
+                  "Optional legacy issue label; omit for local work",
+                  500,
+                ),
+                workLink: {
+                  ...workLinkSchema,
+                  description:
+                    "Optional canonical issue identity. No link means local task; never invent an issue. Provider preference is a default for new work, never a change to retained linkage.",
+                },
                 brief: string("Initial direction for the worker"),
                 repositoryId: string("Exact configured repository ID", 80),
               },
@@ -128,16 +137,21 @@ export function orchestrationTools(
           {
             name: "assign_worker_followup",
             description:
-              "Send new direction to the same retained worker and Codex conversation. Busy workers queue direction for supported serialized delivery. Completed, paused or questioning workers can receive fresh direction. Files, Git HEAD, prior scope and changed configuration do not require Crew review or adoption. Native Codex retains its normal execution policy and approvals. Reuse requestId for exact retries; queued is not delivered. Archive/disposal and missing resources remain truthful availability conditions.",
+              "Send new direction to the same retained worker and Codex conversation. Active workers receive prompt native turn/steer input in the same run; idle workers continue their retained conversation. Completed, paused or questioning workers can receive fresh direction. Files, Git HEAD, prior scope and changed configuration do not require Crew review or adoption. Native Codex retains its normal execution policy and approvals. Reuse requestId for exact retries; pending is not acknowledged; native acceptance is not proof the worker acted on content. Uncertain attempts are not automatically replayed. Archive/disposal and missing resources remain truthful availability conditions.",
             inputSchema: object(
               {
                 taskId: taskIdentifier,
                 requestId: taskIdentifier,
                 brief: string("Manager direction for this worker"),
                 ticket: string(
-                  "Optional ticket label; prior ticket is retained by default",
-                  120,
+                  "Optional legacy label; retains prior by default",
+                  500,
                 ),
+                workLink: {
+                  ...workLinkSchema,
+                  description:
+                    "Omit to retain previous linkage; null explicitly unlinks this new assignment only. Earlier task/assignment identities remain immutable.",
+                },
                 expectedRunId: {
                   type: ["string", "null"],
                   maxLength: 160,

@@ -66,6 +66,7 @@ export interface Project {
     [key: string]: unknown;
   };
   context?: string;
+  tracking?: import("../shared/tracking.mjs").TrackingPreferences;
   linear?: {
     teamId?: string | null;
     projectId?: string | null;
@@ -97,6 +98,7 @@ export interface TaskAttention {
 export interface TaskHistory {
   instructionVersion?: string;
   ticket?: string;
+  workLink?: import("../shared/tracking.mjs").WorkLink | null;
   userDecision?: string | null;
   worktreeFingerprint?: string;
   assignmentId?: string | null;
@@ -158,6 +160,7 @@ export interface TaskRecord {
   };
   id: string;
   ticket: string;
+  workLink?: import("../shared/tracking.mjs").WorkLink | null;
   brief: string;
   projectId: string | null;
   repositoryId: string | null;
@@ -332,9 +335,12 @@ export interface AssignmentAdoption {
   userDecision: string;
 }
 export interface WorkerAssignment {
+  delivery?: DirectionDelivery;
+  deliveryHistory?: DirectionDelivery[];
   stopReason?: string;
   id: string;
   ticket: string;
+  workLink?: import("../shared/tracking.mjs").WorkLink | null;
   brief: string;
   status: string;
   createdAt: string;
@@ -344,6 +350,7 @@ export interface WorkerAssignment {
   expectedAssignmentId?: string | null;
   reviewedWorktreeFingerprint?: string;
   requestTicket?: string | null;
+  requestWorkLink?: import("../shared/tracking.mjs").WorkLink | null;
   requestMetadata?: Record<string, unknown>;
   enqueuedRunId?: string | null;
   enqueuedAssignmentId?: string;
@@ -352,6 +359,20 @@ export interface WorkerAssignment {
   promptSnapshot?: PromptSnapshot;
   archivedQuestions?: TaskRecord["question"][];
   adoptions?: AssignmentAdoption[];
+}
+export interface DirectionDelivery {
+  state:
+    | "pending"
+    | "attempted"
+    | "acknowledged"
+    | "uncertain"
+    | "rejected"
+    | "failed";
+  at: string;
+  runId?: string;
+  threadId?: string;
+  turnId?: string;
+  error?: string;
 }
 export interface WorkflowEvent {
   progressPercent?: number | null;

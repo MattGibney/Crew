@@ -10,7 +10,7 @@ The default behavior includes communication, delegation, scope, reporting and th
 
 Manager saves remain pending until **Restart manager**. Saving never hot-applies a prompt or starts a turn. Settings shows a plain Start/Restart notice when saved instructions are not active; internal version checks remain in place without exposing hash labels. Restart resumes the saved native chat with the saved instructions; it retains conversation history, project tasks and workers. Stop followed by an explicit Start also applies saved instructions. Reloading the window or controller preserves the retained manager instructions and stopped intent; it does not silently activate a newer saved manager prompt.
 
-Worker changes affect the next worker direction or native launch, including a retained worker continuation. Earlier run text/version snapshots remain in history. Saving does not interrupt an active turn or create work.
+Saved worker instructions are the source whenever Crew next prepares a prompt: launch, retained continuation/follow-up, or explicitly requested preparation. Crew rereads saved state immediately before native turn delivery. Earlier text/version snapshots are historical provenance only. Saving does not steer, interrupt or create work, and Crew cannot reload invisible model/tool iterations within a turn it has already supplied.
 
 Upgrading from 0.14 migrates exact, untouched shipped manager and worker defaults in saved project profiles to the current facilitation instructions. Each role upgrades independently; customized instruction text stays byte-for-byte intact. The saved settings retain the old default text/version as upgrade history. An explicit later save of an old default is treated as an intentional custom edit.
 
@@ -81,3 +81,21 @@ The existing ten-minute commitment review appears as **Review commitments**. It 
 Only a running, idle manager with no active/connecting call or pending approval is eligible. Update preparation and project/global holds defer schedules. Missed times are skipped; Crew does not wake a stopped manager or replay a backlog. The settings list shows last submission, next check, submitted/deferred/no-changes/error status and any error. “Submitted” means native delivery was acknowledged, not that the agent finished the task. Status refreshes while this page is visible. A daily time follows its configured time zone through daylight-saving changes; a nonexistent spring-forward time skips that day's slot, and a repeated fall-back time runs once.
 
 Scheduled prompts and routine background commentary do not appear in the conversation. A manager requiring a human decision can explicitly call the existing `request_attention` tool; that validated question is shown as a manager message and retains normal attention signaling. Nothing automatically opens voice or a microphone.
+
+## Saved profile refresh
+
+Settings now follows saved changes made through another Settings API client while the app remains open. Clean manager and worker instruction views refresh automatically; reopening Settings and reconnecting the existing event stream also fetch current saved data. A failed refresh keeps the displayed values and drafts, with **Reload settings** to retry.
+
+Unsaved edits are preserved when a saved version changes elsewhere. The editor shows a conflict and disables saving that stale draft; copy the draft before cancelling to load current instructions. Edits typed while a save is pending also remain unsaved. Refreshing saved text does not apply manager instructions to an active session: use explicit Start/Restart. Worker run snapshots remain historical provenance; the next Crew-owned worker prompt reads current saved Settings. Saving alone does not steer or interrupt the current input.
+
+Developer details and disposable validation commands are in [the local refresh ticket](../tickets/settings-profile-refresh.md).
+
+## Current worker instructions at delivery boundaries
+
+The saved project worker profile is the source for the next worker prompt Crew prepares. This includes workers queued before an edit, a new launch, a retained continuation/follow-up, and text supplied for an explicitly requested update/Quit preparation. Crew reads saved state again immediately before native turn delivery, so an edit made during startup can be used without restarting the app. The retained conversation, working directory and normal Codex permissions stay in place.
+
+Saving alone sends nothing to the worker and does not steer or interrupt its current turn. Input already supplied to Codex may finish with those instructions. Crew cannot observe or replace individual model requests, tool continuations or internal retries inside that native turn. A pre-upgrade detached supervisor likewise retains its running code until its next explicit run.
+
+Historical task/run prompt copies describe earlier preparation; they are not the source for future prompts. Each new run binds the canonical project profile and records the exact profile version prepared at the native boundary. A missing, malformed, unreadable or foreign-project document blocks the new delivery with recovery guidance. Restore access or a valid saved document, then explicitly retry; Crew does not substitute an older copy, reset custom Settings or replay a failed preparation automatically.
+
+On first initialization, legacy configured instructions become saved project state. A small identity-only marker prevents silently recreating older startup instructions after that saved file has been lost. The marker contains no additional prompt copy. Standalone transport test fixtures without a product profile binding retain their explicit synthetic configuration source; every product HTTP controller binds saved project state.

@@ -23,6 +23,11 @@
     "worker": {
       "sandbox": "read-only",
       "timeoutMs": 300000
+    },
+    "tracking": {
+      "providers": [],
+      "preferred": "none",
+      "githubRepository": null
     }
   }
 }

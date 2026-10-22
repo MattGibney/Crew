@@ -1,3 +1,4 @@
+import { createSettingsRefresh } from "./settings-refresh.js";
 import { useManagerConnection } from "./hooks/useManagerConnection.js";
 import { useManagerSounds } from "./hooks/useManagerSounds.js";
 import { useManagerRequests } from "./hooks/useManagerRequests.js";
@@ -14,7 +15,7 @@ import type {
   ManagerProfile,
   WorkerEnvironmentConfig,
 } from "../contracts/manager.js";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, errorText } from "./api.js";
 import { chooseVoice, EMPTY_WORK } from "./state.js";
 import { resolveManagerVoice } from "./manager-voice.js";
@@ -29,6 +30,28 @@ export function useCrewManager() {
   const [managerLifecycle, setManagerLifecycle] = useState<ManagerLifecycle>({
     state: "loading",
   });
+  const [settingsRefresh] = useState(() =>
+    createSettingsRefresh(
+      () => api("settings", {}, { method: "GET" }),
+      (value) => {
+        setSettings(value);
+        setManagerLifecycle(value.managerLifecycle);
+        setSettingsError("");
+      },
+      (failure) =>
+        setSettingsError(
+          `Could not refresh settings: ${errorText(failure)}. Your displayed values and drafts are retained.`,
+        ),
+    ),
+  );
+  useEffect(() => {
+    settingsRefresh.activate();
+    return () => settingsRefresh.dispose();
+  }, [settingsRefresh]);
+  const loadSettings = useCallback(
+    () => settingsRefresh.load(),
+    [settingsRefresh],
+  );
   const lifecycleLock = useRef(false);
   const managerEnabled = managerLifecycle.state === "running";
   const [prepared, setPrepared] = useState(false),
@@ -92,7 +115,7 @@ export function useCrewManager() {
           const result = await api("settings/manager-profile", input, {
             method: "PUT",
           });
-          setSettings(result);
+          void loadSettings().catch(() => {});
           return result.managerProfile;
         },
       });
@@ -111,7 +134,7 @@ export function useCrewManager() {
     } finally {
       setVoiceLoading(false);
     }
-  }, []);
+  }, [loadSettings]);
   const saveManagerProfile = useCallback(
     async (
       patch: Partial<ManagerProfile> | string | null,
@@ -125,13 +148,13 @@ export function useCrewManager() {
         },
         { method: "PUT" },
       );
-      setSettings(result);
+      void loadSettings().catch(() => {});
       if (catalog)
         setSelectedVoice(chooseVoice(catalog, result.managerProfile.voice));
       setVoiceNotice("");
       return result;
     },
-    [catalog],
+    [catalog, loadSettings],
   );
   useManagerConnection({
     voice,
@@ -143,6 +166,9 @@ export function useCrewManager() {
     setWork,
     setManagerLifecycle,
     setSettings,
+    loadSettings,
+    bindSettingsProject: settingsRefresh.bind,
+    invalidateSettings: settingsRefresh.invalidate,
     setOrchestration,
     setWorkerApprovals,
     setWorkNotice,
@@ -184,40 +210,26 @@ export function useCrewManager() {
       setPrepared(true);
       setAccount(`Signed in with ChatGPT · ${result.plan || "subscription"}.`);
       if (result.state) setWork(result.state);
-      const refreshed = await api("settings", {}, { method: "GET" });
-      setSettings(refreshed);
-      setManagerLifecycle(refreshed.managerLifecycle);
-      setSettingsError("");
+      await loadSettings();
       await loadVoices();
     } catch (failure) {
       setPrepared(false);
       showError(failure);
     }
-  }, [loadVoices, showError]);
-  const loadSettings = useCallback(async () => {
-    try {
-      const result = await api("settings", {}, { method: "GET" });
-      setSettings(result);
-      setManagerLifecycle(result.managerLifecycle);
-      setSettingsError("");
-      return result;
-    } catch (failure) {
-      setSettingsError(errorText(failure));
-      throw failure;
-    }
-  }, []);
+  }, [loadSettings, loadVoices, showError]);
   const savePrompt = useCallback(
     async (
       role: "manager" | "worker",
       text: string,
       expectedVersion: string,
     ) => {
-      await api(
+      const saved = await api(
         "settings/prompts",
         { role, text, expectedVersion },
         { method: "PUT" },
       );
-      return await loadSettings();
+      void loadSettings().catch(() => {});
+      return saved;
     },
     [loadSettings],
   );
@@ -231,10 +243,10 @@ export function useCrewManager() {
         { environment, expectedRevision },
         { method: "PUT" },
       );
-      setSettings(result);
+      void loadSettings().catch(() => {});
       return result;
     },
-    [],
+    [loadSettings],
   );
   const saveManagerSchedules = useCallback(
     async (
@@ -246,10 +258,10 @@ export function useCrewManager() {
         { schedules, expectedRevision },
         { method: "PUT" },
       );
-      setSettings(result);
+      void loadSettings().catch(() => {});
       return result;
     },
-    [],
+    [loadSettings],
   );
   const changeManagerLifecycle = useCallback(
     async (action: ManagerAction) => {

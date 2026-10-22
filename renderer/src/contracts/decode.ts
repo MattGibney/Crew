@@ -1,3 +1,4 @@
+import { workLinkSchema } from "../../../src/shared/tracking.mjs";
 import { compile, errorsText, type Schema } from "./schema.js";
 import type {
   ApiPath,
@@ -81,7 +82,11 @@ const directHook = object(
 // Backend execution plans retain null for phases that are not configured.
 const projectHook = nullable(
   object(
-    { command: string, source: environmentSource, timeoutMs: { type: "number" } },
+    {
+      command: string,
+      source: environmentSource,
+      timeoutMs: { type: "number" },
+    },
     ["command", "source", "timeoutMs"],
   ),
 );
@@ -133,6 +138,8 @@ const workSchema = object(
 const taskSchema = object(
   {
     id: string,
+    ticket: string,
+    workLink: workLinkSchema,
     status: string,
     runId: { type: ["string", "null"] },
     attention: array(
@@ -149,7 +156,19 @@ const taskSchema = object(
         {
           id: string,
           ticket: string,
+          workLink: workLinkSchema,
           brief: string,
+          delivery: object(
+            {
+              state: string,
+              at: string,
+              error: string,
+              runId: string,
+              threadId: string,
+              turnId: string,
+            },
+            ["state"],
+          ),
           status: string,
           result: object({ message: string }),
           runIds: array(string),
@@ -197,6 +216,10 @@ const profileSchema = object(
 const prompt = object({ text: string, version: string }, ["text", "version"]);
 const settingsSchema = object(
   {
+    settingsRevision: object(
+      { source: string, sequence: { type: "integer", minimum: 1 } },
+      ["source", "sequence"],
+    ),
     managerProfile: profileSchema,
     managerLifecycle: lifecycleSchema,
     manager: object({ saved: prompt }, ["saved"]),
@@ -401,6 +424,7 @@ export function decodeApi<P extends ApiPath>(
   return value;
 }
 export type ManagerEvent =
+  | { type: "settings-invalidated"; projectId: string }
   | { type: "update-state"; status: UpdateStatus }
   | { type: "work-state"; state: WorkState }
   | { type: "manager-lifecycle"; state: ManagerLifecycle }
@@ -411,6 +435,10 @@ export type ManagerEvent =
   | { type: "closed" };
 const eventValidator = compile<ManagerEvent>({
   oneOf: [
+    object({ type: { const: "settings-invalidated" }, projectId: string }, [
+      "type",
+      "projectId",
+    ]),
     object({ type: { const: "update-state" }, status: updateSchema }, [
       "type",
       "status",
@@ -473,6 +501,7 @@ export function decodeManagerEvent(value: unknown): ManagerEvent | null {
     throw new Error("Live event has no type.");
   if (
     ![
+      "settings-invalidated",
       "update-state",
       "work-state",
       "manager-lifecycle",

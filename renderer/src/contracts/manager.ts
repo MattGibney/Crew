@@ -125,6 +125,7 @@ export interface WorkerTask {
   runId?: string | null;
   status: string;
   ticket?: string;
+  workLink?: import("../../../src/shared/tracking.mjs").WorkLink | null;
   title?: string;
   brief?: string;
   projectId?: string;
@@ -188,6 +189,7 @@ export interface ManagerSchedules {
   schedules: ManagerSchedule[];
 }
 export interface SettingsState {
+  settingsRevision?: { source: string; sequence: number };
   managerSchedules?: ManagerSchedules;
   projectId?: string;
   projectName?: string;
@@ -358,8 +360,17 @@ export interface StorageLike {
 }
 
 export interface WorkerAssignment {
+  delivery?: {
+    state: string;
+    at?: string;
+    error?: string;
+    runId?: string;
+    threadId?: string;
+    turnId?: string;
+  };
   id: string;
   ticket?: string;
+  workLink?: import("../../../src/shared/tracking.mjs").WorkLink | null;
   brief?: string;
   status?: string;
   result?: { message?: string };

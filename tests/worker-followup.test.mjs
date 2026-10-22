@@ -46,9 +46,24 @@ test('manager directions accept advanced HEAD, different repository configuratio
  await f.followup('changed-config-direction','Continue in the existing conversation and current working directory.');const next=await f.active();assert.equal(next.threadId,original.threadId);assert.equal(next.worktree,original.worktree);assert.notEqual((await exec('git',['-C',next.worktree,'rev-parse','HEAD'])).stdout.trim(),original.baseCommit);await f.finish(next,{message:'Advanced HEAD and changed configuration accepted.'});const final=await f.completed();assert.equal(final.assignments.length,2);await assert.rejects(readFile(path.join(final.worktree,'.fixture/setup-count')),{code:'ENOENT'});assert.equal(await readFile(path.join(final.worktree,'committed.txt'),'utf8'),'Advanced worker history.\n');
 });
 
-test('busy directions remain truthfully queued until the native boundary and persisted directions resume after restart without a policy hold',async t=>{
- const f=await fixture(t),initial=await f.create();const queued=await f.followup('busy-manager-direction','Perform the next inspection.');await f.followup('second-busy-direction','Then inspect once more on the same conversation.');assert.equal(queued.task.assignments.at(-1).status,'queued');assert.deepEqual((await f.read()).assignments.slice(-2).map(a=>a.status),['queued','queued']);await f.tick();assert.equal((await f.read()).runId,initial.runId);assert.equal((await f.calls()).filter(c=>c.method==='turn/start').length,1,'accepted queue is not claimed as delivered');
- await f.finish(initial,{message:'First turn complete.'});const next=await f.active(initial.runId);assert.notEqual(next.runId,initial.runId);await f.finish(next,{message:'Busy direction complete.'});const third=await f.active(next.runId);assert.notEqual(third.runId,next.runId);await f.finish(third,{message:'Second busy direction complete.'});const completed=await f.completed();await f.stopController();const pending=await f.followup('restart-manager-direction','Continue this retained direction after reopening.');await f.restart();const restarted=await f.active();assert.notEqual(restarted.runId,completed.runId);assert.equal(restarted.threadId,initial.threadId);assert.equal(restarted.worktree,initial.worktree);await f.manager('assign_worker_followup',pending.args);assert.equal((await f.read()).assignments.length,4);await f.finish(restarted,{message:'Persisted direction complete.'});const final=await f.completed();assert.deepEqual(final.assignments.map(a=>a.status),['completed','completed','completed','completed'],JSON.stringify(final.assignments.map(a=>({id:a.id,status:a.status,runIds:a.runIds,result:a.result?.message}))));assert.deepEqual(final.assignments.map(a=>a.result.message),['First turn complete.','Busy direction complete.','Second busy direction complete.','Persisted direction complete.']);
+test('busy directions steer in order before completion and survive controller restart without duplicate turns',async t=>{
+ const f=await fixture(t),initial=await f.create();
+ await f.followup('busy-manager-direction','Perform the next inspection.');
+ await f.followup('second-busy-direction','Then inspect once more on the same conversation.');
+ const steered=await wait(f.read,x=>x.assignments.slice(-2).every(a=>a.delivery?.state==='acknowledged'),'ordered steering acknowledgement');
+ assert.equal(steered.runId,initial.runId);assert.equal(steered.threadId,initial.threadId);assert.equal(steered.worktree,initial.worktree);assert.equal(steered.currentAssignmentId,'initial');assert.equal(steered.status,'running');assert.equal(steered.result,undefined);
+ assert.deepEqual(steered.assignments.slice(-2).map(a=>a.status),['steered','steered']);
+ assert.ok(steered.reports.some(r=>r.reportId==='steer-busy-manager-direction'));
+ assert.ok(steered.reports.some(r=>r.reportId==='steer-second-busy-direction'));
+ let calls=await f.calls();assert.equal(calls.filter(c=>c.method==='turn/start').length,1);
+ assert.deepEqual(calls.filter(c=>c.method==='turn/steer').map(c=>c.params.clientUserMessageId),['busy-manager-direction','second-busy-direction']);
+ await f.stopController();
+ const pending=await f.followup('restart-manager-direction','Correct this still-active assignment while the controller is closed.');
+ await wait(f.read,x=>x.assignments.at(-1).delivery?.state==='acknowledged','independent supervisor steering');
+ await f.restart();await f.manager('assign_worker_followup',pending.args);await f.tick();
+ calls=await f.calls();assert.equal(calls.filter(c=>c.method==='turn/start').length,1);assert.equal(calls.filter(c=>c.method==='turn/steer').length,3);
+ await f.finish(initial,{message:'Original turn completed after all corrections.'});const completed=await f.completed();assert.equal(completed.runId,initial.runId);assert.equal(completed.assignments.length,4);assert.equal(completed.assignments[0].result.message,'Original turn completed after all corrections.');
+ await f.followup('idle-after-steering','Continue now that the original turn ended.');const resumed=await f.active(initial.runId);assert.equal(resumed.threadId,initial.threadId);await f.finish(resumed,{message:'Idle continuation complete.'});await f.completed();
 });
 
 test('new directions continue question, paused and failed workers without Crew approval or adoption',async t=>{
@@ -83,6 +98,18 @@ test('explicit lifecycle resume after completion creates fresh work while preser
  const request={taskId:f.taskId,actionId:'resume-completed-action',action:'resume',expectedRunId:completed.runId};await f.manager('worker_action',request);const resumed=await f.active(completed.runId);assert.equal(resumed.threadId,research.threadId);assert.equal(resumed.worktree,research.worktree);assert.equal(resumed.result,null,'old completed result is not projected as current execution');assert.notEqual(resumed.currentAssignmentId,completed.currentAssignmentId);assert.equal(store.currentAssignment(resumed).brief,store.currentAssignment(completed).brief);assert.deepEqual(resumed.assignments.slice(0,2),prior);await f.manager('worker_action',request);assert.equal((await f.read()).assignments.length,3,'exact lifecycle retry cannot create another assignment');await f.finish(resumed,{message:'Explicit resumed work complete.'});const final=await f.completed();assert.deepEqual(final.assignments.slice(0,2),prior);assert.equal(final.assignments.at(-1).result.message,'Explicit resumed work complete.');assert.equal(final.result.message,'Explicit resumed work complete.');assert.equal(await readFile(path.join(final.worktree,'implementation.txt'),'utf8'),'Retained implementation.\n');
 });
 
+test('GitHub-only and local assignments preserve linkage through actual dispatch, follow-up, preference change and controller restart',async t=>{
+ const f=await fixture(t),link={provider:'github',repository:'MattGibney/Crew',number:78,url:'https://github.com/MattGibney/Crew/issues/78'};
+ f.project.tracking={providers:['github'],preferred:'github',githubRepository:'MattGibney/Crew'};f.project.linear={teamId:null,teamKey:null,projectId:null};
+ await f.manager('submit_task',{requestId:f.taskId,repositoryId:'repo',brief:'Bounded synthetic issue-context assignment for Crew #78; no external writes.',workLink:link});
+ const first=await f.active();assert.deepEqual(first.workLink,link);assert.deepEqual(JSON.parse(await readFile(path.join(first.runDir,'config.json'),'utf8')).workLink,link);
+ await f.finish(first,{message:'Bounded linked fixture completed.'});const completed=await f.completed();await f.restart();
+ f.project.tracking={providers:['linear','github'],preferred:'linear',githubRepository:'MattGibney/Crew'};
+ await f.followup('github-linked-followup','Retain the selected GitHub issue after preference change.');const resumed=await f.active(first.runId);assert.deepEqual(store.currentAssignment(resumed).workLink,link);assert.deepEqual(JSON.parse(await readFile(path.join(resumed.runDir,'config.json'),'utf8')).workLink,link);assert.equal(resumed.threadId,first.threadId);assert.equal(resumed.worktree,first.worktree);
+ await f.finish(resumed,{message:'Linked continuation complete.'});await f.completed();
+ await f.followup('explicit-local-followup','Local assignment without an external tracker.',null,{workLink:null});const local=await f.active(resumed.runId);assert.equal(store.currentAssignment(local).workLink,null);assert.equal(store.currentAssignment(local).ticket,'');await f.finish(local,{message:'Local assignment complete.'});const final=await f.completed();assert.deepEqual(final.workLink,link);assert.equal(final.assignments[0].result.message,completed.result.message);
+});
+
 async function fixture(t){
  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'crew-followup-'))),repo=path.join(dir,'repo'),state=path.join(dir,'state'),gates=path.join(dir,'gates'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');
  await mkdir(repo);await mkdir(gates);
@@ -104,6 +131,7 @@ async function finishDecision(decision){if(decision.write)writeFileSync('impleme
 for await(const line of lines){const m=JSON.parse(line);if(m.id===undefined)continue;appendFileSync(log,JSON.stringify({...m,run,cwd:process.cwd()})+'\\n');if(!m.method){appendFileSync(log,JSON.stringify({method:'fixture/native-response',run,response:m.result})+'\\n');send({method:'serverRequest/resolved',params:{threadId,requestId:m.id}});if(pendingDecision)await finishDecision(pendingDecision);continue;}let result={};
 if(m.method==='account/read')result={account:{type:'chatgpt'}};
 if(m.method==='config/read')result={config:{sandbox_mode:'workspace-write',approval_policy:'on-request'}};
+if(m.method==='turn/steer'){result={turnId};await reportTask(state,task,run,{reportId:'steer-'+m.params.clientUserMessageId,kind:'progress',message:'Consumed manager correction: '+m.params.input[0].text});}
 if(m.method==='thread/start'||m.method==='thread/resume')result={thread:{id:threadId}};
 if(m.method==='thread/resume')send({method:'turn/completed',params:{threadId,turn:{id:'stale-prior-turn',status:'completed',items:[]}}});
 if(m.method==='turn/start'){

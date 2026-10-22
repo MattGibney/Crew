@@ -3,7 +3,7 @@ export function taskMarkdown(task: TaskRecord): string {
   const lines = [
     `# ${task.id}`,
     "",
-    `Ticket: ${task.ticket}`,
+    `Work: ${task.workLink?.url || task.ticket || `Local task ${task.id}`}`,
     `Status: ${task.status}`,
     `Revision: ${task.revision}`,
     "",
@@ -21,7 +21,7 @@ export function taskMarkdown(task: TaskRecord): string {
     lines.push("## Assignments", "");
     for (const assignment of task.assignments)
       lines.push(
-        `### ${assignment.ticket} — ${assignment.status} (${assignment.id})`,
+        `### ${assignment.workLink?.url || assignment.ticket || task.id} — ${assignment.status} (${assignment.id})`,
         "",
         assignment.brief,
         "",

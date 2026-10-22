@@ -1,3 +1,4 @@
+import { trackingPreferences } from "../../../src/shared/tracking.mjs";
 import type { SetupSnapshot, CheckStatus } from "../contracts/setup.js";
 import type * as React from "react";
 function checkStatus(
@@ -45,6 +46,13 @@ export function SetupButton({
       {children}
     </Button>
   );
+}
+export function SetupCheckbox({
+  disabled,
+  ...props
+}: Omit<React.ComponentProps<"input">, "type">) {
+  const busy = useContext(BusyContext);
+  return <input {...props} type="checkbox" disabled={disabled || busy} />;
 }
 export function Select({
   disabled,
@@ -222,9 +230,20 @@ export function ToolsCheck({ snapshot }: { snapshot: SetupSnapshot | null }) {
   return (
     <div id="tools-result" className="space-y-2">
       <Status name="Connected tools" value={tools} />
-      {tools?.linear && (
-        <Status name="Linear read tools" value={tools.linear} />
-      )}
+      {snapshot?.config &&
+        trackingPreferences(snapshot.config.project).providers.includes(
+          "linear",
+        ) &&
+        tools?.linear && (
+          <Status name="Linear read tools" value={tools.linear} />
+        )}
+      {snapshot?.config &&
+        trackingPreferences(snapshot.config.project).providers.includes(
+          "github",
+        ) &&
+        tools?.github && (
+          <Status name="GitHub advertised tools" value={tools.github} />
+        )}
       {(tools?.servers?.length ?? 0) > 0 && (
         <details className="space-y-3 rounded-lg border border-border p-3">
           <summary className="cursor-pointer text-sm font-medium">

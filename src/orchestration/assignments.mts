@@ -1,7 +1,9 @@
+import { validateWorkLink } from "../shared/tracking.mjs";
 import type { TaskRecord, WorkerAssignment } from "../workers/contracts.mjs";
 import { ID, text, identifier } from "./task-fields.mjs";
 const now = () => new Date().toISOString();
 const ASSIGNMENT_STATES = new Set([
+  "steered",
   "queued",
   "active",
   "completed",
@@ -21,6 +23,7 @@ export function currentAssignment(task: TaskRecord): WorkerAssignment {
     task.assignments?.find((item) => item.id === task.currentAssignmentId) || {
       id: "initial",
       ticket: task.ticket,
+      ...(task.workLink !== undefined ? { workLink: task.workLink } : {}),
       brief: task.brief,
       userDecision: null,
       status: assignmentStatus(task.status),
@@ -99,6 +102,36 @@ export function validateAssignments(task: TaskRecord) {
         !Number.isFinite(Date.parse(item.endedAt || "")))
     )
       throw new Error("Malformed assignment history");
+    if (item.delivery !== undefined) {
+      const history = item.deliveryHistory || [];
+      if (
+        !Array.isArray(history) ||
+        [...history, item.delivery].some(
+          (entry) =>
+            !entry ||
+            ![
+              "pending",
+              "attempted",
+              "acknowledged",
+              "uncertain",
+              "rejected",
+              "failed",
+            ].includes(entry.state) ||
+            !Number.isFinite(Date.parse(entry.at)) ||
+            ([
+              "attempted",
+              "acknowledged",
+              "uncertain",
+              "rejected",
+              "failed",
+            ].includes(entry.state) &&
+              (!entry.runId || !entry.threadId || !entry.turnId)) ||
+            (entry.error !== undefined &&
+              (typeof entry.error !== "string" || entry.error.length > 1000)),
+        )
+      )
+        throw new Error("Malformed direction delivery evidence");
+    }
     if (
       item.reviewedWorktreeFingerprint !== undefined &&
       !/^[a-f0-9]{64}$/.test(item.reviewedWorktreeFingerprint)
@@ -123,7 +156,9 @@ export function validateAssignments(task: TaskRecord) {
       throw new Error("Malformed assignment adoption history");
     for (const adoption of item.adoptions || [])
       text(adoption.userDecision, "assignment adoption decision", 4000);
-    text(item.ticket, "assignment ticket", 120);
+    if (item.ticket !== "") text(item.ticket, "assignment ticket", 500);
+    validateWorkLink(item.workLink);
+    validateWorkLink(item.requestWorkLink);
     text(item.brief, "assignment brief");
     if (item.id !== "initial") {
       identifier(item.id, "assignment ID");
@@ -148,6 +183,8 @@ export function preserveAssignments(next: TaskRecord, previous: TaskRecord) {
         [
           "id",
           "ticket",
+          "workLink",
+          "requestWorkLink",
           "brief",
           "userDecision",
           "createdAt",
@@ -164,6 +201,21 @@ export function preserveAssignments(next: TaskRecord, previous: TaskRecord) {
       )
     )
       throw new Error("Assignment identity is immutable");
+    if (
+      JSON.stringify(
+        after.deliveryHistory?.slice(0, before.deliveryHistory?.length || 0) ||
+          [],
+      ) !== JSON.stringify(before.deliveryHistory || [])
+    )
+      throw new Error("Direction delivery history is immutable");
+    if (
+      before.delivery &&
+      ["acknowledged", "uncertain", "rejected", "failed"].includes(
+        before.delivery.state,
+      ) &&
+      JSON.stringify(after.delivery) !== JSON.stringify(before.delivery)
+    )
+      throw new Error("Settled direction delivery is immutable");
     if (
       before.status === "completed" &&
       JSON.stringify(after) !== JSON.stringify(before)

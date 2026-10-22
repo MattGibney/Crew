@@ -1,3 +1,4 @@
+import { TextContextMenu } from "./TextContextMenu.js";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -28,6 +29,9 @@ export function App() {
   const [pane, setPane] = useState("conversation");
   const [selectedWorker, setSelectedWorker] = useState<string | null>(null);
   const [settingsReturn, setSettingsReturn] = useState("conversation");
+  useEffect(() => {
+    if (pane === "settings") void manager.loadSettings().catch(() => {});
+  }, [pane, manager.loadSettings]);
   const workspace = useRef<HTMLElement | null>(null),
     resizing = useRef(false);
   const [workerWidth, setWorkerWidth] = useState<number | null>(null);
@@ -92,7 +96,7 @@ export function App() {
       count + (task.attention || []).filter((item) => !item.ackedAt).length,
     0,
   );
-  return (
+  const content = (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <a
         href={
@@ -338,4 +342,5 @@ export function App() {
       </div>
     </div>
   );
+  return <TextContextMenu>{content}</TextContextMenu>;
 }

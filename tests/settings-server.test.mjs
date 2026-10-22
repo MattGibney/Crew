@@ -26,20 +26,27 @@ async function fixture(t, { nativeAttention = false } = {}) {
   await writeFile(configPath, JSON.stringify(config));
   await writeFile(executable, `#!${process.execPath}
 import { createInterface } from 'node:readline';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 if (process.argv.includes('--version')) { console.log('codex-cli 0.0.0-synthetic'); process.exit(0); }
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
-createInterface({ input: process.stdin }).on('line', line => {
-  const message = JSON.parse(line); appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify(message) + '\\n');
+const boundArg=process.argv.find(arg=>arg.startsWith('mcp_servers.local_orchestration.args='));
+const bound=boundArg?JSON.parse(boundArg.slice(boundArg.indexOf('=')+1)):[];
+const workerTaskId=bound[2]==='worker'?bound[3]:null,workerRunId=bound[4]||null;
+const gate=${JSON.stringify(directory)},waiting=()=>new Promise(r=>setTimeout(r,20));
+
+createInterface({ input: process.stdin }).on('line', async line => {
+  const message = JSON.parse(line); appendFileSync(${JSON.stringify(callsFile)}, JSON.stringify({...message,workerTaskId,workerRunId}) + '\\n');
   const { id, method, params } = message; if (id === undefined || !method) return;
   const reply = result => send({ id, result });
   if (method === 'initialize') return reply({});
   if (method === 'account/read') return reply({ account: { type: 'chatgpt', planType: 'synthetic' } });
-  if (method === 'config/read') return reply({ config: {} });
+  if (method === 'config/read') { if(workerTaskId)while(existsSync(gate+'/hold-config')&&!existsSync(gate+'/release-config'))await waiting();return reply({ config: {} }); }
   if (method === 'thread/start' || method === 'thread/resume') return reply({ thread: { id: 'http-retained-chat' } });
   if (method === 'thread/timeline/list') return send({ id, error: { code: -32601, message: 'Method not found' } });
   if (method === 'thread/turns/list') return reply({ data: [{ id: 'historic-turn', status: 'completed', items: [{ id: 'historic-message', type: 'agentMessage', text: 'Preserved HTTP history.' }] }] });
   if (method === 'mcpServerStatus/list') return reply({ data: [] });
+  if (method === 'turn/steer') return reply({turnId:'http-turn'});
+  if (method === 'turn/start' && workerTaskId && existsSync(gate+'/hold-turn')) {reply({turn:{id:'http-turn',status:'inProgress'}});send({method:'turn/started',params:{threadId:'http-retained-chat',turn:{id:'http-turn',status:'inProgress'}}});while(!existsSync(gate+'/release-turn'))await waiting();send({method:'turn/completed',params:{threadId:'http-retained-chat',turn:{id:'http-turn',status:'completed'}}});return;}
   if (method === 'turn/start') { const turn = { id: 'http-turn', status: 'completed', items: [] }; send({ method: 'turn/completed', params: { threadId: 'http-retained-chat', turn } }); return reply({ turn }); }
   return reply({});
 });
@@ -53,6 +60,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     return { status: response.status, value: await response.json() };
   }
   async function stop() {
+    await writeFile(join(directory,'release-config'),'release');
+    await writeFile(join(directory,'release-turn'),'release');
     for (const abort of streams) abort.abort(); streams.clear();
     if (child && child.exitCode === null && child.signalCode === null) { const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited; }
     child = null;
@@ -71,7 +80,7 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
   async function start() {
     diagnostics = '';
-    child = spawn(process.execPath, [join(root, 'server.mjs')], { cwd: root, env: { ...process.env, AI_MANAGER_CONFIG: configPath, AI_MANAGER_PORT: String(port), AI_MANAGER_CODEX_BINARY: executable, CODEX_BINARY: executable, ...(nativeAttention ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }, stdio: ['ignore', 'pipe', 'pipe', ...(nativeAttention ? ['ipc'] : [])] });
+    child = spawn(process.execPath, [join(root, 'server.mjs')], { cwd: root, env: { ...process.env, CREW_GLOBAL_CAPACITY_DIR: join(directory, 'capacity'), AI_MANAGER_CONFIG: configPath, AI_MANAGER_PORT: String(port), AI_MANAGER_CODEX_BINARY: executable, CODEX_BINARY: executable, ...(nativeAttention ? { ELECTRON_RUN_AS_NODE: '1' } : {}) }, stdio: ['ignore', 'pipe', 'pipe', ...(nativeAttention ? ['ipc'] : [])] });
     child.stdout.on('data', data => { diagnostics += data; }); child.stderr.on('data', data => { diagnostics += data; });
     if (nativeAttention) child.on('message', message => nativeEvents.push(message));
     const deadline = Date.now() + 12000;
@@ -464,4 +473,96 @@ test('manager schedules save through actual project settings without starting wo
  await f.stop();await writeFile(join(f.stateDir,'manager-schedule-runs.json'),JSON.stringify({'project-check':{nextAt:Date.now()-60000}}));await f.start();
  let current;const deadline=Date.now()+5000;do{current=await f.request('/api/settings',{method:'GET'});if(current.value.managerSchedules.schedules[0].run.status==='deferred')break;await delay(50);}while(Date.now()<deadline);
  assert.equal(current.value.managerLifecycle.state,'stopped');assert.equal(current.value.managerSchedules.schedules[0].name,schedule.name);assert.equal(current.value.managerSchedules.schedules[0].run.status,'deferred');assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,0,'A due schedule never wakes the stopped manager');await f.stop();
+});
+
+// Local Settings profile freshness ticket: production HTTP/controller/detached
+// supervisor with a synthetic subscription provider. No model or voice calls.
+async function waitProfileWorker(f,id,predicate,label){
+ const deadline=Date.now()+20000;let last;
+ while(Date.now()<deadline){last=await readTask(f.stateDir,id);if(await predicate(last))return last;await delay(30);}
+ throw Error(`Timed out ${label}: ${JSON.stringify({status:last?.status,failure:last?.failure,runId:last?.runId})}`);
+}
+async function savedWorker(f,text){
+ const current=(await f.request('/api/settings',{method:'GET'})).value;
+ const saved=await f.request('/api/settings/prompts',{method:'PUT',body:{role:'worker',text,expectedVersion:current.worker.saved.version}});
+ assert.equal(saved.status,200,JSON.stringify(saved.value));return saved.value;
+}
+async function nativeFinished(f,id,previousRun=null){return waitProfileWorker(f,id,async task=>{
+ if(!task.runId||task.runId===previousRun||!task.runDir)return false;
+ const exit=await readFile(join(task.runDir,'exit.json'),'utf8').then(JSON.parse).catch(()=>null);
+ return exit?.runId===task.runId&&exit.connectionClosed&&task.execution?.live===false;
+},'native exit');}
+
+test('saved Settings is authoritative at native start, queued launch and retained follow-up despite stale files and dispatch snapshots',async t=>{
+ const f=await fixture(t);await f.start();
+ await savedWorker(f,'SAVED CUSTOM A');
+ await writeFile(join(f.directory,'worker.md'),'STALE CONFIGURED WORKER FILE');
+ await writeFile(join(f.directory,'hold-config'),'hold');
+ const id='fresh-profile-native';await createTask(f.stateDir,{requestId:id,ticket:'LOCAL-SETTINGS',brief:'Read only disposable fixture',projectId:'http-settings-fixture'});
+ const dispatched=await waitProfileWorker(f,id,async task=>task.runDir&&(await f.calls()).some(c=>c.workerRunId===task.runId&&c.method==='config/read'),'native bootstrap gate');
+ assert.equal(JSON.parse(await readFile(join(dispatched.runDir,'config.json'),'utf8')).workerPrompt,'SAVED CUSTOM A');
+ await savedWorker(f,'SAVED CUSTOM B AFTER DISPATCH');await writeFile(join(f.directory,'release-config'),'release');
+ const first=await nativeFinished(f,id),firstTurn=(await f.calls()).find(c=>c.workerRunId===first.runId&&c.method==='turn/start');
+ assert.ok(firstTurn.params.input[0].text.startsWith('SAVED CUSTOM B AFTER DISPATCH\n'));
+ assert.doesNotMatch(firstTurn.params.input[0].text,/STALE CONFIGURED WORKER FILE|SAVED CUSTOM A/);
+ assert.equal(firstTurn.params.additionalContext,undefined,"Keep ordinary worker instruction delivery and native configuration precedence");
+ const original=await readFile(join(first.runDir,'config.json'),'utf8');
+ const consumption=JSON.parse((await readFile(join(first.runDir,'prompt-consumptions.jsonl'),'utf8')).trim());assert.equal(consumption.saved.text,'SAVED CUSTOM B AFTER DISPATCH');assert.equal(consumption.source,'saved-project-settings');
+ const {requestWorkerFollowup}=await import('../runtime/orchestration/store.mjs');
+ await savedWorker(f,'SAVED CUSTOM C FOLLOWUP');
+ await requestWorkerFollowup(f.stateDir,{taskId:id,requestId:'fresh-followup',brief:'Continue in the same working context.'});
+ const next=await nativeFinished(f,id,first.runId),nextTurn=(await f.calls()).find(c=>c.workerRunId===next.runId&&c.method==='turn/start');
+ assert.equal(next.threadId,first.threadId);assert.equal(next.worktree,first.worktree);assert.ok(nextTurn.params.input[0].text.startsWith('SAVED CUSTOM C FOLLOWUP\n'));assert.equal(await readFile(join(first.runDir,'config.json'),'utf8'),original);
+ // A queued task has no immutable behavior entitlement. Admission after the
+ // manager hold is released must use the profile saved while it was queued.
+ await f.request('/api/manager/lifecycle',{body:{action:'stop'}});
+ const queuedId='fresh-profile-queued';await createTask(f.stateDir,{requestId:queuedId,ticket:'LOCAL-SETTINGS',brief:'Queued disposable task',projectId:'http-settings-fixture'});
+ await savedWorker(f,'SAVED CUSTOM D BEFORE QUEUE START');assert.equal((await readTask(f.stateDir,queuedId)).harnessStarted,undefined);
+ await f.request('/api/manager/lifecycle',{body:{action:'start'}});
+ const queued=await nativeFinished(f,queuedId),queuedTurn=(await f.calls()).find(c=>c.workerRunId===queued.runId&&c.method==='turn/start');assert.ok(queuedTurn.params.input[0].text.startsWith('SAVED CUSTOM D BEFORE QUEUE START\n'));
+ const settings=(await f.request('/api/settings',{method:'GET'})).value;assert.equal(settings.manager.saved.text,'HTTP MANAGER ORIGINAL');assert.equal(settings.worker.saved.text,'SAVED CUSTOM D BEFORE QUEUE START');
+ await f.stop();await f.start();assert.equal((await f.request('/api/settings',{method:'GET'})).value.worker.saved.text,'SAVED CUSTOM D BEFORE QUEUE START');await f.stop();
+});
+
+test('worker profile read failure sends no stale native prompt and explicit follow-up recovers after repair',async t=>{
+ const f=await fixture(t);await f.start();await savedWorker(f,'CUSTOM TO PRESERVE');await writeFile(join(f.directory,'hold-config'),'hold');
+ const id='fresh-profile-failure';await createTask(f.stateDir,{requestId:id,ticket:'LOCAL-SETTINGS',brief:'Read-only failure boundary',projectId:'http-settings-fixture'});
+ const dispatch=await waitProfileWorker(f,id,async task=>task.runDir&&(await f.calls()).some(c=>c.workerRunId===task.runId&&c.method==='config/read'),'bootstrap gate');
+ const file=join(f.stateDir,'prompt-settings','http-settings-fixture.json'),bytes=await readFile(file,'utf8');await writeFile(file,'{malformed saved profile');await writeFile(join(f.directory,'release-config'),'release');
+ const failed=await nativeFinished(f,id);assert.equal((await f.calls()).some(c=>c.workerRunId===failed.runId&&c.method==='turn/start'),false);
+ const exit=JSON.parse(await readFile(join(failed.runDir,'exit.json'),'utf8'));assert.match(exit.error,/saved project worker profile.*explicitly retry/i);assert.equal(await readFile(file,'utf8'),'{malformed saved profile');
+ await writeFile(file,bytes);const {requestWorkerFollowup}=await import('../runtime/orchestration/store.mjs');await requestWorkerFollowup(f.stateDir,{taskId:id,requestId:'fresh-profile-retry',brief:'Retry after explicit saved-profile repair.'});const recovered=await nativeFinished(f,id,dispatch.runId);
+ assert.equal(recovered.threadId,failed.threadId);assert.equal(recovered.worktree,dispatch.worktree);assert.ok((await f.calls()).find(c=>c.workerRunId===recovered.runId&&c.method==='turn/start').params.input[0].text.startsWith('CUSTOM TO PRESERVE\n'));await f.stop();
+});
+
+test('save does not steer a live worker; an explicit preparation delivery reads the current profile',async t=>{
+ const f=await fixture(t);await f.start();await savedWorker(f,'PROFILE BEFORE LIVE TURN');await writeFile(join(f.directory,'hold-turn'),'hold');
+ const id='fresh-profile-preparation';await createTask(f.stateDir,{requestId:id,ticket:'LOCAL-SETTINGS',brief:'Hold disposable native turn',projectId:'http-settings-fixture'});
+ // Always release the synthetic producer before fixture teardown waits for it.
+ t.after(()=>writeFile(join(f.directory,'release-turn'),'release').catch(()=>{}));
+ const live=await waitProfileWorker(f,id,async task=>task.threadId&&(await f.calls()).some(c=>c.workerRunId===task.runId&&c.method==='turn/start'),'live turn');
+ await savedWorker(f,'PROFILE CURRENT AT EXPLICIT PREPARATION');await delay(150);assert.equal((await f.calls()).some(c=>c.workerRunId===live.runId&&c.method==='turn/steer'),false);
+ const {beginPreparation,readPreparation}=await import('../runtime/preparation/store.mjs');
+ await beginPreparation(f.stateDir,{id:'fresh-profile-prepare',purpose:'update',projectId:'http-settings-fixture',participants:[{id:'fresh-participant',role:'worker',taskId:id,runId:live.runId,threadId:live.threadId,requestId:'fresh-preparation-request',required:true,message:'Explicit fixture preparation; no model work.'}]});
+ await waitProfileWorker(f,id,async()=>{const p=await readPreparation(f.stateDir);return p?.participants[0].delivery.state==='acknowledged';},'explicit preparation');
+ const steer=(await f.calls()).find(c=>c.workerRunId===live.runId&&c.method==='turn/steer');assert.match(steer.params.input[0].text,/PROFILE CURRENT AT EXPLICIT PREPARATION/);assert.doesNotMatch(steer.params.input[0].text,/PROFILE BEFORE LIVE TURN/);assert.equal(steer.params.expectedTurnId,'http-turn');
+ await writeFile(join(f.directory,'release-turn'),'release');await nativeFinished(f,id);await f.stop();
+});
+
+test('REL-0.18.0 explicit live directions consume current saved profile and exact optional linkage without a save-triggered send', async t => {
+ const f=await fixture(t);await f.start();await savedWorker(f,'PROFILE ORIGINAL LIVE');await writeFile(join(f.directory,'hold-turn'),'hold');
+ const id='release018-live-direction';await createTask(f.stateDir,{requestId:id,ticket:'LOCAL-REL018',brief:'Hold disposable native turn',projectId:'http-settings-fixture'});
+ const live=await waitProfileWorker(f,id,async task=>task.threadId&&(await f.calls()).some(c=>c.workerRunId===task.runId&&c.method==='turn/start'),'live direction turn');
+ const original=await readFile(join(live.runDir,'config.json'),'utf8');
+ await savedWorker(f,'PROFILE CURRENT DIRECTION');await delay(180);assert.equal((await f.calls()).filter(c=>c.workerRunId===live.runId&&c.method==='turn/steer').length,0);
+ const {requestWorkerFollowup}=await import('../runtime/orchestration/store.mjs');
+ const workLink={provider:'github',repository:'MattGibney/crew',number:78,url:'https://github.com/MattGibney/crew/issues/78'};
+ await requestWorkerFollowup(f.stateDir,{taskId:id,requestId:'linked-direction',workLink,brief:'Explicit linked correction'});
+ const linked=await waitProfileWorker(f,id,n=>n.assignments?.find(a=>a.id==='linked-direction')?.delivery?.state==='acknowledged','linked direction');
+ let calls=(await f.calls()).filter(c=>c.workerRunId===live.runId&&c.method==='turn/steer');assert.equal(calls.length,1);assert.match(calls[0].params.input[0].text,/PROFILE CURRENT DIRECTION/);assert.doesNotMatch(calls[0].params.input[0].text,/PROFILE ORIGINAL LIVE/);assert.ok(calls[0].params.input[0].text.includes(JSON.stringify(workLink)));assert.equal(calls[0].params.expectedTurnId,'http-turn');
+ await savedWorker(f,'PROFILE CURRENT LOCAL DIRECTION');await requestWorkerFollowup(f.stateDir,{taskId:id,requestId:'local-direction',workLink:null,brief:'Explicit local correction'});
+ await waitProfileWorker(f,id,n=>n.assignments?.find(a=>a.id==='local-direction')?.delivery?.state==='acknowledged','local direction');
+ calls=(await f.calls()).filter(c=>c.workerRunId===live.runId&&c.method==='turn/steer');assert.equal(calls.length,2);assert.match(calls[1].params.input[0].text,/PROFILE CURRENT LOCAL DIRECTION/);assert.match(calls[1].params.input[0].text,/Issue link \(data\): null/);
+ assert.equal(linked.runId,live.runId);assert.equal(linked.threadId,live.threadId);assert.equal(linked.worktree,live.worktree);assert.equal(linked.currentAssignmentId,live.currentAssignmentId || "initial");assert.equal(await readFile(join(live.runDir,'config.json'),'utf8'),original);
+ await writeFile(join(f.directory,'release-turn'),'release');await nativeFinished(f,id);await f.stop();
 });

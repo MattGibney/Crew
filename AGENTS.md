@@ -340,3 +340,55 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Authorized Settings hotfix release (GitHub #74)
 
 - The human explicitly authorized merging PR75 and publishing the next signed stable patch, 0.17.3 after 0.17.2. This supersedes GH74's original PR-only boundary for this named delivery; no unrelated features or PR54. Verify real saved null lifecycle phases through packaged Settings open/save/reload/relaunch. Preserve strict validation of populated project commands and direct hooks; never reset valid user configuration to hide renderer contract drift. Preserve existing tags, profiles/auth/workers, physical microphone and business-service boundaries; manual native continuity does not prove automatic portable-root updater relaunch.
+
+## Optional tracking (GitHub #78)
+
+- External tracking is optional. Keep none/Linear/GitHub/both choices separate from local runtime readiness and native execution. Existing Linear configurations retain preference; new folders default to none and cannot inherit unrelated mappings. Never fabricate a ticket for a local task or require an external read before local dispatch.
+- Preserve canonical provider/repository/issue identity per task/assignment and immutable legacy labels/history. Preference changes affect new work only. Missing access, advertised capability, configured mapping and verified object reads are different evidence. GitHub issues, PR reviews and head-bound check evidence use normal connected tools, never a bespoke Crew client or automatic backlog/mutation engine. Exact custom prompt replacements and active snapshots remain unchanged.
+- #78 authorizes local implementation/validation only in this worktree. No external issue/review writes, commits, push, PR, merge, release, installed-profile or physical microphone changes are authorized.
+
+- Build and regression validation must be serialized: `npm run build` removes/recreates `runtime/`, so packaging or another build during running runtime tests can cause false module/prompt ENOENT failures. Finish builds first, then test the stable exact runtime; fixture cleanup still owns all spawned processes.
+
+- GH-78 review: resolve absent legacy workLink only for comparisons/inheritance; explicit null remains intentionally local. Accept exact pre-upgrade URL retries without rewriting records/history, and compare canonical link fields independently of object key order. Follow-up inheritance uses the current assignment, not a potentially different original task link. New setup inputs must honor BusyContext; validate delayed saves through actual UI actions so accepted input cannot be silently overwritten.
+
+- Disposable tests launched from Crew must not inherit the live `CREW_GLOBAL_CAPACITY_DIR`. Clear it or supply a fixture-owned ledger explicitly; otherwise synthetic servers can register temporary state in the live ledger and contend with real workers. Never clear live claims/registrations to make a test pass.
+
+- GH-78 worker-card clarification: show GitHub #number at the card top left before truncating repository context. Infer legacy display only from actual canonical issue URLs, preserve explicit null/local intent, and keep repository identity in title/accessibility so equal numbers remain distinguishable. Display derivation never rewrites retained task/assignment records.
+## Prompt manager-to-worker steering (GitHub #50 correction)
+
+- Ordinary directions steer an active acknowledged native turn promptly in the same run/thread/worktree. Never wait for assignment completion or cancel/restart to deliver input. Idle directions continue the retained conversation. Keep current assignment, question and approval identities intact during steering.
+- Persist ordered pending/attempted/acknowledged/uncertain/rejected/failed delivery evidence. Native acknowledgement is not model-consumption or completion evidence. Never blindly replay attempted or uncertain input after transport or controller recovery. A definite no-active-turn rejection may continue only after confirmed native closure. Keep approvals and lifecycle control responsive during steering acknowledgement waits.
+## Settings profile freshness (local ticket settings-profile-refresh)
+
+- Saved project Settings changes invalidate the existing single manager event stream; refresh authoritative data on invalidation, Settings open and reconnect. Keep refresh observation-only, project-bound and ordered across delayed responses. Errors retain values/drafts with explicit retry; no extra SSE consumer, polling, controller restart, model turn or voice capture.
+- Prompt saves acknowledge their exact saved concurrency version and retain newer typed drafts. Shared cache refresh never rewrites dirty drafts or active manager/worker instruction snapshots. Use disposable profiles and a private CREW_GLOBAL_CAPACITY_DIR for controller acceptance; inherited worker capacity points at live state.
+
+## Current worker profile source correction (local Settings ticket)
+
+- The user's latest clarification supersedes older frozen-profile wording: saved project-state worker instructions are the single current source at each Crew-owned prompt preparation/delivery boundary. Read them for launch/retained continuation and again immediately before native turn/start, plus before explicitly requested preparation text. A queued worker consumes the profile saved before its actual preparation, not the one present when queued.
+- Saving a profile never steers, interrupts, restarts or starts a worker. Already supplied native input can finish. Preserve earlier prompt copies only as provenance; they never override later saved Settings. Keep the same retained native conversation/worktree and normal Codex configuration/permissions.
+- Native-internal model/tool iterations inside a supplied turn are not observable prompt-preparation boundaries controlled by Crew. Do not promise per-model-request reloads. Existing pre-upgrade detached supervisors keep their loaded code until the next explicit run; never interrupt them to adopt new behavior.
+- Canonical saved prompt state is seeded once from legacy/configured defaults. Identity-only initialization evidence prevents silent stale/default reseeding if that saved file is lost. Missing, malformed, foreign-project or unreadable state fails closed with explicit restore/retry guidance; no automatic replacement or native send.
+
+## Settings validation review correction
+
+- A configured but missing global capacity ledger correctly holds admission. Test isolation must initialize a newly created private ledger through the existing capacity API before schedule tests import/run; an empty directory alone is not a ready fixture. Keep missing/held production behavior fail-closed and retain all scheduling assertions.
+- Standalone runs of a modified checkout are not a clean baseline. Compare the same test, runtime/build state, Node/dependencies and environment against an archived clean base before classifying cancellations as unrelated. The six Settings-review scheduling cancellations were an isolation preload fault; do not carry the earlier scheduler-limitation claim forward.
+- The user explicitly set native Quit aside in this review. Preserve earlier evidence without further investigation or using it as a blocker. Use UI-only fixture acceptance and cleanup without exercising product Quit; report that boundary honestly.
+## Text context menus and external links (GitHub #66)
+
+- Selected read-only conversation text offers Copy, never Cut. Use the shared Base UI/shadcn context-menu parts, snapshot selected text before menu focus changes, and retain normal field editing, native keyboard shortcuts and drafts. Leave touch text selection to the browser before offering context actions.
+- Manager/user/worker message Markdown and plain web URLs use the shared validated WebLink. Treat message links as untrusted data; only bounded explicit HTTP(S) URLs without credentials may open externally. Preserve project-origin checks, blocked foreign navigation, denied popups and the bounded write-only clipboard bridge.
+- macOS web activation uses explicit Safari through argv-based `open -a Safari`, without changing browser preferences; other platforms retain their default browser. Browser fixture assertions do not prove a native browser opened. Keep real Safari request evidence, native clipboard checks and screenshots outside Git; never test through the user's installed profile or physical microphone.
+
+## Isolated validation correction (GitHub #66)
+
+- Binding `CREW_GLOBAL_CAPACITY_DIR` to a fresh directory without `capacity.json` intentionally holds production admission. Before scheduling/full-suite validation, initialize only the disposable test ledger through `configureGlobalCapacity` and verify `globalAdmissionPaused` is false. Never weaken the fail-closed guard, alter live claims, or skip assertions to make fixtures proceed.
+- A clean-base cancellation under the same invalid environment does not prove a product baseline defect. Preserve that evidence and correct the conclusion when the harness cause is established. `scripts/issue66-isolated-validation.mjs` records initialized isolation, exact source hashes and focused/full logs outside Git.
+
+## Grouped 0.18.0 integration (REL-0.18.0)
+
+- Integrate only original PR heads #79–82 through merge commits, preserving all histories. This assignment permits the integration branch, scoped commits, push and reviewable integration PR; main merge, tag and publication remain manager actions. Preserve installed profiles, workers and physical microphone boundaries.
+- Ordinary manager steering is also a Crew-owned prompt boundary: read the current saved worker profile immediately before explicit native delivery, and include the direction’s actual canonical optional issue link, including null. A save alone sends nothing. A failed profile read sends no stale input and retains explicit recovery guidance without blind replay.
+
+- REL-0.18.0 review correction: complete async saved-profile preparation before claiming native steering delivery. Recheck existing capacity/update/preparation holds, task/archive/lifecycle and native snapshot guards after the read. Profile preparation is not an attempted send; a newly held unsent direction stays pending and rereads the profile on its next authorized attempt. Preserve acknowledged/uncertain sends without rollback or replay when a later hold appears.
