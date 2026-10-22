@@ -40,7 +40,23 @@ type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
 type SubscriptionStatus =
   | { state: "signed_in"; plan: string | null }
-  | { state: "sign_in_required" }
+  | {
+      state: "sign_in_required";
+      signIn?:
+        | { state: "pending"; reason: null }
+        | {
+            state: "failed";
+            reason: string;
+            stage:
+              | "initialization"
+              | "configuration"
+              | "request"
+              | "response"
+              | "completion"
+              | "transport";
+            code: number | null;
+          };
+    }
   | { state: "blocked"; reason: string };
 interface SignIn {
   loginId: string;
@@ -1074,7 +1090,10 @@ function SubscriptionSettings({
         (next.state === "signed_in" &&
           next.plan !== null &&
           typeof next.plan !== "string") ||
-        (next.state === "blocked" && typeof next.reason !== "string")
+        (next.state === "blocked" && typeof next.reason !== "string") ||
+        (next.state === "sign_in_required" &&
+          next.signIn !== undefined &&
+          !validSignInStatus(next.signIn))
       )
         throw new Error("Invalid subscription state");
       if (alive.current && request === sequence.current) {
@@ -1085,6 +1104,19 @@ function SubscriptionSettings({
           setSignInPending(false);
           setStartFailed(false);
           setError("");
+        } else if (
+          next.state === "sign_in_required" &&
+          next.signIn?.state === "failed"
+        ) {
+          setLogin(null);
+          setSignInPending(false);
+          setStartFailed(false);
+          setError(next.signIn.reason);
+        } else if (
+          next.state === "sign_in_required" &&
+          next.signIn?.state === "pending"
+        ) {
+          setSignInPending(true);
         }
       }
     } catch {
@@ -1147,6 +1179,9 @@ function SubscriptionSettings({
             ? "Sign-in did not return a usable code. Check the status or cancel the pending attempt before starting again."
             : "Sign-in cancellation was not confirmed. Check the current status before trying again.",
         );
+        // Read the provider's bounded stage classification after an action fails.
+        // A generic status result must still retain the original action error.
+        await reload();
       }
     } finally {
       action.current = false;
@@ -1284,6 +1319,27 @@ function validSignIn(value: SignIn): boolean {
   } catch {
     return false;
   }
+}
+
+function validSignInStatus(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const signIn = value as Record<string, unknown>;
+  if (signIn.state === "pending") return signIn.reason === null;
+  return (
+    signIn.state === "failed" &&
+    typeof signIn.reason === "string" &&
+    signIn.reason.length > 0 &&
+    signIn.reason.length <= 2000 &&
+    [
+      "initialization",
+      "configuration",
+      "request",
+      "response",
+      "completion",
+      "transport",
+    ].includes(String(signIn.stage)) &&
+    (signIn.code === null || Number.isSafeInteger(signIn.code))
+  );
 }
 
 function provisioningProblem(snapshot: AgentsSnapshot, agentId: string) {
