@@ -123,6 +123,7 @@ export function createApplicationOrigins(statePath: string) {
     origin: ApplicationOrigin | undefined,
     activeTurnId: string | null,
     messages: ConversationMessage[],
+    knownTurns: string[] = [],
   ) {
     await ready;
     if (!origin) {
@@ -141,7 +142,10 @@ export function createApplicationOrigins(statePath: string) {
         requestId,
         origin,
         baseline: [
-          ...new Set(messages.flatMap((m) => (m.turnId ? [m.turnId] : []))),
+          ...new Set([
+            ...knownTurns,
+            ...messages.flatMap((m) => (m.turnId ? [m.turnId] : [])),
+          ]),
         ],
       };
       if (activeTurnId)
@@ -167,6 +171,19 @@ export function createApplicationOrigins(statePath: string) {
     delete data.pending;
     await save();
   }
+  async function reconcileRecent(turnIds: string[]) {
+    await ready;
+    if (!data.pending || dispatching) return;
+    // Native admission has one writer. The frontier includes all recently
+    // observed native turns, including empty turns absent from chat. Recover
+    // only the one new turn after that exact pre-dispatch frontier, never an
+    // arbitrary older canonical item or text match.
+    const unseen = turnIds.filter((id) => !data.pending!.baseline.includes(id));
+    if (unseen.length !== 1) return;
+    data.turns[unseen[0]] ??= { origin: data.pending.origin, visibleItems: [] };
+    delete data.pending;
+    await save();
+  }
   async function failed() {
     dispatching = false;
     await save();
@@ -179,6 +196,7 @@ export function createApplicationOrigins(statePath: string) {
     begin,
     acknowledged,
     failed,
+    reconcileRecent,
     flush: () => writes,
   };
 }
