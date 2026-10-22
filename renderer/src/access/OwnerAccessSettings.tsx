@@ -107,19 +107,23 @@ export function OwnerAccessSettings({
             </option>
           ))}
         </NativeSelect>
-        {agent && (
-          <AgentAccessPanel
-            {...common}
-            agent={agent}
-            assignmentRevision={
-              snapshot.assignments.find((row) => row.agentId === agent.id)
-                ?.revision ?? null
-            }
-            groups={snapshot.groups}
-            connections={snapshot.connections}
-            onSave={(change) => command("saveAssignment", change)}
-          />
-        )}
+        {/* Keep editors mounted so changing agents retains drafts and pending saves. */}
+        {snapshot.agents.map((row) => (
+          <div key={row.id} hidden={agent?.id !== row.id}>
+            <AgentAccessPanel
+              {...common}
+              agent={row}
+              assignmentRevision={
+                snapshot.assignments.find(
+                  (assignment) => assignment.agentId === row.id,
+                )?.revision ?? null
+              }
+              groups={snapshot.groups}
+              connections={snapshot.connections}
+              onSave={(change) => command("saveAssignment", change)}
+            />
+          </div>
+        ))}
       </section>
       <CreationPresetsPanel
         {...common}

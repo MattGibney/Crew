@@ -349,7 +349,13 @@ function AccessSettings({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void reload().catch(() => {})}
+            onClick={() =>
+              void Promise.all([reload(), refreshProject()]).catch(() =>
+                setError(
+                  "Access settings could not be refreshed. Your saved settings and open drafts are retained.",
+                ),
+              )
+            }
           >
             Retry
           </Button>
@@ -375,7 +381,15 @@ function AccessSettings({
           onNotify={notify}
           onCommand={async (name, args) => {
             await command(`access.${name}`, args);
-            await Promise.all([reload(), refreshProject()]);
+            // A failed read must not turn an acknowledged mutation into a retryable save.
+            const refreshed = await Promise.allSettled([
+              reload(),
+              refreshProject(),
+            ]);
+            if (refreshed.some((result) => result.status === "rejected"))
+              setError(
+                "Your change was saved, but settings could not be refreshed. Retry the refresh to see the current saved settings.",
+              );
           }}
         />
       ) : (
