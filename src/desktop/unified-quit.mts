@@ -221,20 +221,29 @@ export function createUnifiedQuit(options: {
       notify();
     },
     async quit() {
-      if (state.recoveryRequired)
-        throw new Error(
-          "Quit recovery is required. Resolve the incomplete project shutdown before trying again.",
-        );
       if (finishing) return;
-      if (state.state !== "ready")
+      const retrying = state.recoveryRequired;
+      if (!retrying && state.state !== "ready")
         throw new Error("Prepare all projects before quitting.");
       finishing = true;
       notify();
-      let closingStarted = false;
+      let closingStarted = retrying;
       try {
         const projects = options.projects();
+        if (
+          retrying &&
+          (projects.length !== state.projects.length ||
+            projects.some(
+              (project) =>
+                !state.projects.some((row) => row.projectId === project.id),
+            ) ||
+            state.projects.some((row) => !held.has(row.projectId)))
+        )
+          throw new Error(
+            "The retained shutdown project set no longer matches.",
+          );
         // Never re-use the earlier readiness observation as execution authority.
-        for (const project of projects) {
+        for (const project of retrying ? [] : projects) {
           const result = await project.lifecycle.reserveExecution(
             project.id,
             "quit",
@@ -250,11 +259,17 @@ export function createUnifiedQuit(options: {
           const row = state.projects.find(
             (item) => item.projectId === project.id,
           );
+          // A confirmed closed composition must never be entered again. The
+          // unresolved composition rechecks its exact reservation and settlement.
+          if (row?.closeState === "closed") continue;
           if (row) row.closeState = "closing";
           notify();
           try {
             await project.close(reservation);
-            if (row) row.closeState = "closed";
+            if (row) {
+              row.closeState = "closed";
+              row.error = null;
+            }
           } catch (error) {
             if (row) {
               row.closeState = "unconfirmed";
@@ -270,7 +285,7 @@ export function createUnifiedQuit(options: {
         state.recoveryRequired = closingStarted;
         state.state = closingStarted ? "recovery" : "blocked";
         state.detail = closingStarted
-          ? "Quit did not finish after project shutdown began. Some projects are stopped or unconfirmed. Recovery is required before work can resume; reservations remain held and Crew has not restarted the projects."
+          ? "Quit did not finish. Reservations remain held and Crew has not restarted the projects. Retry Quit checks unresolved shutdown again and skips projects already closed."
           : "New or unresolved work prevented Quit. Prepare again after resolving the affected agents.";
         if (!closingStarted) {
           try {
