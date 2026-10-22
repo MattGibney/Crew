@@ -340,3 +340,21 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Authorized Settings hotfix release (GitHub #74)
 
 - The human explicitly authorized merging PR75 and publishing the next signed stable patch, 0.17.3 after 0.17.2. This supersedes GH74's original PR-only boundary for this named delivery; no unrelated features or PR54. Verify real saved null lifecycle phases through packaged Settings open/save/reload/relaunch. Preserve strict validation of populated project commands and direct hooks; never reset valid user configuration to hide renderer contract drift. Preserve existing tags, profiles/auth/workers, physical microphone and business-service boundaries; manual native continuity does not prove automatic portable-root updater relaunch.
+
+## Settings profile freshness (local ticket settings-profile-refresh)
+
+- Saved project Settings changes invalidate the existing single manager event stream; refresh authoritative data on invalidation, Settings open and reconnect. Keep refresh observation-only, project-bound and ordered across delayed responses. Errors retain values/drafts with explicit retry; no extra SSE consumer, polling, controller restart, model turn or voice capture.
+- Prompt saves acknowledge their exact saved concurrency version and retain newer typed drafts. Shared cache refresh never rewrites dirty drafts or active manager/worker instruction snapshots. Use disposable profiles and a private CREW_GLOBAL_CAPACITY_DIR for controller acceptance; inherited worker capacity points at live state.
+
+## Current worker profile source correction (local Settings ticket)
+
+- The user's latest clarification supersedes older frozen-profile wording: saved project-state worker instructions are the single current source at each Crew-owned prompt preparation/delivery boundary. Read them for launch/retained continuation and again immediately before native turn/start, plus before explicitly requested preparation text. A queued worker consumes the profile saved before its actual preparation, not the one present when queued.
+- Saving a profile never steers, interrupts, restarts or starts a worker. Already supplied native input can finish. Preserve earlier prompt copies only as provenance; they never override later saved Settings. Keep the same retained native conversation/worktree and normal Codex configuration/permissions.
+- Native-internal model/tool iterations inside a supplied turn are not observable prompt-preparation boundaries controlled by Crew. Do not promise per-model-request reloads. Existing pre-upgrade detached supervisors keep their loaded code until the next explicit run; never interrupt them to adopt new behavior.
+- Canonical saved prompt state is seeded once from legacy/configured defaults. Identity-only initialization evidence prevents silent stale/default reseeding if that saved file is lost. Missing, malformed, foreign-project or unreadable state fails closed with explicit restore/retry guidance; no automatic replacement or native send.
+
+## Settings validation review correction
+
+- A configured but missing global capacity ledger correctly holds admission. Test isolation must initialize a newly created private ledger through the existing capacity API before schedule tests import/run; an empty directory alone is not a ready fixture. Keep missing/held production behavior fail-closed and retain all scheduling assertions.
+- Standalone runs of a modified checkout are not a clean baseline. Compare the same test, runtime/build state, Node/dependencies and environment against an archived clean base before classifying cancellations as unrelated. The six Settings-review scheduling cancellations were an isolation preload fault; do not carry the earlier scheduler-limitation claim forward.
+- The user explicitly set native Quit aside in this review. Preserve earlier evidence without further investigation or using it as a blocker. Use UI-only fixture acceptance and cleanup without exercising product Quit; report that boundary honestly.

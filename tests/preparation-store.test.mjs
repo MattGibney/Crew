@@ -81,3 +81,9 @@ test('scoped ready response proves receipt despite uncertain native steering ack
 test('a scoped ready response arriving before the steering RPC reply permits close while transport remains attempted',async t=>{
  const f=await fixture(t);await claimPreparationDelivery(f.state,f.identity);await reportPreparation(f.state,f.actor,f.response);await setPreparationPhase(f.state,f.input.id,'complete');assert.equal((await readPreparation(f.state)).participants[0].delivery.state,'attempted');assert.equal(await claimPreparationDelivery(f.state,f.identity),false);
 });
+
+test('saved worker profile fetch failure records unsent preparation, preserves the request and requires explicit retry',async t=>{
+ const f=await fixture(t);let sent=0;
+ const observe=createRunnerPreparation({stateDir:f.state,actor:f.actor,snapshot:()=>({threadId:'thread-one',turnId:'turn-one',acknowledged:true,ending:false}),onPreparing:()=>{},prepareText:async()=>{throw Error('Saved profile unavailable');},steer:async()=>{sent++;return{turnId:'turn-one'};}});
+ await observe();const plan=await readPreparation(f.state);assert.equal(sent,0);assert.equal(plan.participants[0].delivery.state,'failed');assert.match(plan.participants[0].delivery.error,/No preparation was sent.*explicitly retry/);assert.equal(plan.participants[0].response,null);await observe();assert.equal(sent,0,'failed request is not automatically retried');
+});

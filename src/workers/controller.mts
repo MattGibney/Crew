@@ -33,6 +33,7 @@ interface ControllerOptions {
   executable: string;
   project?: Project | null;
   workerPrompt?: string;
+  workerProfileSource?: { projectId: string } | null;
   getWorkerPrompt?: (() => Promise<{ text: string; version: string }>) | null;
   globalCapacity?: { dir?: string; limit?: number } | null;
   onChange?: (view: {
@@ -145,6 +146,7 @@ export async function createController({
   executable,
   project = null,
   workerPrompt = "",
+  workerProfileSource = null,
   getWorkerPrompt = null,
   globalCapacity = null,
   onChange = () => {},
@@ -323,6 +325,7 @@ export async function createController({
     project,
     workerPrompt,
     getWorkerPrompt,
+    workerProfileSource,
     capacity,
     launches,
     operations,

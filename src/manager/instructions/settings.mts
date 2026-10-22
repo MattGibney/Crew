@@ -89,12 +89,13 @@ export async function createPromptSettings({
       });
     }
   }
+  let initialized = false;
   async function load(): Promise<RetainedPrompts> {
     let value: unknown;
     try {
       value = parseRecord(await readFile(file, "utf8"));
     } catch (error) {
-      if (errorCode(error) === "ENOENT") return initial;
+      if (errorCode(error) === "ENOENT" && !initialized) return initial;
       throw new Error(
         "Cannot read saved project prompts; existing settings have been preserved.",
       );
@@ -179,6 +180,49 @@ export async function createPromptSettings({
       return view(texts);
     });
   }
+  // Materialize legacy/configured text once. The marker contains identity only,
+  // never another prompt copy, and prevents startup fallback after file loss.
+  await serializeSave(file, async () => {
+    const marker = `${file}.initialized`;
+    let savedExists = true;
+    try {
+      await readFile(file);
+    } catch (error) {
+      if (errorCode(error) !== "ENOENT") throw error;
+      savedExists = false;
+    }
+    if (!savedExists) {
+      let seeded = false;
+      try {
+        await readFile(marker);
+        seeded = true;
+      } catch (error) {
+        if (errorCode(error) !== "ENOENT") throw error;
+      }
+      if (!seeded)
+        await persist({
+          schemaVersion: 1,
+          projectId,
+          prompts: initial.texts,
+          promptOrigins: initial.origins,
+          promptUpgradeHistory: initial.history,
+        });
+    }
+    try {
+      const handle = await open(marker, "wx", 0o600);
+      try {
+        await handle.writeFile(
+          JSON.stringify({ schemaVersion: 1, projectId }) + "\n",
+        );
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") throw error;
+    }
+    initialized = true;
+  });
   return {
     read,
     save,

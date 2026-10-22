@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { managerProfileSnapshot } from "../manager/profile.mjs";
 import type { createEnvironmentSettings } from "../projects/environment-settings.mjs";
 import type { PromptSettings } from "../manager/instructions/contracts.mjs";
@@ -21,12 +22,17 @@ export function createSettingsView({
   environmentSettings,
   managerSchedules,
 }: SettingsContext) {
+  const source = randomUUID();
+  let sequence = 0;
   return async () => {
+    // Order observations before asynchronous reads, never by response arrival.
+    const settingsRevision = { source, sequence: ++sequence };
     const saved = await prompts.read(),
       lifecycle = manager.view();
     const profile = await managerProfile.read();
     return {
       managerSchedules: await managerSchedules?.view(),
+      settingsRevision,
       projectId: project.id,
       projectName: project.name,
       workerEnvironment: await environmentSettings.read(),

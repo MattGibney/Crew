@@ -94,7 +94,7 @@ test('concurrent store saves serialize version checks and abandoned atomic files
   const updated = await restarted.save({ role: 'manager', text: 'Saved after restart', expectedVersion: saved.manager.version });
   assert.equal(updated.manager.text, 'Saved after restart');
   assert.equal(await readFile(abandoned, 'utf8'), '{"incomplete"');
-  assert.deepEqual((await readdir(directory)).sort(), ['example.json', 'example.json.00000000-abandoned.tmp', 'example.json.lock']);
+  assert.deepEqual((await readdir(directory)).sort(), ['example.json', 'example.json.00000000-abandoned.tmp', 'example.json.initialized', 'example.json.lock']);
 });
 
 test('runtime protocol names explicit workflow and environment context without forcing report termination',()=>{

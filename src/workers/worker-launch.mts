@@ -1,3 +1,4 @@
+import { readSavedWorkerProfile } from "../manager/instructions/worker-profile.mjs";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
@@ -71,6 +72,7 @@ export function createWorkerLauncher({
   project,
   workerPrompt,
   getWorkerPrompt,
+  workerProfileSource,
   capacity,
   launches,
   operations,
@@ -85,6 +87,24 @@ export function createWorkerLauncher({
   getProcessSnapshot,
   nativeConnectionLive,
 }: ControllerServices & { nativeConnectionLive: NativeConnectionLive }) {
+  const readCurrentPrompt = async () => {
+    if (workerProfileSource) {
+      if (workerProfileSource.projectId !== project?.id)
+        throw new Error("Worker profile project identity changed.");
+      return readSavedWorkerProfile(stateDir, workerProfileSource.projectId);
+    }
+    // Standalone transport fixtures may supply their own source. The product
+    // controller always binds the canonical saved project profile above.
+    return getWorkerPrompt
+      ? getWorkerPrompt()
+      : promptSnapshot(
+          workerPrompt ||
+            (await readFile(
+              path.join(sourceDir, "prompts", "worker.md"),
+              "utf8",
+            )),
+        );
+  };
   async function launchContinuation(task: TaskRecord, runId: string) {
     if (
       isStopped() ||
@@ -116,20 +136,13 @@ export function createWorkerLauncher({
       const cwd = await realpath(task.worktree);
       if (!(await stat(cwd)).isDirectory())
         throw new Error("The worker working directory is unavailable.");
-      const saved = getWorkerPrompt
-        ? await getWorkerPrompt()
-        : promptSnapshot(
-            workerPrompt ||
-              (await readFile(
-                path.join(sourceDir, "prompts", "worker.md"),
-                "utf8",
-              )),
-          );
+      const saved = await readCurrentPrompt();
       const assignment = currentAssignment(task),
         runDir = path.join(stateDir, "runs", task.id, runId);
       await mkdir(runDir, { recursive: true, mode: 0o700 });
       const config = {
         project,
+        workerProfileSource,
         workerPrompt: saved.text,
         workerPromptVersion: saved.version,
         retainedDirection: true,
@@ -281,15 +294,7 @@ export function createWorkerLauncher({
         n.launchAt = now();
       });
       const repositoryMode = project?.mode === "repository";
-      const saved = getWorkerPrompt
-        ? await getWorkerPrompt()
-        : promptSnapshot(
-            workerPrompt ||
-              (await readFile(
-                path.join(sourceDir, "prompts", "worker.md"),
-                "utf8",
-              )),
-          );
+      const saved = await readCurrentPrompt();
       if (!saved || promptVersion(saved.text) !== saved.version)
         throw new Error("Worker prompt snapshot is invalid.");
       let meta;
@@ -390,6 +395,7 @@ export function createWorkerLauncher({
       const assignment = currentAssignment(task);
       const config = {
         project,
+        workerProfileSource,
         workerPrompt: saved.text,
         workerPromptVersion: saved.version,
         agentOwnedEnvironment: true,

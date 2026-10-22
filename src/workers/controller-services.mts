@@ -18,6 +18,7 @@ export interface ControllerServices {
   executable: string;
   project: Project | null;
   workerPrompt: string;
+  workerProfileSource: { projectId: string } | null;
   getWorkerPrompt: (() => Promise<PromptSnapshot>) | null;
   capacity: Awaited<ReturnType<typeof createGlobalCapacity>>;
   launches: Map<string, Promise<void>>;

@@ -34,8 +34,7 @@ export function PromptEditor({
     [error, setError] = useState("");
   const [baseVersion, setBaseVersion] = useState<string | null>(null);
   const text = draft ?? data.saved.text;
-  const draftRef = useRef(text);
-  draftRef.current = text;
+  const edits = useRef(0);
   const dirty = draft !== null && draft !== data.saved.text;
   const stale = dirty && baseVersion !== data.saved.version;
   const managerRole = role === "manager";
@@ -49,8 +48,10 @@ export function PromptEditor({
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
   const edit = (value: string) => {
-    if (draft === null) setBaseVersion(data.saved.version);
-    setDraft(value);
+    edits.current++;
+    if (!dirty) setBaseVersion(data.saved.version);
+    setDraft(!saving && value === data.saved.text ? null : value);
+    if (!saving && value === data.saved.text) setBaseVersion(null);
     setError("");
   };
   const cancel = () => {
@@ -63,6 +64,7 @@ export function PromptEditor({
   const save = async () => {
     if (!dirty || saving) return;
     const submitted = text;
+    const submittedEdit = edits.current;
     setSaving(true);
     setError("");
     try {
@@ -71,17 +73,17 @@ export function PromptEditor({
         submitted,
         baseVersion || data.saved.version,
       );
-      if (draftRef.current === submitted) {
+      if (edits.current === submittedEdit) {
         setDraft(null);
         setBaseVersion(null);
         setEditing(false);
       } else setBaseVersion(saved[role].saved.version);
       onNotify(
-        draftRef.current !== submitted
+        edits.current !== submittedEdit
           ? "Instructions saved. Your newer edits are still unsaved."
           : managerRole
             ? "Instructions saved."
-            : "Worker instructions saved for the next direction or launch.",
+            : "Worker instructions saved for the next prompt Crew supplies.",
       );
     } catch (error) {
       setError(errorText(error));
@@ -207,7 +209,7 @@ export function PromptEditor({
             <p className="mt-1">
               {managerRole
                 ? "This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately."
-                : "This text replaces Crew’s default worker instructions for this project. Saved changes apply on the next worker direction or launch. Earlier run instructions remain in history."}
+                : "This text replaces Crew’s default worker instructions for this project. Saved changes apply when Crew next supplies a worker prompt, including a direction or explicit preparation. Saving does not interrupt work already running. Earlier supplied instructions remain in history."}
             </p>
             <p className="mt-2">
               Crew still supplies project and task context. These instructions
