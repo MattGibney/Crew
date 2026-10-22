@@ -619,3 +619,7 @@ accepting item transcripts, then requires exact item/session identity. Deltas re
 registered by an accepted item in that call. Delayed prior-call items cannot be relabeled with
 the pending call's host identity. A bounded synthetic fail-before/pass-after check covers the
 old-call completion before new started, null native identity, old/unknown deltas and valid new text.
+
+An exact-session typed transcript item takes precedence even when a flat transcript arrived
+first. This one-way switch enables keyed live display and suppresses subsequent flat duplicates;
+it does not relax session identity checks or publish unkeyed text through the desktop bridge.

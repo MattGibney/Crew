@@ -569,11 +569,12 @@ export class CodexRealtimeController {
         return;
       if (
         item.type === "transcriptSegment" &&
-        call.transcriptMode !== "flat" &&
         (item.role === "user" || item.role === "assistant") &&
         typeof item.text === "string" &&
         item.text.length <= 200_000
       ) {
+        // Exact-session typed items supersede the unkeyed flat fallback.
+        // Later flat duplicates stay suppressed once item mode is established.
         call.transcriptMode = "item";
         call.transcriptRoles.set(item.id, item.role);
         if (call.transcriptRoles.size > 1024)
