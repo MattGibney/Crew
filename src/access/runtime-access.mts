@@ -300,7 +300,10 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       );
       if (
         version.code !== 0 ||
-        version.stdout.trim() !== "codex-cli 0.163.0-alpha.11"
+        ![
+          "codex-cli 0.163.0-alpha.11",
+          "codex-cli 0.163.0-alpha.11.2",
+        ].includes(version.stdout.trim())
       )
         throw new Error(
           "This Codex version has not passed the native policy contract; validate it before use.",
