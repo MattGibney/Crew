@@ -243,3 +243,14 @@ a once grant remains retryable after proven non-execution and is consumed after
 the fresh-credential retry. The actual-store MCP/CLI and concurrent OAuth flows
 passed again with these changes. Already admitted callbacks may complete after a
 later rotation; the lock does not span remote I/O.
+
+The combined access/gateway fixes are integrated as `7e4bb63` (Crew scope choices)
+and `dd77143` (credential admission). Their bounded renderer/real-store evidence is
+separate from the earlier packaged `5273d9d` lifecycle walkthrough: both idle agents
+saved fresh preparation notes, normal Quit exited 0 with native processes absent and
+the presentation port closed, and reopen retained chats, notes and completed jobs with
+sessions stopped. Private scheduled content stayed hidden before and after reopen.
+Help completed after canonical-ID recovery; the later direct incoming-message-ID fix
+still needs an app recheck. Native compaction has Foundation/adapter acceptance, while
+its desktop check and the ephemeral voice display check remain separate. Real third-party
+operation and retained voice provenance remain unverified by these package checks.

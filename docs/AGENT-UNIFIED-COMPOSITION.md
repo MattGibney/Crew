@@ -70,7 +70,11 @@ independent project resources are not deleted by Stop or Quit.
 
 ## Validation boundary
 
-The 22 October 2026 integration checkpoint is `0150543` (runtime code `5273d9d`).
+The 22 October 2026 packaged acceptance below used runtime code `5273d9d`.
+The later combined source includes scope fix `7e4bb63`, credential fix `dd77143`,
+help identity fix `7bd058d`, and the explicit Restart/compaction implementation
+(`2ea738e`, integrated as `f71d675`). Source integration and focused component
+acceptance do not extend the earlier package's evidence to these later changes.
 The former outer-sandbox/resume blocker is superseded: the pinned native host uses
 its own model authentication, while a verified native named profile constrains model
 tools. Start/resume/turn selection retains the exact profile, `never` escalation and
@@ -83,9 +87,11 @@ The evidence sets remain distinct:
 | Scope | Observed result | Limit |
 | --- | --- | --- |
 | Signed-in composed typed work | The manager created and started a worker, steered active work, queued input, ran an approved disposable project command and received the report. Both recorded jobs completed. | This verifies the tested manager/worker workflow, not arbitrary projects or external providers. |
-| Isolated unsigned package | Actual launch, Quit and reopen preserved the same native chats and signed-in state. | No installed-app replacement, signed release or automatic-update acceptance. |
+| Prepared unsigned package Quit/reopen | Both started, idle agents saved notes after the preparation freshness timestamps and reported Ready. Normal Quit exited 0; the owned app and all recorded native processes were absent and the presentation port closed. Reopen retained the same agents, chats, continuation notes and completed jobs; both sessions were stopped. | This is package `5273d9d`, with no installed-app replacement, signed release or automatic-update acceptance. Later Quit retry changes require their own evidence. |
+| Private scheduled work | The actual private occurrence produced native commentary/final output; its prompt, commentary and final markers remained absent from the public UI before Quit and after reopen. | This verifies the observed private schedule and preparation receipts, not arbitrary native history provenance. |
+| Agent help | Request delivery, response, acknowledgement and answered state persisted through reopen. The manager recovered the canonical request ID from worker history without a human supplying it. | The initial attempt used the delivered message ID and failed. The later `7bd058d` direct incoming-message-ID fix still requires its app recheck. |
 | Real access/broker components | Actual access store, authorization service, vault and gateway exercised exact once approval/resume, session and persistent grants, revocation before later admission, duplicate suppression and changed-argument rejection against an authenticated loopback MCP fixture. | The upstream and credential values were synthetic; this is not a live third-party service test. |
-| Credential execution | The controlled CLI received its synthetic credential only inside the trusted executor; explicit environment, redacted output and final admission denial were checked. Actual Electron safeStorage separately passed synthetic store/rotate/reopen, stale-reference denial and deletion checks. | Vault storage and executor checks do not prove every provider's credential contract or isolate arbitrary trusted-host code. |
+| Credential execution | The controlled CLI received its synthetic credential only inside the trusted executor; explicit environment, redacted output and final admission denial were checked. Reproduced stale-token and old-record read races now reject stale dispatch after completed rotation/deletion/refresh before callback admission, and a fresh once-grant retry succeeds. Actual Electron safeStorage separately passed synthetic store/rotate/reopen, stale-reference denial and deletion checks. | Already admitted callbacks can finish after a later rotation. Vault storage and executor checks do not prove every provider's credential contract or isolate arbitrary trusted-host code. |
 | Native model-tool permissions | Installed-runtime command checks denied protected reads/writes and direct network access; exact profile/configuration, skill paths and session revocation were checked. | No-model command checks and incomplete pre-execution model events do not establish every model-tool denial. |
 
 [Gateway evidence](AGENT-GATEWAY.md#usability-integration-evidence--22-october-2026)
@@ -103,13 +109,26 @@ ID without coding turn/item IDs is not that relationship. Preserve native lifecy
 and history, but do not infer public voice provenance from timing or transcript text.
 There was no physical microphone or human acoustic acceptance. See
 [the native voice evidence and provenance limit](AGENT-NATIVE-RUNTIME.md#current-bounded-evidence).
+The later bounded ephemeral transcript display (`210e939`, integrated as `467285a`)
+and delayed prior-call rejection (`6a8423b`) passed synthetic checks; the real
+application check is pending. Ephemeral display does not establish the missing
+retained coding-turn relationship.
 
-Full acceptance is not asserted. Changed-profile context refresh through explicit
-native compaction is approved and under implementation; its acknowledgement,
-compaction-item/turn completion, retained history and unavailable cost evidence must
-remain separate. Help/private-work/preparation UI checks are still in progress.
+Changed-profile context refresh through explicit native compaction passed the real
+Foundation/native-adapter acceptance with an isolated signed-in chat and a synthetic
+permission resolver. Changed ordinary Start rejected before native launch; explicit
+Restart retained the chat, completed the exact compaction item/turn and applied the
+new instruction marker. Prior public messages remained readable, unchanged Restart
+created no native turn, and final Stop confirmed exit. This does not establish the
+desktop application/provider flow. The failure-path instruction digest invalidation
+is integrated as `9aba24a`; the desktop check and its failure-path acceptance remain
+separate. Acknowledgement, item/turn completion, retained history and unavailable
+per-compaction cost remain distinct evidence.
 [The native context-refresh evidence](AGENT-NATIVE-RUNTIME.md#compaction-completion-history-and-cost-evidence)
-records the supported diagnostic, not acceptance of the pending product integration.
+records the diagnostic and Foundation/adapter acceptance boundaries.
+
+Full acceptance is not asserted. The later help fix, compaction desktop flow, voice
+display and failure corrections need their recorded current-source app checks.
 Real third-party configuration/authentication/operation needs its own owner-approved
 service evidence; no such success is inferred from the local broker fixtures.
 
