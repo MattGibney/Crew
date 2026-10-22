@@ -2,7 +2,7 @@
 
 ## Crew 0.16.2 release scope
 
-The second hosted gate stopped before signing/publication on a multi-project test fixture that accepted historical reports as resumed readiness. Require current-run process and progress evidence before checking the native launch log. Production code is unchanged; preserve both failed tags/runs and use 0.16.2 for the authorized TypeScript publication. See [REL-0.16.2](../tickets/REL-0.16.2.md).
+The second hosted gate stopped before signing/publication on a multi-project test fixture that accepted historical reports as resumed readiness. Require current-run process and progress evidence before checking the native launch log. Production code is unchanged; preserve both failed tags/runs and use 0.16.2 for the authorized TypeScript publication. See [REL-0.16.2](../tickets/REL-0.16.2.md). Published [stable 0.16.2](https://github.com/MattGibney/Crew/releases/tag/v0.16.2) from 720c9633 after hosted 661/661 and signed/notarized gates. Independent unauthenticated public downloads pass checksums/feed, signature, stapler, Gatekeeper, DMG integrity and all 364 compiled runtime/resource comparisons. User installation/profile and microphone remain untouched; automatic installation/profile recovery is not claimed.
 
 ## Crew 0.16.1 release scope
 
