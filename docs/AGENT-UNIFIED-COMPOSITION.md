@@ -70,31 +70,53 @@ independent project resources are not deleted by Stop or Quit.
 
 ## Validation boundary
 
-Bounded checks use real durable stores and the real MCP HTTP protocol. Synthetic
-native adapters are explicitly labelled and prove only control-plane behavior.
-Unsigned-in native probes have verified empty-thread persistence/read/resume,
-profile acknowledgement and voice catalogue discovery without inference or audio.
-The workspace sandbox has separately exercised local inspect/edit/test and denied
-outside access. These do not establish a signed-in agent completing project work,
-a real external provider mutation, physical microphone/acoustic acceptance or a
-packaged application lifecycle. Those milestones remain distinct acceptance steps.
+The 22 October 2026 integration checkpoint is `0150543` (runtime code `5273d9d`).
+The former outer-sandbox/resume blocker is superseded: the pinned native host uses
+its own model authentication, while a verified native named profile constrains model
+tools. Start/resume/turn selection retains the exact profile, `never` escalation and
+neutral local workspace. Real project commands go through the separately authorized
+executor. This is not process-wide isolation of the trusted native host. See
+[the current native policy](ACCESS-ISOLATION.md#native-boundary).
 
+The evidence sets remain distinct:
 
-Current unresolved acceptance: a fresh-process native resume restores a local
-environment, so the adapter holds that route. A bounded native probe verified
-named permission-profile selection on the same resumed chat and standalone command
-denial of a synthetic private file. Effective filesystem restrictions inside a
-server-managed realtime handoff remain unverified. Repeating the named-profile
-resume under Crew's actual outer OS policy failed before a turn: the native
-filesystem helper could not apply its sandbox (`sandbox_apply: Operation not
-permitted`). The standalone result does not establish a usable combined boundary,
-and completing owner sign-in alone does not resolve that local failure.
+| Scope | Observed result | Limit |
+| --- | --- | --- |
+| Signed-in composed typed work | The manager created and started a worker, steered active work, queued input, ran an approved disposable project command and received the report. Both recorded jobs completed. | This verifies the tested manager/worker workflow, not arbitrary projects or external providers. |
+| Isolated unsigned package | Actual launch, Quit and reopen preserved the same native chats and signed-in state. | No installed-app replacement, signed release or automatic-update acceptance. |
+| Real access/broker components | Actual access store, authorization service, vault and gateway exercised exact once approval/resume, session and persistent grants, revocation before later admission, duplicate suppression and changed-argument rejection against an authenticated loopback MCP fixture. | The upstream and credential values were synthetic; this is not a live third-party service test. |
+| Credential execution | The controlled CLI received its synthetic credential only inside the trusted executor; explicit environment, redacted output and final admission denial were checked. Actual Electron safeStorage separately passed synthetic store/rotate/reopen, stale-reference denial and deletion checks. | Vault storage and executor checks do not prove every provider's credential contract or isolate arbitrary trusted-host code. |
+| Native model-tool permissions | Installed-runtime command checks denied protected reads/writes and direct network access; exact profile/configuration, skill paths and session revocation were checked. | No-model command checks and incomplete pre-execution model events do not establish every model-tool denial. |
 
-Real workspace commands now retain private evidence for their launched process
-group and observed descendants. Foreground completion and a background process's
-natural exit plus `environmentOwnerApi.reconcileOperation(operationId)` have passed
-the real Foundation reservation check with a synthetic native session. Reconciliation
+[Gateway evidence](AGENT-GATEWAY.md#usability-integration-evidence--22-october-2026)
+and [access semantics](ACCESS-CONTROLS.md#execution-and-recovery) retain the precise
+once/session/persistent scope and fresh permit-redemption requirements. Credentials
+stay in the vault until trusted executor use; neither native MCP dispatch approval nor
+a previously advertised tool grants service authority. Connection removal/revocation
+blocks later admission and does not undo an operation already admitted.
+
+A separate real subscription WebRTC check used generated speech and produced one
+server-created coding turn that completed in the same resumed chat, without the test
+sending `turn/start`. The pinned runtime did not supply the promotion relationship
+needed to publish that coding turn as owner voice history. A legacy realtime handoff
+ID without coding turn/item IDs is not that relationship. Preserve native lifecycle
+and history, but do not infer public voice provenance from timing or transcript text.
+There was no physical microphone or human acoustic acceptance. See
+[the native voice evidence and provenance limit](AGENT-NATIVE-RUNTIME.md#current-bounded-evidence).
+
+Full acceptance is not asserted. Changed-profile context refresh through explicit
+native compaction is approved and under implementation; its acknowledgement,
+compaction-item/turn completion, retained history and unavailable cost evidence must
+remain separate. Help/private-work/preparation UI checks are still in progress.
+[The native context-refresh evidence](AGENT-NATIVE-RUNTIME.md#compaction-completion-history-and-cost-evidence)
+records the supported diagnostic, not acceptance of the pending product integration.
+Real third-party configuration/authentication/operation needs its own owner-approved
+service evidence; no such success is inferred from the local broker fixtures.
+
+Workspace commands retain private evidence for their launched process group and
+observed descendants. Foreground completion and a background process's natural exit
+plus `environmentOwnerApi.reconcileOperation(operationId)` passed the real Foundation
+reservation check with a synthetic native session. This separate component check
 preserves unknown outcomes and never replays or cleans resources. A dispatch crash
-before the returned evidence reference is saved remains unresolved and blocks
-reservation. Sampling does not establish unobserved daemonization or arbitrary
-resource cleanup; this is not full signed-in or packaged lifecycle acceptance.
+before its returned evidence reference is saved still blocks reservation. Sampling
+does not establish unobserved daemonization or arbitrary resource cleanup.
