@@ -25,6 +25,7 @@ import type {
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AccessStore } from "./state.mjs";
+import { crewActionRequiresProject } from "./crew-scopes.mjs";
 import type {
   AccessAssignment,
   AccessReservation,
@@ -79,12 +80,6 @@ const administrative = new Set<CrewAction>([
   "connections.manage",
   "grants.approve",
   "grants.revoke",
-]);
-const projectOnly = new Set<CrewAction>([
-  "agents.create",
-  "jobs.create",
-  "skills.write",
-  "environments.create",
 ]);
 function exact(input: AuthorizationInput): GrantScope {
   const { connectionId, operation, argumentsFingerprint } = input.operation;
@@ -443,7 +438,7 @@ export class ProjectAuthorizationService
         if (target.type !== "agent" && target.type !== "project")
           return denied("Invalid access target.");
         if (target.type === "agent") await this.agent(state, target.agentId);
-        if (projectOnly.has(action) && target.type !== "project")
+        if (crewActionRequiresProject(action) && target.type !== "project")
           return denied("This operation requires project scope.");
         const assignment = state.assignments.find(
           (row) => row.agentId === caller.agentId,

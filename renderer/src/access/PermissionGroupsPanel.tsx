@@ -6,6 +6,10 @@ import type {
   ServiceCapability,
   ServiceConnectionView,
 } from "../../../src/agents/contracts.mjs";
+import {
+  crewPermissionScopes,
+  defaultCrewPermissionScope,
+} from "../../../src/access/crew-scopes.mjs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,6 +30,12 @@ import {
   OwnerRequired,
   useAccessAction,
 } from "./shared";
+
+const scopeLabels = {
+  self: "This agent only",
+  agents: "Selected agents",
+  project: "Entire project",
+} as const;
 
 export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   groups: readonly PermissionGroup[];
@@ -345,6 +355,9 @@ function GroupEditor({
               const permission = draft.grants.crew.find(
                 (item) => item.action === choice.action,
               );
+              const scopes = crewPermissionScopes(choice.action);
+              const unsupportedScope =
+                permission && !scopes.includes(permission.scope.type);
               return (
                 <div key={choice.action}>
                   <Choice
@@ -353,7 +366,10 @@ function GroupEditor({
                       setCrew(
                         choice.action,
                         checked
-                          ? { action: choice.action, scope: { type: "self" } }
+                          ? {
+                              action: choice.action,
+                              scope: defaultCrewPermissionScope(choice.action),
+                            }
                           : null,
                       )
                     }
@@ -371,6 +387,7 @@ function GroupEditor({
                         value={permission.scope.type}
                         onChange={(event) => {
                           const type = event.target.value;
+                          if (!scopes.some((scope) => scope === type)) return;
                           setCrew(choice.action, {
                             action: choice.action,
                             scope:
@@ -382,11 +399,25 @@ function GroupEditor({
                           });
                         }}
                       >
-                        <option value="self">This agent only</option>
-                        <option value="agents">Selected agents</option>
-                        <option value="project">Entire project</option>
+                        {unsupportedScope && (
+                          <option value={permission.scope.type} disabled>
+                            {scopeLabels[permission.scope.type]} (saved scope)
+                          </option>
+                        )}
+                        {scopes.map((scope) => (
+                          <option key={scope} value={scope}>
+                            {scopeLabels[scope]}
+                          </option>
+                        ))}
                       </NativeSelect>
-                      {permission.scope.type === "agents" &&
+                      {unsupportedScope && (
+                        <p className="text-sm text-muted-foreground">
+                          This action requires the entire project. The saved
+                          scope is retained until you change or remove it.
+                        </p>
+                      )}
+                      {!unsupportedScope &&
+                        permission.scope.type === "agents" &&
                         props.agents.map((agent) => (
                           <Choice
                             key={agent.id}
