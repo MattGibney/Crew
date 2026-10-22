@@ -261,6 +261,7 @@ function AccessSettings({
   visible: boolean;
 }) {
   const [access, setAccess] = useState<AccessOwnerView | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceView[]>([]);
   const [error, setError] = useState("");
   const [toast, setToast] = useState<{ id: string; message: string } | null>(
     null,
@@ -270,10 +271,21 @@ function AccessSettings({
   const reload = useCallback(async () => {
     const request = ++sequence.current;
     try {
-      const next = await command<AccessOwnerView>("access.snapshot", {});
+      const [next, environments] = await Promise.all([
+        command<AccessOwnerView>("access.snapshot", {}),
+        command<{ workspaces: WorkspaceView[] }>("environments.snapshot", {}),
+      ]);
       if (next.projectId !== projectId) throw new Error("Project mismatch");
+      if (
+        !Array.isArray(environments.workspaces) ||
+        environments.workspaces.some(
+          (workspace) => workspace.policy.projectId !== projectId,
+        )
+      )
+        throw new Error("Workspace project mismatch");
       if (alive.current && request === sequence.current) {
         setAccess(next);
+        setWorkspaces(environments.workspaces);
         setError("");
       }
     } catch {
@@ -336,6 +348,13 @@ function AccessSettings({
       {access ? (
         <OwnerAccessSettings
           snapshot={access}
+          workspaces={workspaces.map((workspace) => ({
+            policy: workspace.policy,
+            label: workspace.workspace.path,
+            description: workspace.writable
+              ? "Read and write files"
+              : "Read files only",
+          }))}
           isOwner
           onNotify={notify}
           onCommand={async (name, args) => {
