@@ -274,4 +274,22 @@ Selected project skills are exposed through supported `skills/extraRoots/set`
 before skills/list; exact SKILL.md parent directories are acknowledged in an
 unsigned-in native probe. No signed-in model turn or resumed voice inference has
 yet established the complete isolation/continuity milestone. The new restriction
-is an actual installed-runtime blocker in addition to owner subscription sign-in.
+is an isolation-verification blocker for this implementation in addition to owner
+subscription sign-in. Restored environment metadata alone is not an observation of
+model filesystem-tool use. Explicit text turns support an override; server-managed
+realtime handoffs do not pass through Crew's turn/start call, and effective tool
+exposure for that resumed route remains unverified.
+
+A bounded follow-up found that the same installed runtime supports named permission
+profiles on thread/resume. A fresh native process resumed the same unused named chat
+with the selected profile. A standalone `command/exec` using that profile read an
+allowed synthetic workspace file and received `Operation not permitted` for a
+synthetic private-state file; the read-only baseline could read that private file.
+Both native processes exited normally and no model turn occurred. This establishes
+profile selection and command-sandbox enforcement only. `command/exec` is standalone
+and has no thread identity, so it does not establish that server-created realtime
+handoffs inherit the profile or that every model-accessible filesystem tool enforces
+its deny rules. The current provider's outer OS policy allows the native process
+access to its own private runtime root; that policy alone does not exclude that root
+from native tool descendants. Full resumed handoff isolation remains unresolved,
+and this probe did not change the production launch policy or relax its hold.

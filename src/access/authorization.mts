@@ -1098,11 +1098,37 @@ export class ProjectAuthorizationService
       const target = await this.agent(state, input.agentId);
       if (
         target.runtime.session.sessionId !== null ||
-        target.runtime.threadId !== null ||
-        state.assignments.some((row) => row.agentId === target.id)
+        target.runtime.threadId !== null
       )
         throw new Error(
           "Creation access applies only to a new unprovisioned agent.",
+        );
+      const receipt = state.presetApplications?.find(
+        (row) => row.agentId === target.id,
+      );
+      if (receipt) {
+        if (
+          !isDeepStrictEqual(receipt.actor, input.actor) ||
+          receipt.presetId !== input.presetId ||
+          receipt.presetRevision !== input.expectedPresetRevision
+        )
+          throw new Error(
+            "Provisioning retry differs from the committed preset application.",
+          );
+        // The original access transaction already succeeded. Return today's
+        // authority without reapplying an old preset or restoring revoked access.
+        const current = state.assignments.find(
+          (row) => row.agentId === target.id,
+        );
+        return {
+          permissionGroupIds: current?.permissionGroupIds ?? [],
+          serviceConnectionIds: current?.serviceConnectionIds ?? [],
+          inheritPersonalServiceCredentials: false,
+        };
+      }
+      if (state.assignments.some((row) => row.agentId === target.id))
+        throw new Error(
+          "Existing access has no matching preset application receipt.",
         );
       if (input.actor.type === "user") owner(state, input.actor);
       else {
@@ -1167,6 +1193,13 @@ export class ProjectAuthorizationService
         permissionGroupIds: access.permissionGroupIds,
         serviceConnectionIds: access.serviceConnectionIds,
         revision: 1,
+      });
+      (state.presetApplications ??= []).push({
+        agentId: target.id,
+        actor: input.actor,
+        presetId: input.presetId,
+        presetRevision: input.expectedPresetRevision,
+        appliedAt: now(),
       });
       audit(state, input.actor, "preset.applied", target.id);
       return access;

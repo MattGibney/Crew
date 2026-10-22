@@ -75,6 +75,9 @@ preparation/status/messaging stay responsive during remote I/O. `run` returns ei
 `validateCaller` boolean for this boundary, and does not redeem the permit twice. Integrate
 `broker.settlement(projectId)` before stopping/replacing the host. Pending approval, in-flight,
 uncertain and unflushed authorization-settlement records remain distinguishable.
+Individual agent Stop uses `broker.settlement(projectId, caller)` to inspect only
+that exact project, agent and session. This observation remains available after
+session admission closes; it does not grant authority to execute new work.
 
 `GatewayCatalogue` is an observed schema projection. `refresh(connection)` performs discovery
 outside access transactions; `hasOperation` only consults that projection and cannot re-enter the

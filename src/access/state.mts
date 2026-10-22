@@ -23,6 +23,13 @@ export interface AccessAssignment {
   serviceConnectionIds: string[];
   revision: number;
 }
+export interface PresetApplicationReceipt {
+  agentId: string;
+  actor: Actor;
+  presetId: string;
+  presetRevision: number;
+  appliedAt: string;
+}
 export interface AccessAttempt {
   permit: ExecutionPermit;
   admitted: boolean;
@@ -50,6 +57,8 @@ export interface AccessState {
   presets: AgentCreationPreset[];
   creationDefaults: { revision: number; presetId: string | null };
   assignments: AccessAssignment[];
+  /** Absent in earlier fresh-project journals; never inferred from assignments. */
+  presetApplications?: PresetApplicationReceipt[];
   connections: ServiceConnection[];
   environmentPolicies: EnvironmentPolicy[];
   requests: AccessRequest[];
@@ -89,6 +98,7 @@ export class AccessStore {
       presets: [],
       creationDefaults: { revision: 1, presetId: null },
       assignments: [],
+      presetApplications: [],
       connections: [],
       environmentPolicies: [],
       requests: [],

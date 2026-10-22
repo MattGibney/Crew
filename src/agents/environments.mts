@@ -25,6 +25,7 @@ import type {
 import type {
   WorkspaceCommandResult,
   WorkspaceExecutionPolicy,
+  WorkspaceProcessSettlement,
 } from "../access/workspace-executor.mjs";
 import { canonicalJson } from "../gateway/json.mjs";
 
@@ -62,6 +63,10 @@ export interface EnvironmentOperation {
   policy: EnvironmentPolicy;
   state: "running" | "completed" | "uncertain";
   executionSettled: boolean;
+  /** Private helper receipts; never exposed by model-facing operation views. */
+  processEvidenceRefs: string[];
+  /** False when a helper may have launched but its response/ref was lost. */
+  processEvidenceComplete: boolean;
   result: JsonObject | null;
   createdAt: string;
   updatedAt: string;
@@ -105,12 +110,19 @@ export interface ProjectEnvironmentOptions {
   execute(
     policy: WorkspaceExecutionPolicy,
     input: { command: string; relativeCwd?: string; timeoutMs?: number },
-  ): Promise<WorkspaceCommandResult & { processesSettled?: boolean }>;
+  ): Promise<WorkspaceCommandResult>;
+  /** Read-only helper; never launches, signals, replays, or guesses identities. */
+  observeExecution(
+    privateDirectory: string,
+    processEvidenceRef: string,
+  ): Promise<WorkspaceProcessSettlement>;
 }
 
 const now = () => new Date().toISOString();
 const MAX_STATE = 32 * 1024 * 1024;
 const MAX_OPERATIONS = 10_000;
+const evidenceRef =
+  /^workspace-process:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const idValid = (value: unknown): value is string =>
   typeof value === "string" &&
   value.length > 0 &&
@@ -181,7 +193,10 @@ function boundedCommand(args: JsonObject) {
     throw new Error(
       "Command timeout must be between 100 and 120000 milliseconds.",
     );
-  return { command: commandText(command as string[]), relativeCwd, timeoutMs };
+  const quotedCommand = commandText(command as string[]);
+  if (Buffer.byteLength(quotedCommand) > 64 * 1024)
+    throw new Error("Quoted command exceeds the executor input limit.");
+  return { command: quotedCommand, relativeCwd, timeoutMs };
 }
 
 // The journal contains trusted policy paths and bounded command results, never
@@ -261,6 +276,11 @@ const validate = new Ajv({
         policy: policySchema,
         state: { enum: ["running", "completed", "uncertain"] },
         executionSettled: { type: "boolean" },
+        processEvidenceRefs: array(
+          { type: "string", pattern: evidenceRef.source },
+          2,
+        ),
+        processEvidenceComplete: { type: "boolean" },
         result: nullable({ type: "object" }),
         createdAt: text,
         updatedAt: text,
@@ -366,6 +386,17 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
           )
             throw new Error("Unsafe environment journal.");
           const saved: unknown = JSON.parse(await file.readFile("utf8"));
+          // Earlier receipts predate process observation. Preserve their known
+          // results, but never invent missing evidence for an unsettled command.
+          if (jsonObject(saved) && Array.isArray(saved.operations)) {
+            for (const operation of saved.operations)
+              if (jsonObject(operation)) {
+                if (operation.processEvidenceRefs === undefined)
+                  operation.processEvidenceRefs = [];
+                if (operation.processEvidenceComplete === undefined)
+                  operation.processEvidenceComplete = false;
+              }
+          }
           service.validateState(saved);
           service.state = saved;
         } finally {
@@ -450,7 +481,7 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         environment.agentId !== operation.targetAgentId ||
         environment.policyId !== operation.policy.id ||
         operation.policy.projectId !== state.projectId ||
-        (operation.state !== "completed" && operation.executionSettled)
+        (operation.state === "running" && operation.executionSettled)
       )
         throw new Error("Invalid environment operation.");
     }
@@ -730,6 +761,56 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         metadata: { policyId: row.policyId, state: row.state, retained: true },
       }));
   }
+  async reconcileOperation(
+    actor: Actor,
+    operationId: string,
+  ): Promise<JsonObject> {
+    this.owner(actor);
+    if (!idValid(operationId)) throw new Error("Invalid operation identity.");
+    const operation = structuredClone(
+      this.state.operations.find((row) => row.id === operationId),
+    );
+    if (!operation) throw new Error("Unknown environment operation.");
+    if (
+      operation.state === "running" ||
+      operation.executionSettled ||
+      !operation.processEvidenceComplete
+    )
+      return this.operationView(operation);
+    // Observation is read-only and outside the short shared gate. Each ref was
+    // durably returned by this operation; no directory scan or guessed PID.
+    const observations = await Promise.all(
+      operation.processEvidenceRefs.map((ref) =>
+        this.options
+          .observeExecution(this.options.directory, ref)
+          .catch(() => null),
+      ),
+    );
+    const settled = observations.every(
+      (observation, index) =>
+        observation?.processesSettled === true &&
+        observation.processEvidenceRef === operation.processEvidenceRefs[index],
+    );
+    if (!settled) return this.operationView(operation);
+    return this.options.admission.run(async () => {
+      this.owner(actor);
+      return this.transaction((draft) => {
+        const current = draft.operations.find((row) => row.id === operationId)!;
+        if (
+          current.state !== "running" &&
+          current.processEvidenceComplete &&
+          canonicalJson(current.processEvidenceRefs) ===
+            canonicalJson(operation.processEvidenceRefs)
+        ) {
+          // Outcome uncertainty is deliberately retained. Only process activity
+          // becomes settled; this never marks a command successful or replays it.
+          current.executionSettled = true;
+          current.updatedAt = now();
+        }
+        return this.operationView(current);
+      });
+    });
+  }
   async list(caller: CallerContext, agentId: string): Promise<JsonValue> {
     validCaller(caller, this.options.projectId);
     if (!idValid(agentId)) throw new Error("Invalid environment target.");
@@ -767,11 +848,7 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         .filter((row) => row.state === "running")
         .map((row) => row.id),
       uncertainOperationIds: operations
-        .filter(
-          (row) =>
-            row.state === "uncertain" ||
-            (row.state === "completed" && !row.executionSettled),
-        )
+        .filter((row) => row.state !== "running" && !row.executionSettled)
         .map((row) => row.id),
       observedAt: now(),
     };
@@ -1011,6 +1088,8 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
           policy: workspace.policy,
           state: immediate ? "completed" : "running",
           executionSettled: immediate,
+          processEvidenceRefs: [],
+          processEvidenceComplete: immediate,
           result: immediate ? this.environmentView(savedEnvironment) : null,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -1033,7 +1112,40 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     // Execution deliberately occurs after release of the shared admission gate.
     // The already committed running receipt is the reservation/Stop blocker.
     try {
-      let result: WorkspaceCommandResult & { processesSettled?: boolean };
+      let result: WorkspaceCommandResult;
+      let evidenceComplete = true;
+      const captureEvidence = async (
+        returned: WorkspaceCommandResult,
+        final: boolean,
+      ) => {
+        if (
+          !["exited", "timed_out", "not_started"].includes(returned.state) ||
+          typeof returned.stdout !== "string" ||
+          typeof returned.stderr !== "string" ||
+          typeof returned.mayHaveExecuted !== "boolean" ||
+          typeof returned.processesSettled !== "boolean" ||
+          !(
+            returned.processEvidenceRef === null ||
+            evidenceRef.test(returned.processEvidenceRef)
+          )
+        )
+          throw new Error("Invalid executor result.");
+        evidenceComplete =
+          evidenceComplete &&
+          (!returned.mayHaveExecuted || returned.processEvidenceRef !== null);
+        await this.transaction((draft) => {
+          const saved = draft.operations.find(
+            (row) => row.id === operation.id,
+          )!;
+          if (
+            returned.processEvidenceRef &&
+            !saved.processEvidenceRefs.includes(returned.processEvidenceRef)
+          )
+            saved.processEvidenceRefs.push(returned.processEvidenceRef);
+          saved.processEvidenceComplete = final && evidenceComplete;
+          saved.updatedAt = now();
+        });
+      };
       let identity: DirectoryIdentity | null = environment.identity;
       if (input.action === "create") {
         await mkdir(environment.directory, { mode: 0o700 });
@@ -1059,7 +1171,10 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
             timeoutMs: 120_000,
           },
         );
-        if (result.state === "exited" && result.exitCode === 0) {
+        const verifyRegistration =
+          result.state === "exited" && result.exitCode === 0;
+        await captureEvidence(result, !verifyRegistration);
+        if (verifyRegistration) {
           const registered = await this.options.execute(
             this.executionPolicy(workspace, environment),
             {
@@ -1074,6 +1189,7 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
               timeoutMs: 10_000,
             },
           );
+          await captureEvidence(registered, true);
           const paths = registered.stdout.trim().split("\n");
           if (
             registered.state !== "exited" ||
@@ -1098,6 +1214,7 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
           this.executionPolicy(workspace, environment),
           command!,
         );
+        await captureEvidence(result, true);
       }
       if (
         !["exited", "timed_out", "not_started"].includes(result.state) ||
