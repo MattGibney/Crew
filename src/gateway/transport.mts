@@ -20,15 +20,30 @@ export interface GatewayNativeRequest {
 export class GatewayRequestJournal {
   constructor(private readonly directory: string) {}
   async initialize(): Promise<void> {
-    if (!isAbsolute(this.directory)) throw new Error("Gateway journal path must be absolute.");
+    if (!isAbsolute(this.directory))
+      throw new Error("Gateway journal path must be absolute.");
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const info = await lstat(this.directory);
-    if (!info.isDirectory() || info.isSymbolicLink() || info.mode & 0o077 || info.uid !== process.getuid?.())
-      throw new Error("Gateway request journal must be private and owner controlled.");
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      info.mode & 0o077 ||
+      info.uid !== process.getuid?.()
+    )
+      throw new Error(
+        "Gateway request journal must be private and owner controlled.",
+      );
   }
-  async resolve(caller: CallerContext, native: GatewayNativeRequest, request: JsonObject): Promise<string> {
-    if (!native.epoch || native.epoch.length > 512 ||
-        !["string", "number"].includes(typeof native.requestId))
+  async resolve(
+    caller: CallerContext,
+    native: GatewayNativeRequest,
+    request: JsonObject,
+  ): Promise<string> {
+    if (
+      !native.epoch ||
+      native.epoch.length > 512 ||
+      !["string", "number"].includes(typeof native.requestId)
+    )
       throw new Error("Trusted native request identity is required.");
     const key = sha256(canonicalJson({ caller, native }));
     const fingerprint = sha256(canonicalJson(request));
@@ -36,18 +51,41 @@ export class GatewayRequestJournal {
     const file = join(this.directory, `${key}.json`);
     return withStateLock(this.directory, `${key}.lock`, async () => {
       try {
-        const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+        const handle = await open(
+          file,
+          constants.O_RDONLY | constants.O_NOFOLLOW,
+        );
         try {
           const info = await handle.stat();
-          if (!info.isFile() || info.nlink !== 1 || info.size > 2048 || info.mode & 0o077 || info.uid !== process.getuid?.())
+          if (
+            !info.isFile() ||
+            info.nlink !== 1 ||
+            info.size > 2048 ||
+            info.mode & 0o077 ||
+            info.uid !== process.getuid?.()
+          )
             throw new Error("Invalid gateway request identity record.");
           const saved: unknown = JSON.parse(await handle.readFile("utf8"));
-          if (!saved || typeof saved !== "object" ||
-              canonicalJson(saved) !== canonicalJson({ version: 1, invocationId, fingerprint }))
-            throw new Error("Native request identity was reused for different tool arguments.");
-        } finally { await handle.close(); }
+          if (
+            !saved ||
+            typeof saved !== "object" ||
+            canonicalJson(saved) !==
+              canonicalJson({ version: 1, invocationId, fingerprint })
+          )
+            throw new Error(
+              "Native request identity was reused for different tool arguments.",
+            );
+        } finally {
+          await handle.close();
+        }
       } catch (error) {
-        if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+        if (!(
+          error &&
+          typeof error === "object" &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ))
+          throw error;
         await atomicJson(file, { version: 1, invocationId, fingerprint });
       }
       return invocationId;
@@ -71,10 +109,18 @@ export async function attachGatewayMcpTransport(options: {
     invocationIdForRequest: async (requestId, request) => {
       const caller = await options.authenticatedCaller();
       if (!caller) throw new Error("Authenticated Crew session required.");
-      return options.journal.resolve(caller, await options.nativeRequest(requestId), request);
+      return options.journal.resolve(
+        caller,
+        await options.nativeRequest(requestId),
+        request,
+      );
     },
   });
-  try { await server.connect(options.transport); }
-  catch { await server.close().catch(() => {}); throw new Error("Gateway transport could not be attached."); }
+  try {
+    await server.connect(options.transport);
+  } catch {
+    await server.close().catch(() => {});
+    throw new Error("Gateway transport could not be attached.");
+  }
   return { close: () => server.close() };
 }

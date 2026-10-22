@@ -90,3 +90,13 @@ local/session storage or console output. Desktop and 390 CSS-pixel layouts were 
 the narrow approval view had no horizontal overflow. Screenshots and the fixture stay outside Git.
 These checks establish the contributed UI/callback behavior only, not transport authorization,
 vault persistence, upstream authentication or combined native runtime acceptance.
+
+
+## Unified mounting adapter
+
+`OwnerAccessSettings` now mounts these panels together with `CreationPresetsPanel`. Supply the live `AccessOwnerView` from the authenticated `createAccessOwnerApi` and route its `onCommand` callback to that same owner's IPC command adapter. Subscribe to `access_changed` and refresh props in place. Do not key the component by a snapshot/revision, as that would discard editor drafts. Group, connection and assignment editors retain captured revisions and explicitly show an external-save conflict. The backend independently enforces compare-and-swap.
+
+Presets use canonical `AgentCreationPreset` records. The owner can choose an existing configured agent as a profile/skills/runtime template, edit the new-agent instructions, assign groups/connections and choose the default. No profile template grants authority by itself. Foundation consumes the canonical provisioning port and remains responsible for publishing a usable agent only after assignment succeeds.
+
+
+Connection verification uses an independent optional `onVerify(connectionId, expectedRevision)` callback and displays current backend observation after the check. It is not labelled as OAuth reconnect. Owner-only administration actions are excluded from selectable agent Crew capabilities; saving a group must not imply agents can administer grants or credentials.

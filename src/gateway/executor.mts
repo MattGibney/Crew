@@ -52,7 +52,10 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       authorization: AuthorizationService;
       vault: GatewayCredentialVault;
       admission: GatewayExecutionAdmission;
-      onCatalogue?: (connection: ServiceConnection, capabilities: ServiceCapability[]) => void;
+      onCatalogue?: (
+        connection: ServiceConnection,
+        capabilities: ServiceCapability[],
+      ) => void;
       connections: GatewayConnections;
       resolveConfiguration: ResolveExecutorConfiguration;
       privateDirectory: string;
@@ -180,17 +183,39 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               "Credential-bearing arguments are prohibited.",
               evidence,
             );
-          const dispatch = async (action: () => Promise<ExecutorResult>): Promise<ExecutorResult> => {
-            if (options.signal?.aborted || !(await this.options.canDispatch(invocation)))
-              return noExecution("Execution admission denied or cancelled.", evidence);
-            const admission = await this.options.admission.run(invocation, permit, async () => {
-              if (options.signal?.aborted || !(await this.options.canDispatch(invocation)))
-                return noExecution("Execution cancelled before dispatch.", evidence);
-              admitted = true;
-              return action();
-            });
-            return admission.state === "admitted" ? admission.result
-              : noExecution("Execution admission denied or cancelled.", evidence);
+          const dispatch = async (
+            action: () => Promise<ExecutorResult>,
+          ): Promise<ExecutorResult> => {
+            if (
+              options.signal?.aborted ||
+              !(await this.options.canDispatch(invocation))
+            )
+              return noExecution(
+                "Execution admission denied or cancelled.",
+                evidence,
+              );
+            const admission = await this.options.admission.run(
+              invocation,
+              permit,
+              async () => {
+                if (
+                  options.signal?.aborted ||
+                  !(await this.options.canDispatch(invocation))
+                )
+                  return noExecution(
+                    "Execution cancelled before dispatch.",
+                    evidence,
+                  );
+                admitted = true;
+                return action();
+              },
+            );
+            return admission.state === "admitted"
+              ? admission.result
+              : noExecution(
+                  "Execution admission denied or cancelled.",
+                  evidence,
+                );
           };
           if (config.type === "cli")
             return this.executeCli(
@@ -222,36 +247,36 @@ export class TrustedServiceExecutor implements ServiceExecutor {
             )
               return noExecution("Tool schema or operation changed.", evidence);
             return dispatch(async () => {
-            const result = await client.callTool(
-              {
-                name: capability.upstreamName,
-                arguments: invocation.operation.arguments,
-              },
-              CallToolResultSchema,
-              {
-                timeout: config.timeoutMs,
-                signal: options.signal,
-                onprogress: () =>
-                  options.onProgress?.({
-                    invocationId: invocation.operation.invocationId,
-                    attemptId: permit.attemptId,
-                    label: "Upstream progress",
-                    detail: null,
-                  }),
-              },
-            );
-            const safe = jsonObject(sanitizer.value(result));
-            if (result.isError)
+              const result = await client.callTool(
+                {
+                  name: capability.upstreamName,
+                  arguments: invocation.operation.arguments,
+                },
+                CallToolResultSchema,
+                {
+                  timeout: config.timeoutMs,
+                  signal: options.signal,
+                  onprogress: () =>
+                    options.onProgress?.({
+                      invocationId: invocation.operation.invocationId,
+                      attemptId: permit.attemptId,
+                      label: "Upstream progress",
+                      detail: null,
+                    }),
+                },
+              );
+              const safe = jsonObject(sanitizer.value(result));
+              if (result.isError)
+                return {
+                  state: "failed",
+                  externalReference: null,
+                  reason: `Upstream tool error: ${canonicalJson(safe).slice(0, 2000)}`,
+                };
               return {
-                state: "failed",
+                state: "succeeded",
                 externalReference: null,
-                reason: `Upstream tool error: ${canonicalJson(safe).slice(0, 2000)}`,
+                content: [{ type: "data", value: { crewMcpResult: safe } }],
               };
-            return {
-              state: "succeeded",
-              externalReference: null,
-              content: [{ type: "data", value: { crewMcpResult: safe } }],
-            };
             });
           });
         },
@@ -508,7 +533,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
     permit: ExecutionPermit,
     token: string | null,
     sanitizer: Sanitizer,
-    dispatch: (action: () => Promise<ExecutorResult>) => Promise<ExecutorResult>,
+    dispatch: (
+      action: () => Promise<ExecutorResult>,
+    ) => Promise<ExecutorResult>,
     evidence: string,
     options: BrokerCallOptions,
   ): Promise<ExecutorResult> {
@@ -571,123 +598,132 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       invocation.operation.invocationId,
     );
     await atomicJson(marker, { attemptId: permit.attemptId, state: "pending" });
-    return dispatch(() => new Promise<ExecutorResult>((resolve) => {
-      const child = spawn(config.executable, mapped.argv, {
-        cwd: config.cwd,
-        env: environment,
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      const id = invocation.operation.invocationId;
-      this.activeInvocationIds.add(id);
-      const stdout: Buffer[] = [],
-        stderr: Buffer[] = [];
-      let outBytes = 0,
-        errBytes = 0,
-        overflow = false,
-        cancelled = false,
-        done = false;
-      let grace: ReturnType<typeof setTimeout> | undefined;
-      const finish = (result: ExecutorResult) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        if (grace) clearTimeout(grace);
-        options.signal?.removeEventListener("abort", cancel);
-        resolve(result);
-      };
-      const exited = async (result: ExecutorResult) => {
-        try {
-          await atomicJson(marker, {
-            attemptId: permit.attemptId,
-            state: "exited",
+    return dispatch(
+      () =>
+        new Promise<ExecutorResult>((resolve) => {
+          const child = spawn(config.executable, mapped.argv, {
+            cwd: config.cwd,
+            env: environment,
+            shell: false,
+            stdio: ["pipe", "pipe", "pipe"],
           });
-          finish(result);
-        } catch {
-          finish({
-            state: "uncertain",
-            verificationRef: null,
-            reason: "CLI exit could not be recorded durably.",
+          const id = invocation.operation.invocationId;
+          this.activeInvocationIds.add(id);
+          const stdout: Buffer[] = [],
+            stderr: Buffer[] = [];
+          let outBytes = 0,
+            errBytes = 0,
+            overflow = false,
+            cancelled = false,
+            done = false;
+          let grace: ReturnType<typeof setTimeout> | undefined;
+          const finish = (result: ExecutorResult) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            if (grace) clearTimeout(grace);
+            options.signal?.removeEventListener("abort", cancel);
+            resolve(result);
+          };
+          const exited = async (result: ExecutorResult) => {
+            try {
+              await atomicJson(marker, {
+                attemptId: permit.attemptId,
+                state: "exited",
+              });
+              finish(result);
+            } catch {
+              finish({
+                state: "uncertain",
+                verificationRef: null,
+                reason: "CLI exit could not be recorded durably.",
+              });
+            }
+          };
+          const cancel = () => {
+            if (cancelled) return;
+            cancelled = true;
+            child.kill("SIGTERM"); // Cooperative signal to this owned child only; never force-kill.
+            grace = setTimeout(
+              () =>
+                finish({
+                  state: "uncertain",
+                  verificationRef: null,
+                  reason:
+                    "CLI cancellation requested; execution/exit is unconfirmed.",
+                }),
+              500,
+            );
+          };
+          const timer = setTimeout(cancel, config.timeoutMs);
+          options.signal?.addEventListener("abort", cancel, { once: true });
+          if (options.signal?.aborted) cancel();
+          child.stdout.on("data", (chunk: Buffer) => {
+            outBytes += chunk.length;
+            if (outBytes <= 64 * 1024) stdout.push(chunk);
+            else {
+              overflow = true;
+              cancel();
+            }
           });
-        }
-      };
-      const cancel = () => {
-        if (cancelled) return;
-        cancelled = true;
-        child.kill("SIGTERM"); // Cooperative signal to this owned child only; never force-kill.
-        grace = setTimeout(
-          () =>
-            finish({
-              state: "uncertain",
-              verificationRef: null,
-              reason:
-                "CLI cancellation requested; execution/exit is unconfirmed.",
-            }),
-          500,
-        );
-      };
-      const timer = setTimeout(cancel, config.timeoutMs);
-      options.signal?.addEventListener("abort", cancel, { once: true });
-      if (options.signal?.aborted) cancel();
-      child.stdout.on("data", (chunk: Buffer) => {
-        outBytes += chunk.length;
-        if (outBytes <= 64 * 1024) stdout.push(chunk);
-        else {
-          overflow = true;
-          cancel();
-        }
-      });
-      child.stderr.on("data", (chunk: Buffer) => {
-        errBytes += chunk.length;
-        if (errBytes <= 64 * 1024) stderr.push(chunk);
-        else {
-          overflow = true;
-          cancel();
-        }
-      });
-      child.stdin.on("error", () => {});
-      child.on("error", () => {
-        if (child.pid === undefined) {
-          this.activeInvocationIds.delete(id);
-          void exited(noExecution("CLI process was not spawned.", evidence));
-        } else
-          finish({
-            state: "uncertain",
-            verificationRef: null,
-            reason: "CLI process observation failed.",
+          child.stderr.on("data", (chunk: Buffer) => {
+            errBytes += chunk.length;
+            if (errBytes <= 64 * 1024) stderr.push(chunk);
+            else {
+              overflow = true;
+              cancel();
+            }
           });
-      });
-      child.on("close", (code, signal) => {
-        this.activeInvocationIds.delete(id);
-        if (cancelled || signal || overflow)
-          return void exited({
-            state: "uncertain",
-            verificationRef: null,
-            reason:
-              "CLI was interrupted or exceeded output limits; outcome needs verification.",
+          child.stdin.on("error", () => {});
+          child.on("error", () => {
+            if (child.pid === undefined) {
+              this.activeInvocationIds.delete(id);
+              void exited(
+                noExecution("CLI process was not spawned.", evidence),
+              );
+            } else
+              finish({
+                state: "uncertain",
+                verificationRef: null,
+                reason: "CLI process observation failed.",
+              });
           });
-        if (code !== 0)
-          return void exited({
-            state: "failed",
-            externalReference: null,
-            reason: `CLI exited ${code ?? "without a code"}: ${sanitizer.text(Buffer.concat(stderr).toString("utf8")).slice(0, 2000)}`,
+          child.on("close", (code, signal) => {
+            this.activeInvocationIds.delete(id);
+            if (cancelled || signal || overflow)
+              return void exited({
+                state: "uncertain",
+                verificationRef: null,
+                reason:
+                  "CLI was interrupted or exceeded output limits; outcome needs verification.",
+              });
+            if (code !== 0)
+              return void exited({
+                state: "failed",
+                externalReference: null,
+                reason: `CLI exited ${code ?? "without a code"}: ${sanitizer.text(Buffer.concat(stderr).toString("utf8")).slice(0, 2000)}`,
+              });
+            void exited({
+              state: "succeeded",
+              externalReference: null,
+              content: [
+                {
+                  type: "data",
+                  value: {
+                    stdout: sanitizer.text(
+                      Buffer.concat(stdout).toString("utf8"),
+                    ),
+                    stderr: sanitizer.text(
+                      Buffer.concat(stderr).toString("utf8"),
+                    ),
+                    exitCode: code,
+                  },
+                },
+              ],
+            });
           });
-        void exited({
-          state: "succeeded",
-          externalReference: null,
-          content: [
-            {
-              type: "data",
-              value: {
-                stdout: sanitizer.text(Buffer.concat(stdout).toString("utf8")),
-                stderr: sanitizer.text(Buffer.concat(stderr).toString("utf8")),
-                exitCode: code,
-              },
-            },
-          ],
-        });
-      });
-      child.stdin.end(stdin);
-    }));
+          child.stdin.end(stdin);
+        }),
+    );
   }
 }
