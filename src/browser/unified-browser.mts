@@ -11,6 +11,7 @@ import {
   createProjectBrowser,
   experimentURL,
 } from "../desktop/project-browser.mjs";
+import { pinnedBrowserCatalogue } from "./pinned-catalogue.mjs";
 import { createPreviewMcpClient } from "./mcp-client.mjs";
 import type { BrowserState, BrowserSelection } from "./contracts.mjs";
 
@@ -411,7 +412,7 @@ export function createUnifiedProjectBrowser(options: {
       });
     },
     tools(context: {
-      authorization: Pick<ProjectAuthorizationService, "checkCrew">;
+      authorization: Pick<ProjectAuthorizationService, "canDiscoverBrowser">;
       runAuthorized<T>(
         caller: CallerContext,
         action: "browser.control",
@@ -424,16 +425,8 @@ export function createUnifiedProjectBrowser(options: {
           return () => subscribers.delete(listener);
         },
         async list(caller) {
-          if (!validBinding(caller)) return [];
-          if (
-            (
-              await context.authorization.checkCrew(caller, "browser.control", {
-                type: "project",
-              })
-            ).state !== "allowed"
-          )
+          if (!(await context.authorization.canDiscoverBrowser(caller)))
             return [];
-          if (!validBinding(caller)) return [];
           return [
             {
               name: "browser_status",
@@ -452,7 +445,7 @@ export function createUnifiedProjectBrowser(options: {
                 },
               }),
             },
-            ...catalogue.map((tool) => ({
+            ...pinnedBrowserCatalogue.map((tool) => ({
               ...tool,
               name: "browser_" + tool.name,
               description:

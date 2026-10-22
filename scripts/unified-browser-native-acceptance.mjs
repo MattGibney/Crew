@@ -61,13 +61,13 @@ try {
     `const {app,ipcMain}=require('electron');app.setPath('userData',${JSON.stringify(path.join(dir, "native"))});app.whenReady().then(async()=>{
 const root=${JSON.stringify(path.join(root, "runtime"))};
 const {startDesktopRenderer}=await import(root+'/desktop/unified-renderer.mjs');const {createUnifiedWindow}=await import(root+'/desktop/unified-window.mjs');const {createUnifiedProjectBrowser}=await import(root+'/browser/unified-browser.mjs');const {startAgentMcpHost}=await import(root+'/agents/session-host.mjs');
-const now=new Date().toISOString();global.agent={id:'fixture-agent',projectId:'fixture',createdAt:now,updatedAt:now,archivedAt:null,profile:{revision:1,name:'Browser fixture agent',pictureRef:null,personality:'',systemPrompt:'Synthetic fixture; no native model.'},skills:[],access:{permissionGroupIds:[],serviceConnectionIds:[],inheritPersonalServiceCredentials:false},runtime:{provider:'codex',modelAccessId:'fixture',configRef:'fixture',threadId:'fixture-thread',session:{sessionId:'fixture-session',desiredState:'started',observedState:'started',activeTurnId:null,startedAt:now,lastObservedAt:now,lastError:null,appliedConfiguration:null}},scratchpad:{markdown:'',revision:1,updatedAt:now},reportsTo:{type:'user',userId:'fixture-owner'},resources:[]};
+const now=new Date().toISOString();global.agent={id:'fixture-agent',projectId:'fixture',createdAt:now,updatedAt:now,archivedAt:null,profile:{revision:1,name:'Browser fixture agent',pictureRef:null,personality:'',systemPrompt:'Synthetic fixture; no native model.'},skills:[],access:{permissionGroupIds:[],serviceConnectionIds:[],inheritPersonalServiceCredentials:false},runtime:{provider:'codex',modelAccessId:'fixture',configRef:'fixture',threadId:'fixture-thread',session:{sessionId:'fixture-session',desiredState:'started',observedState:'starting',activeTurnId:null,startedAt:now,lastObservedAt:now,lastError:null,appliedConfiguration:null}},scratchpad:{markdown:'',revision:1,updatedAt:now},reportsTo:{type:'user',userId:'fixture-owner'},resources:[]};
 const owner={projectId:'fixture',projectName:'GH56 disposable browser',ownerId:'fixture-owner',primaryAgentId:agent.id,agents:[agent],jobs:[],skills:[],pendingMessages:[],receipts:[],helpRequests:[],ownerInbox:[],nativeApprovals:[],readiness:[],creationPresets:[]};
 global.messages=[];global.permission=true;global.caller={projectId:'fixture',agentId:agent.id,sessionId:'fixture-session'};
 const renderer=await startDesktopRenderer(root+'/renderer-dist');global.surface=createUnifiedWindow({root,desktopDirectory:${JSON.stringify(path.join(dir, "desktop"))},origin:renderer.origin,isQuitting:()=>false,disconnectVoice:async()=>{},closed:()=>{}});
 global.browser=createUnifiedProjectBrowser({projectId:'fixture',stateDirectory:${JSON.stringify(path.join(dir, "state"))},getWindow:()=>surface.native(),getHostOrigin:()=>renderer.origin,getAgent:id=>id===agent.id?agent:null,publish:e=>surface.notify(e)});
-const extension=browser.tools({authorization:{checkCrew:async()=>({state:permission?'allowed':'denied'})},runAuthorized:async(c,a,op)=>{if(!permission||c.agentId!==agent.id||c.sessionId!==agent.runtime.session.sessionId)throw Error('Denied fixture access');return op();}});
-const foundation={store:{snapshot:()=>({projectId:'fixture',agents:[agent]}),subscribe:()=>()=>{}},executionAllowed:c=>c.sessionId===agent.runtime.session.sessionId};
+const extension=browser.tools({authorization:{canDiscoverBrowser:async c=>permission&&c.projectId==='fixture'&&c.agentId===agent.id&&c.sessionId===agent.runtime.session.sessionId&&agent.runtime.session.desiredState==='started'&&['starting','started'].includes(agent.runtime.session.observedState)},runAuthorized:async(c,a,op)=>{if(!permission||c.agentId!==agent.id||c.sessionId!==agent.runtime.session.sessionId)throw Error('Denied fixture access');return op();}});
+const foundation={store:{snapshot:()=>({projectId:'fixture',agents:[agent]}),subscribe:()=>()=>{}},executionAllowed:c=>c.sessionId===agent.runtime.session.sessionId&&agent.runtime.session.observedState==='started'};
 global.host=await startAgentMcpHost({privateDirectory:${JSON.stringify(path.join(dir, "transport"))},foundation,broker:{},additionalTools:extension});extension.subscribe(()=>void host.refreshTools());global.binding=await host.bind(caller);
 ipcMain.handle('crew:unified',async(event,method,value)=>{if(!surface.accepts(event))return {ok:false,error:{message:'Rejected'}};try{let result;if(method==='snapshot')result={projects:[{id:'fixture',name:owner.projectName,directory:'Disposable fixture'}],selectedId:'fixture',quit:{state:'idle',recoveryRequired:false,detail:null,projects:[]},updates:null};else if(method==='ownerSnapshot')result=owner;else if(method==='browser')result=await browser.request(value);else if(method==='ownerCommand'){const {command,args}=value;if(command==='readHistory')result={state:'acknowledged',value:{items:[],nextCursor:null}};else if(command==='voice.list')result={voices:[],defaultVoice:'',selectedVoice:null};else if(command==='sendMessage'){messages.push({sender:{type:'user',userId:'fixture-owner'},...args.input});result={id:'fixture-message',state:'queued'};}else throw Error('Unsupported fixture command '+command);}else throw Error('Unsupported fixture action');return {ok:true,value:result};}catch(error){return {ok:false,error:{message:error.message}};}});
 global.cleanup=async()=>{await browser.close();await host.close();await renderer.close();};await surface.open();});`,
@@ -88,6 +88,48 @@ global.cleanup=async()=>{await browser.close();await host.close();await renderer
   });
   const page = await electron.firstWindow();
   page.setDefaultTimeout(15000);
+  const binding = await electron.evaluate(() => global.binding);
+  client = new Client(
+    { name: "crew56-fixture-agent-tools", version: "1" },
+    { capabilities: {} },
+  );
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(binding.foundationUrl), {
+      requestInit: {
+        headers: { Authorization: "Bearer " + binding.bearerToken },
+      },
+    }),
+  );
+  const tools = await client.listTools();
+  check(
+    "Authenticated selected session discovers browser tools",
+    tools.tools.some((t) => t.name === "browser_take_snapshot"),
+  );
+  check(
+    "Starting session discovers pinned schemas before owner opens or binds a page",
+    tools.tools.filter((tool) => tool.name.startsWith("browser_")).length ===
+      15,
+  );
+  check(
+    "Discovery does not open a browser",
+    !(await electron.evaluate(() => global.browser.state())).open,
+  );
+  await assert.rejects(
+    () => client.callTool({ name: "browser_list_pages", arguments: {} }),
+    (error) => error.code === 409,
+  );
+  check("Starting session cannot execute browser tools");
+  await electron.evaluate(() => {
+    global.agent.runtime.session.observedState = "started";
+  });
+  const beforeBinding = await client.callTool({
+    name: "browser_list_pages",
+    arguments: {},
+  });
+  check(
+    "Started session without owner binding cannot execute",
+    beforeBinding.isError,
+  );
   await page.getByRole("button", { name: "Browser", exact: true }).click();
   await page.getByRole("textbox", { name: "Page address" }).fill(url);
   await page.getByRole("button", { name: "Open browser", exact: true }).click();
@@ -138,23 +180,6 @@ global.cleanup=async()=>{await browser.close();await host.close();await renderer
     ),
   );
 
-  const binding = await electron.evaluate(() => global.binding);
-  client = new Client(
-    { name: "crew56-fixture-agent-tools", version: "1" },
-    { capabilities: {} },
-  );
-  await client.connect(
-    new StreamableHTTPClientTransport(new URL(binding.foundationUrl), {
-      requestInit: {
-        headers: { Authorization: "Bearer " + binding.bearerToken },
-      },
-    }),
-  );
-  const tools = await client.listTools();
-  check(
-    "Authenticated selected session discovers browser tools",
-    tools.tools.some((t) => t.name === "browser_take_snapshot"),
-  );
   const tool = async (name, args = {}) => {
     const r = await client.callTool({ name, arguments: args });
     assert.ok(!r.isError, JSON.stringify(r));
@@ -243,7 +268,10 @@ global.cleanup=async()=>{await browser.close();await host.close();await renderer
     JSON.stringify(messages[0], null, 2),
   );
   let nativeWindowId;
-  if (process.platform === "darwin") {
+  if (
+    process.platform === "darwin" &&
+    process.env.CREW_BROWSER_SKIP_NATIVE_SCREENSHOTS !== "1"
+  ) {
     const swift = path.join(dir, "window.swift");
     await writeFile(
       swift,
@@ -309,7 +337,12 @@ global.cleanup=async()=>{await browser.close();await host.close();await renderer
   await writeFile(
     path.join(dir, "checks.json"),
     JSON.stringify(
-      { checks, syntheticSession: true, actualModel: false },
+      {
+        checks,
+        syntheticSession: true,
+        actualModel: false,
+        nativeWindowScreenshots: Boolean(nativeWindowId),
+      },
       null,
       2,
     ),
