@@ -1,5 +1,13 @@
 # Delivery policy
 
+## Crew 0.16.0 release scope
+
+The human explicitly authorized merging [PR #57](https://github.com/MattGibney/Crew/pull/57) and publishing the next stable version, with hands-on testing afterward. Version 0.16.0 follows verified public 0.15.0. The migration is merged at da297b83 with a tree identical to validated production commit a4a247c. This supersedes historical TypeScript pause/no-publication guidance for this named release only. The release preparation changes metadata and documentation, preserving the validated implementation.
+
+Production code uses strict TypeScript and responsibility-based src domains, with compiled runtime entries and no shipped source loader. All six 0.14 features and 0.15 agent-owned direction/workflow/prompt migration behavior remain included. Local evidence: 661 tests, seven browser suites and six setup steps, five genuine subscription assignments, isolated native packaged smoke, and a clean exact source archive/build. Native acceptance exposed a nullable silent-command-output regression; both manager and worker contracts now retain that evidence with before/after regression tests. See [REL-0.16.0](../tickets/REL-0.16.0.md).
+
+Production publication still requires hosted tests, Developer ID signing, hardened runtime, notarization/stapling, Gatekeeper, DMG integrity and exact update feed/checksums. User profiles/installations and physical microphone stay untouched. Quit #39 and the custom portable-root automatic updater recovery limit retain their separately documented boundaries. PR #54 and usage/browser/skills work remain outside this release.
+
 ## Crew 0.15.0 release scope
 
 The user authorized shipping [PR #51](https://github.com/MattGibney/Crew/pull/51), including pristine saved-default prompt migration, as one signed/notarized feature release. Version 0.15.0 follows verified public 0.14.0. The implementation passed 638 tests, compiled browser checks, packaged Electron smoke, disposable default/custom manual upgrade recovery and genuine retained subscription continuations. See [REL-0.15.0](../tickets/REL-0.15.0.md) for evidence, explicit manager Restart adoption, custom-prompt preservation and current updater/reload boundaries. Usage work is planning-only; TypeScript #37 remains paused.
