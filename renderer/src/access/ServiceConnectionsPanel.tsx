@@ -26,6 +26,8 @@ export interface ServiceConnectionsPanelProps extends OwnerPanelProps {
   setupChoices: readonly ConnectionSetupChoice[];
   onSave: (change: ConnectionSave) => Promise<void>;
   onRemove: (connectionId: string, expectedRevision: number) => Promise<void>;
+  /** Trusted gateway discovery check, independent of saving metadata or reconnecting auth. */
+  onVerify?: (connectionId: string, expectedRevision: number) => Promise<void>;
   /** Gateway-owned authentication flow. Omit when that adapter is unavailable. */
   onReconnect?: (
     connectionId: string,
@@ -86,6 +88,17 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
           onClose={() => setEditing(null)}
         />
       )}
+      {editing &&
+        editing !== "new" &&
+        !props.connections.some(
+          (connection) => connection.id === editing.id,
+        ) && (
+          <ConnectionEditor
+            {...props}
+            connection={editing}
+            onClose={() => setEditing(null)}
+          />
+        )}
       <div className="divide-y border-y">
         {!props.connections.length && (
           <p className="py-5 text-sm text-muted-foreground">
@@ -113,6 +126,25 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    {props.onVerify && (
+                      <Button
+                        variant="ghost"
+                        disabled={editing !== null || action.busy}
+                        onClick={() =>
+                          void action.run(
+                            () =>
+                              props.onVerify!(
+                                connection.id,
+                                connection.revision,
+                              ),
+                            "Connection verification completed. Check its current status.",
+                            "Could not verify this connection. Check its service credential and configured adapter.",
+                          )
+                        }
+                      >
+                        Verify connection
+                      </Button>
+                    )}
                     {props.onReconnect && (
                       <Button
                         variant="ghost"
@@ -305,6 +337,14 @@ function ConnectionEditor({
         if (saved) onClose();
       }}
     >
+      {connection &&
+        props.connections.find((row) => row.id === connection.id)?.revision !==
+          connection.revision && (
+          <p role="alert" className="text-sm text-destructive">
+            This connection changed while you were editing. Your draft is
+            retained. Cancel and reopen Update to use the current revision.
+          </p>
+        )}
       <fieldset disabled={action.busy} className="space-y-5">
         <legend className="mb-4 text-sm font-semibold">
           {connection ? `Update ${connection.name}` : "Add service connection"}

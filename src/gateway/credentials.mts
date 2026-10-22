@@ -7,7 +7,11 @@ import type {
 } from "../agents/contracts.mjs";
 import { withStateLock } from "../orchestration/state-lock.mjs";
 import { assertHttpEndpoint } from "./config.mjs";
-import type { ExecutorConfiguration, GatewayConnections, GatewayCredentialVault } from "./config.mjs";
+import type {
+  ExecutorConfiguration,
+  GatewayConnections,
+  GatewayCredentialVault,
+} from "./config.mjs";
 import { canonicalJson, jsonObject, Sanitizer, sha256 } from "./json.mjs";
 import { atomicJson } from "./store.mjs";
 
@@ -84,7 +88,8 @@ export class GatewayCredentials {
         const metadata = await this.vault.metadataForReference(
           current.authentication.credentialRef,
         );
-        if (metadata.deleted) throw new Error("OAuth credential is unavailable.");
+        if (metadata.deleted)
+          throw new Error("OAuth credential is unavailable.");
         const markerFile = join(this.privateDirectory, `refresh-${key}.json`);
         let marker: JsonObject | null = null;
         try {
@@ -99,7 +104,10 @@ export class GatewayCredentials {
             throw error;
         }
         // Refresh tokens may rotate even if the response was lost. Never blindly refresh again.
-        if (marker?.revision === metadata.revision && marker.state === "pending")
+        if (
+          marker?.revision === metadata.revision &&
+          marker.state === "pending"
+        )
           throw new Error(
             "OAuth refresh outcome is unknown; owner reauthentication is required.",
           );
@@ -117,8 +125,7 @@ export class GatewayCredentials {
                 throw new Error(
                   "OAuth credential requires an access token and expiry.",
                 );
-              if (saved.expires_at > Date.now() + 30_000)
-                return;
+              if (saved.expires_at > Date.now() + 30_000) return;
               const oauth = config.oauth;
               if (!oauth || typeof saved.refresh_token !== "string")
                 throw new Error("OAuth owner sign-in is required.");
@@ -184,7 +191,8 @@ export class GatewayCredentials {
                 const revision = await this.vault.withReplacement(
                   current.id,
                   replacement,
-                  (handle) => this.vault.replace(current.id, metadata.revision, handle),
+                  (handle) =>
+                    this.vault.replace(current.id, metadata.revision, handle),
                 );
                 await atomicJson(markerFile, { revision, state: "saved" });
                 return;

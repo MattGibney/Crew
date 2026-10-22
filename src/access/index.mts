@@ -17,3 +17,9 @@ export type {
   ElectronSafeStoragePort,
 } from "./vault.mjs";
 export { CodexRuntimeAccessProvider } from "./runtime-access.mjs";
+export { createAccessOwnerApi } from "./owner-api.mjs";
+export type { AccessOwnerApi, AccessOwnerApiOptions } from "./owner-api.mjs";
+export type {
+  AccessOwnerView,
+  OwnerConnectionSetupChoice,
+} from "./owner-contracts.mjs";
