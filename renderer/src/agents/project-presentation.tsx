@@ -26,6 +26,7 @@ import {
 } from "./AgentSchedulesPanel";
 import { PrimaryAgentVoice } from "./voice/PrimaryAgentVoice";
 import { SubscriptionUsagePanel } from "./SubscriptionUsagePanel";
+import { EnvironmentTemplateEditor } from "./EnvironmentTemplateEditor";
 import type {
   SubscriptionUsageClient,
   SubscriptionUsageState,
@@ -721,6 +722,11 @@ function WorkspaceSettings({
       <Button variant="ghost" disabled={busy} onClick={() => void reload()}>
         Refresh workspace
       </Button>
+      <EnvironmentTemplateEditor
+        command={command}
+        subscribe={subscribe}
+        visible={visible}
+      />
       {toast && visible && (
         <SettingsToast
           key={toast.id}
