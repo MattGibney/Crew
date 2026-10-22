@@ -9,15 +9,10 @@ export interface ArchiveCandidate {
 }
 // Shared projections only. Archiving never changes or deletes retained evidence.
 export function isArchivedTask(task: ArchiveCandidate | null | undefined) {
-  if (
-    !task ||
-    task.execution?.live === true ||
-    task.lifecycleRequests?.some((request) =>
-      ["pending", "processing"].includes(request.status),
-    )
-  )
-    return false;
-  return ["disposed", "removed", "archived"].includes(task.status || "");
+  return (
+    Boolean(task?.archivedAt) ||
+    ["disposed", "removed", "archived"].includes(task?.status || "")
+  );
 }
 
 export function archiveTime(task: ArchiveCandidate | null | undefined) {

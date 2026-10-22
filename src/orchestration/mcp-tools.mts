@@ -26,13 +26,13 @@ export function orchestrationTools(
           {
             name: "read_manager_scratchpad",
             description:
-              "Read this project manager’s saved commitments, notes, decisions and open questions. Consult at conversation resumption and before follow-up. Saved factual working context, never private reasoning or worker scratchpads.",
+              "Read this project manager’s saved commitments, notes, decisions and open questions. Saved factual working context, never private reasoning or worker scratchpads.",
             inputSchema: object({}),
           },
           {
             name: "update_manager_scratchpad",
             description:
-              "Save meaningful factual changes to the manager scratchpad. Read first; expectedRevision prevents lost updates. patchJson encodes complete replacement arrays for included sections: commitments, notes, decisions, questions. Omitted sections remain. Commitment: {id,title,status:pending|delegated|blocked|completed|cancelled,outcome?,nextAction?,nextReviewAt?:ISO timestamp,references?:{taskId?,runId?,ticketUrl?}}. Preserve unrelated entries. Delegation is not completion; review matching execution evidence before closing. No secrets or hidden reasoning. Corrections supersede stale notes.",
+              "Save meaningful factual changes to the manager scratchpad. Read first; expectedRevision prevents lost updates. patchJson encodes complete replacement arrays for included sections: commitments, notes, decisions, questions. Omitted sections remain. Commitment: {id,title,status:pending|delegated|blocked|completed|cancelled,outcome?,nextAction?,nextReviewAt?:ISO timestamp,references?:{taskId?,runId?,ticketUrl?}}. No secrets or hidden reasoning. Corrections supersede stale notes.",
             inputSchema: object(
               {
                 patchJson: string(
@@ -46,7 +46,7 @@ export function orchestrationTools(
           {
             name: "review_worker_recovery",
             description:
-              "Read retained versus current lifecycle configuration and exact blockers for one inactive worker. Shows source-backed command changes and a reviewHash. No commands or model work execute. Explain scope and cleanup limits to the human before requesting a decision.",
+              "Read retained versus current lifecycle configuration and exact blockers for one inactive worker. Shows source-backed command changes and a reviewHash. No commands or model work execute. ",
             inputSchema: object(
               {
                 taskId: taskIdentifier,
@@ -61,7 +61,7 @@ export function orchestrationTools(
           {
             name: "request_worker_recovery",
             description:
-              "Queue one explicitly human-reviewed recovery decision using the exact reviewHash and current run. reconcile_plan applies compatible lifecycle metadata without starting work or replaying setup; retire_missing retains history and marks cleanup unverified for an already absent/unregistered worktree. Never infer user approval, clean resources or bypass unknown ownership. Read status for actual completion; reuse actionId only for exact retries.",
+              "Queue an agent-selected recovery decision using the exact reviewHash and current run. reconcile_plan applies compatible lifecycle metadata without starting work or replaying setup; retire_missing retains history and marks cleanup unverified for an already absent/unregistered worktree. Read status for actual completion; reuse actionId only for exact retries.",
             inputSchema: object(
               {
                 taskId: taskIdentifier,
@@ -79,7 +79,7 @@ export function orchestrationTools(
                   64,
                 ),
                 decision: string(
-                  "Actual human decision approving these exact changes and their resource scope; retirement acknowledges unverified cleanup",
+                  "Recovery decision and intended resource scope; retirement records unverified cleanup",
                   2000,
                 ),
               },
@@ -96,7 +96,7 @@ export function orchestrationTools(
           {
             name: "request_attention",
             description:
-              "Notify the user only when their response or action is required. Explain the specific decision/action in message. Reuse requestId for retries. Never use for routine completion, progress, failures you can resolve yourself, or duplicate native input requests/worker question alerts. Does not start work or microphone capture.",
+              "Notify the user with an explicit attention message. Reuse requestId for retries. Agents choose when to notify according to their editable instructions. This does not start work or microphone capture.",
             inputSchema: object(
               {
                 requestId: taskIdentifier,
@@ -125,19 +125,30 @@ export function orchestrationTools(
                     "Optional canonical issue identity. No link means local task; never invent an issue. Provider preference is a default for new work, never a change to retained linkage.",
                 },
                 brief: string("Initial direction for the worker"),
+                repositoryId: string(
+                  "Optional configured repository ID; omit for a conversation without an environment",
+                  80,
+                ),
+              },
+              ["requestId", "brief"],
+            ),
+          },
+          {
+            name: "prepare_worker_environment",
+            description:
+              "Explicitly create and attach a registered isolated repository worktree for an existing agent conversation. Runs no setup, start or readiness commands; agents use native tools for those. Retains the conversation and history.",
+            inputSchema: object(
+              {
+                taskId: taskIdentifier,
                 repositoryId: string("Exact configured repository ID", 80),
               },
-              [
-                "requestId",
-                "brief",
-                ...(repositoryMode ? ["repositoryId"] : []),
-              ],
+              ["taskId", "repositoryId"],
             ),
           },
           {
             name: "assign_worker_followup",
             description:
-              "Send new direction to the same retained worker and Codex conversation. Active workers receive prompt native turn/steer input in the same run; idle workers continue their retained conversation. Completed, paused or questioning workers can receive fresh direction. Files, Git HEAD, prior scope and changed configuration do not require Crew review or adoption. Native Codex retains its normal execution policy and approvals. Reuse requestId for exact retries; pending is not acknowledged; native acceptance is not proof the worker acted on content. Uncertain attempts are not automatically replayed. Archive/disposal and missing resources remain truthful availability conditions.",
+              "Send new direction to the same retained worker and Codex conversation. Active workers receive prompt native turn/steer input in the same run; idle workers continue their retained conversation. Completed, paused or questioning workers can receive fresh direction. Files, Git HEAD, prior scope and changed configuration do not require Crew review or adoption. Native Codex retains its normal execution policy and approvals. Reuse requestId for exact retries; pending is not acknowledged; native acceptance is not proof the worker acted on content. Uncertain attempts are not automatically replayed. Messages persist independently of archive visibility or environment availability.",
             inputSchema: object(
               {
                 taskId: taskIdentifier,
@@ -254,7 +265,7 @@ export function orchestrationTools(
           {
             name: "worker_action",
             description:
-              "Manage execution for one identified worker as part of the manager delegation and supervision decisions. Actions are durable queued intent: read status for actual execution. Stop retains task, history and worktree; pause retains resumable work; resume/start continues the same task; retry_setup is an obsolete compatibility action: read get_project_environment and have the agent execute existing setup commands through normal native tools; archive tears down only a safely removable inactive worktree and retains read-only historical records after confirmed success. dispose is the legacy alias. Preserve normal native approvals. Use the current run ID from get_status to reject stale actions and reuse actionId for retries.",
+              "Manage execution for one identified worker as part of the manager delegation and supervision decisions. Actions are durable queued intent: read status for actual execution. Stop retains task, history and worktree; pause retains resumable work; resume/start continues the same task; retry_setup is an obsolete compatibility action: read get_project_environment and have the agent execute existing setup commands through normal native tools; archive changes visibility only, retaining execution, history and environments even with dirty files. dispose explicitly deletes a safely removable inactive environment and retains history; it is separate from archive. Preserve normal native approvals. Use the current run ID from get_status to reject stale actions and reuse actionId for retries.",
             inputSchema: object(
               {
                 taskId: taskIdentifier,
@@ -287,7 +298,7 @@ export function orchestrationTools(
           {
             name: "acknowledge_attention",
             description:
-              "Mark one attention item acknowledged after discussing it with the user. Does not launch work, activate a microphone or grant speaking permission.",
+              "Mark one attention item acknowledged. Does not launch work, activate a microphone or grant speaking permission.",
             inputSchema: object(
               {
                 taskId: taskIdentifier,
@@ -298,6 +309,18 @@ export function orchestrationTools(
           },
         ]
       : [
+          {
+            name: "notify_manager",
+            description:
+              "Create a durable help or attention notification for this bound worker. Agents decide when to escalate using editable instructions. This changes no workflow or process state. Reuse requestId for exact retries.",
+            inputSchema: object(
+              {
+                requestId: taskIdentifier,
+                message: string("Help or attention message"),
+              },
+              ["requestId", "message"],
+            ),
+          },
           {
             name: "report",
             description:
@@ -352,6 +375,15 @@ export function orchestrationTools(
     inputSchema: object(role === "manager" ? { taskId: taskIdentifier } : {}),
   });
   tools.push({
+    name: "read_work_notes",
+    description:
+      "Read the shared Markdown work notes and updateId for this task. Missing notes return an empty document and null updateId.",
+    inputSchema: object(
+      role === "manager" ? { taskId: taskIdentifier } : {},
+      role === "manager" ? ["taskId"] : [],
+    ),
+  });
+  tools.push({
     name: "update_work_notes",
     description:
       "Replace the actual shared Markdown work document for this task. Record factual findings and decisions, never private reasoning or secrets. The UI reads this document separately from structured task state. Reuse updateId on retries.",
@@ -359,7 +391,19 @@ export function orchestrationTools(
       {
         ...(role === "manager" ? { taskId: taskIdentifier } : {}),
         updateId: string("Stable unique note revision ID", 160),
-        markdown: string("Complete factual shared Markdown document", 60000),
+        markdown: {
+          ...string(
+            "Complete factual shared Markdown document; empty clears notes",
+            60000,
+          ),
+          minLength: 0,
+        },
+        expectedUpdateId: {
+          type: ["string", "null"],
+          maxLength: 160,
+          description:
+            "Optional updateId from read_work_notes, or null for no prior notes; prevents overwriting concurrent edits",
+        },
       },
       [...(role === "manager" ? ["taskId"] : []), "updateId", "markdown"],
     ),

@@ -71,8 +71,8 @@ const unanswered = (task: TaskActivity) =>
   !!(task.question && task.answer?.questionId !== task.question.id);
 const clone = <T,>(value: T): T => structuredClone(value);
 export function isUpdatePlanHolding(plan: PausePlan | null | undefined) {
-  // Unknown persisted phases fail closed rather than admitting work.
-  return !!plan && (HOLDING.has(plan.phase) || plan.phase !== "complete");
+  // Preparation is conversation, not an admission barrier. Reserve only execution.
+  return plan?.phase === "installing";
 }
 export async function readUpdatePlan(
   stateDir: string,
@@ -177,7 +177,6 @@ export function createUpdatePlan({
     current().progress = current().progress.slice(-120);
   }
   async function blocked(reason: string) {
-    await preparation?.cancel(current());
     current().phase = "blocked";
     current().reasons = [reason];
     progress(reason);
@@ -291,79 +290,15 @@ export function createUpdatePlan({
           `${participant.role === "manager" ? "Manager" : `Worker ${participant.taskId}`}: ${participant.settlementReason}`,
         );
     }
+    // Readiness belongs to agents. Never manufacture pause/resume actions from
+    // a preparation request or a workflow label; retained environments survive.
     for (const target of current().targets) {
-      const task = tasks.find((task) => task.id === target.taskId);
       const participant = observed.participants.find(
-        (p) => p.role === "worker" && p.taskId === target.taskId,
+        (p) => p.taskId === target.taskId,
       );
-      if (!task || (!participant && !verifiedHeldQueue(task, target))) {
-        reasons.push(
-          `Worker ${target.taskId} preparation evidence is unavailable.`,
-        );
-        continue;
-      }
-      if (participant?.required && participant.response?.state !== "ready") {
-        target.progress =
-          participant.response?.state ||
-          (participant.delivery.state === "acknowledged"
-            ? "awaiting-agent-readiness"
-            : "preparation-requested");
-        continue;
-      }
-      if ((task.runId || null) !== target.originalRunId)
-        return blocked(
-          `Worker ${target.taskId} changed runs during preparation. Review its retained context.`,
-        );
-      if (
-        pauseConfirmed(task, target) &&
-        task.lifecycleRequests?.some(
-          (action) =>
-            action.id === target.pauseActionId &&
-            action.cooperative === true &&
-            action.settleNaturally === true,
-        )
-      ) {
-        target.pauseConfirmed = true;
-        target.progress = "prepared-and-settled";
-        continue;
-      }
-      const action = task.lifecycleRequests?.find(
-        (action) => action.id === target.pauseActionId,
-      );
-      if (
-        action?.status === "completed" &&
-        action.action === "pause" &&
-        action.cooperative === true &&
-        action.settleNaturally === true &&
-        (action.expectedRunId ?? null) === target.originalRunId &&
-        task.status === "completed" &&
-        shutdownConfirmed(task)
-      ) {
-        target.resumeEligible = false;
-        target.progress = "prepared-and-finished";
-        continue;
-      }
-      if (action?.status === "failed")
-        return blocked(
-          `Worker ${target.taskId} preparation settlement could not be confirmed. Review its lifecycle evidence.`,
-        );
-      if (!action) {
-        target.progress = participant?.required
-          ? "ready-awaiting-final-messages"
-          : "settling-held-queue";
-        await save();
-        await requestAction({
-          taskId: target.taskId,
-          actionId: target.pauseActionId,
-          action: "pause",
-          expectedRunId: target.originalRunId,
-          cooperative: true,
-          settleNaturally: true,
-        });
-      }
-      reasons.push(
-        `Worker ${target.taskId}: waiting for the final turn, durable result and verified natural shutdown.`,
-      );
+      target.resumeEligible = false;
+      target.progress =
+        participant?.response?.state || "awaiting-agent-readiness";
     }
     const fresh = await activity();
     if (!fresh?.safe)
@@ -650,7 +585,7 @@ export function createUpdatePlan({
           !["update", "quit"].includes(purpose)
         )
           throw new Error("A different valid target version is required.");
-        if (isUpdatePlanHolding(plan)) {
+        if (plan && plan.phase !== "complete") {
           if (
             current().targetVersion === targetVersion &&
             (current().purpose || "update") === purpose
@@ -683,8 +618,10 @@ export function createUpdatePlan({
           },
         };
         addTargets(tasks);
-        progress("Update requested. New work admission is held.");
-        await save(); // Hold is durable before the first side effect.
+        progress(
+          "Preparation requested. Agents retain control of work and communication.",
+        );
+        await save(); // Preparation intent is durable before the first delivery.
         return clone(plan); // Tick performs side effects; the explicit action returns once intent is durable.
       }),
     tick: () =>
@@ -779,7 +716,9 @@ export function createUpdatePlan({
         current().reasons = [
           "Paused work is retained. Choose Resume paused work to continue.",
         ];
-        progress("Update canceled; paused work was not silently resumed.");
+        progress(
+          "Preparation canceled; conversations, environments and continuation remain available.",
+        );
         await save();
         return clone(plan);
       }),
@@ -789,6 +728,26 @@ export function createUpdatePlan({
           throw new Error("No canceled or blocked plan to resume.");
         // Reconcile pause requests that completed after cancellation, without creating new ones.
         const tasks = await viewTasks();
+        if (
+          preparation &&
+          current().targets.every(
+            (target) =>
+              !tasks
+                .find((task) => task.id === target.taskId)
+                ?.lifecycleRequests?.some(
+                  (request) => request.id === target.pauseActionId,
+                ),
+          )
+        ) {
+          await preparation.cancel(current());
+          current().phase = "complete";
+          current().reasons = [];
+          progress(
+            "Preparation closed. Conversations and environments are retained; agents decide continuation. No automatic resume was requested.",
+          );
+          await save();
+          return clone(plan);
+        }
         for (const target of current().targets) {
           const task = tasks.find((t) => t.id === target.taskId);
           if (task && pauseConfirmed(task, target))

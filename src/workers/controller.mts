@@ -402,8 +402,7 @@ export async function createController({
           foreign(task) ||
           launches.has(task.id) ||
           !["queued", "resume_queued"].includes(task.status) ||
-          !task.threadId ||
-          !task.worktree
+          !task.threadId
         )
           continue;
         if (await admissionHeld({ taskId: task.id, resume: true })) continue;
@@ -454,12 +453,7 @@ export async function createController({
           })
         )
           continue;
-        if (
-          foreign(task) ||
-          launches.has(task.id) ||
-          (task.threadId && task.worktree)
-        )
-          continue;
+        if (foreign(task) || launches.has(task.id) || task.threadId) continue;
         if (
           task.status === "launching" &&
           Date.now() - Date.parse(task.launchAt || "") >= 15000
@@ -469,20 +463,20 @@ export async function createController({
             "Launch interrupted; inspect its environment before restarting.",
           );
         if (!["queued", "resume_queued"].includes(task.status)) continue;
-        if (task.archiveRestoration?.requiresRecovery) {
-          await fail(
-            task.id,
-            "This restored worker is history only and requires explicit recovery before lifecycle execution.",
-          );
-          continue;
-        }
         // Restart reconciles running work but never dispatches a stored backlog.
         if (startupQueued.has(task.id)) {
           // Lifecycle start/resume explicitly removes this hold. Otherwise only
           // a changed durable answer can authorize dispatch; timestamps and
           // unrelated render/attention updates never replay old authorization.
           if (
-            JSON.stringify(task.answer || null) === startupQueued.get(task.id)
+            JSON.stringify(task.answer || null) ===
+              startupQueued.get(task.id) &&
+            !(task.assignments || []).some(
+              (item) =>
+                item.status === "queued" ||
+                (item.id === task.currentAssignmentId &&
+                  item.delivery?.state === "pending"),
+            )
           )
             continue;
           startupQueued.delete(task.id);

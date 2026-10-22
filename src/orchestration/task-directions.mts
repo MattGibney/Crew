@@ -80,18 +80,6 @@ export async function requestWorkerFollowup(
         throw new Error("Follow-up request ID reused with changed content");
       return;
     }
-    if (
-      ["disposed", "removed", "archived"].includes(task.status) ||
-      task.archiveRestoration?.requiresRecovery ||
-      task.lifecycleRequests?.some(
-        (item) =>
-          ["dispose", "archive"].includes(item.action) &&
-          ["pending", "processing"].includes(item.status),
-      )
-    )
-      throw new Error(
-        "Worker is archived, history only, or archive/disposal is pending",
-      );
     assignments.push({
       id: requestId,
       ticket:

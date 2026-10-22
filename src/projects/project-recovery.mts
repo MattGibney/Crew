@@ -51,7 +51,7 @@ async function recoveryChecks(args: RecoveryContext) {
       "Recovery requires the task’s configured repository project.",
     );
   const repository = project.repositories?.find(
-    (entry) => entry.id === task.repositoryId,
+    (entry) => entry.id === (task.environmentRepositoryId || task.repositoryId),
   );
   if (
     !repository?.path ||

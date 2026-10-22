@@ -25,7 +25,6 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { withStateLock } from "./state-lock.mjs";
 export { withStateLock } from "./state-lock.mjs";
-import { isArchivedTask } from "../shared/worker-archive.mjs";
 
 const now = () => new Date().toISOString();
 const taskPath = (dir: string, id: string) =>
@@ -341,7 +340,7 @@ export async function requestWorkerRecovery(
     !/^[a-f0-9]{64}$/.test(reviewHash || "")
   )
     throw new Error("A matching recovery review is required");
-  text(decision, "explicit user recovery decision", 2000);
+  text(decision, "recovery decision", 2000);
   if (expectedRunId !== null) text(expectedRunId, "expected run ID", 160);
   return updateTask(dir, taskId, (task) => {
     const requests = (task.lifecycleRequests ||= []);
@@ -442,13 +441,26 @@ export async function requestWorkerAction(
         throw new Error("Action ID reused with changed content");
       return;
     }
+    // Archive is visibility only. It neither stops execution nor deletes resources.
+    if (action === "archive") {
+      const at = now();
+      task.archivedAt ||= at;
+      requests.push({
+        id: actionId,
+        action,
+        expectedRunId: expectedRunId !== undefined ? expectedRunId : task.runId || null,
+        status: "completed",
+        at,
+        handledAt: at,
+      });
+      return;
+    }
     if (expectedRunId !== undefined && (task.runId || null) !== expectedRunId)
       throw new Error("Stale worker run for lifecycle action");
-    if (
-      isArchivedTask(task) ||
-      ["disposed", "removed", "archived"].includes(task.status)
-    )
-      throw new Error("Worker has been archived");
+    if (["disposed", "removed"].includes(task.status) && action !== "dispose")
+      throw new Error(
+        "Worker environment was removed; send direction to continue its conversation",
+      );
     if (
       requests.some((request) =>
         ["pending", "processing"].includes(request.status),
@@ -567,15 +579,19 @@ export async function updateWorkNotes(
     updateId,
     markdown,
     runId = null,
-  }: { updateId: string; markdown: string; runId?: string | null },
+    expectedUpdateId,
+  }: {
+    updateId: string;
+    markdown: string;
+    runId?: string | null;
+    expectedUpdateId?: string | null;
+  },
 ) {
   text(updateId, "note update ID", 160);
-  text(markdown, "work notes", 60000);
+  if (markdown !== "") text(markdown, "work notes", 60000);
   if (Buffer.byteLength(markdown) > 60000)
     throw new Error("Work notes exceed the document byte limit");
   return updateTask(dir, id, async (task) => {
-    if (isArchivedTask(task))
-      throw new Error("Archived worker history is read-only");
     if (runId && task.runId !== runId) throw new Error("Stale worker run");
     if (task.workNotes?.updateId === updateId) {
       if (
@@ -587,6 +603,11 @@ export async function updateWorkNotes(
         throw new Error("Note update ID reused with changed content");
       return;
     }
+    if (
+      expectedUpdateId !== undefined &&
+      (task.workNotes?.updateId ?? null) !== expectedUpdateId
+    )
+      throw new Error("Work notes changed; read them again before updating");
     await atomic(path.join(dir, "tasks", `${id}.notes.md`), markdown);
     task.workNotes = {
       updateId,
@@ -609,3 +630,53 @@ import { createArchiveStore } from "./task-archive.mjs";
 export const { manageArchivedTask, ensureArchiveExecutionStopped } =
   createArchiveStore({ readUnlocked, save, recordHistory, atomic });
 export { requestWorkerFollowup, setWorkflowState } from "./task-directions.mjs";
+
+// Shared notes use the same file and revision metadata for every role and the UI.
+export async function readWorkNotes(dir: string, id: string) {
+  identifier(id);
+  return withStateLock(dir, ".schedule.lock", async () => {
+    const task = await readUnlocked(dir, id);
+    const markdown = await fs
+      .readFile(path.join(dir, "tasks", `${id}.notes.md`), "utf8")
+      .catch((error) => {
+        if (errorCode(error) === "ENOENT") return "";
+        throw error;
+      });
+    return {
+      taskId: id,
+      markdown,
+      updateId: task.workNotes?.updateId ?? null,
+      updatedAt: task.workNotes?.updatedAt ?? null,
+    };
+  });
+}
+
+export async function notifyManager(
+  dir: string,
+  id: string,
+  runId: string,
+  { requestId, message }: { requestId: string; message: string },
+) {
+  identifier(requestId, "notification ID");
+  text(message, "notification", 12000);
+  return updateTask(dir, id, (task) => {
+    if (task.runId !== runId) throw new Error("Stale worker run");
+    const attentionId = `help:${runId}:${requestId}`;
+    const existing = task.attention.find((item) => item.id === attentionId);
+    if (existing) {
+      if (existing.message !== message)
+        throw new Error("Notification ID reused with changed content");
+      return;
+    }
+    const at = now();
+    task.attention.push({ id: attentionId, kind: "help", message, at });
+    task.history.push({
+      id: attentionId,
+      actor: "worker",
+      kind: "help",
+      message,
+      at,
+      runId,
+    });
+  });
+}

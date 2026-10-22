@@ -3,16 +3,7 @@ import type {
   ActivityView,
   ActivityResult,
 } from "./contracts.mjs";
-// Update readiness distinguishes durable history from current owned execution.
-const terminalTasks = new Set([
-  "completed",
-  "failed",
-  "canceled",
-  "cancelled",
-  "stopped",
-  "paused",
-  "disposed",
-]);
+// Final restart checks observe execution, never agent workflow labels.
 const idleManager = new Set([
   "idle",
   "ready",
@@ -24,7 +15,6 @@ const idleManager = new Set([
   "canceled",
   "cancelled",
 ]);
-const inactiveEnvironment = new Set(["stopped", "disposed", "not-configured"]);
 export function updateActivity({
   work,
   view,
@@ -77,17 +67,6 @@ export function updateActivity({
     for (const task of view.tasks) {
       const label = `Worker ${String(task.id || "with unavailable identity").slice(0, 100)}`;
       const evidence = task.updateEvidence;
-      const retainedWaiting =
-        ["awaiting_answer", "blocked"].includes(task.status) &&
-        evidence &&
-        ["absent", "stopped"].includes(evidence.worker) &&
-        ["absent", "stopped"].includes(evidence.runtime) &&
-        Array.isArray(evidence.hooks) &&
-        evidence.hooks.every((hook) => hook.state === "stopped");
-      if (!terminalTasks.has(task.status) && !retainedWaiting)
-        reasons.push(
-          `${label} is ${task.status || "unverified"}. Finish or explicitly stop it before updating.`,
-        );
       if (evidence) {
         if (evidence.worker === "live")
           reasons.push(
@@ -119,68 +98,18 @@ export function updateActivity({
         reasons.push(
           `${label} has a pending lifecycle action. Wait for it to finish.`,
         );
-      const environment = task.environment;
-      if (evidence) {
-        for (const hook of evidence.hooks || []) {
-          if (hook.state !== "stopped")
-            reasons.push(
-              `${label}: ${hook.phase || "environment"} command ${hook.state === "live" ? "is still running" : "shutdown is unverified"}. Review that command’s diagnostics before updating.`,
-            );
-        }
-        if (evidence.runtime === "live")
+      // Foreground hooks belong to the controller. Independent environments
+      // and agent-started services are retained rather than stopped for updates.
+      for (const hook of evidence?.hooks || []) {
+        if (hook.state !== "stopped")
           reasons.push(
-            `${label} project runtime is still running. Stop its environment before updating.`,
-          );
-        else if (!["absent", "stopped"].includes(evidence.runtime))
-          reasons.push(
-            `${label} project runtime shutdown is unverified. Preserve its worktree and review runtime ownership.`,
-          );
-        if (
-          environment?.servicesStarted &&
-          !environment.runtime &&
-          !inactiveEnvironment.has(environment.status || "")
-        )
-          reasons.push(
-            `${label} has services without a matching runtime record. Review its environment ownership before updating.`,
-          );
-        if (
-          environment?.status === "failed" &&
-          evidence.runtime === "absent" &&
-          (evidence.hooks || []).length &&
-          (evidence.hooks || []).every((hook) => hook.state === "stopped") &&
-          ["absent", "stopped"].includes(evidence.worker)
-        )
-          notices.push(
-            `${label}: failed environment commands are confirmed stopped. Its retained worktree and data do not need to be removed to update.`,
-          );
-      } else if (environment) {
-        if (
-          environment.hooks?.some((hook) =>
-            ["pending", "running", "processing"].includes(hook.status),
-          )
-        )
-          reasons.push(
-            `${label} has an environment command awaiting shutdown verification. Refresh readiness.`,
-          );
-        if (environment.runtime && environment.runtime.status !== "stopped")
-          reasons.push(
-            `${label} project runtime is active or unverified. Stop or review it before updating.`,
-          );
-        if (
-          !inactiveEnvironment.has(environment.status || "") &&
-          !["ready", "configured"].includes(environment.status || "")
-        )
-          reasons.push(
-            `${label} environment shutdown evidence is unavailable. Refresh readiness; a failed status alone does not mean it is running.`,
-          );
-        if (
-          environment.servicesStarted &&
-          !inactiveEnvironment.has(environment.status || "")
-        )
-          reasons.push(
-            `${label} has project services awaiting shutdown verification.`,
+            `${label}: ${hook.phase || "environment"} command is ${hook.state}; wait for controller-owned execution to settle.`,
           );
       }
+      if (evidence?.runtime === "live")
+        notices.push(
+          `${label}: its independent project environment remains running across restart.`,
+        );
     }
   return {
     safe: reasons.length === 0,

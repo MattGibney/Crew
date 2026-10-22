@@ -46,16 +46,11 @@ export const queuedAssignments = (task: WorkerTask) =>
   (task.assignments || []).filter(
     (item) => item.status === "queued" && item.id !== task.currentAssignmentId,
   );
-export const canDiscussFollowup = (task: WorkerTask) =>
-  Boolean(task.worktree || task.threadId || task.execution?.live) &&
-  !isArchivedTask(task) &&
-  !task.archiveRestoration?.requiresRecovery &&
-  task.status !== "disposed" &&
-  !task.retirement;
+export const canDiscussFollowup = (_task: WorkerTask) => true;
 export function workerFollowupRequest(task: WorkerTask) {
   if (!canDiscussFollowup(task))
     throw new Error(
-      "This worker has no retained worktree available for follow-up.",
+      "This conversation is unavailable.",
     );
   return `CREW_WORKER_DIRECTION\nContinue with this same retained worker: ${JSON.stringify({ taskId: task.id })}. Ask me what direction to send if I have not supplied it, then use assign_worker_followup with a stable requestId and my direction. Preserve this worker's Codex conversation, worktree and prior results. Queue while busy. Do not require worktree review, fingerprint adoption, a new ticket or an extra authorization statement. Pass through native Codex approvals normally.`;
 }
@@ -200,14 +195,14 @@ export function workerActions(task: WorkerTask): WorkerAction[] {
     ["disposed", "stopping", "pausing"].includes(task.status)
   )
     return [];
-  if (task.execution?.live === true) return ["pause", "stop"];
-  if (task.archiveRestoration?.requiresRecovery) return ["dispose"];
+  if (task.execution?.live === true) return ["pause", "stop", "archive"];
+  if (task.archiveRestoration?.requiresRecovery) return ["archive"];
   if (
     ["running", "queued", "launching", "resume_queued", "verifying"].includes(
       task.status,
     )
   )
-    return ["pause", "stop"];
+    return ["pause", "stop", "archive"];
   return [
     "awaiting_answer",
     "paused",
@@ -216,7 +211,7 @@ export function workerActions(task: WorkerTask): WorkerAction[] {
     "blocked",
     "completed",
   ].includes(task.status)
-    ? ["resume", "dispose"]
+    ? ["resume", "archive"]
     : [];
 }
 export function workerActionRequest(
@@ -236,7 +231,7 @@ export function workerActionRequest(
   };
   return {
     requestId: id,
-    text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Archive (the compatible dispose action) is authorized only through the existing safe teardown, which must refuse dirty or unresolved work and retain task records. Report queued intent separately from confirmed completion.`,
+    text: `CREW_WORKER_ACTION\nI explicitly request this lifecycle action for the selected worker only: ${JSON.stringify(selection)}. Read local_orchestration.get_status for this task first. If its run ID differs from the selected expectedRunId (including a selected null), or the action is no longer valid, do not perform it; explain the changed state. Otherwise use local_orchestration.worker_action with this taskId, action, actionId and current expectedRunId when non-null. Reuse this actionId on retries. Preserve normal approvals. Do not launch a different worker, change the agreed brief, modify tickets, or open a microphone. Stop/pause retain partial work and evidence. Archive changes visibility only: retain the environment, dirty files, execution and history. Environment deletion is a separate explicit dispose action. Report queued intent separately from confirmed completion.`,
   };
 }
 

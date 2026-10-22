@@ -97,7 +97,8 @@ export function ArchivedWorkers({ manager }: ManagerProps) {
                       </p>
                     </td>
                     <td className="py-4 pr-4 text-muted-foreground">
-                      Archived
+                      {task.status} · Resources retained unless explicitly
+                      deleted
                     </td>
                     <td className="py-4 pr-4 text-xs text-muted-foreground">
                       {at ? (
@@ -140,7 +141,8 @@ export function ArchivedWorkers({ manager }: ManagerProps) {
                           <p>
                             Permanently delete this worker’s saved Crew history,
                             results, notes and execution evidence? This cannot
-                            be undone.
+                            be undone. Environment files are separate and are
+                            not deleted here.
                           </p>
                           <div className="mt-3 flex gap-2">
                             <Button

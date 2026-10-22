@@ -107,7 +107,6 @@ export function createWorkerReconciler({
       throw new Error(
         "Stored task belongs to another project; refusing to process it",
       );
-    if (isArchivedTask(task)) return;
     // Durable supervisor evidence wins over a controller write interrupted at spawn.
     // A pending spawn intent without an owner/terminal record remains uncertain and
     // cannot be treated as a never-executed preparation or silently relaunched.
@@ -183,7 +182,6 @@ export function createWorkerReconciler({
       }
     }
     task = await lifecycle(task);
-    if (task.archiveRestoration?.requiresRecovery) return;
     if (!task.runDir) return;
     const runtime = await json(path.join(requireRunDir(task), "runtime.json")),
       started = await json(path.join(requireRunDir(task), "started.json")),
@@ -402,25 +400,8 @@ export function createWorkerReconciler({
             message: report.message,
             runId: report.runId,
           };
-          n.status = "awaiting_answer";
-          attention(
-            n,
-            `${report.runId}:${report.reportId}`,
-            "question",
-            report.message,
-          );
-        }
-        if (report.kind === "blocked") {
-          n.status = "blocked";
-          attention(
-            n,
-            `${report.runId}:${report.reportId}`,
-            "blocked",
-            report.message,
-          );
         }
         if (report.kind === "result") {
-          n.status = "verifying";
           n.candidateReportId = report.reportId;
         }
       });
@@ -469,9 +450,8 @@ export function createWorkerReconciler({
         );
         return;
       }
-      if (["resume_queued", "awaiting_answer", "blocked"].includes(task.status))
-        return;
-      if (task.status === "verifying") {
+      if (task.status === "resume_queued") return;
+      if (task.candidateReportId) {
         const report = task.reports.find(
           (r) =>
             r.runId === task.runId && r.reportId === task.candidateReportId,

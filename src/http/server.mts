@@ -165,9 +165,7 @@ const publishWorkerApprovals = async () => {
     tasks.some(
       (task) =>
         task.id === request.taskId &&
-        task.runId === request.runId &&
-        !isArchivedTask(task) &&
-        !task.archiveRestoration?.requiresRecovery,
+        task.runId === request.runId,
     ),
   );
   const serialized = JSON.stringify(requests);
@@ -294,9 +292,10 @@ const activity = async () => {
   return result;
 };
 const synchronizePlan = (plan: PausePlan | null) => {
+  const wasHeld = drainHeld;
   drainHeld = isUpdatePlanHolding(plan);
   if (drainHeld) updateAdmission.hold();
-  else updateAdmission.releaseHold();
+  else if (wasHeld) updateAdmission.releaseHold();
   broadcast({ type: "update-plan-state", plan });
 };
 const managerPreparationActivity = () => {

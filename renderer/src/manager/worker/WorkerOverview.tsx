@@ -196,7 +196,7 @@ export function WorkerOverview({
                 !manager.eventReady
               }
               onClick={() =>
-                action === "dispose" ? setConfirmRemove(true) : void act(action)
+                action === "archive" ? setConfirmRemove(true) : void act(action)
               }
             >
               {
@@ -204,7 +204,8 @@ export function WorkerOverview({
                   pause: "Pause",
                   stop: "Stop",
                   resume: "Resume",
-                  dispose: "Archive",
+                  dispose: "Delete environment",
+                  archive: "Archive",
                 }[action]
               }
             </Button>
@@ -254,18 +255,17 @@ export function WorkerOverview({
         {confirmRemove && (
           <div className="mt-3 rounded-lg border p-3 text-xs">
             <p>
-              Ask your manager to archive this worker? Its environment will be
-              torn down safely before it moves to Archived workers. Dirty or
-              unresolved work is protected; history is kept.
+              Ask your manager to move this worker to Archived workers? Its
+              conversation, environment, files and running work are retained.
             </p>
             <div className="mt-2 flex gap-2">
               <Button
                 size="sm"
                 variant="destructive"
                 disabled={actionBusy}
-                onClick={() => void act("dispose")}
+                onClick={() => void act("archive")}
               >
-                Archive safely
+                Archive
               </Button>
               <Button
                 size="sm"

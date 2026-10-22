@@ -164,6 +164,7 @@ export interface TaskRecord {
   brief: string;
   projectId: string | null;
   repositoryId: string | null;
+  environmentRepositoryId?: string;
   status: string;
   revision: number;
   createdAt: string;

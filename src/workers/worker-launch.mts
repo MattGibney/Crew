@@ -115,28 +115,20 @@ export function createWorkerLauncher({
       await capacity.releasePreparation({ taskId: task.id, runId });
       return;
     }
-    if (
-      isArchivedTask(task) ||
-      ["disposed", "removed", "archived"].includes(task.status) ||
-      task.archiveRestoration?.requiresRecovery
-    ) {
-      await fail(
-        task.id,
-        "The selected worker environment is unavailable after archive/disposal.",
-      );
-      return;
-    }
     let dispatched = false;
     try {
-      if (!task.threadId)
-        throw new Error(
-          "This worker has no existing native Codex conversation to receive the direction.",
-        );
-      if (!task.worktree)
-        throw new Error("This worker has no existing working directory.");
-      const cwd = await realpath(task.worktree);
-      if (!(await stat(cwd)).isDirectory())
-        throw new Error("The worker working directory is unavailable.");
+      // Conversations outlive optional environments. A missing environment is
+      // preserved in task metadata; a private session folder supplies native cwd.
+      let cwd: string;
+      try {
+        if (!task.worktree) throw new Error("No environment attached");
+        cwd = await realpath(task.worktree);
+        if (!(await stat(cwd)).isDirectory())
+          throw new Error("Missing directory");
+      } catch {
+        cwd = path.join(stateDir, "sessions", task.id);
+        await mkdir(cwd, { recursive: true, mode: 0o700 });
+      }
       const saved = await readCurrentPrompt();
       const assignment = currentAssignment(task),
         runDir = path.join(stateDir, "runs", task.id, runId);
@@ -147,7 +139,8 @@ export function createWorkerLauncher({
         workerProfileSource,
         workerPrompt: saved.text,
         workerPromptVersion: saved.version,
-        retainedDirection: true,
+        retainedDirection: Boolean(task.threadId),
+        agentOwnedEnvironment: true,
         taskId: task.id,
         assignmentId: assignment.id,
         runId,
@@ -256,7 +249,12 @@ export function createWorkerLauncher({
     }
   }
   async function launch(task: TaskRecord, resume: boolean, runId: string) {
-    if (task.worktree && task.threadId) return launchContinuation(task, runId);
+    if (
+      task.threadId ||
+      task.worktree ||
+      (project?.mode === "repository" && !task.repositoryId)
+    )
+      return launchContinuation(task, runId);
     if (isStopped() || (await admissionHeld({ taskId: task.id, resume }))) {
       await capacity.releasePreparation({ taskId: task.id, runId });
       return;

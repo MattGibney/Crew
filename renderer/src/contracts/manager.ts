@@ -315,7 +315,7 @@ export interface WorkRequest {
   text: string;
   requestId: string;
 }
-export type WorkerAction = "pause" | "stop" | "resume" | "dispose";
+export type WorkerAction = "pause" | "stop" | "resume" | "dispose" | "archive";
 export type ManagerAction = "start" | "stop" | "restart";
 export interface PrepareResult {
   state?: WorkState;

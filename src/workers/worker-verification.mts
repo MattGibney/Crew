@@ -86,12 +86,7 @@ export async function verifyWorkerCompletion({
         verification,
       };
       n.question = null;
-      attention(
-        n,
-        `${n.runId}:completion`,
-        "completion",
-        "Native Codex work completed. Result and execution history are available.",
-      );
+
     });
     return;
   }

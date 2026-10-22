@@ -63,7 +63,6 @@ const workerSettled = (task: TaskActivity) => {
   const evidence = task.updateEvidence;
   return evidence
     ? ["absent", "stopped"].includes(evidence.worker) &&
-        ["absent", "stopped"].includes(evidence.runtime) &&
         evidence.hooks.every((hook) => hook.state === "stopped")
     : (task.harnessStarted !== true && task.execution?.live !== true) ||
         (task.execution?.live === false &&
@@ -127,7 +126,7 @@ export function createPreparationCoordinator({
                 manager.workStarting,
               ),
             message:
-              "Prepare your existing manager conversation and commitments for continuation. Coordinate only this explicit preparation request; ordinary new work is held.",
+              "Prepare your existing manager conversation and commitments for continuation. Coordinate only this explicit preparation request; ordinary communication remains available.",
           },
           ...tasks
             .filter(
@@ -258,8 +257,8 @@ export function createPreparationCoordinator({
               : !sameRun
                 ? "The worker run changed; review its retained context."
                 : settled
-                  ? "Owned execution and resources are settled."
-                  : "Waiting for final worker messages and verified owned execution/resource shutdown.",
+                  ? "Native execution is settled; retained environments remain agent-owned."
+                  : "Waiting for final worker messages and native execution to settle.",
           };
         }),
       };

@@ -1,7 +1,6 @@
 import { retainedWorkLink } from "../shared/tracking.mjs";
 import { globalAdmissionPaused } from "../orchestration/capacity.mjs";
 import { readUpdatePlan, isUpdatePlanHolding } from "../updates/plan.mjs";
-import { readPreparation } from "../preparation/store.mjs";
 import { readTask, updateTask } from "../orchestration/store.mjs";
 import type {
   DirectionDelivery,
@@ -23,14 +22,7 @@ export function recordDirectionDelivery(
   (item.deliveryHistory ||= []).push(delivery);
 }
 function available(task: TaskRecord, runId: string) {
-  return (
-    task.runId === runId &&
-    !["disposed", "removed", "archived"].includes(task.status) &&
-    !task.archiveRestoration?.requiresRecovery &&
-    !task.lifecycleRequests?.some((r) =>
-      ["pending", "processing"].includes(r.status),
-    )
-  );
+  return task.runId === runId;
 }
 /** One ordered durable attempt per direction. Acceptance is not model-consumption evidence. */
 export function createRunnerDirections({
@@ -64,10 +56,7 @@ export function createRunnerDirections({
   async function held() {
     if (await globalAdmissionPaused(globalCapacityDir)) return true;
     if (isUpdatePlanHolding(await readUpdatePlan(stateDir))) return true;
-    const preparation = await readPreparation(stateDir);
-    return Boolean(
-      preparation && !["canceled", "complete"].includes(preparation.phase),
-    );
+    return false;
   }
   async function deliver() {
     const current = snapshot();

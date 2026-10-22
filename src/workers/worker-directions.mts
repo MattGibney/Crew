@@ -133,17 +133,11 @@ export function createWorkerDirections({
     return false;
   }
   async function activateFollowup(task: TaskRecord) {
-    if (
-      isArchivedTask(task) ||
-      ["disposed", "removed", "archived"].includes(task.status) ||
-      task.archiveRestoration?.requiresRecovery
-    )
-      return task;
     const pending = (task.assignments || []).find(
       (item) =>
         item.status === "queued" && item.id !== task.currentAssignmentId,
     );
-    if (!pending || !task.threadId || !task.worktree) return task;
+    if (!pending) return task;
     if (operations.has(task.id) || (await nativeConnectionLive(task)))
       return task;
     // An attempted request may already be in model context. A dead supervisor
@@ -229,14 +223,6 @@ export function createWorkerDirections({
     // assignment is ordinary work admission. Preserve both result and queued
     // direction while preparation, manager lifecycle or update holds admissions.
     if (await admissionHeld({ taskId: task.id, resume: true })) return task;
-    if (
-      task.lifecycleRequests?.some(
-        (r) =>
-          ["pending", "processing"].includes(r.status) &&
-          ["archive", "dispose"].includes(r.action),
-      )
-    )
-      return task;
     const started = task.runDir
       ? await json(path.join(requireRunDir(task), "started.json"))
       : null;

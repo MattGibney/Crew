@@ -61,7 +61,9 @@ export function createWorkerDisposal({
           const repositoryMode = project?.mode === "repository";
           const repository = repositoryMode
             ? project.repositories?.find(
-                (item) => item.id === task.repositoryId,
+                (item) =>
+                  item.id ===
+                  (task.environmentRepositoryId || task.repositoryId),
               )
             : null;
           const meta = repositoryMode

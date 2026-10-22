@@ -129,7 +129,8 @@ export async function createApplicationUpdates(
     prepare: () =>
       gate.reserve(async () => {
         try {
-          return workspacePause.isHolding()
+          return workspacePause.isHolding() ||
+            workspacePause.status()?.phase === "ready"
             ? await reserveWorkspaceUpdate(projectHosts(), {
                 setAdmissionPaused: (admissionPaused) =>
                   configureGlobalCapacity({

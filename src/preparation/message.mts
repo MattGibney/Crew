@@ -12,6 +12,6 @@ export function preparationMessage(request: PreparationRequest): string {
       requestId: request.requestId,
     }),
     "Use a stable responseId for retries, state preparing, ready, needs-input or blocked, a useful note and optional factual continuation. You may revise the response with a new responseId while preparation remains open. A workflow label or ordinary result is not a preparation acknowledgement.",
-    "Report ready only after preserving the context and safely settling resources you own. After reporting ready, finish your final response and end this turn normally. Crew keeps receiving events and waits for native execution to settle; it will not automatically answer approvals or interrupt this preparation turn.",
+    "Report ready after preserving context and safely settling native work; record any independent environment you intentionally retain. After reporting ready, finish your final response and end this turn normally. Crew keeps receiving events and waits for native execution to settle; it will not automatically answer approvals or interrupt this preparation turn.",
   ].join("\n\n");
 }

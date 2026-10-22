@@ -1,3 +1,5 @@
+> Crew #84 supersedes the broad admission/pause policy described below. Preparation leaves communication available, agents report readiness, and only actual restart/Quit reserves execution. Independent environments are retained; preparation creates no automatic pause/resume/cleanup actions. See [AGENT-OWNED-RUNTIME.md](AGENT-OWNED-RUNTIME.md) for current behavior. Earlier validation below is historical and does not validate #84.
+
 # Agent preparation for restart and shutdown (GitHub #62)
 
 ## Confirmed direction

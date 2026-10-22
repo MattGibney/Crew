@@ -7,6 +7,7 @@ import type {
   PreparationActor,
   ReportPreparationInput,
 } from "../preparation/contracts.mjs";
+import { prepareWorkerEnvironment } from "../workers/worker-environment.mjs";
 import { projectEnvironmentContext } from "./environment-context.mjs";
 import type { TaskRecord } from "../workers/contracts.mjs";
 import type { LoadedProject } from "../config/contracts.mjs";
@@ -23,7 +24,7 @@ import {
 } from "../http/approval-input.mjs";
 import { parseRecord, record } from "../shared/errors.mjs";
 import { errorCode, errorMessage } from "../shared/errors.mjs";
-import { activeTasks, isArchivedTask } from "../shared/worker-archive.mjs";
+import { activeTasks } from "../shared/worker-archive.mjs";
 import { ManagerScratchpad } from "../manager/scratchpad.mjs";
 import { createEnvironmentSettings } from "../projects/environment-settings.mjs";
 import { requestWorkerFollowup, setWorkflowState } from "./store.mjs";
@@ -39,6 +40,8 @@ import {
   acknowledgeAttention,
   requestWorkerAction,
   updateWorkNotes,
+  readWorkNotes,
+  notifyManager,
 } from "./store.mjs";
 import { requestWorkerRecovery } from "./store.mjs";
 import { reviewProjectRecovery } from "../projects/environment.mjs";
@@ -107,11 +110,26 @@ async function callTool(name: unknown, input: unknown) {
       argsFor<ReportPreparationInput>(),
     );
   }
+  if (name === "read_work_notes") {
+    const args = argsFor<{ taskId?: string }>();
+    const id = role === "worker" ? taskId! : args.taskId!;
+    scoped(await readTask(stateDir, id));
+    return readWorkNotes(stateDir, id);
+  }
+  if (name === "notify_manager") {
+    return notifyManager(
+      stateDir,
+      taskId!,
+      runId!,
+      argsFor<{ requestId: string; message: string }>(),
+    );
+  }
   if (name === "update_work_notes") {
     const args = argsFor<{
       taskId?: string;
       updateId: string;
       markdown: string;
+      expectedUpdateId?: string | null;
     }>();
     const id = role === "worker" ? taskId! : args.taskId!;
     scoped(await readTask(stateDir, id));
@@ -164,6 +182,16 @@ async function callTool(name: unknown, input: unknown) {
       return new ManagerScratchpad({ stateDir }).update(
         JSON.parse(argsFor<{ patchJson: string }>().patchJson),
       );
+    case "prepare_worker_environment": {
+      const args = argsFor<{ taskId: string; repositoryId: string }>();
+      scoped(await readTask(stateDir, args.taskId));
+      return prepareWorkerEnvironment({
+        stateDir,
+        project: project ? requireExecutionProject(project) : null,
+        taskId: args.taskId,
+        repositoryId: args.repositoryId,
+      });
+    }
     case "assign_worker_followup": {
       const args = argsFor<Parameters<typeof requestWorkerFollowup>[1]>();
       scoped(await readTask(stateDir, args.taskId));
@@ -178,7 +206,7 @@ async function callTool(name: unknown, input: unknown) {
     }
     case "submit_task": {
       const args = argsFor<Parameters<typeof createTask>[1]>();
-      if (repositoryMode) {
+      if (repositoryMode && args.repositoryId) {
         if (
           !project?.repositories?.some((repo) => repo.id === args.repositoryId)
         )
@@ -196,20 +224,14 @@ async function callTool(name: unknown, input: unknown) {
       const requests = await listWorkerRequests({ stateDir });
       const withApprovals = (task: TaskRecord) => ({
         ...scoped(task),
-        approvals:
-          isArchivedTask(task) || task.archiveRestoration?.requiresRecovery
-            ? []
-            : requests.filter(
-                (request) =>
-                  request.taskId === task.id &&
-                  request.runId === task.runId &&
-                  [
-                    "pending",
-                    "decided",
-                    "delivered",
-                    "delivery-unknown",
-                  ].includes(request.status),
-              ),
+        approvals: requests.filter(
+          (request) =>
+            request.taskId === task.id &&
+            request.runId === task.runId &&
+            ["pending", "decided", "delivered", "delivery-unknown"].includes(
+              request.status,
+            ),
+        ),
       });
       return args.taskId
         ? withApprovals(await readTask(stateDir, args.taskId))

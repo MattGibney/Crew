@@ -149,7 +149,10 @@ export function createWorkspacePauseUpdate({
     try {
       const value = await readWorkspacePauseJournal(path);
       journal = value;
-      if (journal && !terminal(journal)) await setAdmissionPaused(true);
+      if (journal)
+        await setAdmissionPaused(
+          ["marking", "installing"].includes(journal.phase),
+        );
       initialized = true;
     } catch (error) {
       initialError = error;
@@ -180,7 +183,7 @@ export function createWorkspacePauseUpdate({
     active().phase = "blocked";
     active().reasons = [reason];
     await save();
-    await setAdmissionPaused(true);
+    await setAdmissionPaused(false);
     return publicStatus();
   }
   async function blockChildren(values: UpdateProject[], reason: string) {
@@ -276,7 +279,7 @@ export function createWorkspacePauseUpdate({
       return publicStatus();
     } catch {
       return block(
-        "Registered project activity or child plan identity is unavailable. Global admission remains paused.",
+        "Registered project activity or child plan identity is unavailable. Communication remains available; review preparation before retrying.",
       );
     }
   }
@@ -284,7 +287,8 @@ export function createWorkspacePauseUpdate({
     ready,
     status: () => clone(publicStatus()),
     isHolding: () =>
-      !initialized || beginning || Boolean(journal && !terminal(journal)),
+      !initialized ||
+      Boolean(journal && ["marking", "installing"].includes(journal.phase)),
     begin(input: { targetVersion: string; purpose?: "update" | "quit" }) {
       beginning = true;
       return enqueue(async () => {
@@ -323,7 +327,7 @@ export function createWorkspacePauseUpdate({
             reasons: [],
           };
           await save();
-          await setAdmissionPaused(true);
+          await setAdmissionPaused(false);
           try {
             const values = await current();
             active().projects = values.map((project) => ({
@@ -412,7 +416,7 @@ export function createWorkspacePauseUpdate({
           return publicStatus();
         } catch {
           return block(
-            "Cancellation could not be confirmed for every project. Global admission remains paused.",
+            "Cancellation could not be confirmed for every project. Communication remains available; review preparation before retrying.",
           );
         }
       }),
@@ -455,7 +459,7 @@ export function createWorkspacePauseUpdate({
           return tickInternal();
         } catch {
           return block(
-            "Retained-work resume could not be confirmed for every project. Global admission remains paused.",
+            "Retained-work resume could not be confirmed for every project. Communication remains available; review preparation before retrying.",
           );
         }
       }),
@@ -492,7 +496,7 @@ export function createWorkspacePauseUpdate({
           return complete();
         } catch {
           return block(
-            "Return to work could not be confirmed for every project. Global admission remains paused.",
+            "Return to work could not be confirmed for every project. Communication remains available; review preparation before retrying.",
           );
         }
       }),
@@ -514,6 +518,7 @@ export function createWorkspacePauseUpdate({
             !(await workspaceUpdateActivity(values)).safe
           )
             throw new Error("Fresh readiness changed.");
+          await setAdmissionPaused(true);
           active().phase = "marking";
           await save();
           for (const project of active().projects) {
@@ -538,11 +543,11 @@ export function createWorkspacePauseUpdate({
           if (values)
             await blockChildren(
               values,
-              "Installation could not be committed for every project. No controller may be stopped; global admission remains paused.",
+              "Installation could not be committed for every project. No controller may be stopped; communication remains available.",
             );
           else
             await block(
-              "The registered project set changed before installation. Global admission remains paused.",
+              "The registered project set changed before installation. Communication remains available; review preparation before retrying.",
             );
           return { marked: false, plan: publicStatus() };
         }
@@ -568,14 +573,16 @@ export function createWorkspacePauseUpdate({
           return await blockChildren(await matchingProjects(), message);
         } catch {
           return block(
-            "Installation failed and registered project recovery is unavailable. Global admission remains paused.",
+            "Installation failed and registered project recovery is unavailable. Communication remains available; review preparation before retrying.",
           );
         }
       }),
     recover: () =>
       enqueue(async () => {
         if (!journal || terminal(journal)) return publicStatus();
-        await setAdmissionPaused(true);
+        await setAdmissionPaused(
+          ["marking", "installing"].includes(active().phase),
+        );
         try {
           const values = await matchingProjects();
           if (active().phase === "marking")
@@ -626,7 +633,7 @@ export function createWorkspacePauseUpdate({
           return tickInternal();
         } catch {
           return block(
-            "The grouped update cannot verify its registered projects. Global admission remains paused.",
+            "The grouped update cannot verify its registered projects. Communication remains available; review preparation before retrying.",
           );
         }
       }),

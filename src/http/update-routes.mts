@@ -67,8 +67,6 @@ export async function handleUpdateRoute(
         error: "Only this desktop owner may coordinate an update.",
       });
     if (url === "/api/update-plan-begin") {
-      hold();
-      updateAdmission.hold();
       try {
         await updatePlan.begin({
           targetVersion: input.targetVersion,
@@ -103,14 +101,26 @@ export async function handleUpdateRoute(
       await updatePlan.cancel();
       return send(200, { plan: updatePlan.status() });
     }
-    if (url === "/api/update-plan-installing")
-      return send(
-        200,
-        await updatePlan.markInstalling({
+    if (url === "/api/update-plan-installing") {
+      const reservation = await updateAdmission.reserve(activity);
+      if (!reservation.reserved)
+        return send(200, {
+          marked: false,
+          reasons: reservation.reasons,
+          plan: updatePlan.status(),
+        });
+      try {
+        const result = await updatePlan.markInstalling({
           planId: input.planId,
           targetVersion: input.targetVersion,
-        }),
-      );
+        });
+        if (!result.marked) updateAdmission.cancel();
+        return send(200, result);
+      } catch (error) {
+        updateAdmission.cancel();
+        throw error;
+      }
+    }
     await updatePlan.markBlocked(
       "The update could not finish. Paused work is retained; review it or choose Resume paused work.",
       { planId: input.planId, targetVersion: input.targetVersion },

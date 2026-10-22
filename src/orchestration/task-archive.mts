@@ -158,9 +158,44 @@ export function createArchiveStore({
       }
       if (action === "restore") {
         if (!task) throw new Error("Archived worker history is unavailable");
-        await ensureArchiveExecutionStopped(dir, task);
         const previous = structuredClone(task),
           at = now();
+        // Modern archive records preserve their current execution and environment.
+        if (!["disposed", "removed", "archived"].includes(task.status)) {
+          delete task.archivedAt;
+          task.archiveRestoration = {
+            operationId,
+            at,
+            requiresRecovery: false,
+            reason: "visibility-only",
+            archiveRevision: expectedRevision,
+            previousStatus: previous.status,
+            previousFailure: previous.failure || null,
+          };
+          (task.archiveRestorations ||= []).push({
+            ...task.archiveRestoration,
+          });
+          task.history.push({
+            id: `archive-restore:${operationId}`,
+            actor: "controller",
+            kind: "lifecycle",
+            message:
+              "Restored visibility; retained execution and resources are unchanged.",
+            at,
+            runId: task.runId || null,
+          });
+          recordHistory(task, previous);
+          task.revision++;
+          task.updatedAt = at;
+          await save(root, task);
+          await atomic(
+            journalFile,
+            JSON.stringify({ ...identity, status: "completed", at }),
+          );
+          return { ok: true, taskId, action };
+        }
+        await ensureArchiveExecutionStopped(dir, task);
+        delete task.archivedAt;
         task.status = "blocked";
         task.failure =
           "Restored worker history only. Its environment is absent or unavailable. Environment reconstruction is not currently supported; no setup or worker was started.";
@@ -207,6 +242,19 @@ export function createArchiveStore({
       return withStateLock(root, ".worker-approvals.lock", async () => {
         if (task && journal?.status !== "deleting") {
           await ensureArchiveExecutionStopped(dir, task);
+          if (task.worktree && !["disposed", "removed"].includes(task.status)) {
+            const retained = await fs.lstat(task.worktree).then(
+              () => true,
+              (error) => {
+                if (errorCode(error) === "ENOENT") return false;
+                throw error;
+              },
+            );
+            if (retained)
+              throw new Error(
+                "This worker still has a retained environment. Explicitly dispose its environment before deleting ownership and execution records.",
+              );
+          }
         }
         const records = ["json", "md", "notes.md"].map((extension) =>
           path.join(root, "tasks", `${taskId}.${extension}`),
