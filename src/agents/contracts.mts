@@ -30,11 +30,21 @@ export interface Skill {
 }
 export interface AppliedConfiguration {
   profileRevision: Revision;
+  instructionsDigest?: string; // SHA-256 of verified native instructions, not a second prompt store
   permissionGroups: RevisionReference[];
   serviceConnections: RevisionReference[];
   skills: RevisionReference[];
   runtimeConfigRevision: Revision;
   appliedAt: Timestamp;
+}
+export interface InstructionPreparation {
+  state: "compacting" | "completed" | "failed" | "uncertain";
+  threadId: string;
+  turnId: string | null;
+  itemId: string | null;
+  startedAt: Timestamp;
+  completedAt: Timestamp | null;
+  error: RuntimeError | null;
 }
 export interface AgentSession {
   sessionId: Id | null; // Logical Start-to-Stop identity; distinct from thread/turn
@@ -46,6 +56,7 @@ export interface AgentSession {
   lastObservedAt: Timestamp | null;
   lastError: RuntimeError | null;
   appliedConfiguration: AppliedConfiguration | null;
+  instructionPreparation?: InstructionPreparation | null;
 }
 export interface Agent {
   id: Id;
@@ -591,6 +602,13 @@ export interface RuntimeStartInput {
   modelAccess: ModelAccess; // Runtime-managed subscription reference only
   configuration: ConfigurationSnapshot;
   access: RuntimeAccessBinding;
+  instructionRefresh?: {
+    intent: "start" | "restart";
+    previousInstructionsDigest: string | null;
+  };
+  onInstructionPreparation?: (
+    preparation: InstructionPreparation,
+  ) => Promise<void>;
 }
 export interface RuntimeError {
   code:
@@ -619,6 +637,7 @@ export type RuntimeStartResult =
       state: "failed" | "uncertain";
       error: RuntimeError;
       retainedThreadId: string | null;
+      nativeDispatched?: false; // Explicit adapter proof that no native process/request began
     };
 export type DeliveryResult =
   | {

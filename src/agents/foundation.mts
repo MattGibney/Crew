@@ -408,6 +408,11 @@ export class AgentFoundation implements AgentLifecycle {
           "disconnected",
           "Previous native ownership is unverified. Resolve the retained session before explicitly starting again.",
         );
+        const preparation = current.runtime.session.instructionPreparation;
+        if (preparation?.state === "compacting") {
+          preparation.state = "uncertain";
+          preparation.error = current.runtime.session.lastError;
+        }
         for (const message of state.messages) {
           if (
             message.recipientAgentId !== agent.id ||
@@ -451,14 +456,17 @@ export class AgentFoundation implements AgentLifecycle {
         action === "restart" ? "restart" : "stop",
       );
       if (action === "stop" || stopped.state === "failed") return stopped;
-      return this.startLocked(agentId);
+      return this.startLocked(agentId, "restart");
     });
     if (result.state === "acknowledged" && action !== "stop")
       void this.pump(agentId).catch(() => {});
     return result;
   }
 
-  private async startLocked(agentId: string): Promise<RuntimeStartResult> {
+  private async startLocked(
+    agentId: string,
+    intent: "start" | "restart" = "start",
+  ): Promise<RuntimeStartResult> {
     const agent = this.agent(agentId);
     const previous = agent.runtime.session;
     const provisioning = this.store
@@ -539,6 +547,7 @@ export class AgentFoundation implements AgentLifecycle {
           startedAt: null,
           lastObservedAt: now(),
           lastError: null,
+          instructionPreparation: null,
         };
         state.nativeStartAttempts.push({
           agentId,
@@ -595,7 +604,40 @@ export class AgentFoundation implements AgentLifecycle {
           modelAccess: loaded.modelAccess,
           configuration: loaded.configuration,
           access: isolation.runtimeAccess,
+          instructionRefresh: {
+            intent,
+            previousInstructionsDigest:
+              previous.appliedConfiguration?.instructionsDigest ?? null,
+          },
+          onInstructionPreparation: async (preparation) => {
+            await this.store.update((state) => {
+              const current = state.agents.find((row) => row.id === agentId)!;
+              const session = current.runtime.session;
+              if (
+                current.projectId !== caller.projectId ||
+                session.sessionId !== caller.sessionId ||
+                session.observedState !== "starting" ||
+                current.runtime.threadId !== preparation.threadId
+              )
+                throw new Error("Instruction preparation identity changed.");
+              session.instructionPreparation = structuredClone(preparation);
+              session.activeTurnId =
+                preparation.state === "compacting" ||
+                preparation.state === "uncertain"
+                  ? preparation.turnId
+                  : null;
+              session.lastObservedAt = now();
+            });
+          },
         });
+        if (result.state === "failed" && result.nativeDispatched === false) {
+          nativeAttempted = false;
+          await this.store.update((state) => {
+            state.nativeStartAttempts.find(
+              (entry) => entry.sessionId === caller.sessionId,
+            )!.dispatched = false;
+          });
+        }
       }
     } catch {
       // An exception may follow native creation; never assume non-execution.
@@ -842,7 +884,7 @@ export class AgentFoundation implements AgentLifecycle {
             error: stopped.error,
             retainedThreadId: this.agent(agentId).runtime.threadId,
           };
-        return this.startLocked(agentId);
+        return this.startLocked(agentId, "restart");
       },
     );
     if (result.state === "acknowledged")

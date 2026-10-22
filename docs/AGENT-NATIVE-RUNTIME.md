@@ -58,8 +58,8 @@ remains missing; naming is never used to replace an established conversation.
 
 Profile instructions, optional name and personality are sent through the supported direct
 `developerInstructions` field on `thread/start` and `thread/resume`. Creation was behaviorally
-verified; changed instructions on retained chats remain subject to the native propagation limitation
-below. Native configuration is also acknowledged through
+verified; changed instructions on retained chats use the explicitly requested Restart preparation
+described below. Native configuration is also acknowledged through
 `thread/settings/update` → `thread/settings/updated` using
 `collaborationMode.settings.developer_instructions`. New threads use Codex's default collaboration
 mode and its returned model/effort. Resumed threads must expose their effective `collaborationMode`;
@@ -478,11 +478,11 @@ text. Public-history provenance and human acoustic acceptance remain separate ch
 validation can proceed against the candidate; none of this implies installed-product acceptance,
 release permission, or complete coverage of every model-accessible tool.
 
-The current adapter therefore sends the saved profile through the direct native startup field,
+The adapter sends the saved profile through the direct native startup field,
 without adding a workspace instruction file or another durable profile source. Its settings
 acknowledgement remains a configuration claim. The pinned runtime's changed-profile behavior on
-retained chats is unaccepted; no fake turn, replacement chat or experimental feature toggle is
-used to conceal that result. The second synthetic voice check captured a legacy `handoff_request`
+retained chats requires the approved native context refresh below; settings acceptance alone is
+insufficient. The second synthetic voice check captured a legacy `handoff_request`
 with realtime handoff/item IDs but no coding turn/item IDs; it provides no safe public-history
 correlation fallback.
 
@@ -507,16 +507,15 @@ preserved all five existing turns and ten existing item IDs under the same threa
 This is native context maintenance with a real turn lifecycle, not an idle or zero-work restart.
 It may use model allowance; the diagnostic did not capture an exact token count. Inspectable native
 history remained intact, while the active model context was summarized. Do not describe that
-summary as lossless. Neither this probe nor the direct startup fix adds automatic compaction to
-production.
+summary as lossless. The owner subsequently approved this operation for explicit changed-instructions
+Restart. Ordinary Start never silently runs compaction.
 
-The smallest implementation candidate is an explicitly authorized changed-profile Restart that
+The approved implementation is an explicitly authorized changed-instructions Restart that
 retains the thread, supplies the current profile, runs native compaction, and acknowledges the
 applied revision only after the exact compaction item and successful turn complete and native
 policy/idle state is rechecked. RPC acknowledgement or a turn ending alone is insufficient; errors,
-timeouts and missing item completion remain failures/uncertainty. New idle Start must not silently
-run this operation. This policy requires deliberate product integration because earlier startup
-guidance promises no automatic model work.
+timeouts and missing item completion remain failures/uncertainty. New idle Start does not
+run this operation. This explicit owner choice supersedes the earlier policy hold.
 
 ### Compaction completion, history and cost evidence
 
@@ -540,9 +539,43 @@ activity/preparation/reservation handling. No per-compaction token usage was cap
 monetary cost and allowance impact are unavailable, not zero; no cost estimate is inferred from
 its duration. The final history verification sent no model input and confirmed its reader exited.
 
-The owner is choosing between context refresh during an explicit changed-instructions Restart and
-a separate Apply instructions action. Implementation of that dependent policy is on hold. An
-unchanged restart is intended to remain idle, and no compaction behavior has been added to Start.
+The applied configuration retains only a SHA-256 digest of the composed instruction bytes as
+provenance. The saved profile remains the sole current instruction source. A picture-only or other
+non-instruction revision does not cause compaction when the verified digest is unchanged. New
+threads and unchanged verified Start/Restart remain idle. A retained chat with changed instructions
+or no verified digest requires explicit Restart; ordinary Start returns actionable guidance before
+native launch. Legacy applied configurations without the optional digest remain readable.
+
+`AgentSession.instructionPreparation` exposes `compacting`, `completed`, `failed` or `uncertain`,
+the exact native thread and observed turn/item IDs, timestamps and a sanitized error. The session
+stays `starting` until verification succeeds; the previous applied configuration remains in place
+on failure. Controller recovery makes incomplete compaction uncertain and never replays it.
+Preparation uses the existing permission/profile startup path, preserves readable history, and
+does not submit a synthetic work assignment. No token or monetary-cost estimate is exposed.
+
+### Approved Restart implementation acceptance
+
+The production foundation and native adapter were exercised together against the pinned signed-in
+native build using an isolated synthetic chat and a trusted synthetic permission resolver. A new
+idle Start acknowledged a digest, and a genuine arithmetic message returned the old instruction-only
+marker. After a saved profile change, ordinary Start rejected before native launch and settled its
+unused logical session. Explicit Restart retained the chat, recorded the exact native compaction
+turn/item and completed preparation. A subsequent genuine arithmetic message returned the new
+instruction-only marker. The prior public message IDs and content remained readable through the
+foundation history API. An unchanged Restart emitted no native turn, and final Stop confirmed exit.
+
+The initial acceptance harness accidentally consumed a buffered compaction completion while
+waiting for the next arithmetic result; it stopped the arithmetic turn before a response. The
+corrected harness matches the message receipt's exact session and turn, and passed. Both private
+evidence records remain available; this was a harness correction, not a product workaround.
+
+Eight bounded protocol test groups cover unchanged idle paths, pre-launch rejection, required
+durable progress, exact success, missing/conflicting completion, native error followed by a terminal
+turn, lost history, policy drift, timeouts, no replay and explicit Stop. Real-store checks cover
+legacy optional fields, rejected Start followed by Restart, durable preparation, blocked execution
+and final reservation, stale identity rejection, and recovery to uncertainty. Typecheck and build
+passed. This acceptance uses no physical microphone and does not establish installed-app UI,
+production permission-provider or retained voice-history acceptance.
 
 ### Proposed narrow treatment for missing voice provenance
 

@@ -7,6 +7,7 @@ import type {
   CallerContext,
   DeliveryAttempt,
   DeliveryResult,
+  InstructionPreparation,
   JsonObject,
   JsonValue,
   RuntimeBinding,
@@ -96,6 +97,8 @@ export interface CodexRuntimeOptions {
     block: Extract<AgentContent, { type: "image" | "file" }>,
   ) => Promise<JsonObject>;
   acknowledgementTimeoutMs?: number;
+  /** Native compaction may take longer than its initial RPC acknowledgement. */
+  instructionPreparationTimeoutMs?: number;
 }
 type Approval = {
   id: string | number;
@@ -109,6 +112,21 @@ type Send = {
   fingerprint: string;
   sender: MessageSender;
   result: DeliveryResult | null;
+};
+type Compaction = {
+  preparation: InstructionPreparation;
+  publish: NonNullable<RuntimeStartInput["onInstructionPreparation"]>;
+  writes: Promise<void>;
+  persistenceFailed: boolean;
+  dispatched: boolean;
+  tracking: boolean;
+  prior: Map<string, Set<string>>;
+  turnStarted: boolean;
+  itemStarted: boolean;
+  itemCompleted: boolean;
+  turnCompleted: boolean;
+  fault: RuntimeError | null;
+  uncertain: boolean;
 };
 type Session = {
   input: RuntimeStartInput;
@@ -133,6 +151,7 @@ type Session = {
   observed: boolean;
   earlyEvents: RuntimeEvent[];
   realtime: CodexRealtimeController | null;
+  compaction: Compaction | null;
 };
 const now = () => new Date().toISOString();
 const failure = (
@@ -144,6 +163,44 @@ const key = (
 ) => JSON.stringify([binding.projectId, binding.agentId, binding.sessionId]);
 const same = (a: RuntimeBinding, b: RuntimeBinding) =>
   key(a) === key(b) && a.threadId === b.threadId;
+const instructionsFor = (input: RuntimeStartInput) => {
+  const profile = input.configuration.profile;
+  return [
+    profile.systemPrompt,
+    profile.name ? `Agent name: ${profile.name}` : "",
+    profile.personality
+      ? `Agent personality preferences:\n${profile.personality}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+};
+const instructionsDigest = (instructions: string) =>
+  createHash("sha256").update(instructions).digest("hex");
+function historyIdentities(
+  thread: Record<string, unknown>,
+): Map<string, Set<string>> {
+  if (!Array.isArray(thread.turns))
+    throw new CodexRpcError("Native history could not be verified.", -32602);
+  const result = new Map<string, Set<string>>();
+  for (const turn of thread.turns) {
+    if (
+      !object(turn) ||
+      typeof turn.id !== "string" ||
+      !Array.isArray(turn.items) ||
+      result.has(turn.id)
+    )
+      throw new CodexRpcError("Native history identity is ambiguous.", -32602);
+    const ids = new Set<string>();
+    for (const item of turn.items) {
+      if (!object(item) || typeof item.id !== "string" || ids.has(item.id))
+        throw new CodexRpcError("Native item identity is ambiguous.", -32602);
+      ids.add(item.id);
+    }
+    result.set(turn.id, ids);
+  }
+  return result;
+}
 const exactRoot = (roots: unknown, cwd: string) =>
   Array.isArray(roots) && roots.length === 1 && roots[0] === cwd;
 const nativeSettingsMatch = (session: Session, value: unknown) =>
@@ -332,6 +389,35 @@ export class CodexAgentRuntime
     let retainedThreadId =
       input.thread.mode === "resume" ? input.thread.threadId : null;
     try {
+      const instructions = instructionsFor(input);
+      const digest = instructionsDigest(instructions);
+      const refresh =
+        input.thread.mode === "resume" &&
+        input.instructionRefresh?.previousInstructionsDigest !== digest;
+      if (refresh && input.instructionRefresh?.intent !== "restart")
+        return {
+          state: "failed",
+          nativeDispatched: false,
+          retainedThreadId,
+          error: failure(
+            "configuration_rejected",
+            "Restart to apply changed or unverified instructions to this retained chat.",
+          ),
+        };
+      if (refresh && typeof input.onInstructionPreparation !== "function")
+        return {
+          state: "failed",
+          nativeDispatched: false,
+          retainedThreadId,
+          error: failure(
+            "configuration_rejected",
+            "Restart instruction preparation requires durable progress tracking before native execution.",
+          ),
+        };
+      const {
+        onInstructionPreparation: _preparationCallback,
+        ...serializableInput
+      } = input;
       if (key(input.caller) !== key(input.access.caller))
         return {
           state: "failed",
@@ -353,7 +439,9 @@ export class CodexAgentRuntime
           ),
           retainedThreadId,
         };
-      const resolved = await this.options.resolveLaunch(structuredClone(input));
+      const resolved = await this.options.resolveLaunch(
+        structuredClone(serializableInput),
+      );
       if (resolved.state === "blocked")
         return { state: "failed", error: resolved.error, retainedThreadId };
       const { launch, skills, nativePermissions } = resolved;
@@ -411,7 +499,7 @@ export class CodexAgentRuntime
           retainedThreadId,
         };
       const current: Session = {
-        input: structuredClone(input),
+        input: structuredClone(serializableInput),
         binding: retainedThreadId
           ? { ...input.caller, threadId: retainedThreadId }
           : null,
@@ -440,6 +528,7 @@ export class CodexAgentRuntime
         observed: false,
         earlyEvents: [],
         realtime: null,
+        compaction: null,
       };
       session = current;
       this.sessions.set(key(input.caller), current);
@@ -507,15 +596,6 @@ export class CodexAgentRuntime
           );
       }
       const profile = input.configuration.profile;
-      const instructions = [
-        profile.systemPrompt,
-        profile.name ? `Agent name: ${profile.name}` : "",
-        profile.personality
-          ? `Agent personality preferences:\n${profile.personality}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
       // Bind the actual native developer-instruction channel at thread creation.
       // Collaboration-mode settings alone can acknowledge bytes without making
       // them part of the model's initial context on the pinned native build.
@@ -690,12 +770,22 @@ export class CodexAgentRuntime
         throw new CodexRpcError(
           "Native work or unavailable observation prevented idle startup.",
         );
+      if (refresh) {
+        // From this point a native compaction may be dispatched. Never close or
+        // replay an unresolved preparation merely because thread/read is idle.
+        safeToClose = false;
+        await this.prepareInstructions(
+          current,
+          input.onInstructionPreparation!,
+        );
+      }
       const observedAt = now();
       current.acknowledgement = {
         binding: current.binding,
         observedAt,
         appliedConfiguration: {
           profileRevision: profile.revision,
+          instructionsDigest: digest,
           permissionGroups: structuredClone(
             input.configuration.permissionGroups,
           ),
@@ -777,10 +867,15 @@ export class CodexAgentRuntime
       }
       return {
         state:
-          error instanceof CodexRpcError && error.code !== null
-            ? "failed"
-            : "uncertain",
-        error: session?.policyError ?? nativeError(error),
+          session?.compaction?.preparation.state === "uncertain"
+            ? "uncertain"
+            : error instanceof CodexRpcError && error.code !== null
+              ? "failed"
+              : "uncertain",
+        error:
+          session?.compaction?.preparation.error ??
+          session?.policyError ??
+          nativeError(error),
         retainedThreadId,
       };
     }
@@ -795,6 +890,280 @@ export class CodexAgentRuntime
         false,
       );
     return session;
+  }
+  private persistPreparation(session: Session): Promise<void> {
+    const compact = session.compaction!;
+    const snapshot = structuredClone(compact.preparation);
+    compact.writes = compact.writes.then(async () => {
+      try {
+        await compact.publish(snapshot);
+      } catch {
+        compact.persistenceFailed = true;
+        compact.fault ??= failure(
+          "runtime_error",
+          "Native instruction preparation could not be durably recorded. Retain this exact session and reconcile before retrying.",
+        );
+        this.changed(session);
+      }
+    });
+    return compact.writes;
+  }
+  private preparationFault(
+    session: Session,
+    message: string,
+    uncertain = true,
+  ) {
+    const compact = session.compaction!;
+    compact.fault ??= failure("configuration_rejected", message);
+    compact.uncertain ||= uncertain;
+    this.changed(session);
+  }
+  private assertPreparation(session: Session) {
+    const compact = session.compaction!;
+    if (session.policyError || !session.policyVerified || session.stopping) {
+      compact.uncertain ||= compact.dispatched;
+      compact.fault ??=
+        session.policyError ??
+        failure(
+          "configuration_rejected",
+          "Native instruction preparation lost its verified idle session or permission policy.",
+        );
+    }
+    if (compact.fault || compact.persistenceFailed)
+      throw new CodexRpcError(
+        "Native instruction preparation was not verified.",
+        -32602,
+        compact.dispatched,
+      );
+  }
+  private observePreparation(session: Session, envelope: CodexEnvelope) {
+    const compact = session.compaction;
+    if (!compact?.tracking) return;
+    const { method, params } = envelope;
+    if (envelope.id !== undefined || method === "error") {
+      this.preparationFault(
+        session,
+        "A native error or approval interrupted instruction preparation.",
+      );
+      return;
+    }
+    if (!(
+      method === "turn/started" ||
+      method === "turn/completed" ||
+      method === "item/started" ||
+      method === "item/completed"
+    ))
+      return;
+    const turnEvent = method.startsWith("turn/");
+    const turnId =
+      turnEvent && object(params.turn) ? params.turn.id : params.turnId;
+    if (
+      !compact.dispatched ||
+      typeof turnId !== "string" ||
+      !turnId ||
+      compact.prior.has(turnId) ||
+      (compact.preparation.turnId && compact.preparation.turnId !== turnId)
+    ) {
+      this.preparationFault(
+        session,
+        "Native instruction preparation observed an unrelated or ambiguous turn.",
+      );
+      return;
+    }
+    let identityChanged = false;
+    if (method === "turn/started") {
+      if (!compact.preparation.turnId) {
+        compact.preparation.turnId = turnId;
+        identityChanged = true;
+      }
+      compact.turnStarted = true;
+    } else if (!compact.turnStarted) {
+      this.preparationFault(
+        session,
+        "Native instruction preparation did not observe the exact turn start.",
+      );
+      return;
+    } else if (method === "turn/completed") {
+      compact.turnCompleted = true;
+      if (
+        !object(params.turn) ||
+        params.turn.status !== "completed" ||
+        params.turn.error != null
+      )
+        this.preparationFault(
+          session,
+          "The native instruction preparation turn did not complete successfully.",
+          false,
+        );
+    } else if (
+      object(params.item) &&
+      params.item.type === "contextCompaction"
+    ) {
+      const itemId = params.item.id;
+      if (
+        typeof itemId !== "string" ||
+        !itemId ||
+        (compact.preparation.itemId && compact.preparation.itemId !== itemId) ||
+        [...compact.prior.values()].some((ids) => ids.has(itemId))
+      ) {
+        this.preparationFault(
+          session,
+          "Native instruction preparation observed conflicting compaction items.",
+        );
+        return;
+      }
+      if (!compact.preparation.itemId) {
+        compact.preparation.itemId = itemId;
+        identityChanged = true;
+      }
+      // Item-started is optional progress on the pinned protocol. When present,
+      // it must identify the same exact item as the required completed event.
+      if (method === "item/started") compact.itemStarted = true;
+      else compact.itemCompleted = true;
+    }
+    if (identityChanged) void this.persistPreparation(session);
+    this.changed(session);
+  }
+  private async prepareInstructions(
+    session: Session,
+    publish: NonNullable<RuntimeStartInput["onInstructionPreparation"]>,
+  ): Promise<void> {
+    const threadId = session.binding!.threadId;
+    const compact: Compaction = {
+      preparation: {
+        state: "compacting",
+        threadId,
+        turnId: null,
+        itemId: null,
+        startedAt: now(),
+        completedAt: null,
+        error: null,
+      },
+      publish,
+      writes: Promise.resolve(),
+      persistenceFailed: false,
+      dispatched: false,
+      tracking: true,
+      prior: new Map(),
+      turnStarted: false,
+      itemStarted: false,
+      itemCompleted: false,
+      turnCompleted: false,
+      fault: null,
+      uncertain: false,
+    };
+    session.compaction = compact;
+    try {
+      await this.persistPreparation(session);
+      this.assertPreparation(session);
+      const before = record(
+        record(
+          await session.peer.rpc("thread/read", {
+            threadId,
+            includeTurns: true,
+          }),
+        ).thread,
+      );
+      if (
+        before.id !== threadId ||
+        !object(before.status) ||
+        before.status.type !== "idle" ||
+        !nativeEnvironmentMatches(session, before) ||
+        session.activeTurnId ||
+        [...session.approvals.values()].some((approval) => !approval.resolved)
+      )
+        throw new CodexRpcError(
+          "Instruction preparation requires a verified idle retained thread.",
+          -32602,
+          false,
+        );
+      compact.prior = historyIdentities(before);
+      this.assertPreparation(session);
+      compact.dispatched = true;
+      await session.peer.rpc("thread/compact/start", { threadId });
+      await this.wait(
+        session,
+        () =>
+          Boolean(
+            compact.fault ||
+            compact.persistenceFailed ||
+            session.policyError ||
+            (compact.turnStarted &&
+              compact.itemCompleted &&
+              compact.turnCompleted),
+          ),
+        this.options.instructionPreparationTimeoutMs ?? 90_000,
+      );
+      await compact.writes;
+      this.assertPreparation(session);
+      const after = record(
+        record(
+          await session.peer.rpc("thread/read", {
+            threadId,
+            includeTurns: true,
+          }),
+        ).thread,
+      );
+      const retained = historyIdentities(after);
+      const newTurns = [...retained.keys()].filter(
+        (id) => !compact.prior.has(id),
+      );
+      const turn = Array.isArray(after.turns)
+        ? after.turns.find(
+            (value) => object(value) && value.id === compact.preparation.turnId,
+          )
+        : null;
+      if (
+        after.id !== threadId ||
+        !object(after.status) ||
+        after.status.type !== "idle" ||
+        !nativeEnvironmentMatches(session, after) ||
+        session.activeTurnId ||
+        newTurns.length !== 1 ||
+        newTurns[0] !== compact.preparation.turnId ||
+        !object(turn) ||
+        turn.status !== "completed" ||
+        turn.error != null ||
+        !Array.isArray(turn.items) ||
+        !turn.items.some(
+          (item) =>
+            object(item) &&
+            item.type === "contextCompaction" &&
+            item.id === compact.preparation.itemId,
+        ) ||
+        [...compact.prior].some(
+          ([id, items]) =>
+            !retained.has(id) ||
+            [...items].some((itemId) => !retained.get(id)!.has(itemId)),
+        )
+      ) {
+        this.preparationFault(
+          session,
+          "Compaction completion, retained history or native idle workspace could not be verified.",
+        );
+      }
+      this.assertPreparation(session);
+      compact.preparation.state = "completed";
+      compact.preparation.completedAt = now();
+      await this.persistPreparation(session);
+      this.assertPreparation(session);
+      compact.tracking = false;
+    } catch (error) {
+      const uncertain =
+        compact.uncertain ||
+        (compact.dispatched &&
+          (compact.persistenceFailed ||
+            !(error instanceof CodexRpcError) ||
+            error.code === null)) ||
+        (compact.turnStarted && !compact.turnCompleted);
+      compact.preparation.state = uncertain ? "uncertain" : "failed";
+      compact.preparation.completedAt = uncertain ? null : now();
+      compact.preparation.error =
+        compact.fault ?? session.policyError ?? nativeError(error);
+      compact.tracking = uncertain;
+      await this.persistPreparation(session);
+      throw error;
+    }
   }
   private policyFailure(session: Session): RuntimeError | null {
     return (
@@ -855,7 +1224,11 @@ export class CodexAgentRuntime
   private changed(session: Session) {
     for (const waiter of session.waiters) waiter();
   }
-  private async wait(session: Session, predicate: () => boolean) {
+  private async wait(
+    session: Session,
+    predicate: () => boolean,
+    timeoutMs = this.options.acknowledgementTimeoutMs ?? 10_000,
+  ) {
     if (predicate()) return;
     await new Promise<void>((resolve, reject) => {
       const finish = () => {
@@ -872,7 +1245,7 @@ export class CodexAgentRuntime
       const timer = setTimeout(() => {
         session.waiters.delete(finish);
         reject(new CodexRpcError("Native state acknowledgement timed out."));
-      }, this.options.acknowledgementTimeoutMs ?? 10_000);
+      }, timeoutMs);
       session.waiters.add(finish);
       finish();
     });
@@ -913,6 +1286,7 @@ export class CodexAgentRuntime
       return;
     }
     if (!binding || params.threadId !== binding.threadId) return;
+    this.observePreparation(session, envelope);
     if (envelope.id === undefined && method.startsWith("thread/realtime/")) {
       session.realtime?.receive(envelope);
       this.changed(session);

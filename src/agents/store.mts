@@ -102,10 +102,13 @@ const array = (items: Schema, maxItems = 100_000): Schema => ({
   items,
   maxItems,
 });
-const object = (properties: Record<string, Schema>): Schema => ({
+const object = (
+  properties: Record<string, Schema>,
+  optional: string[] = [],
+): Schema => ({
   type: "object",
   properties,
-  required: Object.keys(properties),
+  required: Object.keys(properties).filter((key) => !optional.includes(key)),
   additionalProperties: false,
 });
 const revision: Schema = {
@@ -202,32 +205,50 @@ const agent = object({
     modelAccessId: id,
     configRef: id,
     threadId: nullable(id),
-    session: object({
-      sessionId: nullable(id),
-      desiredState: choice("started", "stopped"),
-      observedState: choice(
-        "stopped",
-        "starting",
-        "started",
-        "stopping",
-        "error",
-        "unknown",
-      ),
-      activeTurnId: nullable(id),
-      startedAt: nullable(timestamp),
-      lastObservedAt: nullable(timestamp),
-      lastError: runtimeError,
-      appliedConfiguration: nullable(
-        object({
-          profileRevision: revision,
-          permissionGroups: references,
-          serviceConnections: references,
-          skills: references,
-          runtimeConfigRevision: revision,
-          appliedAt: timestamp,
-        }),
-      ),
-    }),
+    session: object(
+      {
+        sessionId: nullable(id),
+        desiredState: choice("started", "stopped"),
+        observedState: choice(
+          "stopped",
+          "starting",
+          "started",
+          "stopping",
+          "error",
+          "unknown",
+        ),
+        activeTurnId: nullable(id),
+        startedAt: nullable(timestamp),
+        lastObservedAt: nullable(timestamp),
+        lastError: runtimeError,
+        appliedConfiguration: nullable(
+          object(
+            {
+              profileRevision: revision,
+              instructionsDigest: { type: "string", pattern: "^[a-f0-9]{64}$" },
+              permissionGroups: references,
+              serviceConnections: references,
+              skills: references,
+              runtimeConfigRevision: revision,
+              appliedAt: timestamp,
+            },
+            ["instructionsDigest"],
+          ),
+        ),
+        instructionPreparation: nullable(
+          object({
+            state: choice("compacting", "completed", "failed", "uncertain"),
+            threadId: id,
+            turnId: nullable(id),
+            itemId: nullable(id),
+            startedAt: timestamp,
+            completedAt: nullable(timestamp),
+            error: runtimeError,
+          }),
+        ),
+      },
+      ["instructionPreparation"],
+    ),
   }),
   scratchpad: object({ markdown: text(), revision, updatedAt: timestamp }),
   reportsTo: actor,
@@ -577,6 +598,17 @@ function validateState(
   );
   for (const entry of value.agents) {
     assert(entry.projectId === projectId);
+    const preparation = entry.runtime.session.instructionPreparation;
+    if (preparation) {
+      assert(preparation.threadId === entry.runtime.threadId);
+      assert(preparation.itemId === null || preparation.turnId !== null);
+      if (preparation.state === "completed")
+        assert(
+          Boolean(
+            preparation.turnId && preparation.itemId && preparation.completedAt,
+          ) && preparation.error === null,
+        );
+    }
     checkActor(entry.reportsTo);
     assert(
       new Set(entry.skills.map((skill) => skill.skillId)).size ===
