@@ -56,7 +56,10 @@ inspected runtime, allowing an idle Start → Stop → Start on the same ID. It 
 generates a greeting, executes setup or submits synthetic user input. A missing resumed thread
 remains missing; naming is never used to replace an established conversation.
 
-Profile instructions, optional name and personality are applied through native
+Profile instructions, optional name and personality are sent through the supported direct
+`developerInstructions` field on `thread/start` and `thread/resume`. Creation was behaviorally
+verified; changed instructions on retained chats remain subject to the native propagation limitation
+below. Native configuration is also acknowledged through
 `thread/settings/update` → `thread/settings/updated` using
 `collaborationMode.settings.developer_instructions`. New threads use Codex's default collaboration
 mode and its returned model/effort. Resumed threads must expose their effective `collaborationMode`;
@@ -452,7 +455,7 @@ markers and detailed evidence remain outside the repository.
 | Synthetic realtime handoff | Subscription WebRTC connected. Generated speech produced one native completed coding turn; retained history contains the server-created realtime delegation. The test sent no `turn/start`. |
 | Protected file/image/edit checks | Models reported permission denials and protected fixture bytes stayed unchanged. The inspected public item stream/history omits some pre-execution failures, so those claims alone do not establish per-tool denial coverage. |
 | Production adapter typed path | Native resume and exact profile-settings acknowledgement, genuine text delivery/completion, Stop, fresh-process same-thread restart and a second Stop passed through the actual adapter. |
-| Profile behavior | A simple answer omitted a synthetic prefix despite exact native settings acknowledgement. Settings acceptance therefore does not yet establish that saved profile instructions reach the model. |
+| Profile behavior | Direct `thread/start.developerInstructions` produced the required prefix on a new chat. After same-chat restart, a changed launch instruction was confirmed in config but the model kept the original prefix. Collaboration-mode and direct resume overrides also failed to change behavior. |
 
 The stress profile intentionally enabled native command tools to exercise enforcement; production
 retains additional native-tool disablement and requires its own combined candidate validation.
@@ -474,3 +477,20 @@ must not label a turn as owner voice solely because it overlaps a voice call or 
 text. Public-history provenance and human acoustic acceptance remain separate checks. Typed app
 validation can proceed against the candidate; none of this implies installed-product acceptance,
 release permission, or complete coverage of every model-accessible tool.
+
+The current adapter therefore sends the saved profile through the direct native startup field,
+without adding a workspace instruction file or another durable profile source. Its settings
+acknowledgement remains a configuration claim. The pinned runtime's changed-profile behavior on
+retained chats is unaccepted; no fake turn, replacement chat or experimental feature toggle is
+used to conceal that result. The second synthetic voice check captured a legacy `handoff_request`
+with realtime handoff/item IDs but no coding turn/item IDs; it provides no safe public-history
+correlation fallback.
+
+The new direct-start adapter path was itself exercised with real subscription inference: a plain
+arithmetic question returned the prefix supplied only through the saved startup profile, followed
+by confirmed Stop, fresh-process same-ID resume and another Stop. The latter steps establish
+configuration/lifecycle behavior, not consumption of a changed profile. In the independent #95
+walkthrough, the model returned the current saved-profile marker after reading the profile through
+Crew tools. That proves saved-profile access and successful tool work; it neither contradicts nor
+resolves the private instruction-only resume control. Preserve both evidence sets and scope the
+remaining limitation to the tested native instruction paths.
