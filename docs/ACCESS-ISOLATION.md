@@ -15,17 +15,24 @@ bindings, and selected immutable project skill paths. The initial tested CLI ver
 `0.163.0-alpha.11`; another version requires current validation and otherwise fails closed.
 
 In Subscription settings, the owner selects **Sign in with ChatGPT**. The owner-only
-`beginSignIn()` API uses native `account/login/start` with `chatgptDeviceCode`, returning
-the official verification URL and one-time user code. The owner completes that ceremony;
-Crew checks `subscriptionStatus()` afterward. `cancelSignIn()` cancels only this pending
-Crew login. No personal account is logged out or replaced. Codes and login URLs are
-transient owner UI state, never tickets, logs or repository content.
+`beginSignIn()` API uses native `account/login/start` with `chatgpt`, returning
+`{type: "browser", loginId, authorizationUrl}`. The URL must use an allowed official
+HTTPS origin and the expected loopback callback. The owner opens that link and completes
+the browser ceremony; Crew checks `subscriptionStatus()` afterward. `cancelSignIn()`
+cancels only this pending Crew login. No personal account is logged out or replaced.
+Authorization URLs are transient owner UI state, never tickets, logs or repository content.
+
+Only the dedicated owner browser-login process can bind and accept connections at
+`localhost:1455`. Normal model, status and history launches retain their original network
+policy. The app-server owns callback verification and credential persistence; Crew never
+parses authorization codes or tokens. A busy callback port fails startup without killing
+another process. Browser startup/cancellation does not establish completed authentication.
 
 While signed out, `subscriptionStatus()` includes optional `signIn` state: `pending`
 with a null reason, or `failed` with a fixed safe reason, stage and numeric RPC code
 when available. Failure remains visible across status refreshes until a new attempt or
 explicit cancellation. Missing `signIn` means no active or retained attempt. The owner
-UI clears its transient code and waiting state when the attempt fails or disappears.
+UI clears its transient link and waiting state when the attempt fails or disappears.
 Stages distinguish initialization, configuration, request, response, completion and
 transport; arbitrary native errors are never returned. A matching login-completion
 failure closes only the owned attempt. Explicit cancellation is tracked by generation,
@@ -76,7 +83,7 @@ process cannot rely on personal keychain certificate discovery. An actual device
 request failed after successful proxy CONNECT without this setting and started with it;
 polling, cancellation and confirmed peer exit also passed. The policy and host allowlist
 remain unchanged, and the existing keychain/outside-file/network denials still pass.
-This verifies device-code issuance, not owner completion or token exchange.
+This historical check verified device-code issuance, not owner completion or token exchange.
 
 The native model process has no project mounts or direct shell/JS tools. The adapter
 must also pass `environments: []` on supported native thread-start and turn requests so
@@ -179,6 +186,19 @@ and a permitted new attempt. Removing the CA setting only in a disposable diagno
 launch reproduces the original request failure and retains stage `request` / RPC code
 `-32603` across polling and retry. No owner authorization was completed or token values
 read; these checks stop at code issuance and cancellation.
+
+The later owner device-code ceremony reported browser success while the native process
+remained active, exchanged network bytes and had no observed credential file or completion
+event. Its polling/persistence cause was not established. The authorized corrective route
+uses ordinary browser OAuth with the narrow callback permission described above; it is not
+a claim that the device-code completion problem was diagnosed. Preserve any existing attempt
+until the replacement app is ready and the owner coordinates cancellation/retry.
+
+The browser replacement passed actual public-provider begin/status/cancel/close in a
+fresh disposable native home. Its only listener was `127.0.0.1:1455`; original boundary
+canaries still passed under the login policy, and normal owner/model policies retained
+no inbound permission. The authorization URL passed the same official-origin/length
+constraints as the UI. No browser was opened or authentication completed by that check.
 
 The separate workspace executor inspected a disposable script, edited it and ran its test
 successfully. It also denied an outside canary and read-only mutation, showed a clean
