@@ -1,12 +1,18 @@
 # Delivery policy
 
+## Crew 0.17.2 production evidence
+
+[Crew 0.17.2](https://github.com/MattGibney/Crew/releases/tag/v0.17.2) is public/latest from immutable a6302234293db8b087ce86f571b385c002366865 after PRs 67–69, integration 70 and gate fixes 71/72. Hosted candidate and signed workflow each pass 752/752; local strict/fresh regression also passes 752/752. [Signed workflow 39757381433](https://github.com/MattGibney/Crew/actions/runs/39757381433) passes all signing/notarization/publication gates. Independent public six-asset/hash/feed/signature/staple/Gatekeeper/DMG verification and 386-file tagged-build parity pass.
+
+Disposable signed 0.16.2 → 0.17.2 manual replacement passes default/custom prompts, active snapshot until Restart, retained conversation/worktree/history and same-worker continuation. Bound preparation tools settle Quit naturally; a retained hold returns 409 until explicit Return to work. All fixture processes and ports exit; no physical microphone is used. This is explicit-profile manual continuity, not automatic portable-root relaunch or live-provider/human acceptance. Known issue #39 and updater boundaries remain unresolved. See [REL-0.17.2](../tickets/REL-0.17.2.md).
+
 ## Crew 0.17.2 release gate recovery
 
 The unpublished 0.17.1 run completed 749/751 before signing/publication: two tests sampled process liveness before native thread identity. Conversation continuity snapshots now require correlated native identity and current-run evidence. Keep the original identity assertions and timeouts. Preserve v0.17.0 and v0.17.1 unchanged; deliver the one authorized stable release as 0.17.2 after hosted candidate and full signed gates. See [REL-0.17.2](../tickets/REL-0.17.2.md).
 
 ## Crew 0.17.1 release gate recovery
 
-The grouped feature release is delivered as 0.17.1, preserving unpublished v0.17.0 and both workflow attempts. The first attempt passed hosted tests, signing and notarization, then final ticket validation lost its Apple CloudKit connection. The second exposed a shared-capacity test cleanup race: another polling controller recreated a deleted state lock directory, causing ENOTEMPTY and aborting remaining fixture cleanup. Quiesce every controller before deleting any registered root, retain all cleanup failures, and print TAP diagnostics explicitly. Product readiness/ownership gates and timeouts are unchanged. See [REL-0.17.1](../tickets/REL-0.17.1.md).
+The first gate correction prepared 0.17.1, preserving unpublished v0.17.0 and both workflow attempts; its own test-gate failure is recorded in the 0.17.2 section above. The first attempt passed hosted tests, signing and notarization, then final ticket validation lost its Apple CloudKit connection. The second exposed a shared-capacity test cleanup race: another polling controller recreated a deleted state lock directory, causing ENOTEMPTY and aborting remaining fixture cleanup. Quiesce every controller before deleting any registered root, retain all cleanup failures, and print TAP diagnostics explicitly. Product readiness/ownership gates and timeouts are unchanged. See [REL-0.17.1](../tickets/REL-0.17.1.md).
 
 
 ## Crew 0.17.0 grouped release scope
