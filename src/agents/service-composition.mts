@@ -181,6 +181,7 @@ export async function startUnifiedApplication(
     const owner = { type: "user" as const, userId: options.ownerUserId };
     environments = await ProjectEnvironmentService.open({
       directory: join(root, "environments"),
+      protectedDirectories: [root],
       projectId: options.projectId,
       ownerUserId: options.ownerUserId,
       admission: gate,
@@ -323,6 +324,8 @@ export async function startUnifiedApplication(
               detail: "No realtime activity.",
             });
       },
+      confirmVoiceExit: (binding) =>
+        voice?.confirmNativeExit(binding) ?? Promise.resolve(),
       confirmNativeExit: (caller) => processes.confirmExited(caller),
       references: {
         async validate(kind, id, projectId) {
@@ -574,12 +577,8 @@ export async function startUnifiedApplication(
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
         setupChoices: async () => registry.setupChoices(),
-        capabilities: async (id) => {
-          const connection = await authorization.getConnection(id);
-          if (!connection) throw new Error("Connection unavailable.");
-          registry.assertConnection(connection);
-          return gateway.catalogue.snapshot(connection);
-        },
+        catalogueSnapshot: (connection) =>
+          gateway.catalogue.projection(connection),
         verifyConnection: async (id) => {
           const connection = await authorization.getConnection(id);
           if (!connection) throw new Error("Connection unavailable.");

@@ -628,7 +628,12 @@ function validateState(
   assert(
     new Set(
       value.voiceTurns.map((entry) =>
-        JSON.stringify([entry.agentId, entry.threadId, entry.turnId]),
+        JSON.stringify([
+          entry.agentId,
+          entry.threadId,
+          entry.turnId,
+          entry.nativeItemId,
+        ]),
       ),
     ).size === value.voiceTurns.length,
   );

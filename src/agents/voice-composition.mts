@@ -481,6 +481,24 @@ export class PrimaryAgentVoice {
     const call = this.call;
     if (call) await this.stop(call);
   }
+
+  /** Trusted host only, after acknowledged native Stop or independent proof
+   * that this exact owned native process exited. Never expose through owner/model
+   * JSON commands. Call outside the admission gate so queued correlations drain. */
+  async confirmNativeExit(binding: RuntimeBinding): Promise<void> {
+    const call = this.call;
+    if (!call || !sameBinding(call.binding, binding)) return;
+    call.stopRequested = true;
+    this.closed(call);
+    await call.connectDone;
+    await Promise.all(this.correlations);
+    if (call.correlationFailed)
+      throw new Error(
+        "Native voice exited, but public handoff persistence remains unresolved.",
+      );
+    this.flush();
+  }
+
   async dispose(): Promise<void> {
     this.disposed = true;
     await this.disconnect();
