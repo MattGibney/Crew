@@ -21,6 +21,17 @@ Crew checks `subscriptionStatus()` afterward. `cancelSignIn()` cancels only this
 Crew login. No personal account is logged out or replaced. Codes and login URLs are
 transient owner UI state, never tickets, logs or repository content.
 
+While signed out, `subscriptionStatus()` includes optional `signIn` state: `pending`
+with a null reason, or `failed` with a fixed safe reason, stage and numeric RPC code
+when available. Failure remains visible across status refreshes until a new attempt or
+explicit cancellation. Missing `signIn` means no active or retained attempt. The owner
+UI clears its transient code and waiting state when the attempt fails or disappears.
+Stages distinguish initialization, configuration, request, response, completion and
+transport; arbitrary native errors are never returned. A matching login-completion
+failure closes only the owned attempt. Explicit cancellation is tracked by generation,
+not inferred from error text. Completion success alone does not establish sign-in;
+a fresh account read must confirm the stored ChatGPT account.
+
 Authentication is stored by Codex in the new native home using its supported file
 credential store. Native account state is distinct from Crew service connections and
 the encrypted vault. Subscription availability is not model entitlement: a real completed
@@ -159,6 +170,15 @@ service file; denied descendant read; other-process denial; keychain-list denial
 host TCP and Unix socket access; allowed TLS to the model host and denied other-domain
 proxy/direct host access. No owner credential values were read. Private evidence is
 written to the owned native directory, not this repository.
+
+Actual device-login checks now exercise public begin/status/cancel/retry with the fixed
+CA environment. Cancellation clears pending status only alongside confirmed peer exit.
+A controlled native cancellation delivered as a completion event (without calling the
+provider's cancel method) verifies persistent failed-completion status, owned peer exit
+and a permitted new attempt. Removing the CA setting only in a disposable diagnostic
+launch reproduces the original request failure and retains stage `request` / RPC code
+`-32603` across polling and retry. No owner authorization was completed or token values
+read; these checks stop at code issuance and cancellation.
 
 The separate workspace executor inspected a disposable script, edited it and ran its test
 successfully. It also denied an outside canary and read-only mutation, showed a clean
