@@ -596,3 +596,17 @@ create another chat, or infer provenance from timing, transcript wording, a miss
 voice being active. A future native event supplying the exact realtime/turn/item relationship can
 resolve the association. This transient-status treatment is a proposal, not an implemented fallback
 or a claim that public voice history acceptance is complete.
+
+### Live voice display (#95)
+
+The desktop owner bridge projects validated native transcript items into the existing conversation
+view as a live call transcript. Partial deltas append and final snapshots replace the same native
+item. The display is bounded to 32 recent items, 16,000 characters per item and 64,000 total
+characters. It stays in memory during navigation and clears when the call ends or its binding
+changes. It never writes another chat or sends a model input. Raw realtime payloads and native
+audio are not forwarded through this bridge.
+
+This restores live text only. On the pinned runtime, timeline/item pagination is unsupported and
+turn pagination omits voice transcript segments. Reopening the app therefore cannot restore this
+live transcript. The absent promotion still prevents attributing the server-created coding turn
+to owner voice; private and unknown turns remain hidden by the existing history filter.

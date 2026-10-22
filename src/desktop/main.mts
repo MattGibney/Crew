@@ -261,6 +261,25 @@ async function openProject(project: DesktopProject) {
       const unsubscribeVoice = voice.subscribe((event) =>
         surface?.notify({ type: "voice", projectId: project.id, event }),
       );
+      const unsubscribeTranscript = voice.subscribeRealtime((event) => {
+        // Only native role-bearing transcript items reach the owner display.
+        // These are live call text, never evidence of a coding-turn association.
+        if (event.kind !== "transcript" || !event.itemId) return;
+        surface?.notify({
+          type: "voice",
+          projectId: project.id,
+          event: {
+            kind: "transcript",
+            binding: event.binding,
+            callId: event.callId,
+            itemId: event.itemId,
+            role: event.role,
+            text: event.text,
+            done: event.done,
+            delta: event.delta,
+          },
+        });
+      });
       hosts.set(project.id, {
         project,
         application: composed,
@@ -273,6 +292,7 @@ async function openProject(project: DesktopProject) {
         unsubscribe: () => {
           unsubscribe();
           unsubscribeVoice();
+          unsubscribeTranscript();
         },
       });
       failures.delete(project.id);

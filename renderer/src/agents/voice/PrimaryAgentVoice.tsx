@@ -15,6 +15,7 @@ import type {
 } from "../../../../src/agents/contracts.mjs";
 import type { PrimaryVoiceCatalog, PrimaryVoiceClient } from "./client";
 import { usePrimaryVoice } from "./usePrimaryVoice";
+import { LiveVoiceTranscript } from "./LiveVoiceTranscript";
 
 export function PrimaryAgentVoice({
   client,
@@ -22,6 +23,7 @@ export function PrimaryAgentVoice({
   visible = true,
   mode = "voice",
   controlsTarget,
+  transcriptTarget,
   embedded = false,
 }: {
   client: PrimaryVoiceClient;
@@ -30,6 +32,7 @@ export function PrimaryAgentVoice({
   mode?: "voice" | "compact" | "hidden";
   /** Only visual controls move. The hook and audio element remain at App root. */
   controlsTarget?: HTMLElement | null;
+  transcriptTarget?: HTMLElement | null;
   embedded?: boolean;
 }) {
   const session = agent?.runtime.session;
@@ -197,6 +200,15 @@ export function PrimaryAgentVoice({
   return (
     <>
       <audio ref={voice.audioRef} autoPlay playsInline hidden />
+      {transcriptTarget &&
+        voice.transcript.length > 0 &&
+        createPortal(
+          <LiveVoiceTranscript
+            items={voice.transcript}
+            agentName={agent?.profile.name ?? "Assistant"}
+          />,
+          transcriptTarget,
+        )}
       {controlsTarget === undefined
         ? controls
         : controlsTarget

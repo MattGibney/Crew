@@ -8,6 +8,10 @@ import { createSilentAudio } from "../../manager/voice-silence";
 import { createCallCues, createSounds } from "../../manager/sounds";
 import { sameVoiceBinding } from "./client";
 import type { PrimaryVoiceCall, PrimaryVoiceClient } from "./client";
+import {
+  updateLiveTranscript,
+  type LiveTranscriptItem,
+} from "./live-transcript";
 
 interface Call extends PrimaryVoiceCall {
   peer: RTCPeerConnection;
@@ -37,6 +41,7 @@ export function usePrimaryVoice(
   binding: RuntimeBinding | null,
 ) {
   const [view, setView] = useState(initial);
+  const [transcript, setTranscript] = useState<LiveTranscriptItem[]>([]);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const call = useRef<Call | null>(null);
   const wanted = useRef(true);
@@ -78,6 +83,7 @@ export function usePrimaryVoice(
   const release = useCallback(() => {
     const previous = call.current;
     call.current = null;
+    setTranscript([]);
     input.current!.reset();
     if (previous) {
       clearTimeout(previous.timer);
@@ -132,6 +138,7 @@ export function usePrimaryVoice(
       if (!selected || !voice || call.current || ending.current) return;
       sounds.current ??= createSounds();
       sounds.current.unlock();
+      setTranscript([]);
       patch({ phase: "connecting", inputError: "", error: "" });
       let current: Call | null = null;
       let pendingPeer: RTCPeerConnection | null = null;
@@ -307,6 +314,14 @@ export function usePrimaryVoice(
           !sameVoiceBinding(event.binding, active.binding)
         )
           return;
+        if (event.kind === "transcript") {
+          setTranscript((items) =>
+            call.current === active
+              ? updateLiveTranscript(items, event)
+              : items,
+          );
+          return;
+        }
         if (event.kind === "error")
           patch({
             error:
@@ -338,5 +353,16 @@ export function usePrimaryVoice(
     },
     [],
   );
-  return { ...view, audioRef, connect, disconnect, toggleMute, resumePlayback };
+  return {
+    ...view,
+    transcript:
+      binding && call.current && sameVoiceBinding(binding, call.current.binding)
+        ? transcript
+        : [],
+    audioRef,
+    connect,
+    disconnect,
+    toggleMute,
+    resumePlayback,
+  };
 }

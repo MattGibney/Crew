@@ -102,6 +102,7 @@ export interface AgentsAppProps {
     visible: boolean;
     mode: "voice" | "compact" | "hidden";
     controlsTarget: HTMLElement | null;
+    transcriptTarget: HTMLElement | null;
   }) => ReactNode;
   headerActions?: ReactNode;
   headerUpdates?: ReactNode;
@@ -163,6 +164,9 @@ export function AgentsApp({
   const [inputMode, setInputMode] = useState<"text" | "voice">("voice");
   const [composerVoiceTarget, setComposerVoiceTarget] =
     useState<HTMLElement | null>(null);
+  const [transcriptTarget, setTranscriptTarget] = useState<HTMLElement | null>(
+    null,
+  );
   const [secondaryVoiceTarget, setSecondaryVoiceTarget] =
     useState<HTMLElement | null>(null);
   const [workerWidth, setWorkerWidth] = useState<number | null>(null);
@@ -554,6 +558,7 @@ export function AgentsApp({
                   inputMode={inputMode}
                   onInputMode={setInputMode}
                   voiceTarget={setComposerVoiceTarget}
+                  transcriptTarget={setTranscriptTarget}
                   hasVoice={Boolean(renderVoice)}
                   onOpenSettings={() => openSettings("crew-sessions")}
                   attention={
@@ -719,6 +724,7 @@ export function AgentsApp({
                     ? "voice"
                     : "compact"
                   : "compact",
+            transcriptTarget,
             controlsTarget:
               view === "conversation"
                 ? composerVoiceTarget
@@ -1192,6 +1198,7 @@ function Conversation({
   inputMode = "text",
   onInputMode,
   voiceTarget,
+  transcriptTarget,
   hasVoice = false,
   onOpenSettings,
   attention,
@@ -1208,6 +1215,7 @@ function Conversation({
   inputMode?: "text" | "voice";
   onInputMode?: (mode: "text" | "voice") => void;
   voiceTarget?: (node: HTMLDivElement | null) => void;
+  transcriptTarget?: (node: HTMLDivElement | null) => void;
   hasVoice?: boolean;
   onOpenSettings?: () => void;
   attention?: ReactNode;
@@ -1398,6 +1406,9 @@ function Conversation({
                     />
                   </MessageScrollerItem>
                 ))}
+              {!readOnly && (
+                <div ref={transcriptTarget} className="empty:hidden" />
+              )}
               {(intents.length > 0 || receipts.length > 0) && (
                 <MessageScrollerItem messageId="delivery-activity">
                   <details className="rounded-lg border px-4 py-3 text-sm">

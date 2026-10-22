@@ -46,6 +46,7 @@ export type CodexRealtimeEvent = {
       role: "user" | "assistant";
       text: string;
       done: boolean;
+      delta: boolean;
       itemId: string | null;
     }
   | {
@@ -544,6 +545,7 @@ export class CodexRealtimeController {
           role: params.role,
           text,
           done: method.endsWith("/done"),
+          delta: method.endsWith("/delta"),
           itemId: null,
         });
       }
@@ -578,6 +580,7 @@ export class CodexRealtimeController {
           role: item.role,
           text: item.text,
           done: method.endsWith("/completed"),
+          delta: false,
           itemId: item.id,
         });
       } else if (
@@ -614,6 +617,7 @@ export class CodexRealtimeController {
           role,
           text: params.delta,
           done: false,
+          delta: true,
           itemId: params.itemId,
         });
     }
