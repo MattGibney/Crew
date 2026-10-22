@@ -400,12 +400,22 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
     return { directory: host.project.directory };
   if (command === "environments.prepareFolderAccess") {
     const input = object(args);
-    if (input.access !== "none" && input.access !== "read_only" && input.access !== "read_write")
+    if (
+      input.access !== "none" &&
+      input.access !== "read_only" &&
+      input.access !== "read_write"
+    )
       throw new Error("Choose folder access.");
-    const result = await host.application.environmentOwnerApi.prepareFolderAccess(
-      { workspaceDirectory: text(input.workspaceDirectory), access: input.access },
-    );
-    surface.notify({ type: "owner", projectId: host.project.id, event: { kind: "changed" } });
+    const result =
+      await host.application.environmentOwnerApi.prepareFolderAccess({
+        workspaceDirectory: text(input.workspaceDirectory),
+        access: input.access,
+      });
+    surface.notify({
+      type: "owner",
+      projectId: host.project.id,
+      event: { kind: "changed" },
+    });
     return result;
   }
   if (command === "environments.approveWorkspace") {

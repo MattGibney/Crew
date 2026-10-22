@@ -18,6 +18,42 @@ export interface OwnerConnectionSetupChoice {
   service: string;
   transport: ServiceConnection["transport"];
   authenticationMethods: ServiceConnection["authentication"]["method"][];
+  guide?: {
+    credentialLabel: string;
+    credentialUrl: string;
+    documentationUrl: string;
+    accountOwnership: { personal: string; dedicated: string };
+    steps: string[];
+  };
+}
+export interface OwnerConnectionVerification {
+  requestId: string;
+  verificationId: string | null;
+  connectionId: string;
+  expiresAt: string;
+  state: "verifying" | "verified" | "failed" | "cancelled" | "saved";
+  identity: ServiceConnection["identity"] | null;
+  identityStatus: "verified" | "unavailable";
+  capabilities: ServiceCapability[];
+  capabilitiesStatus: "verified" | "unavailable";
+  accountKind: "personal" | "dedicated";
+  name: string;
+  setupChoiceId: string;
+  reason: string | null;
+}
+export interface OwnerConnectionAccessSelection {
+  requestId: string;
+  verificationId: string;
+  groupSelections: {
+    groupId: string;
+    expectedRevision: number;
+    capabilityIds: string[];
+  }[];
+  agentSelections: {
+    agentId: string;
+    expectedRevision: number | null;
+    permissionGroupIds: string[];
+  }[];
 }
 export interface OwnerRuntimeDefaults {
   modelAccessId: string;
@@ -61,4 +97,6 @@ export interface AccessOwnerView {
     description: string;
   }[];
   canVerifyConnections: boolean;
+  canGuideConnections?: boolean;
+  connectionSetups?: OwnerConnectionVerification[];
 }

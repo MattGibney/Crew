@@ -12,10 +12,19 @@ export interface GatewaySetupChoice {
   service: string;
   transport: ServiceConnection["transport"];
   authenticationMethods: ServiceConnection["authentication"]["method"][];
+  guide?: {
+    credentialLabel: string;
+    credentialUrl: string;
+    documentationUrl: string;
+    accountOwnership: { personal: string; dedicated: string };
+    steps: string[];
+  };
 }
+export type GatewayOwnerIdentityProvider = "linear-api-key" | "github-pat";
 export interface TrustedGatewayRegistration {
   choice: GatewaySetupChoice;
   configuration: ExecutorConfiguration;
+  ownerIdentity?: GatewayOwnerIdentityProvider;
 }
 
 function freeze<T>(value: T): T {
@@ -73,7 +82,19 @@ export class TrustedGatewayRegistry {
       if (configuration.type === "mcp")
         assertHttpEndpoint(configuration.url, configuration.allowLoopbackHttp);
       references.add(reference);
-      this.entries.set(choice.id, freeze({ choice, configuration }));
+      if (
+        registration.ownerIdentity !== undefined &&
+        !["linear-api-key", "github-pat"].includes(registration.ownerIdentity)
+      )
+        throw new Error("Unsupported owner identity verification.");
+      this.entries.set(
+        choice.id,
+        freeze({
+          choice,
+          configuration,
+          ownerIdentity: registration.ownerIdentity,
+        }),
+      );
     }
   }
   setupChoices(): GatewaySetupChoice[] {
@@ -121,6 +142,22 @@ export class TrustedGatewayRegistry {
         "Connection does not match a supported owner setup choice.",
       );
   }
+  ownerIdentity(
+    connection: ServiceConnection,
+  ): GatewayOwnerIdentityProvider | null {
+    this.assertConnection(connection);
+    const reference = configurationReference(connection);
+    for (const entry of this.entries.values()) {
+      const transport = entry.choice.transport;
+      if (
+        (transport.type === "mcp"
+          ? transport.serverConfigRef
+          : transport.executorConfigRef) === reference
+      )
+        return entry.ownerIdentity ?? null;
+    }
+    return null;
+  }
 }
 
 /** Official endpoints verified against https://linear.app/docs/mcp. Credentials
@@ -128,6 +165,37 @@ export class TrustedGatewayRegistry {
  * Token setup is supported now; interactive OAuth requires a separate verified
  * registration/callback implementation and is intentionally not advertised. */
 export function createSupportedGatewayRegistry(): TrustedGatewayRegistry {
+  const linearGuide: NonNullable<GatewaySetupChoice["guide"]> = {
+    credentialLabel: "Linear API key",
+    credentialUrl: "https://linear.app/settings/account/security",
+    documentationUrl: "https://linear.app/docs/mcp",
+    accountOwnership: {
+      personal: "Use an API key belonging to your own Linear account.",
+      dedicated:
+        "Sign in to the separate Linear account your organization intends Crew to use before creating its key.",
+    },
+    steps: [
+      "In Linear, open Settings, then Account, then Security & Access and create an API key for Crew.",
+      "Limit the key to the teams and permissions needed. For read-only work, enable only Read.",
+      "Paste the key here, then verify the account and available capabilities before saving.",
+    ],
+  };
+  const githubGuide: NonNullable<GatewaySetupChoice["guide"]> = {
+    credentialLabel: "GitHub personal access token",
+    credentialUrl: "https://github.com/settings/personal-access-tokens/new",
+    documentationUrl:
+      "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens",
+    accountOwnership: {
+      personal: "Use a token belonging to your own GitHub account.",
+      dedicated:
+        "Use a token created by the separate account your organization has approved for Crew. A personal access token still belongs to that account.",
+    },
+    steps: [
+      "Create a fine-grained personal access token for Crew with an expiry.",
+      "Choose the intended resource owner, repositories and minimum required permissions. Your organization may need to approve the token.",
+      "Paste the token here, then verify the account and available capabilities. Discovery does not prove access to every repository or operation.",
+    ],
+  };
   return new TrustedGatewayRegistry([
     {
       choice: {
@@ -136,7 +204,9 @@ export function createSupportedGatewayRegistry(): TrustedGatewayRegistry {
         service: "linear",
         transport: { type: "mcp", serverConfigRef: "crew.linear.readonly.v1" },
         authenticationMethods: ["token"],
+        guide: linearGuide,
       },
+      ownerIdentity: "linear-api-key",
       configuration: {
         type: "mcp",
         url: "https://mcp.linear.app/mcp/readonly",
@@ -150,12 +220,41 @@ export function createSupportedGatewayRegistry(): TrustedGatewayRegistry {
         service: "linear",
         transport: { type: "mcp", serverConfigRef: "crew.linear.v1" },
         authenticationMethods: ["token"],
+        guide: linearGuide,
       },
+      ownerIdentity: "linear-api-key",
       configuration: {
         type: "mcp",
         url: "https://mcp.linear.app/mcp",
         timeoutMs: 30_000,
       },
     },
+    ...(["readonly", "standard"] as const).map(
+      (mode): TrustedGatewayRegistration => ({
+        choice: {
+          id: mode === "readonly" ? "github-readonly" : "github",
+          label: mode === "readonly" ? "GitHub (read only)" : "GitHub",
+          service: "github",
+          transport: {
+            type: "mcp",
+            serverConfigRef:
+              mode === "readonly"
+                ? "crew.github.readonly.v1"
+                : "crew.github.v1",
+          },
+          authenticationMethods: ["token"],
+          guide: githubGuide,
+        },
+        ownerIdentity: "github-pat",
+        configuration: {
+          type: "mcp",
+          url:
+            mode === "readonly"
+              ? "https://api.githubcopilot.com/mcp/readonly"
+              : "https://api.githubcopilot.com/mcp/",
+          timeoutMs: 30_000,
+        },
+      }),
+    ),
   ]);
 }

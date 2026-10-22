@@ -93,7 +93,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
   /** Host catalogue callback only; broker discovery uses listCapabilities. */
   async discoverCapabilities(
     connection: ServiceConnection,
+    options: Pick<BrokerCallOptions, "signal"> = {},
   ): Promise<ServiceCapability[]> {
+    options.signal?.throwIfAborted();
     const config = await this.configuration(connection);
     const capabilities = await this.credentials.use(
       connection,
@@ -107,29 +109,35 @@ export class TrustedServiceExecutor implements ServiceExecutor {
                 inputSchema: tool.inputSchema,
                 outputSchema: null,
               }))
-            : await this.withMcp(config, token, async (client) => {
-                const tools = [];
-                let cursor: string | undefined;
-                const seen = new Set<string>();
-                do {
-                  const page = await client.listTools(
-                    cursor ? { cursor } : {},
-                    { timeout: config.timeoutMs },
-                  );
-                  tools.push(...page.tools);
-                  if (
-                    tools.length > 500 ||
-                    seen.size >= 20 ||
-                    (page.nextCursor && seen.has(page.nextCursor))
-                  )
-                    throw new Error(
-                      "Upstream catalogue exceeds supported bounds.",
+            : await this.withMcp(
+                config,
+                token,
+                async (client) => {
+                  const tools = [];
+                  let cursor: string | undefined;
+                  const seen = new Set<string>();
+                  do {
+                    const page = await client.listTools(
+                      cursor ? { cursor } : {},
+                      { timeout: config.timeoutMs, signal: options.signal },
                     );
-                  cursor = page.nextCursor;
-                  if (cursor) seen.add(cursor);
-                } while (cursor);
-                return tools;
-              });
+                    tools.push(...page.tools);
+                    if (
+                      tools.length > 500 ||
+                      seen.size >= 20 ||
+                      (page.nextCursor && seen.has(page.nextCursor))
+                    )
+                      throw new Error(
+                        "Upstream catalogue exceeds supported bounds.",
+                      );
+                    cursor = page.nextCursor;
+                    if (cursor) seen.add(cursor);
+                  } while (cursor);
+                  return tools;
+                },
+                options.signal,
+              );
+        options.signal?.throwIfAborted();
         const names = new Set<string>();
         return tools.map((tool): ServiceCapability => {
           if (
@@ -477,7 +485,9 @@ export class TrustedServiceExecutor implements ServiceExecutor {
     config: McpHttpConfiguration,
     token: string | null,
     action: (client: Client) => Promise<T>,
+    signal?: AbortSignal,
   ): Promise<T> {
+    signal?.throwIfAborted();
     const url = assertHttpEndpoint(config.url, config.allowLoopbackHttp);
     const transport = new StreamableHTTPClientTransport(url, {
       // No SDK authProvider: it may automatically resend POST after OAuth. The broker alone retries.
@@ -499,6 +509,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
           redirect: "error",
           signal: AbortSignal.any([
             ...(init?.signal ? [init.signal] : []),
+            ...(signal ? [signal] : []),
             AbortSignal.timeout(config.timeoutMs),
           ]),
         });
@@ -528,7 +539,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       { capabilities: {} },
     );
     try {
-      await client.connect(transport, { timeout: config.timeoutMs });
+      await client.connect(transport, { timeout: config.timeoutMs, signal });
       return await action(client);
     } finally {
       await client.close().catch(() => {});
