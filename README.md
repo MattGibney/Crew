@@ -1,8 +1,18 @@
+<p align="center">
+  <img src="docs/brand/social-preview.png" alt="Crew — a local Codex workspace for voice and text." width="960">
+</p>
+
 # Crew
 
-Crew is a local macOS app for working with persistent Codex agents through one primary conversation. The desktop retains Crew's Conversation, Workers, Scratchpad and Settings interface. Each registered project has its own agents, native chats, profiles, skills, service access and execution records.
+**A local macOS workspace for coordinating persistent AI agents through voice and text.**
 
-This branch contains the unified application replacement tracked by #86 and #95. Historical manager/worker documentation and validation describe the earlier implementation; they do not establish acceptance of this replacement.
+[Download for Mac](https://github.com/MattGibney/Crew/releases/latest) · [Set up a project](#set-up-a-project) · [Documentation](#documentation) · [Report a bug](https://github.com/MattGibney/Crew/issues/new) · [Contributing](CONTRIBUTING.md)
+
+Talk to your manager, delegate work to agents, and follow their progress without juggling separate chats. Crew uses your existing ChatGPT/Codex subscription for model access. Each registered project has its own agents, native chats, profiles, skills, service connections and execution records.
+
+Crew provides the interface, records and tools. Agents decide how to do their work using the instructions and skills you provide. Permission groups control capabilities, while connected-service credentials stay in Crew's execution gateway.
+
+Release downloads and development source can differ. Consult the release notes for the capabilities in the build you install. Historical manager/worker documentation describes the earlier implementation; the unified application work is tracked in [#86](https://github.com/MattGibney/Crew/issues/86) and [#95](https://github.com/MattGibney/Crew/issues/95).
 
 ## Set up a project
 
@@ -58,6 +68,18 @@ Both the package entry and generated runtime package start `desktop/main.mjs`. `
 Build on an Apple Silicon Mac. Local builds are unsigned candidates. Deliberate production publication requires the configured Apple signing/notarization workflow and full release acceptance. See [release setup](docs/RELEASES.md) and [updates](docs/UPDATES.md).
 
 Crew uses React TypeScript, shadcn/ui, Lucide and the canonical semantic theme. See [UI foundation](docs/UI-FOUNDATION.md), [unified composition](docs/AGENT-UNIFIED-COMPOSITION.md), [access controls](docs/ACCESS-CONTROLS.md), and [TypeScript workflow](docs/TYPESCRIPT.md).
+
+## Documentation
+
+| I want to… | Read |
+| --- | --- |
+| Understand agents, native sessions and message delivery | [Unified composition](docs/AGENT-UNIFIED-COMPOSITION.md) |
+| Configure reusable project skills | [Project skills](docs/PROJECT-SKILLS.md) |
+| Understand permission groups and service access | [Access controls](docs/ACCESS-CONTROLS.md) |
+| Recover an interrupted project | [Project recovery](docs/PROJECT-RECOVERY.md) |
+| Understand updates and signed publication | [Updates](docs/UPDATES.md), [release setup](docs/RELEASES.md) |
+| Contribute code or report an issue | [Contributing](CONTRIBUTING.md), [TypeScript workflow](docs/TYPESCRIPT.md) |
+| Maintain the approved logo and social preview | [Brand assets](docs/brand/README.md) |
 
 ## Acceptance boundaries
 
