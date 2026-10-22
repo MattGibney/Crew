@@ -225,6 +225,7 @@
     "scripts/worker-upgrade-native-acceptance.mjs",
     "scripts/workspace-native-acceptance.mjs",
     "src/access/authorization.mts",
+    "src/access/crew-scopes.mts",
     "src/access/index.mts",
     "src/access/native-boundary.mts",
     "src/access/owner-api.mts",
