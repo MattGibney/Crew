@@ -742,3 +742,56 @@ export interface AgentLifecycle {
   >;
   releaseExecution(reservationId: Id): Promise<void>;
 }
+
+
+// #88 usability amendments: one production composition, owner-approved creation.
+export interface ProjectAgentSettings {
+  projectId: Id;
+  revision: Revision;
+  primaryAgentId: Id | null;
+}
+/** Access owns this data and its revision-checked administration. No credentials. */
+export interface AgentCreationPreset {
+  id: Id;
+  projectId: Id;
+  revision: Revision;
+  name: string;
+  enabled: boolean;
+  profile: Omit<Agent["profile"], "revision">;
+  skills: Agent["skills"];
+  modelAccessId: Id;
+  configRef: string;
+  permissionGroupIds: Id[];
+  serviceConnectionIds: Id[];
+}
+/** The same instance serializes native admission, permit redemption and the final
+ * lifecycle reservation. Callbacks must not recursively acquire this gate. */
+export interface ExecutionAdmissionGate {
+  run<T>(operation: () => Promise<T>): Promise<T>;
+}
+/** Trusted composition port. Access is the only assignment/preset authority. */
+export interface AgentProvisioning {
+  listPresets(): Promise<AgentCreationPreset[]>;
+  applyPreset(input: {
+    actor: Actor;
+    agentId: Id;
+    presetId: Id;
+    expectedPresetRevision: Revision;
+  }): Promise<Agent["access"]>;
+  accessFor(agentId: Id): Promise<Agent["access"]>;
+}
+/** Skill storage/UI are owned by #34/#95; the runtime consumes exact revisions. */
+export interface ProjectSkillSource {
+  list(): Promise<Skill[]>;
+  resolve(skillId: Id, revision: Revision): Promise<{ nativePath: string }>;
+}
+/** Explicit environment operations. No job/status/lifecycle inference. */
+export interface AgentEnvironmentService {
+  invoke(input: {
+    caller: CallerContext;
+    agentId: Id;
+    action: "create" | "attach" | "execute" | "dispose";
+    requestId: Id;
+    arguments: JsonObject;
+  }): Promise<JsonValue>;
+}
