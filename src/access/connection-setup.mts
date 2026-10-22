@@ -610,7 +610,7 @@ export class OwnerConnectionSetupService {
       const connection = state.connections.find(
         (row) => row.id === connectionId,
       );
-      const saved = state.connectionSetups?.find(
+      const saved = state.connectionSetups?.findLast(
         (row) => row.connectionId === connectionId && row.state === "saved",
       );
       return connection &&
