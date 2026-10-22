@@ -335,3 +335,70 @@ process-wide guarantee is required, a separate OS isolation layer, such as an
 isolated runtime VM with no personal-file mounts, is needed instead of nesting
 Seatbelt. Neither alternative was implemented or authorized by this investigation;
 no install, account, credentials, native launch policy or production access changed.
+
+## Disposable native-owned permission investigation
+
+A subsequent owner-directed investigation tested the native boundary on its own,
+without changing production launch code. It used a separate synthetic HOME and
+CODEX_HOME, synthetic Crew/auth/vault roots and a synthetic credential file outside
+the main fixture. No personal files or real credentials were read or copied.
+
+The verified fixture configuration was:
+
+```toml
+default_permissions = "crew-probe"
+cli_auth_credentials_store = "file"
+forced_login_method = "chatgpt"
+approval_policy = "never"
+allow_login_shell = false
+shell_environment_policy.inherit = "none"
+
+[permissions.crew-probe]
+extends = ":read-only"
+
+[permissions.crew-probe.filesystem]
+":root" = "deny"
+":minimal" = "read"
+"/synthetic-fixture" = "deny"
+"/synthetic-fixture/workspace" = "read"
+```
+
+The literal fixture paths above stand for canonical disposable paths. The thread
+was created and named without model input, its process exited, and a fresh process
+resumed the same ID using `permissions: "crew-probe"`; the selected profile was
+returned. The following native calls then produced these results:
+
+| Surface | Observed result |
+| --- | --- |
+| `command/exec`, selected or configured default profile | Allowed workspace read; denied synthetic Crew, auth, vault and outside credential reads. |
+| `command/exec` with `shell_environment_policy.inherit="none"` | Neither the synthetic transport-token nor personal-token environment canary reached the process. |
+| Host `fs/readFile`, `fs/readDirectory`, `fs/getMetadata` | Could read or inspect denied fixture paths; these RPCs are not governed by the command profile. |
+| Host `fs/writeFile`, `fs/copy` | Mutated/copied the synthetic private data; resulting bytes were checked. |
+| Host `process/spawn`, `thread/shellCommand` | Could read the private canary, consistent with their explicit unsandboxed host-control contract. |
+
+The host read of the synthetic auth marker demonstrates that the native process
+retains file access while sandboxed commands do not. It does not prove a valid
+subscription session: the malformed marker produced no account, while an earlier
+token-shaped synthetic fixture triggered an unauthorized workspace-routing check.
+Only genuine owner sign-in can establish working model authentication. No model
+inference was invoked. The explicit host shell command did create a user-shell
+turn and corresponding native events, so this matrix is not a zero-turn fixture.
+
+Installed protocol inspection also covers host watchers/search, Git diffs,
+configuration/skill/plugin readers and native history readers. Those host methods
+are not a model-tool inventory. There is no complete effective model-tool catalogue
+or no-model client invocation for native `apply_patch`, image viewing or possible
+dedicated file/search tools in this generated API. MCP and connector inventories
+cover only their own surfaces. Their presence, absence or host-RPC behavior cannot
+prove complete model exposure or denial.
+
+Disposition: this is a concrete candidate command policy and a verified separation
+between trusted host controls and sandboxed execution, not accepted full model
+isolation. Keep host filesystem/process/shell RPCs out of agent-facing tools.
+After owner sign-in, the remaining bounded acceptance is to exercise the available
+native model file/command/edit/image surfaces against synthetic protected markers,
+then stop, resume the same chat in a fresh process and trigger one server-managed
+realtime handoff with synthetic media. Confirm denied markers, allowed workspace
+work, unchanged selected policy, exact handoff identity and no credential canaries
+in tool environments. Do not probe real auth values. Production restrictions stay
+unchanged until that evidence and the trust-boundary choice are accepted.
