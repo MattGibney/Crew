@@ -45,8 +45,12 @@ sender from wording, adjacency or native `user` role.
 ## Session and profile behavior
 
 Start initializes one explicitly owned stdio app-server, verifies subscription authentication and
-opens or resumes the exact requested thread. It never calls `turn/start`, generates a greeting,
-executes setup or submits synthetic user input. A missing resumed thread remains missing.
+opens or resumes the exact requested thread. For a new thread, it sets the native thread name from
+its saved agent name (or agent ID) with `thread/name/set` and verifies that name using `thread/read`.
+This supported metadata operation materializes an otherwise unused persistent thread in the
+inspected runtime, allowing an idle Start → Stop → Start on the same ID. It never calls `turn/start`,
+generates a greeting, executes setup or submits synthetic user input. A missing resumed thread
+remains missing; naming is never used to replace an established conversation.
 
 Profile instructions, optional name and personality are applied through native
 `thread/settings/update` → `thread/settings/updated` using
@@ -69,6 +73,20 @@ service descendants, tears down an environment or answers approvals. Lost owners
 remains a failure. A confirmed idle failed-start cleanup retains a compact stop acknowledgement so
 the foundation can close the logical session without inventing a second process. Startup events are
 buffered until observation begins; an overrun blocks rather than silently losing startup state.
+
+The production composition supplies `onProcessStarted(caller, pid)` to record each owned launch
+before the adapter sends `initialize` or any thread request. Missing PIDs or failed recording block
+native dispatch. `NativeProcessRegistry` stores immutable caller/PID/time records as owner-private,
+fsynced JSON, with the existing process-owned state lock protecting publication. A different PID
+cannot replace an existing logical session's record.
+
+After controller recovery, `confirmExited(caller)` reports success only when a durably recorded
+launch PID returns OS `ESRCH` from the signal-zero existence probe. It delivers no signal. Live PIDs
+(including reused PIDs), permission errors, missing records and unsafe/malformed files stay blocked.
+This confirms absence of the owned native launch only; it does not establish descendant exit or
+stop environments. If the controller crashes before recording, no native request has been sent,
+but missing evidence is still not converted into an exit confirmation. The foundation owns the
+explicit recovery action and its session/permission changes.
 
 ## Messages, native history and approvals
 
@@ -94,9 +112,25 @@ observation and requires rehydration. Reasoning and hook-prompt items are omitte
 retains type/status/timing and names, but does not copy tool arguments/results or credentials.
 Uncorrelated native user input stays `unattributed_native`.
 
-`readHistory` currently requires a live adapter session. After Stop it returns disconnected;
-the host needs a separately owned read-only native transport to offer stopped-session browsing.
-This adapter does not silently restart the agent or open a model session just to read history.
+`readHistory` uses the live owned transport when available. Stopped and controller-recovered
+history uses the optional trusted hook:
+
+```ts
+resolveHistoryLaunch(binding: RuntimeBinding): Promise<
+  | { state: "ready"; launch: CodexLaunch }
+  | { state: "blocked"; error: RuntimeError }
+>
+```
+
+The composition must validate the retained project/agent/thread reference and resolve its isolated
+native storage. An expired session bearer must not be reused. The adapter launches a separate
+read-only peer, initializes it, verifies the exact ID with `thread/read`, pages `thread/turns/list`
+and closes the owned process. It never resumes a thread, starts a turn, signs in, changes settings
+or answers an approval. An unconfirmed reader exit is an explicit failure, never a force-stop.
+Absent storage, unsupported methods and missing resolver remain errors rather than empty history.
+Native history continues to own all messages; this path creates no transcript copy. Delivery
+reconciliation can use the same stopped read path to find exact persisted IDs without replaying
+uncertain messages.
 
 Native server requests retain exact session/thread/turn/request identity. Raw request parameters
 remain only in the adapter's process memory. Exported `projectCodexApproval` is the bounded,
@@ -139,16 +173,36 @@ setting, with no sign-in, credentials, personal configuration or model turn. It 
 - A changed settings call emitted the exact instruction text in the same thread's
   `thread/settings/updated` event; a no-op settings call emitted no such event.
 - `thread/read` observed the same live idle thread.
-- `thread/resume` immediately returned `-32600: no rollout found for thread id …` for the new
-  unmaterialized idle thread. **Idle creation is not durable resumption before the first real user
-  message in this build.** The adapter preserves the identity and error; it never manufactures a
-  message or replacement thread to conceal this limitation.
+- Initially, `thread/resume` immediately returned `-32600: no rollout found for thread id …` for
+  a new unnamed idle thread. The later bounded naming probe below resolves this specific case with
+  a native metadata operation, without a message or replacement thread.
 - Both `thread/timeline/list` and `thread/items/list`, although present in generated types, returned
   `-32601` and “not supported yet”. The adapter uses turn pagination. Before the first message,
   `thread/turns/list` returned the specific native unmaterialized-thread error.
 - Native unsubscribe and process exit completed; disposable state was removed after exit.
 
-`npx tsc -p tsconfig.json --noEmit` passed. A separate short disposable **synthetic transport** flow
+A follow-on native probe on the same installed version used another disposable HOME/CODEX_HOME
+and no sign-in or model request. It observed `thread/name/set` and exact name readback after idle
+`thread/start`, acknowledged profile instruction revision one, then confirmed process exit. A new
+app-server read the same thread as `notLoaded` and returned empty turn pagination without resuming
+it. Explicit `thread/resume` then returned that same ID and revision-one instructions; a second
+settings update emitted exact revision-two instructions. Both owned processes exited, and the
+entire flow had zero turn events. This establishes unused-thread persistence and read-only native
+history mechanics, not subscription inference, credential isolation or model behavior.
+
+The updated adapter itself then read that stopped native thread using the trusted history resolver,
+returned its native empty history, rejected a foreign thread binding, and kept an absent delivery
+receipt uncertain without a replay. Current `tsc -p tsconfig.json --noEmit` and diff validation passed.
+The reader's launch resolver was scoped to the disposable thread; its execution resolver remained
+blocked, so this acceptance could not start a model session. No new permanent tests were added.
+
+A further disposable real-process check verified that live recorded PIDs block, absent recorded
+PIDs confirm exit after reopening the registry, and missing/malformed evidence and replacement
+PIDs are refused. A synthetic stdin peer verified that a rejected `onProcessStarted` callback
+closes the owned process without sending any native request. This checks durable recovery
+mechanics, not an installed-app crash/reopen flow. Type checking passed after these changes.
+
+Earlier focused validation: `npx tsc -p tsconfig.json --noEmit` passed. A separate short disposable **synthetic transport** flow
 passed idle start, exact profile event acknowledgement, enumerated approval validation/resolution,
 queue/steer correlation, lost-ack history reconciliation, sender attribution, interruption/exit and
 same-thread profile restart. This exercised adapter control flow, not subscription inference or
