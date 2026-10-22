@@ -905,16 +905,19 @@ export class FoundationStore {
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
-    this.closing = (async () => {
+    const operation = (async () => {
       await this.queue;
       this.listeners.clear();
-      try {
-        if (await this.ownsLock())
-          await unlink(join(this.directory, "foundation.lock"));
-      } finally {
-        await this.lock.close();
-      }
+      // Retain the handle after a failed unlink so a retry can still verify
+      // ownership. Write admission remains closed throughout cleanup retries.
+      if (await this.ownsLock())
+        await unlink(join(this.directory, "foundation.lock"));
+      await this.lock.close();
     })();
-    return this.closing;
+    this.closing = operation;
+    void operation.catch(() => {
+      if (this.closing === operation) this.closing = null;
+    });
+    return operation;
   }
 }
