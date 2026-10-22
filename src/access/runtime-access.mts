@@ -85,6 +85,12 @@ const blocked = (reason: string): RuntimeIsolationResult => ({
     "Owner ChatGPT sign-in in Crew's separate native home is required. Personal authentication is never copied.",
   ],
 });
+// A failed open must not lose the only guard against launching another process
+// against the same native home. Entries disappear only on a confirmed exit.
+const unconfirmedNativePeers = new Map<string, Set<CodexPeer>>();
+const pendingExitMessage =
+  "An owned native process has not confirmed exit. Further native launches are blocked until it exits; Crew has not force-stopped it.";
+
 type Bound = {
   binding: RuntimeAccessBinding;
   configurationHash: string;
@@ -106,6 +112,12 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   private signing: { peer: CodexPeer; loginId: string | null } | null = null;
   private signInStarting = false;
   private signInGeneration = 0;
+  private signInStartDone: Promise<void> | null = null;
+  private signInCancelTask: Promise<void> | null = null;
+  private readonly ownedPeers = new Set<CodexPeer>();
+  private readonly stoppingPeers = new Set<CodexPeer>();
+  private readonly peerStops = new Map<CodexPeer, Promise<void>>();
+  private closeTask: Promise<void> | null = null;
   private closed = false;
   private tail: Promise<unknown> = Promise.resolve();
   // Empty construction remains safely blocked for callers awaiting configuration.
@@ -133,6 +145,8 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     )
       throw new Error("Native home must be private and controller owned.");
     result.root = await realpath(options.directory);
+    if (unconfirmedNativePeers.get(result.root)?.size)
+      throw new Error(pendingExitMessage);
     if (
       result.root === homedir() ||
       result.root === join(homedir(), ".codex") ||
@@ -202,7 +216,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       try {
         await result.verifyConfiguration(peer, null);
       } finally {
-        await peer.close();
+        await result.stopPeer(peer);
       }
       await writeFile(
         join(result.root, "boundary-evidence.json"),
@@ -234,7 +248,8 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     gateway: NativeGatewayBinding | null,
     skills: Bound["skills"],
   ): Promise<CodexLaunch> {
-    if (!this.options || !this.egress || this.closed)
+    this.assertLaunchable();
+    if (!this.options || !this.egress)
       throw new Error("Native boundary is unavailable.");
     const ports = [this.egress.port];
     if (gateway) {
@@ -333,6 +348,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       LANG: "en_US.UTF-8",
     };
     if (gateway) env.CREW_SESSION_TOKEN = gateway.bearerToken;
+    this.assertLaunchable();
     return {
       executable: "/usr/bin/sandbox-exec",
       args: [
@@ -348,13 +364,59 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       env,
     };
   }
+  private assertLaunchable(): void {
+    if (this.closed) throw new Error("Native boundary is closed.");
+    if (this.stoppingPeers.size || unconfirmedNativePeers.get(this.root)?.size)
+      throw new Error(pendingExitMessage);
+  }
+  private trackPeer(peer: CodexPeer): void {
+    if (this.ownedPeers.has(peer)) return;
+    this.ownedPeers.add(peer);
+    void peer.exited.then(() => {
+      this.ownedPeers.delete(peer);
+      this.stoppingPeers.delete(peer);
+      const retained = unconfirmedNativePeers.get(this.root);
+      retained?.delete(peer);
+      if (retained?.size === 0) unconfirmedNativePeers.delete(this.root);
+      if (this.signing?.peer === peer) this.signing = null;
+    });
+  }
+  private stopPeer(peer: CodexPeer): Promise<void> {
+    const existing = this.peerStops.get(peer);
+    if (existing) return existing;
+    this.trackPeer(peer);
+    this.stoppingPeers.add(peer);
+    const operation = (async () => {
+      let confirmed = false;
+      try {
+        confirmed = await peer.close();
+      } catch {
+        /* Preserve ownership. */
+      }
+      if (!confirmed && this.ownedPeers.has(peer)) {
+        const retained =
+          unconfirmedNativePeers.get(this.root) ?? new Set<CodexPeer>();
+        retained.add(peer);
+        unconfirmedNativePeers.set(this.root, retained);
+        throw new Error(pendingExitMessage);
+      }
+      this.ownedPeers.delete(peer);
+      this.stoppingPeers.delete(peer);
+      if (this.signing?.peer === peer) this.signing = null;
+    })();
+    this.peerStops.set(peer, operation);
+    void operation.finally(() => this.peerStops.delete(peer)).catch(() => {});
+    return operation;
+  }
   private async peer(launch: CodexLaunch): Promise<CodexPeer> {
+    this.assertLaunchable();
     const peer = new CodexPeer(
       launch,
       () => {},
       () => {},
       15_000,
     );
+    this.trackPeer(peer);
     try {
       await peer.rpc("initialize", {
         clientInfo: {
@@ -367,7 +429,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       peer.send({ method: "initialized", params: {} });
       return peer;
     } catch {
-      await peer.close();
+      await this.stopPeer(peer);
       throw new Error("Native access initialization failed.");
     }
   }
@@ -424,11 +486,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
           await peer.rpc("account/read", { refreshToken: false }),
         );
         if (object(response.account) && response.account.type === "chatgpt") {
-          const signing = this.signing;
-          this.signing = null;
-          this.signInGeneration++;
-          this.signInStarting = false;
-          if (signing) await signing.peer.close();
+          await this.cancelSignIn();
           return {
             state: "signed_in",
             plan:
@@ -445,13 +503,15 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
                 "Crew requires native ChatGPT subscription sign-in, without an API-key fallback.",
             };
       } finally {
-        await peer.close();
+        await this.stopPeer(peer);
       }
     } catch {
       return {
         state: "blocked",
         reason:
-          "Crew could not verify its isolated native subscription configuration.",
+          this.stoppingPeers.size || unconfirmedNativePeers.get(this.root)?.size
+            ? pendingExitMessage
+            : "Crew could not verify its isolated native subscription configuration.",
       };
     }
   }
@@ -461,9 +521,15 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     verificationUrl: string;
     userCode: string;
   }> {
-    if (this.signing || this.signInStarting)
-      throw new Error("A Crew sign-in is already pending.");
+    this.assertLaunchable();
+    if (this.signing || this.signInStarting || this.signInCancelTask)
+      throw new Error("A Crew sign-in or cancellation is already pending.");
     this.signInStarting = true;
+    let finishStarting!: () => void;
+    const started = new Promise<void>((resolve) => {
+      finishStarting = resolve;
+    });
+    this.signInStartDone = started;
     const generation = ++this.signInGeneration;
     let peer: CodexPeer | null = null;
     try {
@@ -495,30 +561,54 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         userCode: login.userCode,
       };
     } catch {
-      if (generation === this.signInGeneration) this.signing = null;
-      await peer?.close();
+      if (peer) await this.stopPeer(peer);
+      if (
+        this.stoppingPeers.size ||
+        unconfirmedNativePeers.get(this.root)?.size
+      )
+        throw new Error(pendingExitMessage);
       throw new Error(
         "Native device sign-in could not start. Check network access and try again.",
       );
     } finally {
-      if (generation === this.signInGeneration) this.signInStarting = false;
+      this.signInStarting = false;
+      if (this.signInStartDone === started) this.signInStartDone = null;
+      finishStarting();
     }
   }
   async cancelSignIn(): Promise<void> {
-    this.signInGeneration++;
-    this.signInStarting = false;
-    const signing = this.signing;
-    this.signing = null;
-    if (!signing) return;
+    if (this.signInCancelTask) return this.signInCancelTask;
+    const operation = (async () => {
+      this.signInGeneration++;
+      const starting = this.signInStartDone;
+      const signing = this.signing;
+      if (signing) {
+        try {
+          if (signing.loginId)
+            await signing.peer.rpc("account/login/cancel", {
+              loginId: signing.loginId,
+            });
+        } catch {
+          /* Cancellation response is not process-exit evidence. */
+        }
+        // Preserve the reference until stopPeer observes exit; a false result is
+        // retained and blocks duplicate sign-in even when the RPC was accepted.
+        await this.stopPeer(signing.peer);
+      }
+      // Cancellation during initial RPC setup must wait for that exact attempt
+      // to notice its generation and close its peer before allowing a new one.
+      if (starting) await starting;
+      if (
+        this.stoppingPeers.size ||
+        unconfirmedNativePeers.get(this.root)?.size
+      )
+        throw new Error(pendingExitMessage);
+    })();
+    this.signInCancelTask = operation;
     try {
-      if (signing.loginId)
-        await signing.peer.rpc("account/login/cancel", {
-          loginId: signing.loginId,
-        });
-    } catch {
-      /* Already completed or disconnected; never retry sign-in automatically. */
+      await operation;
     } finally {
-      await signing.peer.close();
+      if (this.signInCancelTask === operation) this.signInCancelTask = null;
     }
   }
   async prepare(
@@ -527,6 +617,11 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   ): Promise<RuntimeIsolationResult> {
     const operation = this.tail.then(
       async (): Promise<RuntimeIsolationResult> => {
+        if (
+          this.stoppingPeers.size ||
+          unconfirmedNativePeers.get(this.root)?.size
+        )
+          return blocked(pendingExitMessage);
         if (
           !this.options ||
           this.closed ||
@@ -583,7 +678,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
           try {
             await this.verifyConfiguration(peer, gateway);
           } finally {
-            await peer.close();
+            await this.stopPeer(peer);
           }
           const binding: RuntimeAccessBinding = {
             caller: structuredClone(caller),
@@ -624,6 +719,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     const bound = this.bindings.get(key(input.caller));
     if (
       this.closed ||
+      this.stoppingPeers.size > 0 ||
+      Boolean(unconfirmedNativePeers.get(this.root)?.size) ||
+      this.releasedSessions.has(key(input.caller)) ||
       !bound ||
       hash(input.access) !== hash(bound.binding) ||
       hash(input.configuration) !== bound.configurationHash
@@ -684,16 +782,61 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   async release(caller: CallerContext): Promise<void> {
     this.releasedSessions.add(key(caller));
     const bound = this.bindings.get(key(caller));
-    this.bindings.delete(key(caller));
     await bound?.gateway.release();
+    this.bindings.delete(key(caller));
   }
   async close(): Promise<void> {
+    if (this.closeTask) return this.closeTask;
     this.closed = true;
-    await this.tail;
-    await this.cancelSignIn();
-    for (const bound of this.bindings.values()) await bound.gateway.release();
-    this.bindings.clear();
-    await this.egress?.close();
-    this.egress = null;
+    const operation = (async () => {
+      let accessCleanupFailed = false;
+      // Revoke transport access even if a native process refuses to exit. Every
+      // cleanup is attempted; an early failure must not leave model egress open.
+      const cleanup = [
+        ...[...this.bindings.entries()].map(async ([id, bound]) => {
+          try {
+            await bound.gateway.release();
+            this.bindings.delete(id);
+          } catch {
+            accessCleanupFailed = true;
+          }
+        }),
+        (async () => {
+          const egress = this.egress;
+          if (!egress) return;
+          try {
+            await egress.close();
+            if (this.egress === egress) this.egress = null;
+          } catch {
+            accessCleanupFailed = true;
+          }
+        })(),
+        this.cancelSignIn(),
+        ...[...this.ownedPeers].map((peer) => this.stopPeer(peer)),
+      ];
+      await Promise.allSettled(cleanup);
+      await this.tail;
+      // A preparation already awaiting gateway creation will have noticed closed
+      // and released that binding. Revisit any peer still awaiting confirmed exit.
+      await Promise.allSettled(
+        [...this.ownedPeers].map((peer) => this.stopPeer(peer)),
+      );
+      if (
+        this.ownedPeers.size ||
+        this.stoppingPeers.size ||
+        unconfirmedNativePeers.get(this.root)?.size
+      )
+        throw new Error(pendingExitMessage);
+      if (accessCleanupFailed)
+        throw new Error(
+          "Native shutdown could not confirm all tool and model transport cleanup.",
+        );
+    })();
+    this.closeTask = operation;
+    try {
+      await operation;
+    } finally {
+      if (this.closeTask === operation) this.closeTask = null;
+    }
   }
 }

@@ -27,6 +27,22 @@ the encrypted vault. Subscription availability is not model entitlement: a real 
 turn is still needed to verify inference. Current validation reaches `sign_in_required`;
 it does **not** claim a completed owner sign-in or subscription-backed response.
 
+## Confirmed native process shutdown
+
+Every access probe and sign-in app-server is retained until its exit is observed.
+Ending stdin is a stop request, not exit evidence. If the native peer does not confirm
+exit within its bounded close wait, cancellation reports that uncertainty and further
+launches/sign-in are blocked. The same native home also remains blocked if initial
+provider opening fails with an unfinished process. Confirmed later exit clears that
+in-process hold; Crew never force-stops it or discards its reference to retry silently.
+
+Provider close attempts every tool-binding revocation and model-egress close even when
+a native process remains alive, then reports the pending owned process. A later close
+can confirm completion. Cancelling during initial sign-in RPC setup waits for that exact
+attempt to stop before permitting another attempt. This tracks processes owned by the
+current controller; it does not claim persisted crash adoption or native installation
+lifecycle acceptance.
+
 ## Native boundary
 
 `native-boundary.mts` denies access by default and permits only system runtime files,
@@ -77,10 +93,18 @@ source patch or Crew-specific integration is required for local file/edit/test o
 
 ```ts
 const access = await CodexRuntimeAccessProvider.open({
-  directory, projectId, executable,
+  directory,
+  projectId,
+  executable,
   runtimeConfigRef: "crew.codex.broker-only.v1",
-  gatewayFor: async caller => ({ url: gatewayUrl, foundationUrl, bearerToken, bindingRef, release }),
-  resolveSkills: async skills => exactSelectedSkillPaths,
+  gatewayFor: async (caller) => ({
+    url: gatewayUrl,
+    foundationUrl,
+    bearerToken,
+    bindingRef,
+    release,
+  }),
+  resolveSkills: async (skills) => exactSelectedSkillPaths,
 });
 // Inject access.prepare/release and access.resolveLaunch into the one #88 host.
 // Mount subscriptionStatus/beginSignIn/cancelSignIn on authenticated owner ingress.
