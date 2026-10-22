@@ -312,3 +312,26 @@ not attempted. Owner sign-in alone cannot repair this local pre-turn failure.
 After resolving boundary composition, effective permission enforcement in a real
 server-created handoff still needs its own bounded synthetic-private-file check;
 selection metadata and standalone command execution are insufficient evidence.
+
+The final minimal OS controls narrowed this further without running Codex or
+reading real private files. An inert outer `(allow default)` profile allowed a
+second sandbox. Adding only a deny-read rule for one synthetic private directory
+correctly blocked its canary read, allowed a single `/usr/bin/true`, and made a
+second sandbox around `/usr/bin/true` fail with exit 71 and the same error. The
+installed Apple SDK's `sandbox.h` documents that `sandbox_init` errors when the
+process is already sandboxed. No supported narrow permission addition has been
+established that lets this restrictive outer Seatbelt policy coexist with the
+native runtime's own sandbox initialization. Loosening unrelated path allowances
+is not a supported repair.
+
+The smallest alternative is an explicit trust-boundary change: run the pinned
+app-server as a trusted host process and let native named permissions be the sole
+model-tool sandbox, with exact deny rules for Crew private state and personal
+credential roots and no escalation beyond those rules. This is a candidate, not
+accepted isolation: complete model-tool coverage and a server-created handoff
+must be verified after owner sign-in before removing the current hold. It drops
+the claim that Crew's outer OS policy confines the app-server itself. If that
+process-wide guarantee is required, a separate OS isolation layer, such as an
+isolated runtime VM with no personal-file mounts, is needed instead of nesting
+Seatbelt. Neither alternative was implemented or authorized by this investigation;
+no install, account, credentials, native launch policy or production access changed.
