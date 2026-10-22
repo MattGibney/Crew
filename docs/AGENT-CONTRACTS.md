@@ -4,7 +4,8 @@ Canonical source: [`src/agents/contracts.mts`](../src/agents/contracts.mts).
 Design authority: [#86](https://github.com/MattGibney/Crew/issues/86), with domain detail in
 [#87](https://github.com/MattGibney/Crew/issues/87), [#88](https://github.com/MattGibney/Crew/issues/88),
 [#89](https://github.com/MattGibney/Crew/issues/89), [#90](https://github.com/MattGibney/Crew/issues/90).
-This is a type-only boundary awaiting owner agreement, not a working replacement runtime.
+The owner approved this boundary in PR #91, merged into `codex/unified-agent-platform`.
+The contracts alone do not establish a working replacement runtime.
 Import using `import type { Agent } from "../agents/contracts.mjs"` (adjust relative path).
 Renderer consumers can import types from the same source; do not copy DTOs into renderer contracts.
 
