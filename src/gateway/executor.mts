@@ -178,7 +178,7 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       return await this.credentials.use(
         connection,
         config,
-        async (_handle, token, sanitizer) => {
+        async (handle, token, sanitizer) => {
           // Credential-bearing input is rejected before dispatch, including values under innocent keys.
           const encoded = canonicalJson(invocation.operation.arguments);
           if (
@@ -212,8 +212,19 @@ export class TrustedServiceExecutor implements ServiceExecutor {
                     "Execution cancelled before dispatch.",
                     evidence,
                   );
-                admitted = true;
-                return action();
+                return this.credentials.withCurrent(
+                  connection,
+                  handle,
+                  async () => {
+                    if (options.signal?.aborted)
+                      return noExecution(
+                        "Execution cancelled before dispatch.",
+                        evidence,
+                      );
+                    admitted = true;
+                    return action();
+                  },
+                );
               },
             );
             return admission.state === "admitted"

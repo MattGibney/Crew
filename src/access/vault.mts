@@ -556,24 +556,53 @@ export class EncryptedCredentialVault implements CredentialVault {
             ): Promise<R> => {
               return this.#guard(async () => {
                 if (!state.active) fail("expired");
-                if (state.current) {
-                  const record = await this.#read(this.#key(connectionId));
-                  if (
-                    !record ||
-                    record.deleted ||
-                    record.revision !== state.current.revision ||
-                    record.credentialRef !== state.current.credentialRef
-                  )
-                    fail("expired");
-                }
-                if (!state.active) fail("expired");
-                const borrowed = Uint8Array.from(state.material);
-                state.borrowed.add(borrowed);
+                let borrowed: Uint8Array | undefined;
+                const invoke = () => {
+                  if (!state.active) fail("expired");
+                  const bytes = Uint8Array.from(state.material);
+                  borrowed = bytes;
+                  state.borrowed.add(bytes);
+                  // Invocation is credential admission. Box the handled promise
+                  // so the mutation lock releases before any remote I/O or
+                  // nested use/replace completes. A later rotation is in flight.
+                  const pending = this.#callback(() =>
+                    authenticate(bytes),
+                  ).then(
+                    (value) => ({ ok: true as const, value }),
+                    (error: unknown) => ({ ok: false as const, error }),
+                  );
+                  return { pending };
+                };
                 try {
-                  return await this.#callback(() => authenticate(borrowed));
+                  const admitted = state.current
+                    ? await withStateLock(
+                        await this.#directoryReady(),
+                        ".vault-lock",
+                        async () => {
+                          if (!state.active) fail("expired");
+                          const record = await this.#read(
+                            this.#key(connectionId),
+                          );
+                          if (
+                            !record ||
+                            record.deleted ||
+                            record.revision !== state.current!.revision ||
+                            record.credentialRef !==
+                              state.current!.credentialRef
+                          )
+                            fail("expired");
+                          return invoke();
+                        },
+                      )
+                    : invoke();
+                  const result = await admitted.pending;
+                  if (!result.ok) throw result.error;
+                  return result.value;
                 } finally {
-                  borrowed.fill(0);
-                  state.borrowed.delete(borrowed);
+                  if (borrowed) {
+                    borrowed.fill(0);
+                    state.borrowed.delete(borrowed);
+                  }
                 }
               });
             },
