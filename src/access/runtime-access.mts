@@ -74,6 +74,32 @@ export type SubscriptionStatus =
   | { state: "signed_in"; plan: string | null }
   | { state: "sign_in_required"; signIn?: SubscriptionSignInStatus }
   | { state: "blocked"; reason: string };
+function validBrowserAuthorizationUrl(value: string): boolean {
+  if (value.length > 4096) return false;
+  try {
+    const url = new URL(value);
+    if (
+      url.origin !== "https://auth.openai.com" ||
+      url.username ||
+      url.password ||
+      url.hash
+    )
+      return false;
+    const redirect = new URL(url.searchParams.get("redirect_uri") ?? "");
+    return (
+      redirect.protocol === "http:" &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(redirect.hostname) &&
+      redirect.port === "1455" &&
+      redirect.pathname === "/auth/callback" &&
+      !redirect.username &&
+      !redirect.password &&
+      !redirect.search &&
+      !redirect.hash
+    );
+  } catch {
+    return false;
+  }
+}
 const signInFailure = (
   stage: SignInStage,
   error?: unknown,
@@ -90,9 +116,9 @@ const signInFailure = (
       "Crew could not initialize its native sign-in process. Try again.",
     configuration: "Crew could not verify the isolated sign-in configuration.",
     request:
-      "The native device-code request failed. Check network access and whether device-code sign-in is enabled for your account, then try again.",
+      "The native browser sign-in request failed. Check network access and try again.",
     response:
-      "Native sign-in returned an unsupported response. No code was accepted.",
+      "Native sign-in returned an unsupported response. No sign-in link was accepted.",
     completion:
       "Crew could not confirm successful native sign-in. Start a new sign-in attempt.",
     transport:
@@ -354,6 +380,10 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         executable: this.binary,
         ports,
         readRoots,
+        ownerSignInCallback:
+          label === "owner-browser-sign-in" &&
+          gateway === null &&
+          skills.length === 0,
       }),
       { mode: 0o600 },
     );
@@ -591,9 +621,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
   }
   /** Mount only on authenticated owner ingress, invoked by explicit owner action. */
   async beginSignIn(): Promise<{
+    type: "browser";
     loginId: string;
-    verificationUrl: string;
-    userCode: string;
+    authorizationUrl: string;
   }> {
     this.assertLaunchable();
     if (this.signing || this.signInStarting || this.signInCancelTask)
@@ -652,7 +682,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
     };
     try {
       peer = await this.peer(
-        await this.launch("owner", null, []),
+        await this.launch("owner-browser-sign-in", null, []),
         (event) => {
           if (event.method !== "account/login/completed") return;
           if (
@@ -689,17 +719,16 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       await this.verifyConfiguration(peer, null);
       stage = "request";
       const response = await peer.rpc("account/login/start", {
-        type: "chatgptDeviceCode",
+        type: "chatgpt",
       });
       stage = "response";
       const login = record(response);
       if (
-        login.type !== "chatgptDeviceCode" ||
+        login.type !== "chatgpt" ||
         typeof login.loginId !== "string" ||
         !login.loginId ||
-        typeof login.userCode !== "string" ||
-        !login.userCode ||
-        login.verificationUrl !== "https://auth.openai.com/codex/device"
+        typeof login.authUrl !== "string" ||
+        !validBrowserAuthorizationUrl(login.authUrl)
       )
         throw new Error("Unsupported native sign-in response.");
       if (
@@ -716,12 +745,12 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
         complete({ loginId: login.loginId, success: earlySuccess });
       if (this.currentSignInStatus()?.state === "failed") {
         stage = "completion";
-        throw new Error("Native sign-in ended before code delivery.");
+        throw new Error("Native sign-in ended before link delivery.");
       }
       return {
+        type: "browser",
         loginId: login.loginId,
-        verificationUrl: login.verificationUrl,
-        userCode: login.userCode,
+        authorizationUrl: login.authUrl,
       };
     } catch (error) {
       if (!this.closed && generation === this.signInGeneration)
@@ -738,7 +767,7 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       throw new Error(
         this.closed || generation !== this.signInGeneration
           ? "Crew sign-in was cancelled."
-          : this.signInStatus?.reason ?? "Native device sign-in could not start.",
+          : this.signInStatus?.reason ?? "Native browser sign-in could not start.",
       );
     } finally {
       earlyCompletions.clear();

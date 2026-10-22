@@ -115,6 +115,8 @@ export function nativeSeatbeltPolicy(input: {
   ports: number[];
   readRoots?: string[];
   writeRoots?: string[];
+  /** Trusted owner-login launch only; never selected by agent/runtime input. */
+  ownerSignInCallback?: boolean;
 }): string {
   if (
     input.ports.some(
@@ -143,6 +145,7 @@ export function nativeSeatbeltPolicy(input: {
 ${input.writeRoots?.map((root) => `(allow file-read* file-write* (subpath ${quote(root)}))`).join("\n") ?? ""}
 (allow file-write* (literal "/dev/null"))
 ${input.ports.map((port) => `(allow network-outbound (remote tcp "localhost:${port}"))`).join("\n")}
+${input.ownerSignInCallback ? '(allow network-bind network-inbound (local tcp "localhost:1455"))' : ""}
 `;
 }
 
