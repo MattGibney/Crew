@@ -133,8 +133,8 @@ function draftInput(value: unknown): AgentSetupDraft {
   )
     throw new AgentSetupError("Invalid setup choices.");
   string(row.name, 1000);
-  string(row.instructions, 100_000);
-  string(row.personality, 100_000);
+  string(row.instructions, 200_000);
+  string(row.personality, 200_000);
   for (const value of [row.pictureRef, row.voice])
     if (value !== null) {
       string(value, 256);

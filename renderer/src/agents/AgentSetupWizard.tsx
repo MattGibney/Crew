@@ -16,6 +16,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Choice } from "../access/shared";
 import { AgentPicture, type AgentImageClient } from "./AgentPicture";
 import { AgentManagerSelection } from "./AgentManagerSelection";
+import { AgentEnvironmentTemplate } from "./AgentEnvironmentTemplate";
 import { readProfilePicture } from "../manager/profile";
 import type { AgentConfigurationOptions } from "../../../src/application/agent-configuration-contracts.mjs";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
@@ -161,6 +162,7 @@ export function AgentSetupWizard(props: Props) {
   const [conflict, setConflict] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [connecting, setConnecting] = useState(false);
+  const connectionFlow = useRef<{ recordId: string } | null>(null);
   const [options, setOptions] = useState<AgentConfigurationOptions | null>(
     null,
   );
@@ -202,6 +204,14 @@ export function AgentSetupWizard(props: Props) {
   const pendingSave = useRef<Promise<AgentSetupRecord> | null>(null);
   const accept = useCallback(
     (next: AgentSetupRecord | null, replaceDraft = true) => {
+      if (
+        connectionFlow.current &&
+        (connectionFlow.current.recordId !== next?.id ||
+          next.phase === "complete")
+      ) {
+        connectionFlow.current = null;
+        if (alive.current) setConnecting(false);
+      }
       current.current = next;
       if (alive.current) {
         setRecord(next);
@@ -247,6 +257,7 @@ export function AgentSetupWizard(props: Props) {
     alive.current = true;
     return () => {
       alive.current = false;
+      connectionFlow.current = null;
       readSequence.current++;
       accessSequence.current++;
     };
@@ -354,16 +365,22 @@ export function AgentSetupWizard(props: Props) {
   }
   function begin(mode: "create" | "repair", agentId?: string, discard = false) {
     void run(async () => {
+      if (discard && pendingSave.current)
+        await pendingSave.current.catch(() => {});
       if (
+        !discard &&
         local.current &&
         current.current &&
         !same(local.current, current.current.draft)
       )
         await save();
+      const latest = discard
+        ? await command<AgentSetupRecord | null>("setup.read", {})
+        : current.current;
       const next = await command<AgentSetupRecord>(
         discard ? "setup.new" : "setup.open",
         {
-          expectedRevision: current.current?.revision ?? null,
+          expectedRevision: latest?.revision ?? null,
           mode,
           ...(agentId ? { agentId } : {}),
         },
@@ -413,6 +430,19 @@ export function AgentSetupWizard(props: Props) {
   const locked = busy || conflict || record?.phase === "applying";
   const dirty = !same(draft, record?.draft);
   const review = !dirty ? record?.review : null;
+  const renderedConnectionFlow = connectionFlow.current;
+  const ownsConnectionFlow = () =>
+    Boolean(
+      alive.current &&
+      renderedConnectionFlow &&
+      connectionFlow.current === renderedConnectionFlow &&
+      current.current?.id === renderedConnectionFlow.recordId,
+    );
+  const closeConnectionFlow = () => {
+    if (!ownsConnectionFlow()) return;
+    connectionFlow.current = null;
+    setConnecting(false);
+  };
   return (
     <div
       className={`${firstUse ? "mx-auto max-w-3xl px-5 py-8 sm:px-8" : "py-6"} min-w-0 space-y-6`}
@@ -438,7 +468,9 @@ export function AgentSetupWizard(props: Props) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={busy || saving || record.phase === "applying"}
+            disabled={
+              busy || saving || connecting || record.phase === "applying"
+            }
             onClick={() =>
               void run(async () => {
                 await save();
@@ -759,7 +791,7 @@ export function AgentSetupWizard(props: Props) {
                   id={`${id}-personality`}
                   value={draft.personality}
                   rows={3}
-                  maxLength={100000}
+                  maxLength={200000}
                   disabled={locked}
                   onChange={(event) =>
                     change({ personality: event.target.value })
@@ -832,11 +864,17 @@ export function AgentSetupWizard(props: Props) {
                 </p>
               </div>
               <div className="space-y-2">
+                <AgentEnvironmentTemplate
+                  agentId={draft.agentId}
+                  command={command}
+                  subscribe={subscribe}
+                  visible={visible}
+                />
                 <Label htmlFor={`${id}-instructions`}>Instructions</Label>
                 <Textarea
                   id={`${id}-instructions`}
                   rows={6}
-                  maxLength={100000}
+                  maxLength={200000}
                   value={draft.instructions}
                   disabled={locked}
                   onChange={(event) =>
@@ -1043,13 +1081,18 @@ export function AgentSetupWizard(props: Props) {
                 Connect the services your agent needs, or continue with local
                 work in Crew.
               </StepTitle>
-              {connecting && props.renderConnectionWizard ? (
+              {connecting &&
+              renderedConnectionFlow &&
+              props.renderConnectionWizard ? (
                 props.renderConnectionWizard({
                   snapshot: access,
                   onCommand: (name, args) => command(`access.${name}`, args),
-                  onNotify: setNotice,
+                  onNotify: (message) => {
+                    if (ownsConnectionFlow()) setNotice(message);
+                  },
                   onComplete: (connectionId) => {
-                    setConnecting(false);
+                    if (!ownsConnectionFlow()) return;
+                    closeConnectionFlow();
                     change({
                       serviceConnectionIds: toggle(
                         local.current?.serviceConnectionIds ?? [],
@@ -1063,8 +1106,8 @@ export function AgentSetupWizard(props: Props) {
                       ),
                     );
                   },
-                  onCancel: () => setConnecting(false),
-                  onSkip: () => setConnecting(false),
+                  onCancel: closeConnectionFlow,
+                  onSkip: closeConnectionFlow,
                 })
               ) : (
                 <>
@@ -1169,7 +1212,10 @@ export function AgentSetupWizard(props: Props) {
                     <Button
                       variant="outline"
                       disabled={locked}
-                      onClick={() => setConnecting(true)}
+                      onClick={() => {
+                        connectionFlow.current = { recordId: record.id };
+                        setConnecting(true);
+                      }}
                     >
                       <Plus />
                       Add connection

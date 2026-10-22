@@ -1912,6 +1912,82 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
       action: input.action,
       arguments: args,
     });
+    // A Start response can be temporarily unknown even when its complete owned
+    // process receipt later proves liveness. Observe before admission, without
+    // signaling, replaying a command or turning a read-only status into a write.
+    const backgroundObservations = new Map<
+      string,
+      {
+        environmentId: string;
+        ref: string;
+        observedAt: number;
+        state: "running" | "settled";
+      }
+    >();
+    if (["execute", "start", "stop"].includes(input.action)) {
+      const environmentId =
+        input.action === "stop"
+          ? this.state.operations.find(
+              (row) =>
+                row.id === args.operationId &&
+                row.action === "start" &&
+                row.targetAgentId === input.agentId,
+            )?.environmentId
+          : args.environmentId;
+      const candidates = this.state.operations
+        .filter(
+          (row) =>
+            row.environmentId === environmentId &&
+            row.targetAgentId === input.agentId &&
+            row.action === "start" &&
+            row.state === "completed" &&
+            !row.executionSettled &&
+            row.processEvidenceComplete &&
+            row.processEvidenceRefs.length === 1,
+        )
+        .map((row) => ({
+          id: row.id,
+          environmentId: row.environmentId,
+          ref: row.processEvidenceRefs[0]!,
+        }));
+      await Promise.all(
+        candidates.map(async (candidate) => {
+          const observedAt = Date.now();
+          const [observation] = await this.observeReceipts([candidate.ref]);
+          if (observation?.processEvidenceRef !== candidate.ref) return;
+          const state =
+            observation.processesSettled === true
+              ? "settled"
+              : observation.processesSettled === false &&
+                  "state" in observation &&
+                  observation.state === "running"
+                ? "running"
+                : null;
+          if (state)
+            backgroundObservations.set(candidate.id, {
+              ...candidate,
+              observedAt,
+              state,
+            });
+        }),
+      );
+    }
+    const freshBackgroundObservation = (row: EnvironmentOperation) => {
+      const observation = backgroundObservations.get(row.id);
+      if (
+        !observation ||
+        row.action !== "start" ||
+        row.state !== "completed" ||
+        row.targetAgentId !== input.agentId ||
+        row.environmentId !== observation.environmentId ||
+        !row.processEvidenceComplete ||
+        row.processEvidenceRefs.length !== 1 ||
+        row.processEvidenceRefs[0] !== observation.ref
+      )
+        return null;
+      const age = Date.now() - observation.observedAt;
+      return age >= 0 && age <= 5000 ? observation : null;
+    };
     const admitted = await this.options.admission.run(async () => {
       if (this.closed || this.failed)
         throw new Error("Environment service requires recovery.");
@@ -2013,6 +2089,28 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         environment &&
         this.state.operations.some(
           (row) =>
+            !row.executionSettled &&
+            row.environmentId === environment!.id &&
+            freshBackgroundObservation(row)?.state === "settled",
+        )
+      )
+        await this.transaction((draft) => {
+          for (const row of draft.operations)
+            if (
+              !row.executionSettled &&
+              row.environmentId === environment!.id &&
+              freshBackgroundObservation(row)?.state === "settled"
+            ) {
+              // Preserve the command's original result and outcome uncertainty.
+              // This confirms only that its complete owned process inventory ended.
+              row.executionSettled = true;
+              row.updatedAt = now();
+            }
+        });
+      if (
+        environment &&
+        this.state.operations.some(
+          (row) =>
             row.environmentId === environment!.id &&
             (row.state === "running" || !row.executionSettled) &&
             !(
@@ -2033,7 +2131,7 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
               row.state === "completed" &&
               row.processEvidenceComplete &&
               row.processEvidenceRefs.length === 1 &&
-              row.result?.state === "running"
+              freshBackgroundObservation(row)?.state === "running"
             ),
         )
       )

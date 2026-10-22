@@ -22,6 +22,188 @@ import {
   reconcileMacWorkspaceCommand,
 } from "../src/access/workspace-executor.mts";
 test(
+  "execution admission refreshes initially unknown managed starts without owner reconciliation",
+  { skip: process.platform !== "darwin", concurrency: false, timeout: 15000 },
+  async (t) => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "crew108-start-refresh-")),
+    );
+    const controller = join(root, "controller"),
+      directory = join(controller, "environments"),
+      workspace = join(root, "workspace");
+    for (const path of [controller, workspace])
+      await mkdir(path, { mode: 0o700 });
+    const actor = { type: "user", userId: "owner" };
+    const caller = {
+      projectId: "project",
+      agentId: "agent",
+      sessionId: "session",
+    };
+    let revoked = false,
+      unknownObservation = false,
+      starts = 0,
+      request = 0;
+    const refs = new Set();
+    let serial = Promise.resolve();
+    const service = await ProjectEnvironmentService.open({
+      directory,
+      protectedDirectories: [controller],
+      projectId: "project",
+      ownerUserId: "owner",
+      admission: {
+        run(fn) {
+          const task = serial.then(fn);
+          serial = task.catch(() => {});
+          return task;
+        },
+      },
+      authorize: async (_caller, action) => {
+        if (revoked && action !== "read") throw Error("revoked");
+      },
+      verifyExecution: async () => {},
+      noteExecutionAdmitted: async () => {},
+      execute: runMacWorkspaceCommand,
+      observeExecution: reconcileMacWorkspaceCommand,
+      startExecution: async (...args) => {
+        starts++;
+        const result = await startMacWorkspaceProcess(...args);
+        if (result.processEvidenceRef) refs.add(result.processEvidenceRef);
+        // Simulate the real initial sampling race while retaining the actual
+        // helper's durable complete identity and later OS observations.
+        return { ...result, state: "unknown", processesSettled: false };
+      },
+      inspectExecution: async (...args) => {
+        const result = await inspectMacWorkspaceProcess(...args);
+        return unknownObservation
+          ? { ...result, state: "unknown", processesSettled: false }
+          : result;
+      },
+      stopExecution: stopMacWorkspaceProcess,
+    });
+    t.after(async () => {
+      const results = await Promise.all(
+        [...refs].map((ref) => stopMacWorkspaceProcess(directory, ref)),
+      );
+      const settled = results.every((result) => result.processesSettled);
+      await service.close();
+      if (settled) await rm(root, { recursive: true, force: true });
+      assert.equal(
+        settled,
+        true,
+        "retain evidence if fixture process exit is unconfirmed",
+      );
+    });
+    await service.approveWorkspace(
+      actor,
+      {
+        policyId: "folder",
+        workspaceDirectory: workspace,
+        writable: true,
+        executableDirectories: [],
+      },
+      null,
+    );
+    const invoke = (action, args) =>
+      service.invoke({
+        caller,
+        agentId: "agent",
+        requestId: `refresh-${++request}`,
+        action,
+        arguments: args,
+      });
+    const attached = await invoke("attach", { policyId: "folder" });
+    const environmentId = attached.result.environmentId;
+    const started = await invoke("start", {
+      environmentId,
+      command: ["/bin/sleep", "2"],
+    });
+    assert.equal(started.result.state, "unknown");
+    assert.equal(started.executionSettled, false);
+    const operation = () =>
+      service
+        .ownerSnapshot(actor)
+        .operations.find((row) => row.id === started.operationId);
+    const observed = await invoke("status", {
+      operationId: started.operationId,
+    });
+    assert.equal(observed.observations[0].state, "running");
+    assert.equal(
+      operation().result.state,
+      "unknown",
+      "read-only status preserves original outcome",
+    );
+    unknownObservation = true;
+    await assert.rejects(
+      invoke("execute", { environmentId, command: ["/usr/bin/true"] }),
+      /running or uncertain/,
+    );
+    unknownObservation = false;
+    const foreground = await invoke("execute", {
+      environmentId,
+      command: ["/usr/bin/true"],
+    });
+    assert.equal(
+      foreground.result.state,
+      "exited",
+      "fresh running evidence permits foreground after an unknown initial response",
+    );
+    assert.equal(operation().result.state, "unknown");
+    assert.equal(operation().executionSettled, false);
+    const second = await invoke("start", {
+      environmentId,
+      command: ["/usr/bin/true"],
+    });
+    assert.equal(
+      second.result.state,
+      "unknown",
+      "fresh running evidence also permits another explicit managed start",
+    );
+    let status;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      status = await invoke("status", { operationId: started.operationId });
+      if (status.observedExecutionSettled) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(status.observedExecutionSettled, true);
+    assert.equal(
+      operation().executionSettled,
+      false,
+      "even confirmed-exit status remains read-only",
+    );
+    revoked = true;
+    await assert.rejects(
+      invoke("execute", { environmentId, command: ["/usr/bin/true"] }),
+      /revoked/,
+    );
+    assert.equal(
+      operation().executionSettled,
+      false,
+      "observation cannot mutate without fresh execution authority",
+    );
+    revoked = false;
+    const afterExit = await invoke("execute", {
+      environmentId,
+      command: ["/usr/bin/true"],
+    });
+    assert.equal(afterExit.result.state, "exited");
+    assert.equal(
+      operation().executionSettled,
+      true,
+      "authorized admission confirms natural settlement without an owner API",
+    );
+    assert.equal(
+      operation().result.state,
+      "unknown",
+      "settlement never rewrites command outcome",
+    );
+    assert.equal(
+      starts,
+      2,
+      "only the two explicit Start requests launched helpers; no setup replay",
+    );
+  },
+);
+test(
   "prepared environment and owner inspection retain exact lifecycle, authority and process evidence",
   { skip: process.platform !== "darwin", concurrency: false, timeout: 3e4 },
   async (t) => {

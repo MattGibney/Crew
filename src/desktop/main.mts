@@ -487,6 +487,20 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (command.startsWith("setup.")) return host.setup.command(command, args);
   if (command === "environments.snapshot")
     return host.application.environmentOwnerApi.snapshot();
+  if (command === "environments.templates.snapshot")
+    return host.application.environmentOwnerApi.templates.snapshot();
+  if (command === "environments.templates.save")
+    return host.application.environmentOwnerApi.templates.save(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["save"]>[0],
+    );
+  if (command === "environments.templates.assign")
+    return host.application.environmentOwnerApi.templates.assign(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["assign"]>[0],
+    );
+  if (command === "environments.templates.inspect")
+    return host.application.environmentOwnerApi.templates.inspect(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["inspect"]>[0],
+    );
   if (command === "environments.projectFolder")
     return { directory: host.project.directory };
   if (command === "environments.prepareFolderAccess") {

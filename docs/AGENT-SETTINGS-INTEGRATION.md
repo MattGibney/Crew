@@ -98,6 +98,23 @@ connection or read credentials.
 Private screenshots and disposable fixture data stay outside Git. Root integration
 must wire the adapters above before combined native acceptance. Actual voice
 catalogue/call adoption, retained-project migration and real account display parity
-still require that combined application check. The environment-template selector
-will use #108's owner API when its shared contract is available; no duplicate
-template authority is introduced here.
+still require that combined application check.
+
+## Environment-template selector (#108)
+
+The agent identity/runtime step embeds the project catalogue selector. Root
+forwards `environments.templates.snapshot {}` to
+`composed.environmentOwnerApi.templates.snapshot()` and
+`environments.templates.assign <input>` to its canonical `.assign(input)`.
+`src/application/agent-template-contracts.mts` defines only the presentation subset
+of #115's existing catalogue snapshot and exact assignment input. Template
+definitions and assignments remain owned by that catalogue.
+
+Template assignment has a separate explicit **Save template** action in the
+editor. It is not part of the profile save transaction. Its selected immutable
+revision, existing pin, conflicts and unconfirmed save are retained honestly;
+Cancel restores the saved assignment. Loading/saving never inspect tools,
+prepare an environment or install packages. A new agent must first be saved,
+then reopened to receive a template. Pending template choices survive recent
+agent switching in bounded project-scoped memory, rather than being promised
+as a durable draft across app shutdown.
