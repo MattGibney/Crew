@@ -79,6 +79,14 @@ Individual agent Stop uses `broker.settlement(projectId, caller)` to inspect onl
 that exact project, agent and session. This observation remains available after
 session admission closes; it does not grant authority to execute new work.
 
+Immediately before dispatch, the executor rechecks the prepared connection snapshot
+and reuses its scoped vault handle to validate the current credential revision.
+Rotation, deletion or refresh during preparation therefore returns proven
+non-execution instead of dispatching with cached old bytes. The vault orders its
+callback admission with credential mutation and releases that short lock before
+awaiting remote I/O. A callback admitted before a later rotation may still finish;
+credential replacement does not undo already admitted work.
+
 `GatewayCatalogue` is an observed schema projection. `refresh(connection)` performs discovery
 outside access transactions; `hasOperation` only consults that projection and cannot re-enter the
 access store. Executor listing updates the projection. Owner setup refreshes before presenting or
@@ -191,11 +199,12 @@ redaction, compact receipts, verified retries (two attempts), four-attempt ceili
 success during provider outage. Separate synthetic OAuth checks proved one locked refresh/CAS,
 stale binding rejection before credential reads and no replay after uncertain rotation.
 
-These checks used synthetic authorization/vault adapters, not #89's final store or genuine provider
-credentials. No broad test coverage/full regression suite, physical microphone, installed application,
-native Codex conversation, live Linear/Lunar mutation or personal service credential was used.
-Parent #86 must finish the integrated #88/#89 approval and same-native-thread result flow, once/session/
-persistent policy acceptance, actual isolation evidence, native/package lifecycle and real provider setup.
+The initial track checks above used synthetic authorization/vault adapters. The
+later real-store walkthrough below closes that composition gap. Current native
+and package evidence, together with remaining acceptance limits, is recorded in
+[the application composition](AGENT-UNIFIED-COMPOSITION.md#validation-boundary).
+No broad regression suite, live Linear/Lunar mutation or personal service
+credential was used in these gateway checks.
 
 ## Usability integration evidence — 22 October 2026
 
@@ -225,3 +234,12 @@ replacement uses the vault-created scoped handle. This closes the earlier synthe
 gap. The disposable provider and encryption backend do not establish OS safeStorage, native Codex
 isolation, live Linear authentication, Lunar compatibility or packaged lifecycle acceptance. Those
 remain separately owned native/provider checks. No personal tokens or live account were accessed.
+
+A later focused review reproduced stale-token dispatch after owner rotation during
+admission, plus a vault read of the old record racing a committed rotation. Final
+connection/handle validation and locked credential callback admission close both
+cases. Real-vault rotation, deletion and refresh checks now reject stale dispatch;
+a once grant remains retryable after proven non-execution and is consumed after
+the fresh-credential retry. The actual-store MCP/CLI and concurrent OAuth flows
+passed again with these changes. Already admitted callbacks may complete after a
+later rotation; the lock does not span remote I/O.

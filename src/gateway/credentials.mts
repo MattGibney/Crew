@@ -23,6 +23,34 @@ export class GatewayCredentials {
     private readonly privateDirectory: string,
   ) {}
 
+  private async currentConnection(connection: ServiceConnection) {
+    const current = await this.connections.get(connection.id);
+    if (
+      !current ||
+      current.revision !== connection.revision ||
+      current.projectId !== connection.projectId ||
+      current.service !== connection.service ||
+      canonicalJson(current.authentication) !==
+        canonicalJson(connection.authentication) ||
+      canonicalJson(current.transport) !== canonicalJson(connection.transport) ||
+      canonicalJson(current.identity) !== canonicalJson(connection.identity)
+    )
+      throw new Error("Connection changed during credential preparation.");
+    return current;
+  }
+
+  /** Preparation can await discovery or admission. Revalidate the exact
+   * connection and borrowed vault revision immediately before dispatch. An
+   * owner rotation/removal or a concurrent refresh must invalidate old bytes. */
+  async withCurrent<T>(
+    connection: ServiceConnection,
+    handle: TrustedCredentialHandle | null,
+    action: () => Promise<T>,
+  ): Promise<T> {
+    await this.currentConnection(connection);
+    return handle ? handle.use(action) : action();
+  }
+
   async use<T>(
     connection: ServiceConnection,
     config: ExecutorConfiguration,
@@ -33,21 +61,15 @@ export class GatewayCredentials {
     ) => Promise<T>,
   ): Promise<T> {
     const sanitizer = new Sanitizer();
-    if (connection.authentication.method === "none")
+    if (connection.authentication.method === "none") {
+      await this.currentConnection(connection);
       return action(null, null, sanitizer);
+    }
     if (connection.authentication.method === "oauth")
       await this.refresh(connection, config);
-    const current = await this.connections.get(connection.id);
-    if (
-      !current ||
-      current.revision !== connection.revision ||
-      current.projectId !== connection.projectId ||
-      current.authentication.method !== connection.authentication.method ||
-      canonicalJson(current.transport) !==
-        canonicalJson(connection.transport) ||
-      canonicalJson(current.identity) !== canonicalJson(connection.identity)
-    )
-      throw new Error("Connection changed during credential preparation.");
+    const current = await this.currentConnection(connection);
+    if (current.authentication.method === "none")
+      throw new Error("Connection authentication changed.");
     return this.vault.withCredential(
       current.authentication.credentialRef,
       (handle) =>
