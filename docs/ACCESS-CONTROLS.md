@@ -177,14 +177,28 @@ The owner completed Crew browser sign-in, confirmed through native account readb
 no personal authentication was copied. #88 separately recorded a subscription model
 call reaching an allowed synthetic MCP operation and a broker-denied forbidden operation.
 
-The integrated signed-in typed walkthrough now covers manager/worker creation, Start,
+The integrated signed-in typed walkthrough covers manager/worker creation, Start,
 steering, queued input, an approved disposable project command and reporting; both jobs
-completed. Isolated unsigned packaged launch/Quit/reopen preserved the same chats and
-sign-in. Real access/broker components separately passed once/session/persistent grant
-and revocation checks against synthetic authenticated endpoints, with credentials confined
-to trusted executor use. These do not establish live third-party configuration or operation.
-Changed-profile compaction and help/private-work/preparation checks remain in progress;
-real voice handoff execution still lacks authoritative public-history provenance. See
+completed. The isolated unsigned package at `5273d9d` also verified private scheduled
+prompt/commentary/final content remained hidden before and after reopen. Both started,
+idle agents saved fresh continuation notes and reported Ready; normal Quit exited 0,
+all recorded native processes were absent and the presentation port closed. Reopen
+retained the same agents, chats, notes and completed jobs, with both sessions stopped.
+Help delivery and response succeeded after the manager recovered the canonical help
+request ID from worker history; the later incoming-message-ID fix needs its own app recheck.
+
+Real access/broker components separately passed once/session/persistent grant and
+revocation checks against synthetic authenticated endpoints, with credentials confined
+to trusted executor use. The integrated credential-race fix also rejects stale handles
+after completed rotation/deletion/refresh, with admitted callbacks allowed to finish.
+These do not establish live third-party configuration or operation.
+
+Changed-profile compaction passed the real Foundation/native-adapter flow with a
+synthetic permission resolver; its desktop application check remains separate. Digest
+invalidation is integrated as `9aba24a`; this checkpoint does not assert desktop
+failure-path acceptance. Bounded
+live voice display passed synthetic checks but awaits its app check, and retained voice
+coding turns still lack authoritative public-history provenance. See
 [the current composition checkpoint](AGENT-UNIFIED-COMPOSITION.md#validation-boundary)
 and [native policy evidence](ACCESS-ISOLATION.md) for the exact limits.
 
