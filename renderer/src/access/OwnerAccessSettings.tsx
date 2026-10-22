@@ -9,6 +9,7 @@ import { ApprovalGrantsPanel } from "./ApprovalGrantsPanel";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { OwnerRequired } from "./shared";
+import type { WorkspacePermissionChoice } from "./types";
 
 /** #95 mounts this with the authenticated owner's live snapshot. It owns no store
  * or authority; refresh props in place so in-progress panel drafts remain intact. */
@@ -17,11 +18,13 @@ export function OwnerAccessSettings({
   isOwner,
   onCommand,
   onNotify,
+  workspaces = [],
 }: {
   snapshot: AccessOwnerView;
   isOwner: boolean;
   onCommand(name: string, args: unknown): Promise<unknown>;
   onNotify(message: string): void;
+  workspaces?: readonly WorkspacePermissionChoice[];
 }) {
   const [selectedId, setSelectedId] = useState("");
   if (!isOwner) return <OwnerRequired />;
@@ -77,6 +80,15 @@ export function OwnerAccessSettings({
         capabilities={snapshot.capabilities}
         crewCapabilities={snapshot.crewCapabilities}
         agents={snapshot.agents}
+        workspaces={workspaces.filter(
+          (workspace) =>
+            workspace.policy.projectId === snapshot.projectId &&
+            snapshot.environmentPolicies.some(
+              (policy) =>
+                policy.id === workspace.policy.id &&
+                policy.revision === workspace.policy.revision,
+            ),
+        )}
         onSave={(change) => command("saveGroup", change)}
       />
       <section className="py-6">

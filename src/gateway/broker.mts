@@ -14,7 +14,7 @@ import type {
   ServiceExecutor,
 } from "../agents/contracts.mjs";
 import type { GatewayConnections } from "./config.mjs";
-import { canonicalJson, normalizeArguments } from "./json.mjs";
+import { canonicalJson, jsonObject, normalizeArguments } from "./json.mjs";
 import { GatewayStore, operationKey } from "./store.mjs";
 import type { StoredOperation } from "./store.mjs";
 
@@ -576,9 +576,35 @@ export class DurableOperationBroker implements OperationBroker {
       return this.cancelUnsent(key, latest);
     });
   }
-  async settlement(projectId: string): Promise<BrokerSettlement> {
+  async settlement(
+    projectId: string,
+    caller?: CallerContext,
+  ): Promise<BrokerSettlement> {
+    const identity = (value: unknown): value is string =>
+      typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= 512 &&
+      !/[\u0000-\u001f\u007f]/.test(value);
+    if (!identity(projectId))
+      throw new Error("Invalid settlement project identity.");
+    let scope: CallerContext | undefined;
+    if (caller !== undefined) {
+      const value = jsonObject(caller);
+      if (
+        Object.keys(value).length !== 3 ||
+        value.projectId !== projectId ||
+        !identity(value.agentId) ||
+        !identity(value.sessionId)
+      )
+        throw new Error("Invalid settlement caller identity.");
+      scope = { projectId, agentId: value.agentId, sessionId: value.sessionId };
+    }
+    // Stop/recovery can inspect an already closed session. Validate the exact
+    // identity here without requiring that session to admit new execution.
     const records = (await this.options.store.all()).filter(
-      (record) => record.receipt.caller.projectId === projectId,
+      (record) =>
+        record.receipt.caller.projectId === projectId &&
+        (!scope || sameCaller(record.receipt.caller, scope)),
     );
     const live = new Set(this.options.activeExecutorInvocations?.() ?? []);
     return {

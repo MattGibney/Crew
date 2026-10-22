@@ -283,3 +283,8 @@ before tool dispatch. End session authority at Stop/Restart, retaining receipts.
 single project store. `AgentEnvironmentService` implements explicit authorized
 actions and preserves request identity; absent integration reports unavailable.
 Neither missing environments nor dirty/completed work gates communication.
+
+Later #88 implementation amendments add exact preparation generation/freshness,
+compact authoritative realtime promotion metadata and original provisioning creator
+identity. See [Unified application composition](AGENT-UNIFIED-COMPOSITION.md) for
+the implemented host boundaries and the separate native/provider acceptance limits.

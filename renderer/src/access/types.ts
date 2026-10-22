@@ -2,6 +2,7 @@ import type {
   Agent,
   AuthorizationService,
   CrewPermission,
+  EnvironmentPolicy,
   PermissionGroup,
   Revision,
   ServiceConnection,
@@ -26,6 +27,13 @@ export type GroupSave = {
 /** Labels come from the current Crew catalogue; actions retain canonical types. */
 export type CrewPermissionChoice = {
   action: CrewPermission["action"];
+  label: string;
+  description: string;
+};
+
+/** Owner-approved workspace metadata; never a user-entered policy identity. */
+export type WorkspacePermissionChoice = {
+  policy: EnvironmentPolicy;
   label: string;
   description: string;
 };

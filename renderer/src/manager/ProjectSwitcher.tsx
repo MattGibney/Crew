@@ -1,12 +1,18 @@
-import type { WorkspaceSnapshot } from "../contracts/setup.js";
+import type { WorkspaceSnapshot, WorkspaceBridge } from "../contracts/setup.js";
 import { errorText } from "./api.js";
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Plus, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 
-export function ProjectSwitcher({ fallbackName }: { fallbackName?: string }) {
-  const bridge = window.crewWorkspaces;
+export function ProjectSwitcher({
+  fallbackName,
+  bridge: suppliedBridge,
+}: {
+  fallbackName?: string;
+  bridge?: Pick<WorkspaceBridge, "snapshot" | "subscribe" | "select" | "add">;
+}) {
+  const bridge = suppliedBridge ?? window.crewWorkspaces;
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
