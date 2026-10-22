@@ -41,7 +41,7 @@ export interface LinearCatalog {
   teamsStatus?: string;
   projectsStatus?: string;
 }
-type Rpc = (
+export type Rpc = (
   method: string,
   params?: Record<string, unknown>,
 ) => Promise<unknown>;
@@ -198,7 +198,7 @@ export async function verifyReference({
     );
   }
 }
-async function withClient<T>(
+export async function withClient<T>(
   options: SetupConnectionOptions,
   body: (rpc: Rpc) => Promise<T>,
 ): Promise<T> {
@@ -212,11 +212,11 @@ async function withClient<T>(
     await client.close();
   }
 }
-function payload(result: unknown): Record<string, unknown> | unknown[] {
+export function payload(result: unknown): Record<string, unknown> | unknown[] {
   const value = record(result);
   if (value.isError)
     throw new Error(
-      "Linear could not read this workspace. Reconnect Linear in Codex and retry.",
+      "The connected tool could not read this resource. Reconnect in Codex and retry.",
     );
   if (value.structuredContent && typeof value.structuredContent === "object")
     return Array.isArray(value.structuredContent)
@@ -230,7 +230,7 @@ function payload(result: unknown): Record<string, unknown> | unknown[] {
       } catch {}
     }
   throw new Error(
-    "Linear returned an unrecognized response. Retry or connect it later.",
+    "The connected tool returned an unrecognized response. Retry or disable the integration.",
   );
 }
 function records(

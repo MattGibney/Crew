@@ -12,7 +12,6 @@ import {
 } from "./setup-service.mjs";
 import {
   discoverRepository,
-  discoverLinearOptions,
   verifyReference,
   type LinearCatalog,
   type RepositoryOption,
@@ -93,18 +92,14 @@ export async function analyzeAndApplyProject({
       signal: signal,
     }),
     discoverRepository({ path: discoveryRoot, env }),
-    discoverLinearOptions({
-      executable: runtime.executable,
-      root,
-      env,
-      signal: signal,
-    }).catch((error) => ({
-      status: "unavailable",
-      detail: safe(error),
+    Promise.resolve({
+      status: "not-configured",
+      detail:
+        "External tracking is optional. Choose integrations after selecting your project.",
       teams: [],
       projects: [],
       truncated: false,
-    })),
+    }),
   ]);
   await assertSetupInputs(inputs);
   if (signal.aborted)

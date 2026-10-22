@@ -1,3 +1,4 @@
+import { trackingPreferences } from "../shared/tracking.mjs";
 import type { RawConfig, RawProject } from "../config/contracts.mjs";
 import type { LinearCatalog, RepositoryOption } from "./project-options.mjs";
 // AI-010: evidence-backed defaults; no model, filesystem writes or external mutations.
@@ -95,11 +96,13 @@ export function composeProjectSetup({
         r === existingRepository ? configuredRepository : structuredClone(r),
       )
     : [configuredRepository];
-  config.project.linear = linearDefaults(
-    linear,
-    sameFolder ? current.project.linear : {},
-    config.project.name,
-  );
+  // Discovery never opts a new folder into an external account or inherits another mapping.
+  config.project.linear = sameFolder
+    ? structuredClone(current.project.linear)
+    : { teamId: null, teamKey: null, projectId: null };
+  config.project.tracking = sameFolder
+    ? structuredClone(trackingPreferences(current.project))
+    : { providers: [], preferred: "none", githubRepository: null };
   return config;
 }
 export function assertLinearSelection(

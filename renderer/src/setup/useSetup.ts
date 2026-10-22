@@ -1,3 +1,4 @@
+import { trackingPreferences } from "../../../src/shared/tracking.mjs";
 import { errorText } from "../manager/api.js";
 import type {
   SetupBridge,
@@ -138,6 +139,11 @@ export function useSetup(api: SetupBridge = requireBridge()) {
       accept(await api[method]());
     });
 
+  function verifyGitHub(repository: string) {
+    return run("Verify GitHub repository", async () => {
+      accept(await api.githubOptions(repository));
+    });
+  }
   function chooseEnvironment(value: string) {
     environmentRef.current = value;
     setEnvironment(value);
@@ -156,13 +162,19 @@ export function useSetup(api: SetupBridge = requireBridge()) {
     return save("Save Linear team", edit("project.linear", linear));
   }
   function deferLinear() {
+    const tracking = trackingPreferences(draftRef.current!.project);
+    const providers = tracking.providers.filter(
+      (provider) => provider !== "linear",
+    );
     return save(
-      "Connect Linear later",
-      edit("project.linear", {
-        ...draftRef.current!.project.linear,
-        teamId: "",
-        teamKey: "",
-        projectId: "",
+      "Disable Linear",
+      edit("project.tracking", {
+        ...tracking,
+        providers,
+        preferred:
+          tracking.preferred === "linear"
+            ? providers[0] || "none"
+            : tracking.preferred,
       }),
     );
   }
@@ -189,6 +201,21 @@ export function useSetup(api: SetupBridge = requireBridge()) {
         };
         if (index === null) repositories.push(repo);
         else repositories[index] = repo;
+        if (
+          index !== null &&
+          ("path" in previous ? previous.path : null) !== choice.path
+        ) {
+          edit("project.tracking", {
+            providers: [],
+            preferred: "none",
+            githubRepository: null,
+          });
+          edit("project.linear", {
+            teamId: null,
+            teamKey: null,
+            projectId: null,
+          });
+        }
         const next = edit("project.repositories", repositories);
         if (index !== null) return persist(next);
         return { notice: "Folder added. Save changes to keep it." };
@@ -208,7 +235,7 @@ export function useSetup(api: SetupBridge = requireBridge()) {
     return run("Set up project", async () => {
       setAnalyzing(true);
       setDiscoveryProgress(
-        "Reading project files and finding branches and Linear teams. Your saved setup stays available until the new settings are validated.",
+        "Reading project files and finding branches and optional tracking choices. Your saved setup stays available until the new settings are validated.",
       );
       try {
         const next = await api.discover();
@@ -262,6 +289,7 @@ export function useSetup(api: SetupBridge = requireBridge()) {
     check,
     chooseTeam,
     deferLinear,
+    verifyGitHub,
     chooseBranch,
     pickRepository,
     discover,

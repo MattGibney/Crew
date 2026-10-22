@@ -25,6 +25,7 @@ const editablePaths = new Set([
   "project.mode",
   "project.worker.maxConcurrent",
   "project.repositories",
+  "project.tracking",
   "project.linear",
   "project.linear.teamId",
   "project.linear.teamKey",

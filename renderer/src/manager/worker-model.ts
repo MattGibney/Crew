@@ -37,6 +37,7 @@ export const currentAssignment = (task: WorkerTask) =>
   ) || {
     id: "initial",
     ticket: task.ticket,
+    workLink: task.workLink,
     brief: task.brief,
     status: task.status,
     result: task.result,

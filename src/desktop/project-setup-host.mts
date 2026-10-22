@@ -1,3 +1,8 @@
+import {
+  discoverGitHubOptions,
+  type GitHubCatalog,
+} from "./github-options.mjs";
+import { trackingPreferences } from "../shared/tracking.mjs";
 import { createProjectSetupWindow } from "./project-setup-window.mjs";
 import { analyzeAndApplyProject } from "./project-discovery-apply.mjs";
 import { app, dialog, shell, systemPreferences } from "electron";
@@ -74,6 +79,7 @@ export function createProjectSetup(context: SetupHostContext) {
     discoveryRoot: string | undefined,
     discoveryProposal: unknown,
     discoverySummary: unknown,
+    githubOptions: GitHubCatalog | undefined,
     linearOptions: LinearCatalog | undefined,
     discoveryPhase: string | undefined;
   const repositoryOptions = new Map<string, RepositoryOption>();
@@ -91,7 +97,7 @@ export function createProjectSetup(context: SetupHostContext) {
   function projectDraftStatus(issues: string[] = []) {
     const detail = issues.map((issue) =>
       /teamId|teamKey/.test(issue)
-        ? "Choose your Linear team, or connect it later before assigning ticketed work."
+        ? "Tracking is optional. Configure the selected provider, switch it or disable tracking."
         : /baseRef/.test(issue)
           ? "Choose a starting branch for each project folder."
           : /path/.test(issue)
@@ -194,6 +200,7 @@ export function createProjectSetup(context: SetupHostContext) {
       workerEnvironmentOptions,
       discoverySummary,
       linearOptions,
+      githubOptions,
       repositoryOptions: [...repositoryOptions.values()],
       discoveryRoot,
       checks: setupChecks,
@@ -445,6 +452,20 @@ export function createProjectSetup(context: SetupHostContext) {
           discoveryPhase = undefined;
         }
       }
+      if (action === "github-options") {
+        const runtime = await checkRuntimeForSetup();
+        if (!runtime.executable) throw Error(runtime.checks.codex.detail);
+        const inputs = await setupInputsKey(configPath);
+        const next = await discoverGitHubOptions({
+          executable: runtime.executable,
+          root,
+          env,
+          repository: typeof input === "string" ? input : undefined,
+        });
+        await assertSetupInputs(inputs);
+        githubOptions = next;
+        return setupSnapshot();
+      }
       if (action === "linear-options") {
         const runtime = await checkRuntimeForSetup();
         if (!runtime.executable) throw Error(runtime.checks.codex.detail);
@@ -502,7 +523,10 @@ export function createProjectSetup(context: SetupHostContext) {
           );
           assertWorkerEnvironmentSelection(inputConfig, options);
         }
-        assertLinearSelection(inputConfig.project.linear, linearOptions);
+        if (
+          trackingPreferences(inputConfig.project).providers.includes("linear")
+        )
+          assertLinearSelection(inputConfig.project.linear, linearOptions);
         await host.validateCandidate(id, configPath, inputConfig);
         const options = {
           root,

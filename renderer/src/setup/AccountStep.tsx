@@ -55,9 +55,9 @@ export function AccountStep({ setup }: SetupProps) {
           Connected tools
         </h3>
         <Hint>
-          Crew uses your connected Linear tools to find teams and projects in
-          the next step. Before work starts, the manager checks the actual
-          ticket.
+          External tracking is optional. Connect Linear or GitHub through Codex
+          when you want linked issue context. Neither account is required for
+          local assignments.
         </Hint>
         <ToolsCheck snapshot={snapshot} />
       </section>

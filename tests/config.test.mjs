@@ -49,7 +49,7 @@ test('unconfigured Set1 is a reviewable template, cannot become dispatch-ready b
   const value = await fixture.load({ configPath: join(fixture.root, 'config/set1.example.json') });
   assert.equal(value.project.id, 'set1'); assert.equal(value.project.readiness.ready, false);
   assert.equal(value.project.repositories[0].path, null); assert.equal(value.project.linear.teamId, null);
-  assert.equal(value.project.readiness.issues.length, 4); assert.match(value.project.context, /DRAFT/);
+  assert.equal(value.project.readiness.issues.length, 2); assert.match(value.project.context, /DRAFT/);
 });
 test('repository readiness validates actual Git path and explicit commit ref', async () => {
   const fixture = await setup(), repository = join(fixture.root, 'business');

@@ -1,3 +1,4 @@
+import { validateTracking } from "../shared/tracking.mjs";
 import { runtimeRoot } from "../shared/paths.mjs";
 import { fail, object, text } from "./validation.mjs";
 import { validateWorkerEnvironment } from "./environment.mjs";
@@ -226,6 +227,7 @@ export async function loadAppConfig({
       "repositories",
       "context",
       "linear",
+      "tracking",
       "prompts",
       "worker",
     ],
@@ -278,6 +280,7 @@ export async function loadAppConfig({
           "runtime.dataDir must be outside the configured business repositories so execution state is not written into a worktree.",
         );
     }
+  validateTracking(value);
   object(value.linear, ["teamId", "projectId", "teamKey"], "project.linear");
   for (const key of ["teamId", "projectId", "teamKey"] as const)
     text(value.linear[key], `project.linear.${key}`, {
@@ -366,12 +369,6 @@ export async function loadAppConfig({
   if (value.mode === "repository") {
     if (!repositories.length)
       issues.push("Configure at least one project repository.");
-    if (!value.linear.teamId)
-      issues.push(
-        "Confirm and set project.linear.teamId from the intended Linear workspace.",
-      );
-    if (!value.linear.teamKey)
-      issues.push("Confirm and set project.linear.teamKey.");
     for (const repository of repositories) {
       if (!repository.path)
         issues.push(`Set the local path for repository "${repository.id}".`);

@@ -1,3 +1,5 @@
+import { WorkerReference } from "./worker/WorkerReference.js";
+import { workReference } from "../../../src/shared/tracking.mjs";
 import type { ManagerProps, WorkerTask } from "../contracts/manager.js";
 
 import { useEffect, useState } from "react";
@@ -69,22 +71,22 @@ function WorkerCard({
     attention = pendingAttention(task);
   const assignment = currentAssignment(task),
     queued = queuedAssignments(task).length;
+  const reference = workReference(assignment, task.id);
   const title = assignment.brief?.trim().split("\n")[0] || "Worker task";
   return (
     <article data-worker-id={task.id} className="h-full min-w-0">
       <button
         type="button"
         onClick={() => onSelect(task.id)}
-        aria-label={`Open worker ${assignment.ticket || task.id}: ${title}`}
+        aria-label={`Open worker ${reference.context}: ${title}`}
         className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5">
-          <span
-            className="truncate text-[11px] font-medium text-muted-foreground"
-            title={task.id}
-          >
-            {assignment.ticket || task.id}
-          </span>
+          <WorkerReference
+            assignment={assignment}
+            fallback={task.id}
+            className="text-[11px] font-medium text-muted-foreground"
+          />
           <WorkerStatus task={task} />
         </div>
         <h3

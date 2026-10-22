@@ -1,3 +1,4 @@
+import { workReference } from "../../../../src/shared/tracking.mjs";
 import type { WorkerTask } from "../../contracts/manager.js";
 import { workerWorkflow, queuedAssignments } from "../worker-model.js";
 import { Markdown } from "./WorkerExchange.js";
@@ -99,7 +100,8 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
                 >
                   <summary className="cursor-pointer">
                     <span className="font-medium">
-                      {item.ticket} · {item.brief?.trim().split("\n")[0]}
+                      {workReference(item, "Local assignment").context} ·{" "}
+                      {item.brief?.trim().split("\n")[0]}
                     </span>
                     <span className="ml-2 text-muted-foreground">
                       {item.status === "completed" ? "Turn ended" : item.status}

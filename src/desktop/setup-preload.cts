@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld(
     chooseDiscovery: () => call("choose-discovery"),
     discover: () => call("discover"),
     cancelDiscovery: () => call("cancel-discovery"),
+    githubOptions: (repository?: string) => call("github-options", repository),
     linearOptions: (teamId: string | null) => call("linear-options", teamId),
     repositoryOptions: (path: string) => call("repository-options", path),
     chooseRepository: () => call("choose-repository"),

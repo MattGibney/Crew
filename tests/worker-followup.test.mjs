@@ -83,6 +83,18 @@ test('explicit lifecycle resume after completion creates fresh work while preser
  const request={taskId:f.taskId,actionId:'resume-completed-action',action:'resume',expectedRunId:completed.runId};await f.manager('worker_action',request);const resumed=await f.active(completed.runId);assert.equal(resumed.threadId,research.threadId);assert.equal(resumed.worktree,research.worktree);assert.equal(resumed.result,null,'old completed result is not projected as current execution');assert.notEqual(resumed.currentAssignmentId,completed.currentAssignmentId);assert.equal(store.currentAssignment(resumed).brief,store.currentAssignment(completed).brief);assert.deepEqual(resumed.assignments.slice(0,2),prior);await f.manager('worker_action',request);assert.equal((await f.read()).assignments.length,3,'exact lifecycle retry cannot create another assignment');await f.finish(resumed,{message:'Explicit resumed work complete.'});const final=await f.completed();assert.deepEqual(final.assignments.slice(0,2),prior);assert.equal(final.assignments.at(-1).result.message,'Explicit resumed work complete.');assert.equal(final.result.message,'Explicit resumed work complete.');assert.equal(await readFile(path.join(final.worktree,'implementation.txt'),'utf8'),'Retained implementation.\n');
 });
 
+test('GitHub-only and local assignments preserve linkage through actual dispatch, follow-up, preference change and controller restart',async t=>{
+ const f=await fixture(t),link={provider:'github',repository:'MattGibney/Crew',number:78,url:'https://github.com/MattGibney/Crew/issues/78'};
+ f.project.tracking={providers:['github'],preferred:'github',githubRepository:'MattGibney/Crew'};f.project.linear={teamId:null,teamKey:null,projectId:null};
+ await f.manager('submit_task',{requestId:f.taskId,repositoryId:'repo',brief:'Bounded synthetic issue-context assignment for Crew #78; no external writes.',workLink:link});
+ const first=await f.active();assert.deepEqual(first.workLink,link);assert.deepEqual(JSON.parse(await readFile(path.join(first.runDir,'config.json'),'utf8')).workLink,link);
+ await f.finish(first,{message:'Bounded linked fixture completed.'});const completed=await f.completed();await f.restart();
+ f.project.tracking={providers:['linear','github'],preferred:'linear',githubRepository:'MattGibney/Crew'};
+ await f.followup('github-linked-followup','Retain the selected GitHub issue after preference change.');const resumed=await f.active(first.runId);assert.deepEqual(store.currentAssignment(resumed).workLink,link);assert.deepEqual(JSON.parse(await readFile(path.join(resumed.runDir,'config.json'),'utf8')).workLink,link);assert.equal(resumed.threadId,first.threadId);assert.equal(resumed.worktree,first.worktree);
+ await f.finish(resumed,{message:'Linked continuation complete.'});await f.completed();
+ await f.followup('explicit-local-followup','Local assignment without an external tracker.',null,{workLink:null});const local=await f.active(resumed.runId);assert.equal(store.currentAssignment(local).workLink,null);assert.equal(store.currentAssignment(local).ticket,'');await f.finish(local,{message:'Local assignment complete.'});const final=await f.completed();assert.deepEqual(final.workLink,link);assert.equal(final.assignments[0].result.message,completed.result.message);
+});
+
 async function fixture(t){
  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'crew-followup-'))),repo=path.join(dir,'repo'),state=path.join(dir,'state'),gates=path.join(dir,'gates'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');
  await mkdir(repo);await mkdir(gates);

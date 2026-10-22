@@ -340,3 +340,17 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Authorized Settings hotfix release (GitHub #74)
 
 - The human explicitly authorized merging PR75 and publishing the next signed stable patch, 0.17.3 after 0.17.2. This supersedes GH74's original PR-only boundary for this named delivery; no unrelated features or PR54. Verify real saved null lifecycle phases through packaged Settings open/save/reload/relaunch. Preserve strict validation of populated project commands and direct hooks; never reset valid user configuration to hide renderer contract drift. Preserve existing tags, profiles/auth/workers, physical microphone and business-service boundaries; manual native continuity does not prove automatic portable-root updater relaunch.
+
+## Optional tracking (GitHub #78)
+
+- External tracking is optional. Keep none/Linear/GitHub/both choices separate from local runtime readiness and native execution. Existing Linear configurations retain preference; new folders default to none and cannot inherit unrelated mappings. Never fabricate a ticket for a local task or require an external read before local dispatch.
+- Preserve canonical provider/repository/issue identity per task/assignment and immutable legacy labels/history. Preference changes affect new work only. Missing access, advertised capability, configured mapping and verified object reads are different evidence. GitHub issues, PR reviews and head-bound check evidence use normal connected tools, never a bespoke Crew client or automatic backlog/mutation engine. Exact custom prompt replacements and active snapshots remain unchanged.
+- #78 authorizes local implementation/validation only in this worktree. No external issue/review writes, commits, push, PR, merge, release, installed-profile or physical microphone changes are authorized.
+
+- Build and regression validation must be serialized: `npm run build` removes/recreates `runtime/`, so packaging or another build during running runtime tests can cause false module/prompt ENOENT failures. Finish builds first, then test the stable exact runtime; fixture cleanup still owns all spawned processes.
+
+- GH-78 review: resolve absent legacy workLink only for comparisons/inheritance; explicit null remains intentionally local. Accept exact pre-upgrade URL retries without rewriting records/history, and compare canonical link fields independently of object key order. Follow-up inheritance uses the current assignment, not a potentially different original task link. New setup inputs must honor BusyContext; validate delayed saves through actual UI actions so accepted input cannot be silently overwritten.
+
+- Disposable tests launched from Crew must not inherit the live `CREW_GLOBAL_CAPACITY_DIR`. Clear it or supply a fixture-owned ledger explicitly; otherwise synthetic servers can register temporary state in the live ledger and contend with real workers. Never clear live claims/registrations to make a test pass.
+
+- GH-78 worker-card clarification: show GitHub #number at the card top left before truncating repository context. Infer legacy display only from actual canonical issue URLs, preserve explicit null/local intent, and keep repository identity in title/accessibility so equal numbers remain distinguishable. Display derivation never rewrites retained task/assignment records.

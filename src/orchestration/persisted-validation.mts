@@ -1,3 +1,4 @@
+import { validateWorkLink } from "../shared/tracking.mjs";
 import { ID } from "./task-fields.mjs";
 import { parseTaskRecord } from "./task-validation.mjs";
 import { validateAssignments } from "./assignments.mjs";
@@ -27,6 +28,7 @@ export const REPORT_KINDS = new Set([
 ]);
 export function validatePersistedTask(input: unknown, expectedId: string) {
   const task = parseTaskRecord(input, expectedId);
+  validateWorkLink(task.workLink);
   if (
     !task ||
     typeof task !== "object" ||
@@ -34,8 +36,7 @@ export function validatePersistedTask(input: unknown, expectedId: string) {
     task.id !== expectedId ||
     !ID.test(task.id) ||
     typeof task.ticket !== "string" ||
-    !task.ticket.trim() ||
-    task.ticket.length > 120 ||
+    task.ticket.length > 500 ||
     typeof task.brief !== "string" ||
     !task.brief.trim() ||
     task.brief.length > 12000 ||

@@ -1,3 +1,4 @@
+import { workLinkSchema, validateWorkLink, type WorkLink } from "../shared/tracking.mjs";
 import { Ajv } from "ajv";
 import type {
   Project,
@@ -19,6 +20,7 @@ export interface WorkerConfiguration {
   sandbox?: string;
   timeoutMs?: number;
   ticket: string;
+  workLink?: WorkLink | null;
   brief: string;
   project: Project | null;
   environment?: EnvironmentEvidence | null;
@@ -51,6 +53,7 @@ const configShape = ajv.compile<WorkerConfiguration>({
     sandbox: { type: "string" },
     timeoutMs: { type: "number" },
     ticket: { type: "string" },
+    workLink: workLinkSchema,
     brief: { type: "string" },
     project: { type: ["object", "null"] },
     environment: { type: ["object", "null"] },
@@ -61,6 +64,7 @@ const configShape = ajv.compile<WorkerConfiguration>({
 export function parseWorkerConfiguration(value: unknown): WorkerConfiguration {
   if (!configShape(value))
     throw new Error("Malformed worker runner configuration.");
+  validateWorkLink(value.workLink);
   return value;
 }
 export interface NativeThread {
