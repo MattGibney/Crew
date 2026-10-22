@@ -1,0 +1,1299 @@
+import { randomUUID } from "node:crypto";
+import type {
+  Agent,
+  AgentContent,
+  AgentLifecycle,
+  AgentMessage,
+  AgentRuntimeAdapter,
+  AuthorizationService,
+  BrokerInvocation,
+  CallerContext,
+  ConfigurationSnapshot,
+  DeliveryResult,
+  ExecutionReservation,
+  JsonValue,
+  ModelAccess,
+  OperationBroker,
+  PreparationReadiness,
+  RuntimeAccessProvider,
+  RuntimeBinding,
+  RuntimeError,
+  RuntimeEvent,
+  RuntimeResult,
+  RuntimeStartResult,
+} from "./contracts.mjs";
+import {
+  FoundationRecords,
+  type FoundationPrincipal,
+  type FoundationReferences,
+} from "./records.mjs";
+import { FoundationStore, messageIntentFingerprint } from "./store.mjs";
+
+const now = () => new Date().toISOString();
+const error = (code: RuntimeError["code"], message: string): RuntimeError => ({
+  code,
+  message,
+});
+const failed = (message: string): RuntimeResult<never> => ({
+  state: "failed",
+  error: error("runtime_error", message),
+});
+
+export interface FoundationOptions {
+  store: FoundationStore;
+  runtime: AgentRuntimeAdapter;
+  access: RuntimeAccessProvider;
+  authorization: AuthorizationService;
+  broker: OperationBroker;
+  references: FoundationReferences;
+  configuration(agent: Agent): Promise<{
+    configuration: ConfigurationSnapshot;
+    modelAccess: ModelAccess;
+  }>;
+  /** Trusted native control channel, never a fabricated user message. If absent,
+   * preparation is visible but blocked until a genuine request is supplied. */
+  requestPreparation?: (
+    binding: RuntimeBinding,
+    reason: ExecutionReservation["reason"],
+  ) => Promise<void>;
+  /** Must be wired to #89's fresh admission predicate before reservation is usable.
+   * Existing admitted operations are then checked through broker.settlement. */
+  admissionUsesFoundationBarrier: boolean;
+}
+
+export interface SendInput {
+  id?: string;
+  recipientAgentId: string;
+  jobId: string | null;
+  replyToMessageId: string | null;
+  kind?: AgentMessage["kind"];
+  content: AgentContent[];
+  deliveryMode: AgentMessage["deliveryMode"];
+}
+
+/** One project and one durable writer. UI and authenticated tool transports use
+ * this same service; there is no second manager/worker runtime. */
+export class AgentFoundation implements AgentLifecycle {
+  readonly records: FoundationRecords;
+  readonly store: FoundationStore;
+  private readonly options: FoundationOptions;
+  private readonly locks = new Map<string, Promise<unknown>>();
+  private readonly listeners = new Set<(event: RuntimeEvent) => void>();
+  private readonly observers = new Map<string, AsyncIterator<RuntimeEvent>>();
+  private readonly terminalTurns = new Set<string>();
+  private disposed = false;
+
+  constructor(options: FoundationOptions) {
+    this.options = options;
+    this.store = options.store;
+    this.records = new FoundationRecords(
+      options.store,
+      options.authorization,
+      options.references,
+    );
+  }
+
+  subscribeRuntime(listener: (event: RuntimeEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private serial<T>(id: string, run: () => Promise<T>): Promise<T> {
+    const work = (this.locks.get(id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(run);
+    this.locks.set(id, work);
+    void work
+      .finally(() => {
+        if (this.locks.get(id) === work) this.locks.delete(id);
+      })
+      .catch(() => {});
+    return work;
+  }
+
+  private agent(id: string): Agent {
+    const agent = this.store.snapshot().agents.find((entry) => entry.id === id);
+    if (!agent) throw new Error("Agent does not exist in this project.");
+    return agent;
+  }
+
+  private binding(agent: Agent): RuntimeBinding | null {
+    const sessionId = agent.runtime.session.sessionId;
+    return sessionId && agent.runtime.threadId
+      ? {
+          projectId: agent.projectId,
+          agentId: agent.id,
+          sessionId,
+          threadId: agent.runtime.threadId,
+        }
+      : null;
+  }
+
+  /** #89 must consult these fresh facts on admission, never a copied session flag. */
+  executionAllowed(caller: CallerContext): boolean {
+    const state = this.store.snapshot();
+    const agent = state.agents.find((entry) => entry.id === caller.agentId);
+    return (
+      !this.disposed &&
+      !state.reservation &&
+      caller.projectId === state.projectId &&
+      agent?.runtime.session.sessionId === caller.sessionId &&
+      agent.runtime.session.observedState === "started" &&
+      agent.runtime.session.desiredState === "started"
+    );
+  }
+
+  /** Called once before accepting requests after controller recovery. Old logical
+   * sessions/grants are closed, not adopted without native ownership proof. */
+  async recover(): Promise<void> {
+    for (const agent of this.store.snapshot().agents) {
+      const session = agent.runtime.session;
+      if (!session.sessionId || session.observedState === "stopped") continue;
+      await this.options.authorization.closeSession(
+        {
+          projectId: agent.projectId,
+          agentId: agent.id,
+          sessionId: session.sessionId,
+        },
+        "unverifiable_recovery",
+      );
+      await this.store.update((state) => {
+        const current = state.agents.find((entry) => entry.id === agent.id)!;
+        current.runtime.session.observedState = "unknown";
+        current.runtime.session.lastError = error(
+          "disconnected",
+          "Previous native ownership is unverified. Resolve the retained session before explicitly starting again.",
+        );
+        for (const message of state.messages) {
+          if (
+            message.recipientAgentId !== agent.id ||
+            message.delivery.state !== "sending"
+          )
+            continue;
+          message.delivery.state = "uncertain";
+          const attempt = message.delivery.attempts.at(-1);
+          if (attempt) attempt.outcome = "uncertain";
+        }
+        for (const approval of state.nativeApprovals) {
+          if (approval.agentId === agent.id && approval.state === "responding")
+            approval.state = "uncertain";
+        }
+      });
+    }
+  }
+
+  async start(agentId: string): Promise<RuntimeStartResult> {
+    const result = await this.serial(agentId, () => this.startLocked(agentId));
+    if (result.state === "acknowledged")
+      void this.pump(agentId).catch(() => {});
+    return result;
+  }
+
+  /** Authenticated agent entry; recheck authority after waiting for the target's
+   * lifecycle lock so queued commands cannot outlive their caller's permission. */
+  async lifecycle(
+    principal: FoundationPrincipal,
+    agentId: string,
+    action: "start" | "stop" | "restart",
+  ): Promise<RuntimeStartResult | RuntimeResult<null>> {
+    const result = await this.serial(agentId, async () => {
+      await this.records.authorize(principal, `sessions.${action}`, {
+        type: "agent",
+        agentId,
+      });
+      if (action === "start") return this.startLocked(agentId);
+      const stopped = await this.stopLocked(
+        agentId,
+        action === "restart" ? "restart" : "stop",
+      );
+      if (action === "stop" || stopped.state === "failed") return stopped;
+      return this.startLocked(agentId);
+    });
+    if (result.state === "acknowledged" && action !== "stop")
+      void this.pump(agentId).catch(() => {});
+    return result;
+  }
+
+  private async startLocked(agentId: string): Promise<RuntimeStartResult> {
+    const agent = this.agent(agentId);
+    const previous = agent.runtime.session;
+    const reject = (
+      code: RuntimeError["code"],
+      message: string,
+    ): RuntimeStartResult => ({
+      state: "failed",
+      error: error(code, message),
+      retainedThreadId: agent.runtime.threadId,
+    });
+    if (this.disposed || this.store.snapshot().reservation)
+      return reject(
+        "cancelled",
+        "Execution is reserved for an explicit lifecycle action.",
+      );
+    if (agent.archivedAt)
+      return reject(
+        "cancelled",
+        "Unarchive the agent before starting its session.",
+      );
+    const existing = this.binding(agent);
+    if (
+      previous.observedState === "started" &&
+      existing &&
+      previous.appliedConfiguration
+    ) {
+      return {
+        state: "acknowledged",
+        value: {
+          binding: existing,
+          appliedConfiguration: previous.appliedConfiguration,
+          observedAt: previous.lastObservedAt ?? now(),
+        },
+      };
+    }
+    if (["starting", "stopping", "unknown"].includes(previous.observedState))
+      return reject(
+        "disconnected",
+        "The retained native session must be settled before another Start.",
+      );
+    if (previous.sessionId && previous.observedState !== "stopped")
+      return reject(
+        "disconnected",
+        "Stop and settle the previous session before another Start.",
+      );
+    const caller: CallerContext = {
+      projectId: agent.projectId,
+      agentId,
+      sessionId: randomUUID(),
+    };
+    await this.store.update((state) => {
+      if (state.reservation) throw new Error("Execution is reserved.");
+      const current = state.agents.find((entry) => entry.id === agentId)!;
+      current.runtime.session = {
+        ...current.runtime.session,
+        sessionId: caller.sessionId,
+        desiredState: "started",
+        observedState: "starting",
+        activeTurnId: null,
+        startedAt: null,
+        lastObservedAt: now(),
+        lastError: null,
+      };
+      state.nativeStartAttempts.push({
+        agentId,
+        sessionId: caller.sessionId,
+        dispatched: false,
+      });
+    });
+    let result: RuntimeStartResult;
+    let nativeAttempted = false;
+    try {
+      const loaded = await this.options.configuration(agent);
+      if (
+        loaded.configuration.profile.revision !== agent.profile.revision ||
+        loaded.modelAccess.id !== agent.runtime.modelAccessId
+      )
+        throw new Error("Configuration identity changed during preparation.");
+      const isolation = await this.options.access.prepare(
+        caller,
+        loaded.configuration,
+      );
+      if (isolation.state === "blocked") {
+        result = {
+          state: "failed",
+          error: error("isolation_blocked", isolation.reason),
+          retainedThreadId: agent.runtime.threadId,
+        };
+      } else if (
+        isolation.runtimeAccess.caller.projectId !== caller.projectId ||
+        isolation.runtimeAccess.caller.agentId !== caller.agentId ||
+        isolation.runtimeAccess.caller.sessionId !== caller.sessionId
+      ) {
+        result = {
+          state: "failed",
+          error: error(
+            "identity_mismatch",
+            "Runtime access is bound to a different caller.",
+          ),
+          retainedThreadId: agent.runtime.threadId,
+        };
+      } else {
+        await this.store.update((state) => {
+          if (state.reservation) throw new Error("Execution is reserved.");
+          state.nativeStartAttempts.find(
+            (entry) => entry.sessionId === caller.sessionId,
+          )!.dispatched = true;
+        });
+        nativeAttempted = true;
+        result = await this.options.runtime.start({
+          caller,
+          thread: agent.runtime.threadId
+            ? { mode: "resume", threadId: agent.runtime.threadId }
+            : { mode: "create" },
+          modelAccess: loaded.modelAccess,
+          configuration: loaded.configuration,
+          access: isolation.runtimeAccess,
+        });
+      }
+    } catch {
+      // An exception may follow native creation; never assume non-execution.
+      result = {
+        state: nativeAttempted ? "uncertain" : "failed",
+        error: error(
+          nativeAttempted ? "runtime_error" : "configuration_rejected",
+          "Session preparation failed without a native acknowledgement.",
+        ),
+        retainedThreadId: agent.runtime.threadId,
+      };
+    }
+    if (result.state === "acknowledged") {
+      const bound = result.value.binding;
+      if (
+        bound.agentId !== agentId ||
+        bound.projectId !== caller.projectId ||
+        bound.sessionId !== caller.sessionId ||
+        (agent.runtime.threadId && bound.threadId !== agent.runtime.threadId)
+      ) {
+        result = {
+          state: "uncertain",
+          retainedThreadId: agent.runtime.threadId,
+          error: error(
+            "identity_mismatch",
+            "Native acknowledgement did not match this session and retained thread.",
+          ),
+        };
+      }
+    }
+    const final = result;
+    await this.store.update((state) => {
+      const current = state.agents.find((entry) => entry.id === agentId)!;
+      if (final.state === "acknowledged") {
+        current.runtime.threadId = final.value.binding.threadId;
+        Object.assign(current.runtime.session, {
+          observedState: "started",
+          appliedConfiguration: final.value.appliedConfiguration,
+          startedAt: now(),
+          lastObservedAt: final.value.observedAt,
+          lastError: null,
+        });
+      } else {
+        current.runtime.threadId =
+          final.retainedThreadId ?? current.runtime.threadId;
+        current.runtime.session.observedState =
+          final.state === "uncertain" ? "unknown" : "error";
+        current.runtime.session.lastError = final.error;
+      }
+    });
+    if (final.state === "acknowledged") this.observe(final.value.binding);
+    else
+      await this.options.authorization.closeSession(
+        caller,
+        "unverifiable_recovery",
+      );
+    return final;
+  }
+
+  async stop(agentId: string): Promise<RuntimeResult<null>> {
+    return this.serial(agentId, () => this.stopLocked(agentId, "stop"));
+  }
+
+  private async stopLocked(
+    agentId: string,
+    reason: "stop" | "restart",
+  ): Promise<RuntimeResult<null>> {
+    const agent = this.agent(agentId);
+    if (agent.runtime.session.observedState === "stopped")
+      return { state: "acknowledged", value: null };
+    const sessionId = agent.runtime.session.sessionId;
+    if (!sessionId) return failed("Native session identity is unavailable.");
+    const caller = { projectId: agent.projectId, agentId, sessionId };
+    await this.store.update((state) => {
+      const current = state.agents.find((entry) => entry.id === agentId)!;
+      current.runtime.session.desiredState = "stopped";
+      current.runtime.session.observedState = "stopping";
+    });
+    try {
+      await this.options.authorization.closeSession(caller, reason);
+      const settlement = await this.options.broker.settlement(agent.projectId);
+      if (
+        settlement.inFlightInvocationIds.length ||
+        settlement.uncertainInvocationIds.length
+      )
+        throw new Error(
+          "Broker operations must settle before stopping this session.",
+        );
+      const binding = this.binding(agent);
+      if (
+        !binding &&
+        !this.store
+          .snapshot()
+          .nativeStartAttempts.some(
+            (entry) =>
+              entry.agentId === agentId &&
+              entry.sessionId === sessionId &&
+              !entry.dispatched,
+          )
+      )
+        throw new Error(
+          "Native thread identity is unavailable; resolve preparation before stopping.",
+        );
+      const stopped = binding
+        ? await this.options.runtime.stop(binding)
+        : { state: "acknowledged" as const, value: { stoppedAt: now() } };
+      if (stopped.state !== "acknowledged") {
+        await this.sessionError(agentId, stopped.error);
+        return stopped;
+      }
+      await this.options.access.release(caller);
+      await this.store.update((state) => {
+        const current = state.agents.find((entry) => entry.id === agentId)!;
+        Object.assign(current.runtime.session, {
+          observedState: "stopped",
+          activeTurnId: null,
+          lastObservedAt: stopped.value.stoppedAt,
+          lastError: null,
+        });
+        // The exact stopped native session can no longer accept these requests.
+        state.nativeApprovals = state.nativeApprovals.filter(
+          (entry) => entry.sessionId !== sessionId,
+        );
+      });
+      this.observers.delete(sessionId);
+      return { state: "acknowledged", value: null };
+    } catch {
+      const failure = error(
+        "runtime_error",
+        "Stop is not confirmed. Native ownership or broker execution still needs settlement; no resources were deleted.",
+      );
+      await this.sessionError(agentId, failure);
+      return { state: "failed", error: failure };
+    }
+  }
+
+  async restart(agentId: string): Promise<RuntimeStartResult> {
+    const result = await this.serial(
+      agentId,
+      async (): Promise<RuntimeStartResult> => {
+        const stopped = await this.stopLocked(agentId, "restart");
+        if (stopped.state === "failed")
+          return {
+            state: "failed",
+            error: stopped.error,
+            retainedThreadId: this.agent(agentId).runtime.threadId,
+          };
+        return this.startLocked(agentId);
+      },
+    );
+    if (result.state === "acknowledged")
+      void this.pump(agentId).catch(() => {});
+    return result;
+  }
+
+  private async sessionError(
+    agentId: string,
+    failure: RuntimeError,
+  ): Promise<void> {
+    await this.store.update((state) => {
+      const session = state.agents.find((entry) => entry.id === agentId)!
+        .runtime.session;
+      session.observedState = "error";
+      session.lastError = failure;
+      session.lastObservedAt = now();
+    });
+  }
+
+  async send(
+    principal: FoundationPrincipal,
+    input: SendInput,
+  ): Promise<AgentMessage | { messageId: string }> {
+    const actor = await this.records.authorize(principal, "messages.send", {
+      type: "agent",
+      agentId: input.recipientAgentId,
+    });
+    if (
+      !["queue", "steer"].includes(input.deliveryMode) ||
+      !Array.isArray(input.content) ||
+      input.content.length < 1 ||
+      JSON.stringify(input.content).length > 256_000
+    )
+      throw new Error(
+        "A bounded message and explicit queue or steer mode are required.",
+      );
+    for (const block of input.content) {
+      if (!block || !["text", "image", "file", "data"].includes(block.type))
+        throw new Error("Unsupported message content.");
+      if (block.type === "text" && typeof block.text !== "string")
+        throw new Error("Text content is required.");
+      if (
+        (block.type === "image" || block.type === "file") &&
+        (typeof block.fileRef !== "string" || !block.fileRef)
+      )
+        throw new Error("An authorized artifact reference is required.");
+    }
+    const messageId = input.id ?? randomUUID();
+    const fingerprint = messageIntentFingerprint({
+      ...input,
+      sender: actor,
+      kind: input.kind ?? "message",
+    });
+    const message = await this.store.update((state) => {
+      if (
+        principal.type === "agent" &&
+        !state.agents.some(
+          (entry) =>
+            entry.id === principal.caller.agentId &&
+            entry.runtime.session.sessionId === principal.caller.sessionId &&
+            entry.runtime.session.observedState === "started" &&
+            entry.runtime.session.desiredState === "started",
+        )
+      )
+        throw new Error(
+          "Calling session closed before the intent could be saved.",
+        );
+      if (!state.agents.some((entry) => entry.id === input.recipientAgentId))
+        throw new Error("Recipient does not exist in this project.");
+      if (input.jobId && !state.jobs.some((entry) => entry.id === input.jobId))
+        throw new Error("Unknown job.");
+      if (
+        input.replyToMessageId &&
+        !state.messages.some((entry) => entry.id === input.replyToMessageId) &&
+        !state.receipts.some(
+          (entry) => entry.messageId === input.replyToMessageId,
+        ) &&
+        !state.helpRequests.some(
+          (entry) => entry.messageId === input.replyToMessageId,
+        )
+      )
+        throw new Error("Unknown reply reference.");
+      if (
+        Object.hasOwn(state.intentFingerprints, messageId) &&
+        state.intentFingerprints[messageId] !== fingerprint
+      )
+        throw new Error("Message ID is already bound to different intent.");
+      const existing = state.messages.find((entry) => entry.id === messageId);
+      if (existing) {
+        if (
+          JSON.stringify(existing.sender) !== JSON.stringify(actor) ||
+          existing.recipientAgentId !== input.recipientAgentId ||
+          JSON.stringify(existing.content) !== JSON.stringify(input.content) ||
+          existing.deliveryMode !== input.deliveryMode ||
+          existing.jobId !== input.jobId ||
+          existing.replyToMessageId !== input.replyToMessageId
+        )
+          throw new Error("Message ID is already bound to different intent.");
+        return existing;
+      }
+      const receipt = state.receipts.find(
+        (entry) => entry.messageId === messageId,
+      );
+      if (receipt) {
+        if (
+          JSON.stringify(receipt.sender) !== JSON.stringify(actor) ||
+          receipt.recipientAgentId !== input.recipientAgentId
+        )
+          throw new Error("Message ID belongs to another sender or recipient.");
+        return { messageId };
+      }
+      const created: AgentMessage = {
+        id: messageId,
+        projectId: state.projectId,
+        sender: actor,
+        recipientAgentId: input.recipientAgentId,
+        jobId: input.jobId,
+        replyToMessageId: input.replyToMessageId,
+        kind: input.kind ?? "message",
+        content: input.content,
+        deliveryMode: input.deliveryMode,
+        createdAt: now(),
+        delivery: {
+          state: "queued",
+          attempts: [],
+          runtimeMessageRef: null,
+          deliveredAt: null,
+          error: null,
+        },
+      };
+      state.messages.push(created);
+      Object.defineProperty(state.intentFingerprints, messageId, {
+        value: fingerprint,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+      return created;
+    });
+    void this.pump(input.recipientAgentId).catch(() => {});
+    return message;
+  }
+
+  /** Called after any tool operation which may have persisted a help/reply intent. */
+  async flush(): Promise<void> {
+    await Promise.all(
+      this.store.snapshot().agents.map((agent) => this.pump(agent.id)),
+    );
+  }
+
+  async pump(agentId: string): Promise<void> {
+    return this.serial(agentId, async () => {
+      for (;;) {
+        const agent = this.agent(agentId);
+        const binding = this.binding(agent);
+        if (!binding || !this.executionAllowed(binding)) return;
+        const pending = this.store
+          .snapshot()
+          .messages.filter((entry) => entry.recipientAgentId === agentId);
+        // Unknown native acceptance may itself have started a turn. Reconcile first.
+        if (
+          pending.some((entry) =>
+            ["sending", "uncertain"].includes(entry.delivery.state),
+          )
+        )
+          return;
+        const active = agent.runtime.session.activeTurnId;
+        const message = pending.find(
+          (entry) =>
+            entry.delivery.state === "queued" &&
+            (!active || entry.deliveryMode === "steer"),
+        );
+        if (!message) return;
+        if (active && !this.options.runtime.capabilities.activeTurnSteering) {
+          await this.store.update((state) => {
+            const current = state.messages.find(
+              (entry) => entry.id === message.id,
+            )!;
+            current.delivery.state = "failed";
+            current.delivery.error = error(
+              "unsupported",
+              "This native runtime does not support active-turn steering.",
+            );
+          });
+          continue;
+        }
+        const attemptId = randomUUID();
+        await this.store.update((state) => {
+          if (state.reservation) throw new Error("Execution is reserved.");
+          const current = state.messages.find(
+            (entry) => entry.id === message.id,
+          )!;
+          current.delivery.state = "sending";
+          current.delivery.attempts.push({
+            id: attemptId,
+            sessionId: binding.sessionId,
+            threadId: binding.threadId,
+            turnId: active,
+            attemptedAt: now(),
+            outcome: "pending",
+            runtimeMessageRef: null,
+          });
+        });
+        let result: DeliveryResult;
+        try {
+          result = await this.options.runtime.deliver({
+            binding,
+            attemptId,
+            message,
+            expectedTurnId: active,
+          });
+        } catch {
+          result = {
+            state: "uncertain",
+            error: error(
+              "disconnected",
+              "Native acceptance is unknown. Reconcile this message before another attempt.",
+            ),
+          };
+        }
+        await this.settleDelivery(message.id, attemptId, result);
+        if (result.state !== "acknowledged") return;
+      }
+    });
+  }
+
+  private async settleDelivery(
+    messageId: string,
+    attemptId: string,
+    result: DeliveryResult,
+  ): Promise<void> {
+    await this.store.update((state) => {
+      const message = state.messages.find((entry) => entry.id === messageId);
+      const attempt = message?.delivery.attempts.find(
+        (entry) => entry.id === attemptId,
+      );
+      if (!message || !attempt || attempt.outcome === "acknowledged") return;
+      if (result.state === "acknowledged") {
+        attempt.outcome = "acknowledged";
+        attempt.turnId = result.turnId;
+        state.receipts.push({
+          messageId,
+          sender: message.sender,
+          recipientAgentId: message.recipientAgentId,
+          jobId: message.jobId,
+          sessionId: attempt.sessionId,
+          threadId: attempt.threadId,
+          attemptId,
+          runtimeMessageRef: result.runtimeMessageRef,
+          acknowledgedAt: result.acknowledgedAt,
+        });
+        state.messages = state.messages.filter(
+          (entry) => entry.id !== messageId,
+        );
+        const session = state.agents.find(
+          (entry) => entry.id === message.recipientAgentId,
+        )!.runtime.session;
+        if (
+          session.sessionId === attempt.sessionId &&
+          !this.terminalTurns.has(`${attempt.sessionId}:${result.turnId}`)
+        )
+          session.activeTurnId = result.turnId;
+      } else {
+        attempt.outcome = result.state;
+        message.delivery.state =
+          result.state === "uncertain" ? "uncertain" : "failed";
+        message.delivery.error = result.error;
+      }
+    });
+  }
+
+  async reconcileMessage(
+    principal: FoundationPrincipal,
+    messageId: string,
+  ): Promise<DeliveryResult> {
+    const message = this.store
+      .snapshot()
+      .messages.find((entry) => entry.id === messageId);
+    if (!message) throw new Error("No unresolved message with that identity.");
+    await this.records.authorize(principal, "messages.send", {
+      type: "agent",
+      agentId: message.recipientAgentId,
+    });
+    const result = await this.serial(message.recipientAgentId, async () => {
+      const current = this.store
+        .snapshot()
+        .messages.find((entry) => entry.id === messageId)!;
+      const attempt = current.delivery.attempts.at(-1);
+      if (!attempt) throw new Error("Message has not been attempted.");
+      const result = await this.options.runtime.reconcileDelivery(
+        {
+          projectId: message.projectId,
+          agentId: message.recipientAgentId,
+          sessionId: attempt.sessionId,
+          threadId: attempt.threadId,
+        },
+        attempt,
+      );
+      await this.settleDelivery(messageId, attempt.id, result);
+      return result;
+    });
+    void this.pump(message.recipientAgentId).catch(() => {});
+    return result;
+  }
+
+  async retryMessage(
+    principal: FoundationPrincipal,
+    messageId: string,
+  ): Promise<void> {
+    const message = this.store
+      .snapshot()
+      .messages.find((entry) => entry.id === messageId);
+    if (!message) throw new Error("Unknown pending message.");
+    await this.records.authorize(principal, "messages.send", {
+      type: "agent",
+      agentId: message.recipientAgentId,
+    });
+    await this.store.update((state) => {
+      const current = state.messages.find((entry) => entry.id === messageId)!;
+      if (
+        current.delivery.state !== "failed" ||
+        current.delivery.attempts.at(-1)?.outcome !== "not_sent"
+      )
+        throw new Error("Only proven non-delivery may be retried.");
+      current.delivery.state = "queued";
+      current.delivery.error = null;
+    });
+    await this.pump(message.recipientAgentId);
+  }
+
+  private observe(binding: RuntimeBinding): void {
+    const iterator = this.options.runtime
+      .observe(binding)
+      [Symbol.asyncIterator]();
+    this.observers.set(binding.sessionId, iterator);
+    void (async () => {
+      try {
+        while (
+          !this.disposed &&
+          this.observers.get(binding.sessionId) === iterator
+        ) {
+          const event = await iterator.next();
+          if (event.done) {
+            const current = this.agent(binding.agentId);
+            if (
+              current.runtime.session.sessionId === binding.sessionId &&
+              current.runtime.session.observedState === "started"
+            )
+              await this.sessionError(
+                binding.agentId,
+                error(
+                  "disconnected",
+                  "Native observation ended without a confirmed stop.",
+                ),
+              );
+            break;
+          }
+          if (this.disposed) break;
+          await this.onRuntimeEvent(event.value);
+        }
+      } catch {
+        if (this.disposed || this.observers.get(binding.sessionId) !== iterator)
+          return;
+        const current = this.agent(binding.agentId);
+        if (
+          current.runtime.session.sessionId === binding.sessionId &&
+          current.runtime.session.observedState !== "stopped"
+        )
+          await this.sessionError(
+            binding.agentId,
+            error(
+              "disconnected",
+              "Native event observation ended without confirmed settlement.",
+            ),
+          );
+      }
+    })().catch(() => {
+      /* A failed/closed durable writer must not be bypassed. */
+    });
+  }
+
+  private async onRuntimeEvent(event: RuntimeEvent): Promise<void> {
+    if (this.disposed) return;
+    const current = this.agent(event.binding.agentId);
+    if (
+      current.projectId !== event.binding.projectId ||
+      current.runtime.session.sessionId !== event.binding.sessionId ||
+      current.runtime.threadId !== event.binding.threadId ||
+      current.runtime.session.observedState === "stopped"
+    )
+      return;
+    if (event.kind === "turn" && event.state !== "started")
+      this.terminalTurns.add(`${event.binding.sessionId}:${event.turnId}`);
+    if (event.kind === "delivery") {
+      const message = this.store
+        .snapshot()
+        .messages.find(
+          (entry) =>
+            entry.recipientAgentId === event.binding.agentId &&
+            entry.delivery.attempts.some(
+              (attempt) =>
+                attempt.id === event.attemptId &&
+                attempt.sessionId === event.binding.sessionId &&
+                attempt.threadId === event.binding.threadId,
+            ),
+        );
+      if (message)
+        await this.settleDelivery(message.id, event.attemptId, event.result);
+    } else if (
+      event.kind === "history" &&
+      event.item.kind === "approval" &&
+      event.item.metadata.state === "resolved" &&
+      typeof event.item.metadata.approvalId === "string"
+    ) {
+      await this.store.update((state) => {
+        state.nativeApprovals = state.nativeApprovals.filter(
+          (entry) =>
+            !(
+              entry.sessionId === event.binding.sessionId &&
+              entry.threadId === event.binding.threadId &&
+              entry.approvalId === event.item.metadata.approvalId
+            ),
+        );
+      });
+    } else if (event.kind !== "history") {
+      await this.store.update((state) => {
+        const session = state.agents.find(
+          (entry) => entry.id === event.binding.agentId,
+        )!.runtime.session;
+        session.lastObservedAt = event.observedAt;
+        if (event.kind === "turn") {
+          if (
+            event.state === "started" &&
+            !this.terminalTurns.has(
+              `${event.binding.sessionId}:${event.turnId}`,
+            )
+          ) {
+            if (session.activeTurnId && session.activeTurnId !== event.turnId) {
+              session.observedState = "unknown";
+              session.lastError = error(
+                "identity_mismatch",
+                "Native observation reported conflicting active turns; reconcile before further delivery.",
+              );
+            } else session.activeTurnId = event.turnId;
+          } else if (session.activeTurnId === event.turnId)
+            session.activeTurnId = null;
+        } else if (
+          event.kind === "connection" &&
+          event.state === "disconnected" &&
+          session.observedState !== "stopping"
+        ) {
+          session.observedState = "unknown";
+          session.lastError =
+            event.error ??
+            error(
+              "disconnected",
+              "Native connection ended without a confirmed stop.",
+            );
+        } else if (
+          event.kind === "native_approval" &&
+          !state.nativeApprovals.some(
+            (entry) =>
+              entry.sessionId === event.binding.sessionId &&
+              entry.approvalId === event.approvalId,
+          )
+        ) {
+          state.nativeApprovals.push({
+            agentId: event.binding.agentId,
+            sessionId: event.binding.sessionId,
+            threadId: event.binding.threadId,
+            approvalId: event.approvalId,
+            turnId: event.turnId,
+            request: event.request,
+            state: "pending",
+          });
+        }
+      });
+    }
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        /* display subscribers do not own delivery */
+      }
+    }
+    if (
+      (event.kind === "turn" && event.state !== "started") ||
+      event.kind === "delivery"
+    )
+      void this.pump(event.binding.agentId).catch(() => {});
+  }
+
+  async history(
+    principal: FoundationPrincipal,
+    agentId: string,
+    cursor?: string,
+  ) {
+    await this.records.authorize(principal, "history.read", {
+      type: "agent",
+      agentId,
+    });
+    const binding = this.binding(this.agent(agentId));
+    if (!binding) return failed("This agent has no native thread yet.");
+    return this.options.runtime.readHistory(binding, cursor);
+  }
+
+  async respondToNativeApproval(
+    principal: FoundationPrincipal,
+    agentId: string,
+    approvalId: string,
+    response: JsonValue,
+  ): Promise<RuntimeResult<null>> {
+    // Native turn/start can await an approval before acknowledging delivery. Keep
+    // this lane separate from send/lifecycle RPC waits; atomic state admission below
+    // orders it against Stop, while duplicate responses share this request lock.
+    return this.serial(`approval:${agentId}:${approvalId}`, () =>
+      this.respondToNativeApprovalLocked(
+        principal,
+        agentId,
+        approvalId,
+        response,
+      ),
+    );
+  }
+
+  private async respondToNativeApprovalLocked(
+    principal: FoundationPrincipal,
+    agentId: string,
+    approvalId: string,
+    response: JsonValue,
+  ): Promise<RuntimeResult<null>> {
+    if (
+      principal.type !== "owner" ||
+      principal.userId !== this.store.snapshot().ownerUserId
+    )
+      throw new Error("Native approvals require the human owner.");
+    const agent = this.agent(agentId);
+    const binding = this.binding(agent);
+    if (!binding)
+      return failed("Native approval has no retained session binding.");
+    const draining =
+      response !== null &&
+      typeof response === "object" &&
+      !Array.isArray(response) &&
+      (response.decision === "decline" || response.decision === "cancel");
+    await this.store.update((state) => {
+      const session = state.agents.find((entry) => entry.id === agentId)!
+        .runtime.session;
+      if (
+        session.sessionId !== binding.sessionId ||
+        session.observedState === "stopped"
+      )
+        throw new Error("Native approval is no longer current.");
+      if (
+        !draining &&
+        (state.reservation ||
+          session.observedState !== "started" ||
+          session.desiredState !== "started")
+      )
+        throw new Error(
+          "Positive approval is held while the session is stopping or unavailable.",
+        );
+      const approval = state.nativeApprovals.find(
+        (entry) =>
+          entry.agentId === agentId &&
+          entry.sessionId === binding.sessionId &&
+          entry.approvalId === approvalId,
+      );
+      if (!approval || approval.state !== "pending")
+        throw new Error(
+          "Approval is missing or its previous response is uncertain.",
+        );
+      approval.state = "responding";
+    });
+    let result: RuntimeResult<null>;
+    try {
+      result = await this.options.runtime.respondToNativeApproval(
+        binding,
+        approvalId,
+        response,
+      );
+    } catch {
+      result = failed("Native approval response delivery is unknown.");
+    }
+    const delivered = result.state === "acknowledged";
+    await this.store.update((state) => {
+      if (delivered)
+        state.nativeApprovals = state.nativeApprovals.filter(
+          (entry) =>
+            !(
+              entry.sessionId === binding.sessionId &&
+              entry.approvalId === approvalId
+            ),
+        );
+      else {
+        const approval = state.nativeApprovals.find(
+          (entry) =>
+            entry.sessionId === binding.sessionId &&
+            entry.approvalId === approvalId,
+        );
+        if (approval) approval.state = "uncertain";
+      }
+    });
+    return result;
+  }
+
+  async invoke(principal: FoundationPrincipal, invocation: BrokerInvocation) {
+    if (
+      principal.type !== "agent" ||
+      principal.caller.agentId !== invocation.caller.agentId ||
+      principal.caller.projectId !== invocation.caller.projectId ||
+      principal.caller.sessionId !== invocation.caller.sessionId ||
+      !this.executionAllowed(principal.caller)
+    )
+      throw new Error("A live authenticated calling session is required.");
+    return this.options.broker.invoke(invocation);
+  }
+
+  async prepare(
+    projectId: string,
+    reason: ExecutionReservation["reason"],
+  ): Promise<PreparationReadiness[]> {
+    if (
+      projectId !== this.store.snapshot().projectId ||
+      !["quit", "restart", "update"].includes(reason)
+    )
+      throw new Error("Invalid project preparation.");
+    const readiness = await this.store.update((state) => {
+      if (state.reservation) throw new Error("Execution is already reserved.");
+      const readiness: PreparationReadiness[] = state.agents
+        .filter(
+          (agent) =>
+            agent.runtime.session.sessionId &&
+            agent.runtime.session.observedState !== "stopped",
+        )
+        .map((agent) => ({
+          agentId: agent.id,
+          sessionId: agent.runtime.session.sessionId!,
+          state: this.options.requestPreparation ? "pending" : "blocked",
+          continuationSavedAt: null,
+          detail: this.options.requestPreparation
+            ? null
+            : "A native preparation control channel is not configured. Send a genuine preparation request and have the agent report readiness.",
+        }));
+      state.preparation = { reason, readiness, requestedAt: now() };
+      return readiness;
+    });
+    for (const item of readiness) {
+      const binding = this.binding(this.agent(item.agentId));
+      if (binding && this.options.requestPreparation) {
+        try {
+          await this.options.requestPreparation(binding, reason);
+        } catch {
+          await this.store.update((state) => {
+            const entry = state.preparation?.readiness.find(
+              (entry) => entry.sessionId === item.sessionId,
+            );
+            if (entry) {
+              entry.state = "blocked";
+              entry.detail =
+                "Preparation request could not be acknowledged. Ordinary messages remain available.";
+            }
+          });
+        }
+      }
+    }
+    return this.store.snapshot().preparation!.readiness;
+  }
+
+  async reportReadiness(
+    principal: FoundationPrincipal,
+    input: Pick<
+      PreparationReadiness,
+      "state" | "continuationSavedAt" | "detail"
+    >,
+  ): Promise<void> {
+    if (principal.type !== "agent" || !this.executionAllowed(principal.caller))
+      throw new Error(
+        "Readiness must come from the actual live agent session.",
+      );
+    if (
+      !["pending", "ready", "blocked"].includes(input.state) ||
+      (input.state === "ready" &&
+        (!input.continuationSavedAt ||
+          !Number.isFinite(Date.parse(input.continuationSavedAt))))
+    )
+      throw new Error("Ready requires an explicit continuation save time.");
+    await this.store.update((state) => {
+      const current = state.agents.find(
+        (agent) => agent.id === principal.caller.agentId,
+      );
+      if (
+        state.reservation ||
+        current?.runtime.session.sessionId !== principal.caller.sessionId ||
+        current.runtime.session.observedState !== "started" ||
+        current.runtime.session.desiredState !== "started"
+      )
+        throw new Error(
+          "Readiness session is no longer current or execution is reserved.",
+        );
+      const entry = state.preparation?.readiness.find(
+        (entry) =>
+          entry.agentId === principal.caller.agentId &&
+          entry.sessionId === principal.caller.sessionId,
+      );
+      if (!entry)
+        throw new Error("No preparation request for this exact session.");
+      Object.assign(entry, input);
+    });
+  }
+
+  async reserveExecution(
+    projectId: string,
+    reason: ExecutionReservation["reason"],
+  ): Promise<
+    | { state: "reserved"; reservation: ExecutionReservation }
+    | { state: "blocked"; reason: string }
+  > {
+    if (!this.options.admissionUsesFoundationBarrier)
+      return {
+        state: "blocked",
+        reason:
+          "Access/broker admission has not been wired to the foundation execution barrier.",
+      };
+    let reservation: ExecutionReservation | undefined;
+    try {
+      reservation = await this.store.update((state) => {
+        if (
+          projectId !== state.projectId ||
+          state.reservation ||
+          state.preparation?.reason !== reason
+        )
+          throw new Error("Prepare this project before reserving execution.");
+        for (const agent of state.agents) {
+          if (agent.runtime.session.observedState === "stopped") continue;
+          if (
+            agent.runtime.session.observedState !== "started" ||
+            agent.runtime.session.activeTurnId
+          )
+            throw new Error("Native execution is not settled.");
+          if (
+            !state.preparation.readiness.some(
+              (entry) =>
+                entry.agentId === agent.id &&
+                entry.sessionId === agent.runtime.session.sessionId &&
+                entry.state === "ready",
+            )
+          )
+            throw new Error(
+              "An agent has not reported ready for this session.",
+            );
+        }
+        if (
+          state.nativeApprovals.length ||
+          state.messages.some((entry) =>
+            ["sending", "uncertain"].includes(entry.delivery.state),
+          )
+        )
+          throw new Error(
+            "Native approvals or uncertain deliveries require resolution.",
+          );
+        const value: ExecutionReservation = {
+          id: randomUUID(),
+          projectId,
+          reason,
+          acquiredAt: now(),
+        };
+        state.reservation = value;
+        return value;
+      });
+      const settlement = await this.options.broker.settlement(projectId);
+      if (
+        settlement.inFlightInvocationIds.length ||
+        settlement.uncertainInvocationIds.length ||
+        settlement.pendingApprovalIds.length
+      ) {
+        await this.releaseExecution(reservation.id);
+        return {
+          state: "blocked",
+          reason: "Broker operations or access approvals require settlement.",
+        };
+      }
+      return { state: "reserved", reservation };
+    } catch {
+      if (
+        reservation &&
+        this.store.snapshot().reservation?.id === reservation.id
+      )
+        await this.releaseExecution(reservation.id);
+      return {
+        state: "blocked",
+        reason:
+          "Preparation, native execution, approvals or delivery evidence is not settled; inspect the retained state.",
+      };
+    }
+  }
+
+  async releaseExecution(reservationId: string): Promise<void> {
+    await this.store.update((state) => {
+      if (state.reservation?.id !== reservationId)
+        throw new Error("Reservation identity does not match.");
+      state.reservation = null;
+    });
+    void this.flush().catch(() => {});
+  }
+
+  async dispose(): Promise<void> {
+    // Transport shutdown is not native Stop, service cleanup or destructive archive.
+    this.disposed = true;
+    this.listeners.clear();
+    this.observers.clear();
+    await Promise.allSettled([...this.locks.values()]);
+    await this.store.close();
+  }
+}
