@@ -177,6 +177,7 @@ export function createUpdatePlan({
     current().progress = current().progress.slice(-120);
   }
   async function blocked(reason: string) {
+    await preparation?.cancel(current());
     current().phase = "blocked";
     current().reasons = [reason];
     progress(reason);
@@ -246,6 +247,21 @@ export function createUpdatePlan({
       shutdownConfirmed(task)
     );
   }
+  function verifiedHeldQueue(task: TaskActivity, target: PauseTarget): boolean {
+    const evidence = task.updateEvidence;
+    return (
+      target.originalRunId === null &&
+      ["queued", "resume_queued"].includes(target.originalStatus) &&
+      (task.runId || null) === null &&
+      !task.harnessStarted &&
+      !task.spawnIntentAt &&
+      !task.runDir &&
+      task.execution?.live !== true &&
+      evidence?.worker === "absent" &&
+      evidence.runtime === "absent" &&
+      evidence.hooks.length === 0
+    );
+  }
   async function drainPrepared() {
     const tasks = await viewTasks();
     addTargets(tasks);
@@ -280,13 +296,13 @@ export function createUpdatePlan({
       const participant = observed.participants.find(
         (p) => p.role === "worker" && p.taskId === target.taskId,
       );
-      if (!task || !participant) {
+      if (!task || (!participant && !verifiedHeldQueue(task, target))) {
         reasons.push(
           `Worker ${target.taskId} preparation evidence is unavailable.`,
         );
         continue;
       }
-      if (participant.required && participant.response?.state !== "ready") {
+      if (participant?.required && participant.response?.state !== "ready") {
         target.progress =
           participant.response?.state ||
           (participant.delivery.state === "acknowledged"
@@ -332,7 +348,7 @@ export function createUpdatePlan({
           `Worker ${target.taskId} preparation settlement could not be confirmed. Review its lifecycle evidence.`,
         );
       if (!action) {
-        target.progress = participant.required
+        target.progress = participant?.required
           ? "ready-awaiting-final-messages"
           : "settling-held-queue";
         await save();
@@ -840,8 +856,8 @@ export function createUpdatePlan({
           throw new Error(
             "Only canceled or blocked update work can return to manager review.",
           );
+        await preparation?.cancel(current());
         current().phase = "complete";
-        await preparation?.complete(current());
         current().reasons = [];
         progress(
           "User returned to work. Queued work may continue; paused workers remain paused for manager review. No resume requests were created.",

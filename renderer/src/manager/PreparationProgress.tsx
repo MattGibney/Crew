@@ -10,8 +10,22 @@ export function preparationPurpose(plan: UpdatePlan): "update" | "quit" {
 /** Only explicit participant evidence describes acknowledgement; workflow/native turn status never does. */
 export function participantAcknowledgement(
   participant: PreparationParticipant,
+  canceled = false,
 ): string {
-  if (!participant.required) return "Already stopped; no preparation needed";
+  if (!participant.required) return "No active agent preparation needed";
+  if (canceled) {
+    if (!participant.response)
+      return participant.delivery.state === "pending"
+        ? "Canceled before preparation delivery"
+        : "Canceled; no readiness reply recorded";
+    const previous = {
+      preparing: "Preparing",
+      ready: "Ready",
+      "needs-input": "Needs input",
+      blocked: "Blocked",
+    }[participant.response.state];
+    return `Last agent reply: ${previous}`;
+  }
   if (participant.response) {
     return {
       preparing: "Agent preparing",
@@ -75,6 +89,8 @@ export function preparationPhase(plan: UpdatePlan): string {
 
 export function PreparationProgress({ plan }: { plan: UpdatePlan }) {
   const participants = plan.preparation?.participants;
+  const canceled =
+    plan.phase === "canceled" || plan.preparation?.phase === "canceled";
   return (
     <section
       aria-label="Agent preparation progress"
@@ -85,8 +101,9 @@ export function PreparationProgress({ plan }: { plan: UpdatePlan }) {
         worktrees and changes.
       </p>
       <p>
-        Agents confirm when they are ready. Crew also waits for their final
-        messages and running work to finish.
+        {canceled
+          ? "This preparation request is canceled. Delivery and replies below are retained evidence; no new preparation request will be sent."
+          : "Agents confirm when they are ready. Crew also waits for their final messages and running work to finish."}
       </p>
       {participants && participants.length > 0 ? (
         <ul className="space-y-3" aria-label="Preparation participants">
@@ -108,13 +125,13 @@ export function PreparationProgress({ plan }: { plan: UpdatePlan }) {
                     needsInput ? "font-medium text-foreground" : undefined
                   }
                 >
-                  {participantAcknowledgement(participant)}
+                  {participantAcknowledgement(participant, canceled)}
                 </p>
                 {participant.required && (
                   <p>
                     {participant.settled === true
                       ? "Execution settled."
-                      : participant.response?.state === "ready"
+                      : !canceled && participant.response?.state === "ready"
                         ? "Waiting for final messages and execution to settle."
                         : "Execution settlement has not been confirmed."}
                   </p>
@@ -137,8 +154,10 @@ export function PreparationProgress({ plan }: { plan: UpdatePlan }) {
                       ? `${participant.projectName} project’s`
                       : "project’s"}{" "}
                     existing manager conversation to resolve native approvals.
-                    This panel does not answer them. For new directions or other
-                    decisions, cancel this request, then choose Return to work.
+                    This panel does not answer them.{" "}
+                    {canceled
+                      ? "For new directions or other decisions, choose Return to work."
+                      : "For new directions or other decisions, cancel this request, then choose Return to work."}{" "}
                     Prepared workers stay paused; Resume paused work is a
                     separate explicit action.
                   </p>

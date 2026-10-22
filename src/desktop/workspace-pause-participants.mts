@@ -7,6 +7,45 @@ import {
 } from "./workspace-pause-store.mjs";
 import type { UpdateProject, PausePlan } from "./update-contracts.mjs";
 
+import type { ObservedPreparation } from "../preparation/coordinator.mjs";
+const summaryText = (text: string, limit: number) =>
+  text.length > limit ? text.slice(0, limit - 1) + "…" : text;
+/** This is a presentation cache only. Each project's preparation.json retains
+ * full immutable request identity, response history and continuation evidence. */
+export function summarizeWorkspacePreparation(
+  value: ObservedPreparation,
+): ObservedPreparation {
+  return {
+    ...value,
+    participants: value.participants.map((participant) => {
+      const response = participant.response
+        ? {
+            responseId: participant.response.responseId,
+            state: participant.response.state,
+            note: summaryText(participant.response.note, 400),
+            at: participant.response.at,
+          }
+        : null;
+      return {
+        ...participant,
+        message: summaryText(participant.message, 240),
+        delivery: {
+          ...participant.delivery,
+          ...(participant.delivery.error === undefined
+            ? {}
+            : { error: summaryText(participant.delivery.error, 400) }),
+        },
+        response,
+        responses: response ? [response] : [],
+        settlementReason: summaryText(participant.settlementReason, 240),
+        ...(participant.taskLabel === undefined
+          ? {}
+          : { taskLabel: summaryText(participant.taskLabel, 160) }),
+      };
+    }),
+  };
+}
+
 export const approvedPauseChild = (
   child: PausePlan | null | undefined,
   target: string,
@@ -86,7 +125,9 @@ export function createWorkspacePauseParticipants({
   };
   function remember(project: SavedProject, child: PausePlan) {
     project.phase = child.phase;
-    project.preparation = child.preparation;
+    project.preparation = child.preparation
+      ? summarizeWorkspacePreparation(child.preparation)
+      : undefined;
     project.reasons = (child.reasons || [])
       .slice(0, 64)
       .map((reason) => reason.slice(0, 1000));

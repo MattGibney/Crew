@@ -141,3 +141,18 @@ test('Quit shares all-project preparation but reopening preserves held continuat
  for(const child of f.children.values())child.phase='canceled';const reopened=await f.make('1.0.0');await reopened.recover();assert.equal(reopened.status().phase,'canceled');assert.equal(reopened.status().purpose,'quit');assert.equal(f.paused,true);assert.equal(f.calls.some(call=>call.endsWith('update-plan-resume')),false);assert.equal(f.calls.includes('global:false'),false);
  await reopened.releaseForReview();assert.equal(f.paused,false);assert.equal(f.calls.some(call=>call.endsWith('update-plan-resume')),false);
 });
+
+test('large child preparation histories stay authoritative locally while the grouped journal keeps a bounded restartable latest-state summary',async t=>{
+ const f=await fixture(t);await f.engine.begin({targetVersion:'1.1.0'});
+ const fullEvidence=new Map();
+ for(const [id,child]of f.children){
+  const responses=Array.from({length:40},(_,index)=>({responseId:`response-${index}`,state:'ready',note:'N'.repeat(12000),continuation:'C'.repeat(20000),at:new Date().toISOString()}));
+  child.preparation={schema:1,id:child.id,projectId:id,purpose:'update',phase:'ready',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),participants:[{id:'manager',role:'manager',taskId:null,runId:null,threadId:id+'-thread',requestId:id+'-request',required:true,message:'M'.repeat(12000),delivery:{state:'acknowledged',nativeTurnId:id+'-turn',at:new Date().toISOString()},response:responses.at(-1),responses,settled:true,settlementReason:'S'.repeat(2000)}]};
+  const original=JSON.stringify(child.preparation);assert.ok(Buffer.byteLength(original)>1048576);fullEvidence.set(id,original);
+ }
+ await f.engine.tick();assert.equal(f.engine.status().phase,'ready');
+ const serialized=await readFile(f.path,'utf8');assert.ok(Buffer.byteLength(serialized)<20000,'group cache contains latest state instead of duplicated long history');
+ const restarted=await f.make('1.0.0');assert.equal(restarted.status().phase,'ready');assert.equal(restarted.isHolding(),true);
+ for(const participant of restarted.status().preparation.participants){assert.equal(participant.response.state,'ready');assert.equal(participant.responses.length,1);assert.equal(participant.response.continuation,undefined);assert.ok(participant.response.note.length<=400);assert.ok(participant.message.length<=240);assert.equal(participant.required,true);assert.equal(participant.settled,true);}
+ for(const [id,child]of f.children)assert.equal(JSON.stringify(child.preparation),fullEvidence.get(id),'the complete child evidence was never mutated or replaced');
+});

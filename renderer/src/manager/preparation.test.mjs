@@ -100,7 +100,7 @@ test("explicit agent ready and late execution proof remain separate visible obse
   assert.doesNotMatch(settled, /Waiting for final messages/);
 });
 
-test("needs-input, failed delivery and already stopped participants stay truthful and distinguishable", () => {
+test("needs-input, failed delivery and non-required participants stay truthful and distinguishable", () => {
   const html = render(
     plan([
       participant({
@@ -140,7 +140,7 @@ test("needs-input, failed delivery and already stopped participants stay truthfu
   assert.match(html, /Preparation request failed/);
   assert.match(html, /Native delivery failed/);
   assert.match(html, /task-two/);
-  assert.match(html, /Already stopped; no preparation needed/);
+  assert.match(html, /No active agent preparation needed/);
   assert.doesNotMatch(html, /Agent ready/);
 });
 
@@ -196,4 +196,79 @@ test("workers with the same ticket remain distinguishable before opening request
     participantLabel(second, [first, second]),
     "Worker · GH-62 · task-second",
   );
+});
+
+test("unstarted queued participants and a manager without a session do not claim a prior stop or acknowledgement", () => {
+  const queued = participant({
+    id: "queued",
+    runId: null,
+    threadId: null,
+    required: false,
+  });
+  const manager = participant({
+    id: "manager",
+    role: "manager",
+    taskId: null,
+    runId: null,
+    threadId: null,
+    required: false,
+  });
+  const html = render(plan([queued, manager]));
+  assert.equal(
+    (html.match(/No active agent preparation needed/g) || []).length,
+    2,
+  );
+  assert.doesNotMatch(html, /Already stopped|Agent ready|Execution settled/);
+});
+
+test("canceled preparation retains delivery and late reply evidence without promising delivery or another cancel", () => {
+  for (const purpose of ["update", "quit"]) {
+    const value = plan(
+      [
+        participant({ id: "pending", delivery: { state: "pending", at } }),
+        participant({ id: "attempted", delivery: { state: "attempted", at } }),
+        participant({
+          id: "input",
+          response: {
+            responseId: "old-input",
+            state: "needs-input",
+            note: "Review the pending native approval.",
+            at,
+          },
+        }),
+        participant({
+          id: "ready",
+          response: {
+            responseId: "late-ready",
+            state: "ready",
+            note: "Continuation saved after cancellation.",
+            at,
+          },
+          settled: false,
+        }),
+      ],
+      purpose,
+    );
+    value.phase = "canceled";
+    value.preparation.phase = "canceled";
+    const html = render(value);
+    assert.match(html, /Canceled before preparation delivery/);
+    assert.match(html, /Canceled; no readiness reply recorded/);
+    assert.match(html, /Last agent reply: Needs input/);
+    assert.match(html, /Last agent reply: Ready/);
+    assert.match(html, /Continuation saved after cancellation/);
+    assert.match(html, /Execution settlement has not been confirmed/);
+    assert.match(
+      html,
+      /For new directions or other decisions, choose Return to work/,
+    );
+    assert.doesNotMatch(
+      html,
+      /cancel this request|waiting for delivery|Waiting for agent acknowledgement|Waiting for final messages/,
+    );
+    value.preparation.participants[3].settled = true;
+    const settled = render(value);
+    assert.match(settled, /Execution settled/);
+    assert.match(settled, /Last agent reply: Ready/);
+  }
 });

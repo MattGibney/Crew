@@ -1,4 +1,4 @@
-// GH-50 packaged Electron smoke. Synthetic native peer; isolated profile/repo only.
+// GH-50/GH-62 packaged Electron smoke. Synthetic native peer; isolated profile/repo only.
 // CREW_ACCEPTANCE_EXECUTABLE must name the built package's Contents/MacOS/Crew.
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile} from 'node:fs/promises';
@@ -79,5 +79,6 @@ if(m.method==='turn/start'){
  const after=await readTask(stateDir,taskId);for(const key of Object.keys(before))assert.deepEqual(after[key],before[key],key+' survives packaged relaunch');
  await page.getByRole('tab',{name:'Conversation',exact:true}).click();await detail().getByText('Packaged follow-up result retained.',{exact:true}).first().waitFor();await page.screenshot({path:path.join(dir,'packaged-history-after-relaunch.png')});
  const calls=(await readFile(protocol,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(calls.filter(call=>call.method==='thread/realtime/start').length,0);assert.equal(calls.filter(call=>call.role==='worker'&&call.method==='turn/start').length,2);assert.equal(calls.filter(call=>call.role==='worker'&&call.method==='thread/resume').length,1);assert.equal(await page.evaluate(()=>window.__smokeMicrophoneCalls),0);assert.deepEqual(errors,[]);
+ assert.ok(calls.some(call=>call.role==='manager'&&call.method==='turn/start'&&call.input?.startsWith('Crew preparation request:')),'explicit Quit received an actual agent preparation response');
  const proof={pass:true,evidenceDir:dir,packagedExecutable:executable,syntheticNativePeer:true,physicalMicrophoneCalls:0,sameWorkerThread:after.threadId,sameWorktree:after.worktree,assignments:after.assignments.length,explicitWorkflow:after.workflowState.value,persistedHistory:true,draftPreserved:true,packagedMcpTools:true,sharedQuitPreparation:true,preparationReports: calls.filter(call=>call.role==='manager'&&call.method==='turn/start'&&call.input?.startsWith('Crew preparation request:')).length};await writeFile(path.join(dir,'proof.json'),JSON.stringify(proof,null,2)+'\n');console.log(JSON.stringify(proof));
 }catch(error){console.error('Packaged smoke evidence:',dir);for(const page of electron?.windows()||[])await page.screenshot({path:path.join(dir,'packaged-failure.png')}).catch(()=>{});throw error;}finally{await quit();}

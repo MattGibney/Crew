@@ -311,7 +311,7 @@ updatePlan = createUpdatePlan({
     stateDir: orchestrationDir,
     projectId: project.id,
     getManager: managerPreparationActivity,
-    sendManager: (text, requestId) => bridge.startWork(text, requestId),
+    sendManager: (text, requestId, preparationId) => bridge.startWork(text, requestId, { origin: { source: 'preparation', operationId: preparationId } }),
   }),
   stateDir: orchestrationDir,
   version,

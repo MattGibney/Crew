@@ -75,10 +75,16 @@ export function createPreparationCoordinator({
   stateDir,
   projectId,
   sendManager,
+  getManager,
 }: {
   stateDir: string;
   projectId: string;
-  sendManager: (text: string, requestId: string) => Promise<DeliveryResult>;
+  sendManager: (
+    text: string,
+    requestId: string,
+    preparationId: string,
+  ) => Promise<DeliveryResult>;
+  getManager: () => ManagerActivity | Promise<ManagerActivity>;
 }): PreparationCoordinator {
   async function same(plan: PausePlan) {
     const value = await readPreparation(stateDir);
@@ -154,6 +160,7 @@ export function createPreparationCoordinator({
       let value = await same(plan);
       const participant = value.participants.find((p) => p.role === "manager");
       if (
+        ["draining", "ready"].includes(plan.phase) &&
         value.phase === "preparing" &&
         participant?.required &&
         participant.delivery.state === "pending" &&
@@ -182,6 +189,7 @@ export function createPreparationCoordinator({
                 participant,
               }),
               `crew-preparation-${value.id}-${participant.requestId}`,
+              value.id,
             );
             if ("accepted" in result || !(result.turn?.id || result.turnId))
               throw new Error(
@@ -200,6 +208,9 @@ export function createPreparationCoordinator({
         }
         value = await same(plan);
       }
+      // Native delivery may start/end a turn while its RPC is awaited. Render
+      // the resulting state rather than the pre-delivery idle snapshot.
+      manager = await getManager();
       return {
         ...value,
         participants: value.participants.map((p) => {

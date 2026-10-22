@@ -23,7 +23,9 @@ A finished or interrupted manager turn does not block installation once it has n
 
 If an older 0.9.1/0.9.2 build remains blocked after its manager finished and a setup failed, Refresh readiness cannot repair the old classification logic. Do not Resume or Remove a worker simply to install an update. Verify no work is still active, quit Crew normally (closing the window alone leaves its controller running), and manually replace the app with the signed corrected release. Keep the same external configuration/state. Unavailable activity or genuinely live project commands require investigation before replacing the application.
 
-## Pause work and update
+## Historical cooperative pause flow (before GitHub #62)
+
+The paragraphs in this section describe the earlier released behavior. The agent preparation flow below replaces it when #62 is released.
 
 When a downloaded update is blocked by active work, choose **Pause work and update**. Crew immediately holds new conversation/voice requests and worker launches, saves a durable plan, disconnects voice and requests targeted cooperative pauses. A running setup phase finishes before the worker launch boundary. A running worker receives a cooperative interrupt; a persistent project environment must have a declared stop command. Crew waits for fresh verified shutdown evidence. The update panel shows each captured worker and specific blockers.
 
@@ -37,9 +39,9 @@ Implementation is tracked by AI-018. This feature is prepared on a pull request 
 
 ## Integration contract
 
-The single-instance engine lives in update-plan.mjs. Its callbacks provide fresh task/manager evidence, voice shutdown, correlated manager interruption, ordinary lifecycle requests and aggregate install readiness. The controller's admissionHeld callback freezes queued/pre-spawn work; cooperative:true is accepted only for targeted pause requests. Plan targetVersion, task/run/action IDs and confirmed lifecycle/process evidence determine recovery. Preserve these checks when adapting the engine.
+The single-project engine lives in `src/updates/plan.mts`. Its callbacks provide fresh task/manager evidence, voice shutdown, ordinary lifecycle requests, aggregate install readiness and the shared preparation coordinator. Production preparation uses durable agent acknowledgements and natural settlement; correlated interruption remains only in legacy compatibility tests. The controller's admissionHeld callback freezes queued/pre-spawn work; cooperative:true is accepted only for targeted pause requests. Plan targetVersion, task/run/action IDs and confirmed lifecycle/process evidence determine recovery. Preserve these checks when adapting the engine.
 
-A future multi-project coordinator must enumerate every managed instance, hold all admissions, collect all worker/runtime evidence and keep the native installation lease/other-instance checks global. One project's idle state cannot approve a shared application replacement. A separate manager-lifecycle start/restart endpoint must enter the same update-admission barrier; lifecycle transitions or errors remain unverified until a positively stopped/ready process state is confirmed. Manager stop is not worker pause. No multi-project registry or manager-settings feature is implemented by AI-018.
+The native multi-project coordinator enumerates every registered instance, holds all admissions, collects worker/runtime evidence and keeps the installation lease/other-instance checks global. One project's idle state cannot approve a shared application replacement. A separate manager-lifecycle start/restart endpoint must enter the same update-admission barrier; lifecycle transitions or errors remain unverified until a positively stopped/ready process state is confirmed. Manager stop is not worker pause. The registry and manager lifecycle settings were integrated separately from the original AI-018 engine.
 
 Retained worker questions/blocked records with freshly confirmed stopped execution can survive an update unanswered. Missing or live execution evidence still blocks. Recovery does not resume those previously waiting workers.
 

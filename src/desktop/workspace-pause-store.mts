@@ -1,4 +1,4 @@
-import { readFile, mkdir, open, rename, unlink } from "node:fs/promises";
+import { mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import { parseObservedPreparation } from "../preparation/observed.mjs";
@@ -44,6 +44,8 @@ export interface PauseJournal {
   reasons: string[];
   resumeMode?: string;
 }
+export const WORKSPACE_PAUSE_JOURNAL_BYTES = 1048576;
+
 const PHASES = new Set([
   "draining",
   "ready",
@@ -62,12 +64,17 @@ export async function writeWorkspacePauseJournal(
   path: string,
   journal: PauseJournal,
 ): Promise<void> {
+  const serialized = JSON.stringify(journal) + "\n";
+  if (Buffer.byteLength(serialized) > WORKSPACE_PAUSE_JOURNAL_BYTES)
+    throw new Error(
+      "Grouped preparation journal exceeds its byte bound. Full project evidence is retained; the prior grouped journal was not replaced.",
+    );
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.${randomUUID()}.tmp`;
   let file;
   try {
     file = await open(temporary, "wx", 0o600);
-    await file.writeFile(JSON.stringify(journal) + "\n");
+    await file.writeFile(serialized);
     await file.sync();
     await file.close();
     file = null;
@@ -89,15 +96,21 @@ export async function readWorkspacePauseJournal(
   path: string,
 ): Promise<PauseJournal | null> {
   let raw;
+  let file;
   try {
-    raw = await readFile(path, "utf8");
+    file = await open(path, "r");
+    if ((await file.stat()).size > WORKSPACE_PAUSE_JOURNAL_BYTES)
+      throw new Error("Journal exceeds bound.");
+    raw = await file.readFile("utf8");
   } catch (error) {
     if (errorCode(error) === "ENOENT") {
       return null;
     }
     throw error;
+  } finally {
+    await file?.close();
   }
-  if (Buffer.byteLength(raw) > 1048576)
+  if (Buffer.byteLength(raw) > WORKSPACE_PAUSE_JOURNAL_BYTES)
     throw new Error("Journal exceeds bound.");
   const value = decodeJournal(parseJSON(raw));
   if (

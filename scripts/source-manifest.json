@@ -422,6 +422,7 @@
     "tests/worker-worktree-evidence.test.mjs",
     "tests/workspace-isolation.test.mjs",
     "tests/workspace-pause-integration.test.mjs",
+    "tests/workspace-pause-store.test.mjs",
     "tests/workspace-pause-update.test.mjs",
     "tests/workspace-preload.test.mjs",
     "tests/workspace-registry.test.mjs",
