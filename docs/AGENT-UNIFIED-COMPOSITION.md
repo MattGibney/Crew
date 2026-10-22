@@ -39,6 +39,13 @@ during private work waits for a separate native turn, and private work during a
 public turn waits likewise. An uncertain acceptance holds later dispatch until
 reconciled. Delivery intent remains visible while waiting.
 
+The scheduler passes its bounded local eligibility callback as the second argument
+to `foundation.sendInternal(input, isCurrent)`. Foundation rechecks it under the
+shared admission gate immediately before persisting the private intent. A stale
+occurrence returns `null`; the host reports `accepted: false`. Native pumping runs
+after releasing the gate. Checking eligibility only before calling Foundation
+leaves a schedule-change/admission race.
+
 Voice belongs to the explicit primary agent's existing native chat. Native
 server-managed handoffs must not create a second model turn. Only authoritative
 native promotion IDs establish public voice-turn history; transient transcript
@@ -74,8 +81,16 @@ packaged application lifecycle. Those milestones remain distinct acceptance step
 
 
 Current unresolved acceptance: a fresh-process native resume restores a local
-environment, so the adapter blocks that path rather than claiming isolation.
-Workspace commands retain unsettled status until the real executor supplies
-confirmed process-group evidence; root command exit alone does not release it.
-These are held boundaries in this checkpoint, not successful Stop/Restart/Quit
-acceptance after arbitrary project work.
+environment, so the adapter holds that route. A bounded native probe verified
+named permission-profile selection on the same resumed chat and standalone command
+denial of a synthetic private file. Effective filesystem restrictions inside a
+server-managed realtime handoff remain unverified.
+
+Real workspace commands now retain private evidence for their launched process
+group and observed descendants. Foreground completion and a background process's
+natural exit plus `environmentOwnerApi.reconcileOperation(operationId)` have passed
+the real Foundation reservation check with a synthetic native session. Reconciliation
+preserves unknown outcomes and never replays or cleans resources. A dispatch crash
+before the returned evidence reference is saved remains unresolved and blocks
+reservation. Sampling does not establish unobserved daemonization or arbitrary
+resource cleanup; this is not full signed-in or packaged lifecycle acceptance.
