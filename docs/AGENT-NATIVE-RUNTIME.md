@@ -404,3 +404,41 @@ realtime handoff with synthetic media. Confirm denied markers, allowed workspace
 work, unchanged selected policy, exact handoff identity and no credential canaries
 in tool environments. Do not probe real auth values. Production restrictions stay
 unchanged until that evidence and the trust-boundary choice are accepted.
+
+## Owner-confirmed boundary and real-model acceptance
+
+The owner has since clarified the intended product boundary: the pinned native
+app-server is trusted to access its own Crew model authentication. Model tools
+must not read Crew vault or personal-service credentials, or bypass owner-approved
+tools and workspaces. A VM or process-wide protection against that trusted native
+host is not a product requirement. The earlier discussion of that stronger
+guarantee is historical investigation, not an outstanding owner decision.
+
+The candidate therefore retains Crew-only HOME/config, existing authentication in
+place, current session authorization and broker-only production tool exposure.
+Native named filesystem/network permissions would replace the incompatible outer
+Seatbelt layer for model tools. Host filesystem, process and shell RPCs remain
+trusted adapter controls and must never become agent-facing tools. Native profile
+selection and verification must cover thread creation, fresh-process same-chat
+resume, explicit turns and server-managed realtime handoffs.
+
+The bounded acceptance harness has been prepared outside the repository. Its
+configuration parses successfully in a separate unsigned-in native process:
+default-deny filesystem, minimal runtime reads, one read-only synthetic workspace,
+explicit private-root denial, network disabled, no environment inheritance and no
+approval escalation. This is configuration evidence only. The real-model run
+requires an explicit verified idle handoff of the owner's Crew auth home; it must
+not search for, read or copy authentication values, or start another sign-in.
+
+Acceptance will challenge native command/file/edit/image surfaces that are
+actually available with disposable markers, check unchanged protected files and
+blocked direct network access, and verify an authenticated synthetic MCP tool.
+The stress configuration deliberately enables native command tools to exercise
+the permission boundary; production's additional native-tool disablement must be
+retained and verified separately. After confirmed exit, a fresh process must resume
+the same native chat/profile and complete an actual server-managed realtime
+handoff. Realtime uses a labelled synthetic text append through the supported
+WebSocket transport, with no physical microphone or fabricated human speech.
+Native turn/item correlations and actual tool outcomes are required; model claims
+alone do not pass acceptance. Production launch policy remains unchanged pending
+that evidence.
