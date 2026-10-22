@@ -1,5 +1,10 @@
 # Delivery policy
 
+## Crew 0.17.1 release gate recovery
+
+The grouped feature release is delivered as 0.17.1, preserving unpublished v0.17.0 and both workflow attempts. The first attempt passed hosted tests, signing and notarization, then final ticket validation lost its Apple CloudKit connection. The second exposed a shared-capacity test cleanup race: another polling controller recreated a deleted state lock directory, causing ENOTEMPTY and aborting remaining fixture cleanup. Quiesce every controller before deleting any registered root, retain all cleanup failures, and print TAP diagnostics explicitly. Product readiness/ownership gates and timeouts are unchanged. See [REL-0.17.1](../tickets/REL-0.17.1.md).
+
+
 ## Crew 0.17.0 grouped release scope
 
 The human authorized integrating PRs #67, #68 and #69, testing their interactions, merging their histories and publishing one signed/notarized stable release after 0.16.2. This release adds one agent-reported worker status with optional progress, private configurable manager schedules, and shared agent-owned preparation for updates and explicit Quit. PR #54 and ticket-only ideas are excluded. See [REL-0.17.0](../tickets/REL-0.17.0.md).

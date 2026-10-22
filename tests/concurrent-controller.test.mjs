@@ -1,7 +1,7 @@
 import {workerAppServerFixture} from './helpers/worker-app-server-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,realpath,rm,chmod} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,realpath,rm,chmod,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import path from 'node:path';import {fileURLToPath,pathToFileURL} from 'node:url';
 import {execFile,spawn}from'node:child_process';import{promisify}from'node:util';
 import{createController}from'../runtime/workers/controller.mjs';
@@ -18,9 +18,64 @@ async function fixture(t,{environment={},mode='repository',holdResume=false,stat
  let controller=await createController({stateDir,sourceDir,executable:binary,project,globalCapacity});
  const created=[];const add=async(id,brief='long running')=>{created.push(id);await createTask(stateDir,{requestId:id,ticket:'AI-011',brief,projectId:project.id,repositoryId:'fixture-repo'});await controller.tick();};
  const action=async(id,action)=>{await requestWorkerAction(stateDir,{taskId:id,actionId:`action-${action}-${Date.now()}-${id}`,action});await controller.tick();};
- let cleaned=false;const cleanup=async()=>{if(cleaned)return;cleaned=true;for(const id of created){const task=await readTask(stateDir,id).catch(()=>null);if(task&&!['disposed','completed','failed','stopped','paused'].includes(task.status)){await action(id,'stop').catch(()=>{});}}await wait(async()=>{const tasks=await Promise.all(created.map(id=>readTask(stateDir,id)));return tasks.every(task=>!task.execution?.live);},'cleanup worker exits').catch(()=>{});await controller.stop();const meta=await readFile(path.join(stateDir,'fixture.json'),'utf8').then(JSON.parse).catch(()=>null);if(meta?.base?.includes('crew-fixture-'))await rm(meta.base,{recursive:true,force:true});await rm(dir,{recursive:true,force:true});};t.after(cleanup);
- return{cleanup,dir,stateDir,repo,project,binary,add,action,get controller(){return controller;},restart:async()=>{await controller.stop();controller=await createController({stateDir,sourceDir,executable:binary,project,globalCapacity});}};
+ let draining;
+ const drain=()=>draining??=(async()=>{
+  try{
+   for(const id of created){
+    const task=await readTask(stateDir,id).catch(()=>null);
+    if(task&&!['disposed','completed','failed','stopped','paused'].includes(task.status))await action(id,'stop');
+   }
+   await wait(async()=>{const tasks=await Promise.all(created.map(id=>readTask(stateDir,id)));return tasks.every(task=>!task.execution?.live);},'cleanup worker exits');
+  }finally{await controller.stop();}
+ })();
+ let cleaned=false;
+ const cleanup=async()=>{
+  if(cleaned)return;
+  await drain();
+  const meta=await readFile(path.join(stateDir,'fixture.json'),'utf8').then(JSON.parse).catch(()=>null);
+  if(meta?.base?.includes('crew-fixture-'))await rm(meta.base,{recursive:true,force:true});
+  await rm(dir,{recursive:true,force:true});cleaned=true;
+ };
+ t.after(cleanup);
+ return{cleanup,drain,dir,stateDir,repo,project,binary,add,action,get controller(){return controller;},restart:async()=>{await controller.stop();controller=await createController({stateDir,sourceDir,executable:binary,project,globalCapacity});}};
 }
+async function cleanupSharedFixtures(fixtures,capacityDir){
+ // Every registered controller reads every project through the capacity ledger.
+ // Stop all producers before removing any state: another controller's lock scan
+ // otherwise recreates the directory during rm and skips remaining cleanup.
+ const drained=await Promise.allSettled(fixtures.map(f=>f.drain()));
+ const removed=await Promise.allSettled(fixtures.map(f=>f.cleanup()));
+ const failures=[...drained,...removed].filter(result=>result.status==='rejected').map(result=>result.reason);
+ if(failures.length)throw new AggregateError(failures,'Shared capacity fixture cleanup failed');
+ await rm(capacityDir,{recursive:true,force:true});
+}
+
+test('shared ledger fixture cleanup quiesces every reader before deletion and preserves cleanup errors without skipping peers',async t=>{
+ const directory=await mkdtemp(path.join(tmpdir(),'crew-capacity-cleanup-'));
+ t.after(()=>rm(directory,{recursive:true,force:true}));
+ const states=[path.join(directory,'a'),path.join(directory,'b')];
+ await Promise.all(states.map(dir=>mkdir(dir)));
+ const {loadTasks}=await import('../runtime/orchestration/store.mjs');
+ // The capacity reader really recreates a removed registered root when taking
+ // its ordinary state lock. This is the producer that raced the old cleanup.
+ await rm(states[0],{recursive:true});await loadTasks(states[0]);
+ assert.equal((await stat(states[0])).isDirectory(),true);
+ const readers=new Set(states),removed=[],injected=new Error('Injected first-state deletion failure');
+ const fixtures=states.map((state,index)=>({
+  async drain(){await Promise.resolve();readers.delete(state);},
+  async cleanup(){
+   assert.equal(readers.size,0,'every shared-ledger reader must stop before either root is removed');
+   removed.push(state);await rm(state,{recursive:true});
+   if(index===0)throw injected;
+  },
+ }));
+ await assert.rejects(cleanupSharedFixtures(fixtures,directory),error=>{
+  assert.ok(error instanceof AggregateError);assert.deepEqual(error.errors,[injected]);return true;
+ });
+ assert.deepEqual(removed,states,'one removal failure must not skip the other project cleanup');
+ for(const state of states)await assert.rejects(stat(state),{code:'ENOENT'});
+});
+
 test('two real harnesses/worktrees run concurrently; question yields capacity and resumes same chat while another runs',async t=>{
  const f=await fixture(t);await f.add('worker-question','ask question');await f.add('worker-running');
  const question=await wait(async()=>{const q=await readTask(f.stateDir,'worker-question'),other=await readTask(f.stateDir,'worker-running');return q.status==='awaiting_answer'&&other.threadId&&q.execution?.live===false?q:null;},'question and parallel running');
@@ -105,7 +160,7 @@ test('stopped questions do not gate same-context resume and reused report IDs re
 
 test('separate project controllers share one capacity ledger; restart preserves workers and holds queued backlog for explicit start', async t => {
  const capacityDir=await mkdtemp(path.join(tmpdir(),'crew-global-capacity-'));
- const fixtures=[];t.after(async()=>{for(const f of fixtures)await f.cleanup();await rm(capacityDir,{recursive:true,force:true});});
+ const fixtures=[];t.after(()=>cleanupSharedFixtures(fixtures,capacityDir));
  const {configureGlobalCapacity}=await import('../runtime/orchestration/capacity.mjs');
  await configureGlobalCapacity({dir:capacityDir,limit:1});
  const a=await fixture(t,{globalCapacity:{dir:capacityDir}});fixtures.push(a);const b=await fixture(t,{globalCapacity:{dir:capacityDir}});fixtures.push(b);

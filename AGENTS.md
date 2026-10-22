@@ -325,3 +325,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Settling an ended worker turn is retained history observation; selecting its queued next assignment is new work admission. Check the active hold before changing currentAssignmentId or clearing the retained result, preserve the exact queued direction, and activate it once only after admissions are explicitly released.
 - Schedule save responses must not discard edits made while saving. Retain newer drafts and advance their concurrency revision only after the saved revision is confirmed; failed/missing confirmation preserves editable state with actionable guidance.
+
+## Unpublished 0.17.0 release gate recovery
+
+- Preserve immutable v0.17.0 and its attempts: first hosted tests/signing/notarization passed, then Apple CloudKit ticket validation lost its network connection before publication. Attempt 2 exposed an ENOTEMPTY cleanup race and was canceled after its failed test left a fixture controller alive. No 0.17.0 release was published; deliver the authorized grouped features as 0.17.1 without rewriting the tag.
+- Shared-capacity test fixtures require group-wide teardown ordering. Every polling controller must quiesce before any registered state root is deleted: capacity reconciliation can create another project state lock. Attempt all owned cleanup despite one error, preserve failures, and never equate a terminal worker label with group-wide writer quiescence. Keep application/test ownership and no-force assertions unchanged. Explicit TAP output keeps per-test failure details available before the suite summary.
