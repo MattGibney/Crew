@@ -55,6 +55,12 @@ import {
 import { randomUUID } from "node:crypto";
 import { createUnifiedProjectBrowser } from "../browser/unified-browser.mjs";
 import { combineAgentToolExtensions } from "../agents/tool-extensions.mjs";
+import type { SubscriptionUsageSnapshot } from "../agents/codex-usage.mjs";
+
+type UsageState = {
+  status: "available" | "disconnected" | "unsupported" | "error";
+  snapshot: SubscriptionUsageSnapshot | null;
+};
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const desktopDirectory = join(
@@ -85,6 +91,7 @@ type ProjectHost = {
   imageCommand: ReturnType<typeof createImageOwnerCommands>;
   setup: Awaited<ReturnType<typeof openAgentSetup>>;
   browser: ReturnType<typeof createUnifiedProjectBrowser>;
+  readUsage(): Promise<UsageState>;
   unsubscribe: () => void;
 };
 const hosts = new Map<string, ProjectHost>(),
@@ -317,6 +324,34 @@ async function openProject(project: DesktopProject) {
       const unsubscribeVoice = voice.subscribe((event) =>
         surface?.notify({ type: "voice", projectId: project.id, event }),
       );
+      let usageState: UsageState = { status: "disconnected", snapshot: null };
+      const publishUsage = (state: UsageState) => {
+        usageState = structuredClone(state);
+        surface?.notify({
+          type: "subscription-usage",
+          projectId: project.id,
+          state: usageState,
+        });
+      };
+      const unsubscribeUsage = composed.subscription.subscribeUsage(
+        (snapshot) => publishUsage({ status: "available", snapshot }),
+      );
+      const readUsage = async (): Promise<UsageState> => {
+        const result = await composed.subscription.usage();
+        if (result.state === "acknowledged")
+          publishUsage({ status: "available", snapshot: result.value });
+        else
+          publishUsage({
+            status:
+              result.error.code === "disconnected"
+                ? "disconnected"
+                : result.error.code === "unsupported"
+                  ? "unsupported"
+                  : "error",
+            snapshot: usageState.snapshot,
+          });
+        return structuredClone(usageState);
+      };
       const unsubscribeTranscript = voice.subscribeRealtime((event) => {
         // Only native role-bearing transcript items reach the owner display.
         // These are live call text, never evidence of a coding-turn association.
@@ -347,9 +382,11 @@ async function openProject(project: DesktopProject) {
         imageCommand: createImageOwnerCommands(images),
         setup,
         browser: projectBrowser,
+        readUsage,
         unsubscribe: () => {
           unsubscribe();
           unsubscribeVoice();
+          unsubscribeUsage();
           unsubscribeTranscript();
         },
       });
@@ -535,6 +572,7 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (command.startsWith("voice.")) return host.voiceCommand(command, args);
   if (command === "subscription.status")
     return host.application.subscription.status();
+  if (command === "subscription.usage") return host.readUsage();
   if (command === "subscription.beginSignIn")
     return host.application.subscription.beginSignIn();
   if (command === "subscription.cancelSignIn")
