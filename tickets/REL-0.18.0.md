@@ -19,7 +19,7 @@ The integration adds the fresh saved profile read to ordinary live steering and 
 
 ## Validation
 
-Current combined-source evidence (individual PR results are historical):
+Combined-source evidence at integration head `7276e269c6ef25c89203b5885f9ee6aaa60e10db`, before the post-integration review correction below (individual PR results are historical):
 
 - Strict TypeScript/renderer typecheck and clean runtime/renderer build passed.
 - Final isolated full regression: **790 passed, 0 failed, 0 cancelled, 0 skipped**, exit 0. Runtime stayed frozen and no browser/native/subscription acceptance overlapped this final suite. Initialized disposable global capacity through the production API; live registry/claims were not used. The accompanying scheduling/preparation focus passed 6/6.
@@ -47,3 +47,19 @@ The integration branch is `codex/release-0.18.0-integration`, targeting `main`. 
 ## Boundaries
 
 Unsigned candidate acceptance is separate from signing/notarization/publication. Known portable-root automatic updater relaunch remains unresolved; explicit-profile manual launch is not automatic update proof. Historical native shutdown observation is set aside by user direction and is not investigated or used as a blocker. Physical sound/microphone acceptance remains outside autonomous checks.
+
+
+## Post-integration review — profile-read admission race
+
+Manager review identified an integration gap: ordinary steering awaited async saved-profile preparation after its durable attempted claim and guard checks. A hold or identity change during that read could still reach native steering. Deterministic gated tests against unchanged integration runtime reproduced incorrect steer-callback invocations in all ten scenarios: capacity, update, preparation, archive request, archived task, ending/changed/unacknowledged native turn, changed task run and changed task thread. The after-native-send hold control passed and retained acknowledgement without replay.
+
+The scoped correction completes profile preparation before the existing durable claim. Hold/task/snapshot guards therefore revalidate after that read. Newly held unsent directions remain pending without fabricated attempted evidence; release uses the same ordered direction and rereads the current profile. Local profile-read failures keep the existing failure evidence when admission remains valid. Sent/accepted/uncertain delivery semantics are unchanged; no rollback or replay is added.
+
+Validation of the reviewed correction:
+
+- Strict build/typecheck passed.
+- Corrected focused suite: **46/46 passed**, covering the twelve runner boundary/control cases plus actual HTTP/detached-supervisor profile delivery, native peer, saved-profile and preparation regressions. The initial broader command omitted `--import tsx` and failed to load one TypeScript-importing test file; the corrected normal-loader command passed without a product change for that harness error.
+- All ten gated races now suppress the steer callback and preserve pending directions without attempted history. Clearing the disposable condition delivers the same two queued directions in order with a fresh profile read. Two concurrent profile preparers produce exactly one attempted/acknowledged history. A hold after send preserves acknowledgement without replay; existing ambiguous/rejected native outcomes remain covered. These deterministic callback assertions are not model-consumption evidence.
+- Final isolated full regression: **802 passed, 0 failed, 0 cancelled, 0 skipped**, exit 0. The initialized-capacity scheduling/preparation focus also passed **6/6**. Build and suite ran serially with no overlapping acceptance/rebuild; all 433 driver-captured source hashes stayed unchanged.
+
+The manager independently reproduced the preparation-hold failure before the fix and confirmed zero native sends after the fix. Final corrected-source real subscription acceptance also passed: two ordered acknowledgements and separate model-consumption reports before any result, current saved profile consumed, same run/thread/native turn/worktree and natural confirmed exit, with no physical microphone. Earlier packaged/native UI evidence above remains prior-head evidence; the correction changes only the ordinary steering/profile boundary. Four existing tracked files changed with no source-manifest additions/removals. The manager reviewed this correction for the authorized integration PR; signed publication remains a subsequent stage.

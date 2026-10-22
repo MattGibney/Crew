@@ -297,10 +297,278 @@ test("shared admission holds steering before a project preparation journal exist
   assert.equal((await f.read()).assignments[1].delivery.state, "acknowledged");
 });
 
-test('saved-profile failure sends nothing, retains recovery and never blindly retries the direction', async t => {
- const f=await fixture(t);await f.follow();
- const observer=createRunnerDirections({...f.options,prepareText:async()=>{throw Error('saved profile unreadable');}});
- await observer.observe();assert.equal(f.calls.length,0);
- const task=await f.read();assert.equal(task.assignments[1].delivery.state,'failed');assert.match(task.followupWait,/no direction was sent.*Restore saved Settings/i);
- await createRunnerDirections(f.options).observe();assert.equal(f.calls.length,0);
+test("saved-profile failure sends nothing, retains recovery and never blindly retries the direction", async (t) => {
+  const f = await fixture(t);
+  await f.follow();
+  const observer = createRunnerDirections({
+    ...f.options,
+    prepareText: async () => {
+      throw Error("saved profile unreadable");
+    },
+  });
+  await observer.observe();
+  assert.equal(f.calls.length, 0);
+  const task = await f.read();
+  assert.equal(task.assignments[1].delivery.state, "failed");
+  assert.match(
+    task.followupWait,
+    /no direction was sent.*Restore saved Settings/i,
+  );
+  await createRunnerDirections(f.options).observe();
+  assert.equal(f.calls.length, 0);
+});
+
+// REL-0.18.0: the saved-profile read must not extend a durable send claim
+// across a new hold or invalidate the captured native/task identity.
+const profileRaces = {
+  capacity: async (f) => {
+    const { configureGlobalCapacity } =
+      await import("../runtime/orchestration/capacity.mjs");
+    await configureGlobalCapacity({
+      dir: f.options.globalCapacityDir,
+      admissionPaused: true,
+    });
+    return () =>
+      configureGlobalCapacity({
+        dir: f.options.globalCapacityDir,
+        admissionPaused: false,
+      });
+  },
+  update: async (f) => {
+    const { createUpdatePlan } = await import("../runtime/updates/plan.mjs");
+    const engine = createUpdatePlan({
+      stateDir: f.stateDir,
+      version: "0.18.0",
+      getView: async () => ({ tasks: [] }),
+      getManager: async () => ({
+        status: "ready",
+        workStarting: false,
+        approvals: [],
+      }),
+      stopVoice: async () => {},
+      interruptManager: async () => {},
+      requestAction: async () => {},
+      activity: async () => ({ safe: false, reasons: ["Disposable hold"] }),
+    });
+    await engine.ready;
+    await engine.begin({ targetVersion: "0.18.1" });
+    return async () => {
+      await engine.cancel();
+      await engine.releaseForReview();
+    };
+  },
+  preparation: async (f) => {
+    const { beginPreparation, cancelPreparation } =
+      await import("../runtime/preparation/store.mjs");
+    await beginPreparation(f.stateDir, {
+      id: "profile-read-race",
+      projectId: "fixture",
+      purpose: "update",
+      participants: [],
+    });
+    return () => cancelPreparation(f.stateDir, "profile-read-race");
+  },
+  archive: async (f) => {
+    await updateTask(f.stateDir, f.taskId, (n) => {
+      n.lifecycleRequests = [
+        {
+          id: "archive-during-profile",
+          action: "archive",
+          status: "pending",
+          at: new Date().toISOString(),
+        },
+      ];
+    });
+    return () =>
+      updateTask(f.stateDir, f.taskId, (n) => {
+        n.lifecycleRequests = [];
+      });
+  },
+  archived: async (f) => {
+    await updateTask(f.stateDir, f.taskId, (n) => {
+      n.status = "archived";
+    });
+    return () =>
+      updateTask(f.stateDir, f.taskId, (n) => {
+        n.status = "running";
+      });
+  },
+  ending: async (f) => {
+    f.live.ending = true;
+    return async () => {
+      f.live.ending = false;
+    };
+  },
+  turn: async (f) => {
+    f.live.turnId = "newer-turn";
+    return async () => {
+      f.live.turnId = "turn";
+    };
+  },
+  acknowledgement: async (f) => {
+    f.live.acknowledged = false;
+    return async () => {
+      f.live.acknowledged = true;
+    };
+  },
+  run: async (f) => {
+    await updateTask(f.stateDir, f.taskId, (n) => {
+      n.runId = "newer-run";
+    });
+    return () =>
+      updateTask(f.stateDir, f.taskId, (n) => {
+        n.runId = f.runId;
+      });
+  },
+  thread: async (f) => {
+    await updateTask(f.stateDir, f.taskId, (n) => {
+      n.threadId = "newer-thread";
+    });
+    return () =>
+      updateTask(f.stateDir, f.taskId, (n) => {
+        n.threadId = "thread";
+      });
+  },
+};
+for (const [name, hold] of Object.entries(profileRaces))
+  test(`profile-read race: ${name} prevents native send and preserves the ordered pending direction`, async (t) => {
+    const f = await fixture(t);
+    const { configureGlobalCapacity } =
+      await import("../runtime/orchestration/capacity.mjs");
+    f.options.globalCapacityDir = path.join(f.stateDir, "capacity");
+    await configureGlobalCapacity({
+      dir: f.options.globalCapacityDir,
+      admissionPaused: false,
+    });
+    await f.follow();
+    await f.follow("second-direction");
+    let enter, release;
+    const entered = new Promise((r) => (enter = r)),
+      gate = new Promise((r) => (release = r));
+    t.after(() => release());
+    let reads = 0;
+    const observer = createRunnerDirections({
+      ...f.options,
+      prepareText: async (text) => {
+        reads++;
+        enter();
+        await gate;
+        return "CURRENT PROFILE\n" + text;
+      },
+    });
+    const delivering = observer.observe();
+    await entered;
+    let clear;
+    try {
+      clear = await hold(f);
+    } finally {
+      release();
+      await delivering;
+    }
+    assert.equal(
+      f.calls.length,
+      0,
+      "No native input may cross the new hold/identity boundary",
+    );
+    let task = await f.read();
+    assert.equal(task.assignments[1].delivery.state, "pending");
+    assert.equal(task.assignments[2].delivery.state, "pending");
+    assert.equal(
+      task.assignments[1].deliveryHistory,
+      undefined,
+      "Preparation alone is not a delivery attempt",
+    );
+    await clear();
+    await observer.observe();
+    await observer.observe();
+    assert.deepEqual(
+      f.calls.map((c) => c.requestId),
+      ["first-direction", "second-direction"],
+    );
+    assert.ok(f.calls.every((c) => c.text.startsWith("CURRENT PROFILE\n")));
+    task = await f.read();
+    assert.ok(
+      task.assignments
+        .slice(1)
+        .every((a) => a.delivery.state === "acknowledged"),
+    );
+    assert.equal(
+      reads,
+      3,
+      "The held direction rereads the saved profile before its later attempt",
+    );
+    await createRunnerDirections(f.options).observe();
+    assert.equal(f.calls.length, 2, "Acknowledged input is never replayed");
+  });
+
+test("hold after native send retains acknowledgement and never replays accepted input", async (t) => {
+  const f = await fixture(t);
+  await f.follow();
+  let enter, release;
+  const entered = new Promise((r) => (enter = r)),
+    gate = new Promise((r) => (release = r));
+  t.after(() => release());
+  const observer = createRunnerDirections({
+    ...f.options,
+    steer: async (input) => {
+      f.calls.push(input);
+      enter();
+      await gate;
+      return { turnId: input.expectedTurnId };
+    },
+  });
+  const delivering = observer.observe();
+  await entered;
+  const { beginPreparation, cancelPreparation } =
+    await import("../runtime/preparation/store.mjs");
+  try {
+    await beginPreparation(f.stateDir, {
+      id: "after-send-hold",
+      projectId: "fixture",
+      purpose: "update",
+      participants: [],
+    });
+  } finally {
+    release();
+    await delivering;
+  }
+  assert.equal((await f.read()).assignments[1].delivery.state, "acknowledged");
+  await observer.observe();
+  await cancelPreparation(f.stateDir, "after-send-hold");
+  await createRunnerDirections(f.options).observe();
+  assert.equal(f.calls.length, 1);
+});
+
+test("concurrent profile preparation still permits only one durable native attempt", async (t) => {
+  const f = await fixture(t);
+  await f.follow();
+  let release, bothReady;
+  const gate = new Promise((r) => (release = r)),
+    entered = new Promise((r) => (bothReady = r));
+  t.after(() => release());
+  let readers = 0;
+  const options = {
+    ...f.options,
+    prepareText: async (text) => {
+      if (++readers === 2) bothReady();
+      await gate;
+      return text;
+    },
+  };
+  const one = createRunnerDirections(options),
+    two = createRunnerDirections(options);
+  const attempts = [one.observe(), two.observe()];
+  await entered;
+  assert.equal((await f.read()).assignments[1].delivery.state, "pending");
+  release();
+  await Promise.all(attempts);
+  const task = await f.read();
+  assert.equal(f.calls.length, 1);
+  assert.equal(task.assignments[1].delivery.state, "acknowledged");
+  assert.deepEqual(
+    task.assignments[1].deliveryHistory.map((d) => d.state),
+    ["attempted", "acknowledged"],
+  );
+  await createRunnerDirections(f.options).observe();
+  assert.equal(f.calls.length, 1);
 });

@@ -93,6 +93,18 @@ export function createRunnerDirections({
       threadId: current.threadId,
       turnId: current.turnId,
     };
+    // Profile I/O is preparation, not a delivery attempt. Keep it before the
+    // durable claim so every existing hold/task/native guard is fresh afterward.
+    // A crash or newly held direction here remains safely pending and unsent.
+    let text = "",
+      preparationFailed = false;
+    try {
+      text = await prepareText(
+        `Manager direction (task ${taskId}, request ${direction.id}, run ${runId}):\nIssue link (data): ${JSON.stringify(retainedWorkLink(direction))}\n${direction.brief}`,
+      );
+    } catch {
+      preparationFailed = true;
+    }
     let claimed = false;
     await updateTask(stateDir, taskId, async (next) => {
       if (await held()) return;
@@ -120,19 +132,13 @@ export function createRunnerDirections({
     if (!claimed) return;
     let state: DirectionDelivery["state"], error: string | undefined;
     try {
-      let text: string;
-      try {
-        text = await prepareText(
-          `Manager direction (task ${taskId}, request ${direction.id}, run ${runId}):\nIssue link (data): ${JSON.stringify(retainedWorkLink(direction))}\n${direction.brief}`,
-        );
-      } catch {
+      if (preparationFailed)
         throw Object.assign(
           new Error(
             "Cannot read the current saved worker profile; no direction was sent. Restore saved Settings and explicitly send a new direction.",
           ),
           { nativeRejected: true, nativePreparationFailed: true },
         );
-      }
       const result = await steer({
         threadId: current.threadId,
         expectedTurnId: current.turnId,
