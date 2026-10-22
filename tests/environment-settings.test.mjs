@@ -5,9 +5,42 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createEnvironmentSettings} from '../runtime/projects/environment-settings.mjs';
 import {validateWorkerEnvironment} from '../runtime/config/index.mjs';
+import {decodeApi} from '../renderer/src/contracts/decode.ts';
 
 const source = {path: 'AGENTS.md', sha256: 'a'.repeat(64)};
 const hook = {command: '/usr/bin/printf', args: ['a b', '"quoted"', '$(never-execute)', ''], timeoutMs: 1234};
+test('settings decoder accepts backend-validated absent lifecycle phases without losing edits', async t => {
+  const phases = ['setup','start','resume','ready','stop','teardown'];
+  const plan = {schemaVersion:1, sources:[source], ...Object.fromEntries(phases.map(phase => [phase,null]))};
+  plan.start = {command:'printf retained', source, timeoutMs:1000};
+  const f = await fixture(t, {executionPlan:plan});
+  const response = workerEnvironment => ({managerProfile:{voice:null,version:'profile'}, managerLifecycle:{state:'running'}, manager:{saved:{text:'Manager',version:'m1'}}, worker:{saved:{text:'Worker',version:'w1'}}, workerEnvironment});
+  const before = await f.store.read();
+  for (const phase of phases) {
+    const payload = response(structuredClone(before));
+    payload.workerEnvironment.environment.executionPlan[phase] = null;
+    payload.workerEnvironment.environment = validateWorkerEnvironment(payload.workerEnvironment.environment);
+    assert.equal(decodeApi('settings', payload), payload);
+  }
+  for (const endpoint of ['settings','settings/worker-environment']) {
+    const payload = response(before);
+    assert.equal(decodeApi(endpoint, payload), payload);
+  }
+  const edited = structuredClone(before.environment);
+  edited.executionPlan.start.command = 'printf updated';
+  const saved = await f.store.save({expectedRevision:before.revision, environment:edited});
+  assert.equal(decodeApi('settings/worker-environment', response(saved)).workerEnvironment.environment.executionPlan.ready, null);
+  const restarted = await createEnvironmentSettings({configuration:f.configuration});
+  const restored = await restarted.read();
+  assert.deepEqual(decodeApi('settings', response(restored)).workerEnvironment.environment, edited);
+  for (const phase of phases) {
+    for (const invalid of [false, 'not a hook', [], {command:'missing source and timeout'}]) {
+      const malformed = response(structuredClone(restored));
+      malformed.workerEnvironment.environment.executionPlan[phase] = invalid;
+      assert.throws(() => decodeApi('settings', malformed), /Invalid settings response/);
+    }
+  }
+});
 async function fixture(t, environment = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'crew-environment-settings-'));
   t.after(() => rm(directory, {recursive:true, force:true}));

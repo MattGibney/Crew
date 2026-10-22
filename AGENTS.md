@@ -8,6 +8,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 # Working scope and durable engineering guidance
 
+- Settings response schemas must preserve backend-supported null optional execution-plan phases. An unused setup/start/resume/readiness/stop/teardown phase is not a malformed command. Test real saved environment output through the renderer decoder, including save/reload, while retaining rejection of malformed non-null hooks; never reset user configuration to work around decoder drift (GH-74).
+
 - The annotation-preview setup is explicitly exempt from ticket creation. Keep its Vite scenario harness developer-only, use the real Crew renderer/components/theme, and stub all effects before rendering. No physical media, native lifecycle, auth/model/worker operations or installed-profile changes. Preserve the running preview for direct user annotations; subsequent product changes still follow separately agreed scope and delivery policy.
 - UI annotation direction: the desktop worker panel resizes from its left edge; voice controls and typed input share one composer; omit the subscription/workspace footer beneath it. Preserve call lifetime, draft handling and the narrow-screen worker navigation while iterating this design.
 - Worker detail keeps a compact identity/status header. Put the full summary, execution timing, assignment, metadata and manager-mediated lifecycle actions in an Overview tab rather than consuming conversation space with a large fixed header.
