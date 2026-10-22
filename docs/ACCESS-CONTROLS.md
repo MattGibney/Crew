@@ -165,13 +165,16 @@ The owner completed Crew browser sign-in, confirmed through native account readb
 no personal authentication was copied. #88 separately recorded a subscription model
 call reaching an allowed synthetic MCP operation and a broker-denied forbidden operation.
 
-Combined provider/adapter typecheck and build passed. #95 is validating the isolated
-typed manager/worker candidate; composed lifecycle/profile/chat continuity, agent request
-→ owner approval → broker execution, agent-mediated project work and final native voice
-handoff acceptance remain integration work. Actual configured external-service setup
-and operation are not established by synthetic credentials or MCP fixtures. Packaged
-lifecycle acceptance is tracked separately. See [the detailed evidence](ACCESS-ISOLATION.md)
-for the trusted-host/model-tool boundary and remaining limits.
+The integrated signed-in typed walkthrough now covers manager/worker creation, Start,
+steering, queued input, an approved disposable project command and reporting; both jobs
+completed. Isolated unsigned packaged launch/Quit/reopen preserved the same chats and
+sign-in. Real access/broker components separately passed once/session/persistent grant
+and revocation checks against synthetic authenticated endpoints, with credentials confined
+to trusted executor use. These do not establish live third-party configuration or operation.
+Changed-profile compaction and help/private-work/preparation checks remain in progress;
+real voice handoff execution still lacks authoritative public-history provenance. See
+[the current composition checkpoint](AGENT-UNIFIED-COMPOSITION.md#validation-boundary)
+and [native policy evidence](ACCESS-ISOLATION.md) for the exact limits.
 
 
 ## Unified owner settings and provisioning (#89)

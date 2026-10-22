@@ -273,10 +273,15 @@ Actual Electron 44.9.2 safeStorage plus the real vault passed synthetic store/re
 second-process reopen, stale-reference denial and deletion. This proves host OS storage
 integration, not signed/installed Crew application identity or process isolation.
 
-Still required for the full #86 acceptance: real inference; same-thread
-Start/Stop/Restart/profile application through the composed app; authenticated native Crew
-MCP; real agent-mediated project work; actual configured service verification; and packaged
-launch/Quit/reopen. Physical microphone capture and signed automatic updates were not tested.
+The later [composition checkpoint](AGENT-UNIFIED-COMPOSITION.md#validation-boundary)
+records actual signed-in manager/worker tool work, steering/queueing, a disposable project
+command, completed jobs and unsigned packaged launch/Quit/reopen with retained chats and
+sign-in. These supersede the earlier pending typed/project/package milestones above.
+Changed-profile compaction integration and help/private-work/preparation checks remain
+in progress. Real synthetic-audio voice handoff execution is recorded in the
+[native runtime evidence](AGENT-NATIVE-RUNTIME.md#current-bounded-evidence), with public
+history provenance still unresolved. Live third-party service operation, physical
+microphone/acoustic acceptance and signed automatic updates are not established.
 
 References: [native authentication](https://learn.chatgpt.com/docs/auth),
 [app-server protocol](https://learn.chatgpt.com/docs/app-server),
