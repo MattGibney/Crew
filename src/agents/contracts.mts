@@ -709,6 +709,7 @@ export type RuntimeEvent = {
       request: JsonObject;
     }
   | { kind: "delivery"; attemptId: Id; result: DeliveryResult }
+  | { kind: "configuration"; state: "rejected"; error: RuntimeError }
   | {
       kind: "connection";
       state: "connected" | "disconnected";
