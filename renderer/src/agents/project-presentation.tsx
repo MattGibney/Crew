@@ -1057,8 +1057,10 @@ function SubscriptionSettings({
   const [status, setStatus] = useState<SubscriptionStatus | null>(null);
   const [login, setLogin] = useState<SignIn | null>(null);
   const [signInPending, setSignInPending] = useState(false);
+  const [startFailed, setStartFailed] = useState(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [statusError, setStatusError] = useState("");
   const alive = useRef(true),
     sequence = useRef(0),
     action = useRef(false);
@@ -1077,15 +1079,17 @@ function SubscriptionSettings({
         throw new Error("Invalid subscription state");
       if (alive.current && request === sequence.current) {
         setStatus(next);
-        setError("");
+        setStatusError("");
         if (next.state === "signed_in") {
           setLogin(null);
           setSignInPending(false);
+          setStartFailed(false);
+          setError("");
         }
       }
     } catch {
       if (alive.current && request === sequence.current)
-        setError(
+        setStatusError(
           "Subscription status could not be checked. Retry when the native connection is available.",
         );
     }
@@ -1108,10 +1112,10 @@ function SubscriptionSettings({
     [subscribe, visible, reload],
   );
   useEffect(() => {
-    if (!signInPending || !visible || busy) return;
+    if (!signInPending || startFailed || !visible || busy) return;
     const timer = setTimeout(() => void reload(), 3000);
     return () => clearTimeout(timer);
-  }, [signInPending, visible, busy, status, reload]);
+  }, [signInPending, startFailed, visible, busy, status, reload]);
   async function run(kind: "beginSignIn" | "cancelSignIn") {
     if (action.current) return;
     action.current = true;
@@ -1121,6 +1125,7 @@ function SubscriptionSettings({
     try {
       if (kind === "beginSignIn") {
         setSignInPending(true);
+        setStartFailed(false);
         const result = await command<SignIn>("subscription.beginSignIn", {});
         if (!validSignIn(result))
           throw new Error("Unsupported verification result");
@@ -1130,16 +1135,19 @@ function SubscriptionSettings({
         if (alive.current) {
           setLogin(null);
           setSignInPending(false);
+          setStartFailed(false);
         }
       }
       await reload();
     } catch {
-      if (alive.current)
+      if (alive.current) {
+        if (kind === "beginSignIn") setStartFailed(true);
         setError(
           kind === "beginSignIn"
             ? "Sign-in did not return a usable code. Check the status or cancel the pending attempt before starting again."
             : "Sign-in cancellation was not confirmed. Check the current status before trying again.",
         );
+      }
     } finally {
       action.current = false;
       if (alive.current) setBusy(false);
@@ -1225,7 +1233,9 @@ function SubscriptionSettings({
       ) : signInPending ? (
         <div className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            Waiting for a confirmed sign-in result.
+            {startFailed
+              ? "Sign-in needs attention."
+              : "Waiting for a confirmed sign-in result."}
           </p>
           <Button
             variant="outline"
@@ -1245,6 +1255,11 @@ function SubscriptionSettings({
       {error && (
         <p role="alert" className="text-sm text-destructive">
           {error}
+        </p>
+      )}
+      {statusError && (
+        <p role="alert" className="text-sm text-destructive">
+          {statusError}
         </p>
       )}
     </section>
