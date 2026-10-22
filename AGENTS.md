@@ -479,3 +479,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - A new voice call must not adopt delayed transcript items from the prior call. Until native started establishes a nonnull realtime session ID, fail closed; require exact item/session identity and accept deltas only for items admitted under that call. Renderer call IDs alone cannot establish native provenance because host publication stamps the current call.
 
 - Realtime flat events can arrive before typed transcript items. Exact-session typed items must supersede the flat fallback; suppress later flat duplicates, while preserving native identity checks and the desktop bridge's typed-only display.
+
+- Packaged synthetic voice acceptance must establish that generated speech actually reached the call. Listening with fake-device launch switches is insufficient: the audio sandbox can reject a WAV before input. Preserve the harness diagnostic, keep the sandbox enabled, and leave actual desktop transcript acceptance pending until a supported generated-audio path works.
