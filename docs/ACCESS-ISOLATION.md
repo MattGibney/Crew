@@ -59,6 +59,14 @@ The explicit child environment contains no inherited service tokens, SSH agent s
 Git helper configuration or personal CLI configuration. The Crew session token authorizes
 only that native session at the Crew gateway; it is not a provider secret.
 
+Native TLS explicitly uses the macOS public CA bundle at `/private/etc/ssl/cert.pem`
+through Codex's supported `CODEX_CA_CERTIFICATE` environment setting. The isolated
+process cannot rely on personal keychain certificate discovery. An actual device-login
+request failed after successful proxy CONNECT without this setting and started with it;
+polling, cancellation and confirmed peer exit also passed. The policy and host allowlist
+remain unchanged, and the existing keychain/outside-file/network denials still pass.
+This verifies device-code issuance, not owner completion or token exchange.
+
 The native model process has no project mounts or direct shell/JS tools. The adapter
 must also pass `environments: []` on supported native thread-start and turn requests so
 native filesystem tools have no selected environment, and verify the observed selection.
@@ -184,3 +192,5 @@ References: [native authentication](https://learn.chatgpt.com/docs/auth),
 [configuration](https://learn.chatgpt.com/docs/config-file/config-reference), and the
 installed CLI's generated experimental protocol schema. Native token-import variants
 marked internal-only are not used.
+
+The certificate setting is documented in [native environment variables](https://learn.chatgpt.com/docs/config-file/environment-variables).

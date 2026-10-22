@@ -339,6 +339,9 @@ export class CodexRuntimeAccessProvider implements RuntimeAccessProvider {
       PATH: "/usr/bin:/bin",
       HOME: join(this.root, "home"),
       CODEX_HOME: join(this.root, "codex"),
+      // Native TLS must not depend on personal keychain access inside Seatbelt.
+      // Codex supports this explicit public system CA bundle for login/model TLS.
+      CODEX_CA_CERTIFICATE: "/private/etc/ssl/cert.pem",
       CFFIXED_USER_HOME: join(this.root, "home"),
       TMPDIR: join(this.root, "tmp"),
       HTTPS_PROXY: `http://127.0.0.1:${this.egress.port}`,
