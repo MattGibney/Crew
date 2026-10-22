@@ -42,6 +42,20 @@ try{
  const source={path:'.codex/environments/environment.toml',sha256:'a'.repeat(64)};
  const plan={schemaVersion:1,sources:[source],env:{PATH:'/exact/tools:/usr/bin'},networkAccess:false};
  for(const phase of ['setup','start','resume','ready','stop','teardown'])plan[phase]={command:`echo '${phase} script'`,source,timeoutMs:600000};
+ // GH74: project discovery legitimately saves null for unused lifecycle phases.
+ const optionalPlan={...plan,setup:null,ready:null,resume:null,stop:null,teardown:null};
+ await context.request.post(origin+'/__control',{data:{workerEnvironment:{executionPlan:optionalPlan}}});
+ await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByRole('button',{name:'Worker environment',exact:true}).click();
+ await form.getByRole('button',{name:'Update',exact:true}).click();
+ const readiness=form.locator('section').filter({has:page.getByRole('heading',{name:'Check readiness',exact:true})});
+ assert.equal(await readiness.getByRole('checkbox',{name:'Configured'}).isChecked(),false);
+ await form.getByRole('textbox',{name:'Start shell script',exact:true}).fill('printf retained-with-null-phases');
+ await form.getByRole('button',{name:'Save environment',exact:true}).click();await form.getByRole('button',{name:'Update',exact:true}).waitFor();
+ const optionalSaved=await (await context.request.get(origin+'/api/settings')).json();
+ assert.equal(optionalSaved.workerEnvironment.environment.executionPlan.ready,null);
+ assert.equal(optionalSaved.workerEnvironment.environment.executionPlan.start.command,'printf retained-with-null-phases');
+ await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByRole('button',{name:'Worker environment',exact:true}).click();
+ await page.screenshot({path:path.join(output,'nullable-project-phases.png'),fullPage:true});
  await context.request.post(origin+'/__control',{data:{workerEnvironment:{executionPlan:plan}}});await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).click();await page.getByRole('button',{name:'Worker environment',exact:true}).click();await form.getByRole('button',{name:'Update',exact:true}).click();
  for(const label of ['Set up','Start','Resume','Check readiness','Stop','Tear down']){await form.getByRole('textbox',{name:`${label} shell script`,exact:true}).fill(`printf '%s\\n' '${label}'\n# exact multiline`);await form.getByRole('spinbutton',{name:`${label} timeout (milliseconds)`,exact:true}).fill('45678');}
  await page.getByRole('region',{name:'Settings',exact:true}).evaluate(el=>el.scrollTop=0);

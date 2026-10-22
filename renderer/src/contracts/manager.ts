@@ -399,7 +399,7 @@ export interface EnvironmentHook {
   source?: EnvironmentSource;
 }
 export type EnvironmentHooks = Partial<
-  Record<EnvironmentPhase, EnvironmentHook>
+  Record<EnvironmentPhase, EnvironmentHook | null>
 >;
 export interface WorkerEnvironmentPlan extends EnvironmentHooks {
   sources: EnvironmentSource[];
@@ -407,7 +407,9 @@ export interface WorkerEnvironmentPlan extends EnvironmentHooks {
   networkAccess?: boolean;
   permissionsSource?: EnvironmentSource;
 }
-export interface WorkerEnvironmentConfig extends EnvironmentHooks {
+export interface WorkerEnvironmentConfig extends Partial<
+  Record<EnvironmentPhase, EnvironmentHook>
+> {
   executionPlan?: WorkerEnvironmentPlan;
 }
 export interface WorkerEnvironmentSettings {

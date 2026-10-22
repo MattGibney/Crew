@@ -78,9 +78,12 @@ const directHook = object(
   { command: string, args: array(string), timeoutMs: { type: "number" } },
   ["command", "args", "timeoutMs"],
 );
-const projectHook = object(
-  { command: string, source: environmentSource, timeoutMs: { type: "number" } },
-  ["command", "source", "timeoutMs"],
+// Backend execution plans retain null for phases that are not configured.
+const projectHook = nullable(
+  object(
+    { command: string, source: environmentSource, timeoutMs: { type: "number" } },
+    ["command", "source", "timeoutMs"],
+  ),
 );
 const workerEnvironment = object({
   bootstrap: directHook,
