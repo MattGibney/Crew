@@ -9,7 +9,15 @@ The package entry, development entry and `crew start` open `src/desktop/main.mts
 - Skills are project-owned native `SKILL.md` bundles with immutable selected revisions. The composition's authorization/admission wrapper governs their agent tools. See [Project skills](PROJECT-SKILLS.md).
 - Voice uses the composition-owned primary voice service. The desktop adapts validated owner commands; it does not create another handoff, turn or settlement authority. One mounted renderer hook owns media while controls move between presentation modes. Explicit Connect is required; automated validation uses synthetic media.
 - Per-agent schedules reuse the existing cadence/checkpoint engine and have no default occurrence. The desktop passes the scheduler's current-state check into foundation admission, where it runs before persisting private delivery intent. A disabled or changed schedule is rejected there without leaving a queued message.
-- Project setup uses subscription status, access-owner operations and the environment-owner API. Approve a folder in Workspace settings, then select that folder in a permission group and assign the group to the agent. The group editor displays paths and read/write access from current project workspace records. Approval of a path alone does not grant an agent access or prove actual project execution.
+- Guided project setup walks through Sign in, Project folder, Agent, Access, Connections and Review. The selected folder has explicit no-access, read-only and read-write choices. The final action prepares its exact policy, saves a visible shared access group and applies the reviewed assignment through the existing access authority. Approval of a path alone does not grant an agent access or prove actual project execution.
+
+## Guided setup (#100)
+
+The first-use screen creates the manager without asking the owner to configure an approved preset manually. Later, **Create agent / update access** in the worker area and **Agent setup** in Settings open the same flow. Existing-agent repair changes access while preserving its profile and conversation. Shared groups can be reused; creating a new named group never rewrites a group used by other agents. Current permissions from every selected group appear in the final review.
+
+Setup progress is a private, revision-checked record of non-secret choices and completed stages. Credentials and sign-in URLs stay in their existing authentication flows. **Save and close** pauses the form; reopening resumes it. A concurrent saved revision leaves typed choices visible and requires an explicit reload. Completion uses stable group and creation-configuration identities, recovers an already allocated agent from its exact provisioning provenance and fails closed when a creation attempt cannot be resolved. It never retries an uncertain creation by allocating a second agent.
+
+Connections are optional. Local-only work can use Crew capabilities and the selected project folder. Saving the setup creates a stopped agent; Start remains explicit. Access repair applies to subsequent authorized tool calls without replacing the native chat. Profile changes retain their separate Restart behavior.
 
 ## Native lifecycle
 
