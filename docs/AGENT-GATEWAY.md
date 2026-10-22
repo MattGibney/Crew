@@ -196,6 +196,15 @@ persistent policy acceptance, actual isolation evidence, native/package lifecycl
 
 ## Usability integration evidence — 22 October 2026
 
+Owner snapshots use the synchronous `catalogueSnapshot(connection)` callback wired to
+`gateway.catalogue.projection(connection)`. This is a local, revision-matched projection
+with `available`, `undiscovered` and `failed` states. A successfully discovered empty
+catalogue is distinct from a connection never checked. Explicit connection verification
+performs remote discovery. Refresh retains the previous same-revision observation during
+I/O and atomically publishes the new catalogue; concurrent refreshes share one request,
+and invalidated or superseded results cannot republish stale schemas. Authorization uses
+the local operation projection without waiting on network work inside a state transaction.
+
 A focused disposable walkthrough now uses the actual `AccessStore`,
 `ProjectAuthorizationService` and `EncryptedCredentialVault` with a disposable AES encryption backend.
 An MCP SDK client connects through the gateway transport to an authenticated loopback HTTP MCP

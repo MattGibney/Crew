@@ -100,3 +100,6 @@ Presets use canonical `AgentCreationPreset` records. For an empty project the ho
 
 
 Connection verification uses an independent optional `onVerify(connectionId, expectedRevision)` callback and displays current backend observation after the check. It is not labelled as OAuth reconnect. Owner-only administration actions are excluded from selectable agent Crew capabilities; saving a group must not imply agents can administer grants or credentials.
+
+
+The owner snapshot consumes a required synchronous `catalogueSnapshot(connection)` host callback and never starts provider discovery. Its `catalogue` rows distinguish `available`, `undiscovered` and `failed`. `OwnerAccessSettings` displays a connection-specific not-yet-discovered or failed-discovery message and offers the separate Verify connection action only when supplied. Empty current catalogues can be available; absent/unverified cache entries cannot.

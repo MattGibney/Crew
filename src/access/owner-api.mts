@@ -6,7 +6,6 @@ import type {
   AgentCreationPreset,
   AuthorizationService,
   PermissionGroup,
-  ServiceCapability,
   ServiceConnection,
 } from "../agents/contracts.mjs";
 import type { ProjectAuthorizationService } from "./authorization.mjs";
@@ -17,11 +16,13 @@ import type {
   AccessOwnerView,
   OwnerConnectionSetupChoice,
   OwnerRuntimeDefaults,
+  OwnerCatalogueSnapshot,
 } from "./owner-contracts.mjs";
 export type {
   AccessOwnerView,
   OwnerConnectionSetupChoice,
   OwnerRuntimeDefaults,
+  OwnerCatalogueSnapshot,
 } from "./owner-contracts.mjs";
 
 export interface AccessOwnerApiOptions {
@@ -33,7 +34,8 @@ export interface AccessOwnerApiOptions {
   runtimeDefaults?: OwnerRuntimeDefaults | null;
   listAgents(): Promise<Agent[]>;
   setupChoices(): Promise<OwnerConnectionSetupChoice[]>;
-  capabilities(connectionId: string): Promise<ServiceCapability[]>;
+  /** Synchronous local projection only. Discovery/refresh belongs to explicit verification. */
+  catalogueSnapshot(connection: ServiceConnection): OwnerCatalogueSnapshot;
   /** Actual gateway connection check; absent means no supported verification flow. */
   verifyConnection?(connectionId: string): Promise<void>;
 }
@@ -214,23 +216,41 @@ export function createAccessOwnerApi(
         options.listAgents(),
         options.setupChoices(),
       ]);
-      const discovered = await Promise.all(
-        state.connections.map(async (connection) => {
-          try {
-            return {
-              connectionId: connection.id,
-              state: "available" as const,
-              capabilities: await options.capabilities(connection.id),
-            };
-          } catch {
-            return {
-              connectionId: connection.id,
-              state: "unavailable" as const,
-              capabilities: [] as ServiceCapability[],
-            };
-          }
-        }),
-      );
+      const discovered = state.connections.map((connection) => {
+        try {
+          const projection = options.catalogueSnapshot(connection);
+          if (
+            !projection ||
+            !["available", "undiscovered", "failed"].includes(
+              projection.state,
+            ) ||
+            !Array.isArray(projection.capabilities)
+          )
+            throw new Error("Invalid local catalogue projection.");
+          if (
+            projection.capabilities.some(
+              (capability) => capability.connectionId !== connection.id,
+            )
+          )
+            throw new Error(
+              "Catalogue projection belongs to another connection.",
+            );
+          return {
+            connectionId: connection.id,
+            state: projection.state,
+            capabilities:
+              projection.state === "available"
+                ? structuredClone(projection.capabilities)
+                : [],
+          };
+        } catch {
+          return {
+            connectionId: connection.id,
+            state: "failed" as const,
+            capabilities: [],
+          };
+        }
+      });
       return {
         ...state,
         projectId: options.projectId,
