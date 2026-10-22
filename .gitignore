@@ -30,3 +30,6 @@ renderer-dist/
 # Private observed conversation overlays and atomic-write scratch files
 *.conversation.json
 *.conversation-*.tmp
+
+# Compiled TypeScript runtime and sourcemaps
+runtime/

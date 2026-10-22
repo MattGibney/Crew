@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createConversationTimeline } from '../conversation-timeline.mjs';
+import { createConversationTimeline } from '../runtime/manager/conversation/timeline.mjs';
 
 test('several promotion fragments reference one native item and canonical replay updates its exact position', () => {
   const timeline = createConversationTimeline();

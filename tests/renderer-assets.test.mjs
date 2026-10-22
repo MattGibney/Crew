@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, symlink, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createRendererAssets } from '../renderer-assets.mjs';
+import { createRendererAssets } from '../runtime/http/renderer-assets.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'crew-renderer-'));

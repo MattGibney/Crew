@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSounds, createCallCues, CUES } from './sounds.js';
-import { attentionKeys, createAttentionSounds } from './attention-sounds.js';
+import { createSounds, createCallCues, CUES } from './sounds.ts';
+import { attentionKeys, createAttentionSounds } from './attention-sounds.ts';
 
 test('only explicit human action evidence qualifies, with exact question/run correlation', () => {
   const work = { threadId: 'manager', approvals: [{ id: 'approval' }], items: [{ attention: { id: 'decision', message: 'Choose account' } }], messages: [{ role: 'assistant', text: 'Done. Any questions?' }], status: 'failed' };

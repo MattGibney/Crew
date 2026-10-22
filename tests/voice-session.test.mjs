@@ -3,10 +3,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import vm from 'node:vm';
-import {createVoiceInput,voiceActivityEvent} from '../renderer/src/manager/voice-input.js';
-import {createCallCues} from '../renderer/src/manager/sounds.js';
-import {createSilentAudio} from '../renderer/src/manager/voice-silence.js';
-const source=(await readFile(new URL('../renderer/src/manager/useVoiceSession.js',import.meta.url),'utf8')).replace(/^import .*;\s*$/gm,'').replace('export function useVoiceSession','function useVoiceSession');
+import { transformSync } from 'esbuild';
+import {createVoiceInput,voiceActivityEvent} from '../renderer/src/manager/voice-input.ts';
+import {createCallCues} from '../renderer/src/manager/sounds.ts';
+import {createSilentAudio} from '../renderer/src/manager/voice-silence.ts';
+const typedSource = await readFile(new URL('../renderer/src/manager/useVoiceSession.ts',import.meta.url),'utf8');
+const source=transformSync(typedSource, { loader: 'ts', format: 'esm', target: 'es2023' }).code.replace(/^import .*;\s*$/gm,'').replace(/^export\s*\{[^}]*\};?\s*$/gm,'');
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 function track(){return {enabled:true,readyState:'live',stopCount:0,stop(){this.enabled=false;this.readyState='ended';this.stopCount++;},end(){this.readyState='ended';this.onended?.();}};}
 function stream(){const audio=track();return {audio,getTracks:()=>[audio],getAudioTracks:()=>[audio]};}
@@ -46,7 +48,7 @@ function harness({acquire,replaceTrack}={}){
   emit(state='connected'){this.connectionState=state;this.onconnectionstatechange?.();}
   close(){this.closed=true;this.connectionState='closed';}
  }
- const context=vm.createContext({useRef,useState,useCallback,useEffect,createVoiceInput,voiceActivityEvent,createCallCues,createSilentAudio:()=>createSilentAudio(AudioContext),navigator:{mediaDevices:{getUserMedia:async constraints=>{captures.push(constraints);return acquire?acquire(captures.length):stream();}}},RTCPeerConnection:Peer,window,document,api:async(route,input)=>{requests.push({route,input});return route==='connect'?{sessionToken:'synthetic-session',sdp:'v=0\r\nsynthetic-answer'}:{};},errorText:error=>String(error?.message||error),setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},setInterval:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id),clearInterval:id=>timers.delete(id)});
+ const context=vm.createContext({useRef,useState,useCallback,useEffect,createVoiceInput,voiceActivityEvent,createCallCues,createSilentAudio:()=>createSilentAudio(AudioContext),navigator:{mediaDevices:{getUserMedia:async constraints=>{captures.push(constraints);return acquire?acquire(captures.length):stream();}}},RTCPeerConnection:Peer,window,document,api:async(route,input)=>{requests.push({route,input});return route==='connect'?{sessionToken:'synthetic-session',sdp:'v=0\r\nsynthetic-answer'}:{};},errorText:error=>String(error?.message||error),errorName:error=>error?.name||'',setTimeout:fn=>{timers.set(++timerId,fn);return timerId;},setInterval:fn=>{timers.set(++timerId,fn);return timerId;},clearTimeout:id=>timers.delete(id),clearInterval:id=>timers.delete(id)});
  vm.runInContext(source+'\nglobalThis.voiceHook=useVoiceSession;',context,{filename:'useVoiceSession.js'});
  const soundPlayer={play:kind=>sounds.push(kind),unlock(){}};
  function render(){cursor=0;dirty=false;current=context.voiceHook(error=>errors.push(error),soundPlayer);while(effects.length)effects.shift()();return current;}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { workspaceUpdateActivity, reserveWorkspaceUpdate } from '../desktop/workspace-update.mjs';
+import { workspaceUpdateActivity, reserveWorkspaceUpdate } from '../runtime/desktop/workspace-update.mjs';
 const reservationFixture = responses => {
   const calls = [];
   const projects = Object.entries(responses).map(([name, response]) => ({ name, host:{ async updateToken(route) {
@@ -108,7 +108,7 @@ test('an unconfirmed first reservation is rejected without canceling a barrier i
 import { mkdtemp, readFile, writeFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createWorkspaceUpdateReservation } from '../desktop/workspace-update.mjs';
+import { createWorkspaceUpdateReservation } from '../runtime/desktop/workspace-update.mjs';
 async function journalFixture(t, responses = { Alpha:yes, Beta:yes }) {
   const dir = await mkdtemp(join(tmpdir(), 'crew-idle-update-'));
   t.after(() => rm(dir, { recursive:true, force:true }));

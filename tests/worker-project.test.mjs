@@ -7,11 +7,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { createTask, readTask, updateTask, answerQuestion, requestWorkerAction } from '../orchestration-store.mjs';
-import { createController } from '../controller.mjs';
-import { promptSnapshot } from '../prompt-settings.mjs';
+import { createTask, readTask, updateTask, answerQuestion, requestWorkerAction } from '../runtime/orchestration/store.mjs';
+import { createController } from '../runtime/workers/controller.mjs';
+import { promptSnapshot } from '../runtime/manager/instructions/settings.mjs';
 const exec = promisify(execFile);
-const sourceDir = fileURLToPath(new URL('../', import.meta.url));
+const sourceDir = fileURLToPath(new URL('../runtime/', import.meta.url));
 async function repository(base) {
   const repo = path.join(base, 'source'); await mkdir(repo);
   await exec('git', ['init', '-b', 'main', repo]);
@@ -26,7 +26,7 @@ async function mockedCodex(base, fixture = false, edit = false, {finalMessage=tr
   await writeFile(file, workerAppServerFixture(`#!/usr/bin/env node
 import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
-import {reportTask} from ${JSON.stringify(new URL('../orchestration-store.mjs', import.meta.url).href)};
+import {reportTask} from ${JSON.stringify(new URL('../runtime/orchestration/store.mjs', import.meta.url).href)};
 const args=process.argv.slice(2); const config=args.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));
 const [,state,,task,run]=JSON.parse(config.split('=').slice(1).join('='));
 const worktree=process.cwd(); if (${edit}) writeFileSync('example.txt','edited\\n'); const output=execFileSync('git',['-C',worktree,'status','--porcelain'],{encoding:'utf8'});
@@ -150,7 +150,7 @@ test('worker directions use current saved instructions and retain original run s
 import {execFileSync} from 'node:child_process';
 import {writeFileSync} from 'node:fs';
 import path from 'node:path';
-import {reportTask} from ${JSON.stringify(new URL('../orchestration-store.mjs', import.meta.url).href)};
+import {reportTask} from ${JSON.stringify(new URL('../runtime/orchestration/store.mjs', import.meta.url).href)};
 const args=process.argv.slice(2),raw=args.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));
 const [,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 writeFileSync(path.join(state,run+'-prompt.txt'),args.at(-1));

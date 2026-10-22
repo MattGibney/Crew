@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {updateActivity} from '../update-activity.mjs';
+import {updateActivity} from '../runtime/updates/activity.mjs';
 const idle=()=>({work:{status:'idle',voiceActive:false,voiceConnecting:false,workStarting:false,activeTurnId:null,approvals:[]},view:{tasks:[]}});
 test('only positively idle manager and worker evidence permits restart',()=>{assert.deepEqual(updateActivity(idle()),{safe:true,reasons:[]});for(const input of [{}, {work:idle().work}, {work:idle().work,view:{tasks:[],error:'offline'}}])assert.equal(updateActivity(input).safe,false);});
 test('active or pending manager/voice activity always defers updates',()=>{for(const change of [{voiceActive:true},{voiceConnecting:true},{workStarting:true},{activeTurnId:'turn'},{approvals:[{id:'a'}]},{status:'working'}]){const value=idle();Object.assign(value.work,change);assert.equal(updateActivity(value).safe,false);}assert.equal(updateActivity({...idle(),setupBusy:true}).safe,false);});

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { managerAttention } from '../manager-attention.mjs';
+import { managerAttention } from '../runtime/manager/attention.mjs';
 
 const request = { requestId: 'attention-decision', message: 'Which account should I use?' };
 const result = { ok: true, attention: request };
@@ -22,7 +22,7 @@ test('started, failed, unrelated or malformed tool calls cannot request attentio
 });
 
 async function rpc(role, method, params) {
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../orchestration-mcp.mjs', import.meta.url)), '/tmp/crew-attention-tool-no-state', role, ...(role === 'worker' ? ['worker-test', 'run-test'] : [])]);
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../runtime/orchestration-mcp.mjs', import.meta.url)), '/tmp/crew-attention-tool-no-state', role, ...(role === 'worker' ? ['worker-test', 'run-test'] : [])]);
   let output = '', errors = '';
   child.stdout.on('data', chunk => output += chunk); child.stderr.on('data', chunk => errors += chunk);
   child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) + '\n');

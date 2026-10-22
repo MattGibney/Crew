@@ -55,12 +55,12 @@ With the source distribution and Node.js 22+, the existing CLI remains supported
 ```sh
 npm ci
 npm run renderer:build
-node cli.mjs init --template set1 --config ./instance/project.json
-node cli.mjs doctor --config ./instance/project.json
-node cli.mjs validate --config ./instance/project.json
-node cli.mjs start --config ./instance/project.json
-node cli.mjs status --config ./instance/project.json
-node cli.mjs stop --config ./instance/project.json
+node runtime/cli.mjs init --template set1 --config ./instance/project.json
+node runtime/cli.mjs doctor --config ./instance/project.json
+node runtime/cli.mjs validate --config ./instance/project.json
+node runtime/cli.mjs start --config ./instance/project.json
+node runtime/cli.mjs status --config ./instance/project.json
+node runtime/cli.mjs stop --config ./instance/project.json
 ```
 
 `doctor` checks Node, Git, Codex and CLI ChatGPT login without starting voice or workers. It does not prove realtime or connector access. `validate` checks configuration/path/ref readiness without launching work. Foreground start is the default; optional `start --background` detaches the same process and writes `server.log`, without installing a service. Use the same `--config` for every command. Stop a CLI-owned instance with its CLI before opening that configuration in Electron.

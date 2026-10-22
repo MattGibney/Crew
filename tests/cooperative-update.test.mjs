@@ -1,13 +1,13 @@
 import {workerAppServerFixture} from './helpers/worker-app-server-fixture.mjs';
 import test from 'node:test';import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';import path from 'node:path';import {tmpdir} from 'node:os';import {fileURLToPath,pathToFileURL} from 'node:url';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
-import {createController} from '../controller.mjs';import {promptSnapshot} from '../prompt-settings.mjs';import {createTask,readTask,updateTask,requestWorkerAction} from '../orchestration-store.mjs';
-const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+import {createController} from '../runtime/workers/controller.mjs';import {promptSnapshot} from '../runtime/manager/instructions/settings.mjs';import {createTask,readTask,updateTask,requestWorkerAction} from '../runtime/orchestration/store.mjs';
+const exec=promisify(execFile),sourceDir=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../runtime');const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,label){const until=Date.now()+15000;while(Date.now()<until){const result=await fn();if(result)return result;await sleep(40);}throw new Error('Timed out '+label);}
 async function fixture(t,{environment={},timeoutMs=30000,getWorkerPrompt=null}={}){
  const dir=await mkdtemp(path.join(tmpdir(),'crew-cooperative-')),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'disposable fixture');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture']);
  const executable=path.join(dir,'fake-codex.mjs');await writeFile(executable,workerAppServerFixture(`#!${process.execPath}
-import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration-store.mjs')).href)};
+import{readFile,appendFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration/store.mjs')).href)};
 const args=process.argv.slice(2),m=JSON.parse(args.find(a=>a.startsWith('mcp_servers.local_orchestration.args=')).split('=').slice(1).join('=')),[,state,,id,run]=m,task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8')),thread=args.includes('resume')?args[args.indexOf('resume')+1]:'thread-'+id;
 process.on('fixtureInterrupt',async()=>{await appendFile(state+'/'+id+'-signals','turn/interrupt\\n');if(!task.brief.includes('ignore'))process.exit(0);});
 process.on('SIGTERM',async()=>{await appendFile(state+'/'+id+'-signals','SIGTERM\\n');process.exit(0);});

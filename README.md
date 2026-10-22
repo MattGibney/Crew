@@ -64,13 +64,13 @@ Build on an Apple Silicon Mac. Output is a versioned `.app`, DMG, ZIP and `SHA25
 The source-only command-line workflow remains available with Node.js 22+:
 
 ```sh
-node cli.mjs init --template set1
-node cli.mjs doctor
-node cli.mjs validate
-node cli.mjs start
-node cli.mjs status
-node cli.mjs stop
-node cli.mjs package
+node runtime/cli.mjs init --template set1
+node runtime/cli.mjs doctor
+node runtime/cli.mjs validate
+node runtime/cli.mjs start
+node runtime/cli.mjs status
+node runtime/cli.mjs stop
+node runtime/cli.mjs package
 ```
 
 Use `--config path` consistently for independent instances. Foreground start is the default; `start --background` detaches the local controller without installing a daemon. Desktop startup never takes over an existing CLI-owned controller: stop that instance with its original CLI command first. Packages exclude local configuration, account credentials, conversations, worker state/worktrees and Git metadata.
@@ -81,8 +81,10 @@ The installed Electron lifecycle/fixture loop passed automated acceptance; live 
 
 ## Renderer development
 
-Crew 0.8 uses React JavaScript with official shadcn/ui and Lucide. Run `npm ci` then `npm run renderer:build` before a source controller launch. Desktop dev/release commands build automatically. See [UI foundation and one-file theme workflow](docs/UI-FOUNDATION.md) and [manager workspace and voice controls](docs/MANAGER-WORKSPACE.md).
+Crew uses React TypeScript with official shadcn/ui and Lucide. Run `npm ci` then `npm run build` before a source controller launch. Desktop dev/release commands build automatically. See [UI foundation and one-file theme workflow](docs/UI-FOUNDATION.md) and [manager workspace and voice controls](docs/MANAGER-WORKSPACE.md).
 
 ## Releases and updates
 
 See [release setup](docs/RELEASES.md) for deliberate GitHub builds, required Apple signing credentials and the complete update asset set. [Updating Crew](docs/UPDATES.md) explains explicit download/restart, active-work deferral and retained local configuration. Unsigned candidates do not enable automatic installation.
+
+Developer source/build and responsibility map: [TypeScript workflow](docs/TYPESCRIPT.md).

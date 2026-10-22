@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { captureWorktreeEvidence } from '../worker-worktree-evidence.mjs';
+import { captureWorktreeEvidence } from '../runtime/workers/worktree-evidence.mjs';
 const exec=promisify(execFile);
 test('workspace fingerprint tracks content, mode and untracked links without following their targets',async t=>{
  const root=await mkdtemp(join(tmpdir(),'crew-worktree-evidence-'));t.after(()=>rm(root,{recursive:true,force:true}));

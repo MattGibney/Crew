@@ -1,8 +1,8 @@
-// This entry is injected only by scripts/ui-preview/start.mjs. Production uses manager/main.jsx.
+// This entry is injected only by scripts/ui-preview/start.mjs. Production uses manager/main.tsx.
 import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../styles/theme.css';
-import { App } from '../manager/App.jsx';
+import { App } from '../manager/App.js';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/native-select';
 import { scenarios } from '../../../scripts/ui-preview/scenarios.mjs';

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
-import {runEnvironmentHooks,environmentFile} from '../worker-environment.mjs';
+import {runEnvironmentHooks,environmentFile} from '../runtime/projects/worker-environment.mjs';
 async function fixture(t){const stateDir=await mkdtemp(path.join(tmpdir(),'crew-bootstrap-'));t.after(()=>rm(stateDir,{recursive:true,force:true}));const worktree=path.join(stateDir,'worktree');await mkdir(worktree);await mkdir(path.join(stateDir,'runs','worker'),{recursive:true});return{stateDir,taskId:'worker',worktree};}
 const hook=script=>({command:process.execPath,args:['-e',script],timeoutMs:5000});
 const count="const fs=require('fs');const n=fs.existsSync('seeds')?Number(fs.readFileSync('seeds','utf8')):0;fs.writeFileSync('seeds',String(n+1));";

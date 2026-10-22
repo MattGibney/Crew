@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,rm,readdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {createDiagnosticsRecorder,DIAGNOSTIC_LIMIT} from '../diagnostics.mjs';
-import {runEnvironmentHooks,environmentFile} from '../worker-environment.mjs';
+import {createDiagnosticsRecorder,DIAGNOSTIC_LIMIT} from '../runtime/http/diagnostics.mjs';
+import {runEnvironmentHooks,environmentFile} from '../runtime/projects/worker-environment.mjs';
 test('streaming diagnostics bound output and redact split assignments, URL credentials/query, bearer, JWT and keys',()=>{
  const recorder=createDiagnosticsRecorder(),secret='privateDiagnosticCanary123';recorder.push('stderr','ERROR: expected Node 22 but found Node 20\nAPI_TO');recorder.push('stderr',`KEN=${secret}\nhttps://user:${secret}@example.invalid/path?token=${secret}#private\nBearer ${secret}\neyJhbGciOiJIUzI1NiJ9.eyJ1c2VyIjoiY2FuYXJ5In0.c2lnbmF0dXJl\n-----BEGIN PRIVATE KEY-----\n${secret}\n-----END PRIVATE KEY-----\n`);
  let value=recorder.finish();assert.match(value.text,/expected Node 22/);assert.equal(value.text.includes(secret),false);assert.equal(value.text.includes('eyJhbGci'),false);assert.equal(value.text.includes('user:'),false);assert.equal(value.text.includes('?token'),false);

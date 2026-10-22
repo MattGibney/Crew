@@ -2,14 +2,14 @@
 // Usage: npm run renderer:build; node tests/browser-fixture.mjs [port=4342]
 // This never loads Codex, project configuration, credentials or business repositories.
 import http from 'node:http';
-import { isArchivedTask } from '../worker-archive.mjs';
-import {validateWorkerEnvironment} from '../config.mjs';
-import { conversationMessage } from '../conversation.mjs';
-import { createConversationTimeline } from '../conversation-timeline.mjs';
+import { isArchivedTask } from '../runtime/shared/worker-archive.mjs';
+import {validateWorkerEnvironment} from '../runtime/config/index.mjs';
+import { conversationMessage } from '../runtime/manager/conversation/message.mjs';
+import { createConversationTimeline } from '../runtime/manager/conversation/timeline.mjs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-const root = fileURLToPath(new URL('../', import.meta.url));
+const root = fileURLToPath(new URL('../runtime/', import.meta.url));
 const port = Number(process.argv[2] || 4342);
 const assetsRoot = path.resolve(process.argv[3] || path.join(root, 'renderer-dist'));
 const peers = new Set(), mediaPeers = new Set();
@@ -45,16 +45,24 @@ const initialSettings = structuredClone(settings);
 let fixtureProjectName = 'Crew acceptance fixture';
 let designPreview = false;
 const managerProfiles = new Map();
-const profileView = () => managerProfiles.get(fixtureProjectName) || { voice: null, version: 'profile-0' };
+const profileView = () => managerProfiles.get(fixtureProjectName) || { voice: null, configured: false, name: '', picture: null, personality: '', version: 'profile-0' };
 let nativeAttentionSound = false;
 
 let proof = { calls: [], media: null, setup: [], sseConnections: 0 };
-const lifecycleView = () => ({ ...managerLifecycle, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
+const lifecycleView = () => ({ ...managerLifecycle, error:null, activeVersion: managerLifecycle.state === 'running' ? settings.manager.activeVersion : null, retainedVersion: settings.manager.activeVersion });
 let workerEnvironment = {revision:'environment-0',configPath:'/private/tmp/crew-fixture/config.json',environment:{},available:true};
-const settingsView = () => ({ ...settings, workerEnvironment, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
+// Match production activation: picture/voice are presentation/call preferences;
+// saved name/personality join instructions only after explicit Start/Restart.
+const savedBehaviorVersion = () => {
+  const {name = '', personality = ''} = profileView();
+  return name || personality ? `${settings.manager.saved.version}:${JSON.stringify({name,personality})}` : settings.manager.saved.version;
+};
+const settingsView = () => ({ ...settings, workerEnvironment, managerProfile: profileView(), managerLifecycle: lifecycleView(), manager: { ...settings.manager, savedBehaviorVersion:savedBehaviorVersion(), pendingRestart:settings.manager.activeVersion !== savedBehaviorVersion(), activeVersion: lifecycleView().activeVersion, retainedVersion: settings.manager.activeVersion } });
 const emit = message => { for (const response of peers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const sendMedia = message => { for (const response of mediaPeers) response.write(`data: ${JSON.stringify(message)}\n\n`); };
 const server = http.createServer(async (req, res) => {
+  // Match production: validators and UI bundles must work without dynamic script evaluation.
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' https: data:; media-src 'self' blob:; frame-ancestors 'none'");
   const send = (value, code = 200) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
   try {
     const url = new URL(req.url, `http://127.0.0.1:${port}`);
@@ -66,7 +74,7 @@ const server = http.createServer(async (req, res) => {
     if (workerMatch && req.method === 'GET') return workerDetails.has(decodeURIComponent(workerMatch[1])) ? send(workerDetails.get(decodeURIComponent(workerMatch[1]))) : send({ error: 'Worker not found in this project.' }, 404);
     if (url.pathname === '/api/settings' && req.method === 'GET') return send(settingsView());
     if (req.method === 'POST' || req.method === 'PUT') {
-      let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > 100000) throw Error('Too large'); }
+      let raw = ''; for await (const chunk of req) { raw += chunk; if (raw.length > (url.pathname === '/api/settings/manager-profile' ? 1024 * 1024 : 100000)) throw Error('Too large'); }
       const body = JSON.parse(raw || '{}');
       if (url.pathname === '/__telemetry') { proof.media = body; return send({ ok: true }); }
       if (url.pathname === '/__setup-proof') { proof.setup.push(body); return send({ ok: true }); }
@@ -127,7 +135,7 @@ const server = http.createServer(async (req, res) => {
         emit({ type: 'orchestration-state', state: orchestration });
         return send({ taskId: target.id, action: 'delete', status: 'deleted' });
       }
-      if (name === 'updates') return send({ phase: 'unsupported', message: 'Synthetic fixture; no update checks.' });
+      if (name === 'updates') return send({ phase: 'unsupported', error:null, plan:null, workspacePlan:null, message: 'Synthetic fixture; no update checks.' });
       if (name === 'settings/worker-environment') {
         if (body.expectedRevision !== workerEnvironment.revision) return send({error:'Environment settings changed elsewhere; reload before saving.'},400);
         workerEnvironment = {...workerEnvironment,environment:validateWorkerEnvironment(body.environment,{mode:'repository'}),revision:`environment-${++promptRevision}`};
@@ -135,7 +143,9 @@ const server = http.createServer(async (req, res) => {
       }
       if (name === 'settings/manager-profile') {
         if (body.expectedVersion !== profileView().version) return send({ error: 'Manager profile changed elsewhere.' }, 409);
-        managerProfiles.set(fixtureProjectName, { voice: body.voice, version: `profile-${++promptRevision}` });
+        const current = profileView();
+        const patch = Object.fromEntries(['voice','name','picture','personality'].filter(field => Object.hasOwn(body,field)).map(field => [field,body[field]]));
+        managerProfiles.set(fixtureProjectName, { ...current, ...patch, configured: Object.hasOwn(body,'voice') || current.configured, version: `profile-${++promptRevision}` });
         return send(settingsView());
       }
       if (name === 'settings/prompts') {
@@ -149,12 +159,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (name === 'manager/lifecycle') {
         managerLifecycle = { state: body.action === 'stop' ? 'stopped' : 'running' };
-        if (body.action === 'restart') { settings.manager.activeVersion = settings.manager.saved.version; settings.manager.pendingRestart = false; }
+        if (body.action === 'restart' || body.action === 'start') { settings.manager.activeVersion = savedBehaviorVersion(); settings.manager.pendingRestart = false; }
         work = { ...work, activeTurnId: null, status: 'idle' };
         emit({ type: 'manager-lifecycle', state: lifecycleView() }); emit({ type: 'work-state', state: work });
         return send({ managerLifecycle: lifecycleView(), state: work });
       }
-      if (name === 'config') return send({ nativeAttentionSound, project: { name: fixtureProjectName, mode: 'fixture', readiness: { ready: true } } });
+      if (name === 'config') return send({ nativeAttentionSound, project: { name: fixtureProjectName, mode: 'fixture', readiness: { ready: true, issues: [] } } });
       if (name === 'prepare') return send({ plan: 'synthetic fixture', state: work });
       if (name === 'state') return send(work);
       if (name === 'orchestration') return send(orchestration);
@@ -189,8 +199,8 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (url.pathname === '/__proof') return send(proof);
     if (url.pathname === '/__state') return send({ work, orchestration });
-    if (url.pathname === '/__media.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(await readFile(path.join(root, 'tests/fixtures/browser-media.js'))); }
-    if (url.pathname === '/__setup.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(await readFile(path.join(root, 'tests/fixtures/browser-setup.js'))); }
+    if (url.pathname === '/__media.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(await readFile(new URL('./fixtures/browser-media.js',import.meta.url))); }
+    if (url.pathname === '/__setup.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(await readFile(new URL('./fixtures/browser-setup.js',import.meta.url))); }
     const requested = url.pathname === '/' ? '/index.html' : url.pathname;
     const file = path.resolve(assetsRoot, `.${requested}`);
     if (!file.startsWith(assetsRoot + path.sep)) return send({ error: 'Invalid path' }, 404);

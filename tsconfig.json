@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmitOnError": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "rootDir": "src",
+    "outDir": "runtime",
+    "sourceMap": true,
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@/*": [
+        "./renderer/src/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.mts",
+    "src/**/*.cts"
+  ],
+  "exclude": [
+    "runtime",
+    "node_modules",
+    "tests",
+    "scripts",
+    "renderer"
+  ]
+}

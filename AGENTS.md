@@ -211,6 +211,26 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - The user's bottom-follow preference supersedes turn anchoring: open at the bottom, follow appended/streamed output only while at the bottom, and preserve the reader's position through state refreshes and new messages while scrolled back. Do not mark user rows as scroll anchors or reapply opening position on updates. Jump to latest explicitly resumes following. Verify repeated refresh, near-bottom reading, new user/assistant rows, streaming, completion and composer resizing in the real compiled renderer.
 - The user explicitly authorized releasing the chat-scroll fix in PR #33 as patch 0.13.1. Merge through that PR, preserve published 0.13.0, and use the existing signed/notarized workflow and public artifact verification. This authorization covers this patch only.
 
+
+
+## TypeScript and modular source (GitHub #37)
+
+- Production implementations use strict TypeScript (.mts Node/Electron, .cts preloads, .ts/.tsx renderer). Keep emitted .mjs/.cjs import names for NodeNext; runtime entry points live under runtime/. Types never replace runtime boundary validation, ownership checks, native approvals or scope authorization. Do not bypass errors with blanket any, ignores or unvalidated casts.
+- Run npm run build before launching a source controller or packaging; npm test builds first. Builds clear stale runtime modules, so never rebuild runtime while tests/controllers use it. Keep build tools, tests and developer-only preview separate from shipped code; source archives carry typed source and clean build instructions.
+- Preserve complete concurrent scratchpad (#36), profile/instruction propagation (#35) and chat reconciliation (#38) changes through explicit integration/rebase. A main-based structural migration is not proof those pending fixes are included. No automatic merge, release or version bump.
+
+- Browser validators must work under the existing strict script-src self policy; never add unsafe-eval for schema compilation. Mirror production CSP in synthetic browser fixtures, and preserve legitimate null/unavailable wire states in decoders. A permissive fixture is not native acceptance.
+
+- Source archives use the exact committed scripts/source-manifest.json, including after extraction without Git. After staging added/removed code, refresh and review it with npm run source:manifest. Never recursively sweep local JSON/Markdown/evidence into distributable sources. Raw legacy configuration ports still normalize after explicit environment override selection.
+
+- Retained-worker follow-up assignments (issue #42) remain a separate feature dependency; port its append-only assignment/run contracts explicitly after review. The structural migration preserves completion semantics and does not implement new assignments.
+
+- Fixture cleanup must await owned runtime and journal shutdown before removing its directory, using one registered cleanup handler. A failed earlier Node after-hook can skip later hooks and leave disposable children alive; directory removal is not process-exit evidence. Keep generous fixture lifetimes separate from product timeout tests.
+
+## Paused TypeScript migration (GitHub #37)
+
+- The human paused this migration pending completion, approved merges and main integration of the five functional changes: PRs #36, #40, #41 and issues #42, #43. Preserve the checkpoint and do not resume refinement or integration until explicit resumption. On resumption, merge the complete updated main history and resolve typed/runtime integration; do not silently omit or preemptively implement those features. See docs/TYPESCRIPT-CHECKPOINT.md for baseline, rename/build contracts, failed and passing evidence, and outstanding native-package acceptance.
+
 ## Manager scratchpad and follow-up (GitHub #26)
 
 - Keep one manager-only factual scratchpad per project, with separate explicit commitments, notes, decisions and open questions. Capture distinct delegated requests and authorized promises; brainstorming/triage is not a task by default. Delegation remains open until matching task/run evidence is reviewed. Correct stale notes and preserve unrelated commitments.
@@ -258,3 +278,11 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Quit issue #39 remains unresolved. Its post-voice profile-harness Quit/inspector timeout reproduced in both combined source and exact unintegrated PR #40 candidate 006284e0. This supports preservation relative to PR #40, not a claim that it predates #35/main or establishes root cause. Preserve that excluded-gate evidence and do not claim all native shutdown acceptance passed.
 - Preserve the documented custom portable-profile automatic-updater relaunch boundary. Do not repeat installation that can enter the user's default profile. Signed payload/feed checks and isolated explicit-profile launch/manual replacement cannot prove automatic installation/profile recovery.
 - Avoid negative issue-closing phrases followed by issue references in PR descriptions: GitHub can interpret them as closing directives. Verify actual issue states after merge and keep unresolved #39 open.
+
+
+## Resumed TypeScript integration (GitHub #37)
+
+- Explicit human resumption supersedes the historical pause above. Merge the complete released main history first, preserving all six functional features and 0.15.0 agent-owned workflows, queued directions and persisted pristine prompt upgrades. Keep feature work on its reviewable branch; no merge, release or version bump is authorized.
+- Organize production implementations into coherent responsibility directories under src and split large multi-role modules. Strict meaningful types and runtime boundary validation are required throughout; renaming alone is insufficient. Final acceptance uses exact-source compiled browser, disposable genuine subscription and native packaged tests without physical microphone or user-profile/install mutation. Preserve Quit #39 and custom portable updater evidence boundaries.
+
+- Native command items may carry `aggregatedOutput: null` for successful silent commands. Preserve that legal unavailable/empty-output state in worker and manager protocol schemas; command success must not disappear from execution evidence because no stdout was produced. Compare canonical native history when a projection loses evidence, and keep a regression that exercises actual retained command persistence rather than weakening the acceptance assertion.

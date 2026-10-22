@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,copyFile,writeFile,readFile,mkdir,chmod,rm,access} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {appRoot,loadAppConfig} from '../config.mjs';
-import {readSetupConfig,saveSetupConfig,checkLocalRuntime,probeCodex,probePaths,setupInputsKey,applyDiscoveryDraft,requestMicrophonePermission} from '../desktop/setup-service.mjs';
+import {appRoot,loadAppConfig} from '../runtime/config/index.mjs';
+import {readSetupConfig,saveSetupConfig,checkLocalRuntime,probeCodex,probePaths,setupInputsKey,applyDiscoveryDraft,requestMicrophonePermission} from '../runtime/desktop/setup-service.mjs';
 const roots=[];
 async function fixture(){const root=await mkdtemp(join(tmpdir(),'relay-setup-'));roots.push(root);await mkdir(join(root,'prompts'));for(const role of ['manager','worker'])await copyFile(join(appRoot,'prompts',`${role}.md`),join(root,'prompts',`${role}.md`));const config=JSON.parse(await readFile(join(appRoot,'config/fixture.example.json'),'utf8'));config.runtime.dataDir='.data';config.project.prompts={manager:'prompts/manager.md',worker:'prompts/worker.md'};const configPath=join(root,'project.json');await writeFile(configPath,JSON.stringify(config));const env={...process.env,AI_MANAGER_CONFIG:'',AI_MANAGER_CODEX_BINARY:'',CODEX_BINARY:'',AI_MANAGER_PORT:'',VOICE_PORT:''};return{root,configPath,config,env};}
 test.after(async()=>{await Promise.all(roots.map(root=>rm(root,{recursive:true,force:true})));});

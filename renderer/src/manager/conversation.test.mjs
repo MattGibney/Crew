@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { conversationMessage } from '../../../conversation.mjs';
-import { orderedMessages } from './conversation.js';
+import { conversationMessage } from '../../../runtime/manager/conversation/message.mjs';
+import { orderedMessages } from './conversation.ts';
 
 test('recovery-review control shows readable human intent without internal instructions',()=>{
  const message=conversationMessage({id:'review',type:'userMessage',content:[{type:'text',text:'CREW_WORKER_RECOVERY_REVIEW\nInternal selected task/run review protocol'}]},'turn');
@@ -64,7 +64,7 @@ test('incomplete or empty delegation input has an explicit unavailable state wit
 });
 
 test('backing work is secondary by exact provenance and turn, never by matching speech', async () => {
-  const { conversationRows } = await import('./conversation.js');
+  const { conversationRows } = await import('./conversation.ts');
   const messages = [
     {id:'speech',role:'user',source:'voice',text:'Repeat',position:0},
     {id:'request',role:'user',turnId:'work',origin:'realtime-delegation',text:'Repeat',position:1},

@@ -5,13 +5,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, appendFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createBridge } from '../codex-bridge.mjs';
-import { createManagerLifecycle } from '../manager-lifecycle.mjs';
-import { promptSnapshot } from '../prompt-settings.mjs';
-import { createManagerProfile, managerProfileSnapshot } from '../manager-profile.mjs';
-import { ManagerScratchpad } from '../manager-scratchpad.mjs';
-import { ManagerReview } from '../manager-review.mjs';
-import { createUpdateAdmission } from '../update-admission.mjs';
+import { createBridge } from '../runtime/manager/bridge/index.mjs';
+import { createManagerLifecycle } from '../runtime/manager/lifecycle.mjs';
+import { promptSnapshot } from '../runtime/manager/instructions/settings.mjs';
+import { createManagerProfile, managerProfileSnapshot } from '../runtime/manager/profile.mjs';
+import { ManagerScratchpad } from '../runtime/manager/scratchpad.mjs';
+import { ManagerReview } from '../runtime/manager/reviews/scheduler.mjs';
+import { createUpdateAdmission } from '../runtime/updates/admission.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(predicate) {

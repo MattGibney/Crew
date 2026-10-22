@@ -13,7 +13,7 @@ function loadBridge() {
     on(channel, listener) { listeners.set(channel, listener); },
     removeListener(channel, listener) { if (listeners.get(channel) === listener) listeners.delete(channel); }
   };
-  vm.runInNewContext(fs.readFileSync(new URL('../desktop/workspace-preload.cjs', import.meta.url), 'utf8'), { process: { platform: 'darwin' }, require(name) { assert.equal(name, 'electron'); return { contextBridge, ipcRenderer }; } });
+  vm.runInNewContext(fs.readFileSync(new URL('../runtime/desktop/workspace-preload.cjs', import.meta.url), 'utf8'), { exports: {}, process: { platform: 'darwin' }, require(name) { assert.equal(name, 'electron'); return { contextBridge, ipcRenderer }; } });
   return { bridge, nativeWindow, calls, listeners, ipcRenderer };
 }
 

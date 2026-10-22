@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { instanceKey, summarizeTasks, isAppURL, isExternalHTTPS, permitsAudio, childEnvironment } from '../desktop/lifecycle.mjs';
+import { instanceKey, summarizeTasks, isAppURL, isExternalHTTPS, permitsAudio, childEnvironment } from '../runtime/desktop/lifecycle.mjs';
 test('desktop identity is scoped by instance config, not global project identity', () => {
   assert.equal(instanceKey('/tmp/project-a/../project-a/config.json'), instanceKey('/tmp/project-a/config.json'));
   assert.notEqual(instanceKey('/tmp/project-a/config.json'), instanceKey('/tmp/project-b/config.json'));
@@ -36,7 +36,7 @@ test('connector links can open HTTPS in system browser without credentials or un
 
 
 test('native clipboard writes accept plain bounded text only', async () => {
- const {clipboardText}=await import('../desktop/clipboard.mjs');
+ const {clipboardText}=await import('../runtime/desktop/clipboard.mjs');
  assert.equal(clipboardText('const value = 1;\n'),'const value = 1;\n');
  for(const value of [null,42,{},'x'.repeat(1000001)])assert.throws(()=>clipboardText(value));
 });

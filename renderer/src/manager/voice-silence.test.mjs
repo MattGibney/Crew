@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSilentAudio } from './voice-silence.js';
+import { createSilentAudio } from './voice-silence.ts';
 function fixture({ failResume = false, failStart = false } = {}) {
   const calls = []; const track = { readyState: 'live', stop() { calls.push('track.stop'); this.readyState = 'ended'; } };
   const stream = { getTracks: () => [track], getAudioTracks: () => [track] };

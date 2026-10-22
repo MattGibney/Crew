@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {discoverWorkerEnvironment,assertWorkerEnvironmentSelection} from '../desktop/environment-options.mjs';
+import {discoverWorkerEnvironment,assertWorkerEnvironmentSelection} from '../runtime/desktop/environment-options.mjs';
 const exec=promisify(execFile);
 test('execution selection reads committed project commands and rejects stale provenance',async t=>{
  const repo=await mkdtemp(join(tmpdir(),'crew environment '));t.after(()=>rm(repo,{recursive:true,force:true}));const git=(...args)=>exec('git',['-C',repo,...args]);await git('init','-b','main');await mkdir(join(repo,'.codex/environments'),{recursive:true});
@@ -16,7 +16,7 @@ test('execution selection reads committed project commands and rejects stale pro
 });
 
 test('action changes preserve local runtime choices while refreshing project permissions',async()=>{
- const {selectExecutionPlan}=await import('../desktop/execution-selection.mjs'),source={path:'environment.toml',sha256:'a'.repeat(64)},action=command=>({command,source,timeoutMs:600000});
+ const {selectExecutionPlan}=await import('../runtime/desktop/execution-selection.mjs'),source={path:'environment.toml',sha256:'a'.repeat(64)},action=command=>({command,source,timeoutMs:600000});
  const discovered={schemaVersion:1,sources:[source],setup:action('setup'),start:action('start'),resume:action('start'),ready:null,stop:null,teardown:null,networkAccess:false,permissionsSource:{path:'/repo/.codex/config.toml',sha256:'b'.repeat(64)}};
  const saved={...structuredClone(discovered),networkAccess:true,permissionsSource:{...discovered.permissionsSource,sha256:'c'.repeat(64)},env:{PATH:'/installed/tools'},ready:action('health'),stop:action('stop'),teardown:action('down')};saved.start.timeoutMs=45000;
  const result=selectExecutionPlan({discovered,saved,action:{command:'alternate',source}});assert.equal(result.start.command,'alternate');assert.equal(result.resume.command,'alternate');assert.equal(result.start.timeoutMs,45000);assert.deepEqual(result.env,saved.env);assert.deepEqual(result.ready,saved.ready);assert.deepEqual(result.teardown,saved.teardown);assert.equal(result.networkAccess,false);assert.equal(result.permissionsSource.sha256,'b'.repeat(64));

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
-import { createTask, updateTask, readTask, currentAssignment, ensureAssignments, requestWorkerFollowup, reportTask, requestWorkerAction, setWorkflowState } from '../orchestration-store.mjs';
-import { buildWorkerInstructions } from '../prompt-settings.mjs';
+import { createTask, updateTask, readTask, currentAssignment, ensureAssignments, requestWorkerFollowup, reportTask, requestWorkerAction, setWorkflowState } from '../runtime/orchestration/store.mjs';
+import { buildWorkerInstructions } from '../runtime/manager/instructions/settings.mjs';
 async function fixture(t, status='completed') {
   const dir=await mkdtemp(join(tmpdir(),'crew-followup-store-'));t.after(()=>rm(dir,{recursive:true,force:true}));
   await createTask(dir,{requestId:'worker-alpha',ticket:'AI-42',brief:'Research only',projectId:'crew',repositoryId:'primary'});
@@ -56,7 +56,7 @@ test('malformed transport data and assignment history fail closed',async t=>{
   await assert.rejects(updateTask(dir,'worker-alpha',task=>{task.assignments=[];}),/immutable|Malformed/);
 });
 async function rpc(dir,role,extra,method,params){
-  const child=spawn(process.execPath,[fileURLToPath(new URL('../orchestration-mcp.mjs',import.meta.url)),dir,role,...extra]);
+  const child=spawn(process.execPath,[fileURLToPath(new URL('../runtime/orchestration-mcp.mjs',import.meta.url)),dir,role,...extra]);
   let out='',err='';child.stdout.on('data',v=>out+=v);child.stderr.on('data',v=>err+=v);
   child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method,params})+'\n');
   assert.equal(await new Promise(resolve=>child.on('close',resolve)),0,err);return JSON.parse(out).result;
@@ -100,7 +100,7 @@ test('report history never expires a live worker and instruction profiles can re
  await updateTask(dir,'worker-alpha',task=>{task.reports=Array.from({length:300},(_,i)=>({reportId:`progress-${i}`,runId:'run-research',kind:'progress',message:'Retained progress',evidence:[],at:task.createdAt}));});
  await reportTask(dir,'worker-alpha','run-research',{reportId:'progress-after-history',kind:'progress',message:'Still working'});
  assert.equal((await readTask(dir,'worker-alpha')).reports.length,301);
- const {promptSnapshot}=await import('../prompt-settings.mjs');
+ const {promptSnapshot}=await import('../runtime/manager/instructions/settings.mjs');
  await updateTask(dir,'worker-alpha',task=>{task.workerPromptSnapshot=promptSnapshot('Original instructions');});
  await updateTask(dir,'worker-alpha',task=>{task.workerPromptSnapshot=promptSnapshot('Current instructions');});
  const current=await readTask(dir,'worker-alpha');assert.equal(current.workerPromptSnapshot.text,'Current instructions');assert.equal(current.history.filter(event=>event.kind==='configuration').length,2);

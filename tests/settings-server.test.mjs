@@ -9,9 +9,9 @@ import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createTask, updateTask, readTask, loadTasks, requestWorkerAction } from '../orchestration-store.mjs';
-import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../worker-approvals.mjs';
-const root = fileURLToPath(new URL('../', import.meta.url));
+import { createTask, updateTask, readTask, loadTasks, requestWorkerAction } from '../runtime/orchestration/store.mjs';
+import { recordWorkerRequest, workerRequestDecisions, listWorkerRequests } from '../runtime/workers/approval-store.mjs';
+const root = fileURLToPath(new URL('../runtime/', import.meta.url));
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() { const server = createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening'); const port = server.address().port; await new Promise(resolve => server.close(resolve)); return port; }
 async function fixture(t, { nativeAttention = false } = {}) {
@@ -441,7 +441,7 @@ test('HTTP command edits survive restart as agent context without automatic boot
   const refused=await waitTask(task=>task.lifecycleRequests?.some(item=>item.id===action.actionId&&item.status==='failed'),'Obsolete retry did not explain the agent command path');
   assert.match(refused.lifecycleRequests.find(item=>item.id===action.actionId).error,/agent-initiated.*get_project_environment.*native tools/);
   assert.equal((await f.calls()).filter(call=>call.method==='turn/start').length,turnsBefore);
-  const {requestWorkerFollowup}=await import('../orchestration-store.mjs');
+  const {requestWorkerFollowup}=await import('../runtime/orchestration/store.mjs');
   await requestWorkerFollowup(f.stateDir,{taskId,requestId:'http-new-agent-direction',brief:'Continue in the same working context with the latest configured commands.'});
   const next=await waitTask(async task=>task.runId!==first.runId&&await nativeEnded(task),'Retained native continuation did not finish');
   assert.equal(next.worktree,first.worktree);assert.equal(next.threadId,first.threadId);assert.equal(next.environment?.hooks?.length||0,0);

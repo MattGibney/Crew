@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../orchestration-store.mjs';
-import { readWorkerDetail } from '../worker-detail.mjs';
+import { createTask, updateTask, reportTask, answerQuestion, requestWorkerAction, updateWorkNotes } from '../runtime/orchestration/store.mjs';
+import { readWorkerDetail } from '../runtime/workers/detail.mjs';
 const project = { id: 'project-one', mode: 'repository' };
 async function fixture(t) {
   const dir = await mkdtemp(path.join(tmpdir(), 'crew-detail-'));
@@ -96,7 +96,7 @@ test('MCP shared notes are bound to exact worker run and manager project', async
   const { dir, id } = await fixture(t);
   await updateTask(dir, id, task => { task.runId = 'notes-mcp-run'; task.status = 'running'; });
   async function call(roleArgs, args) {
-    const child = spawn(process.execPath, [fileURLToPath(new URL('../orchestration-mcp.mjs', import.meta.url)), dir, ...roleArgs], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../runtime/orchestration-mcp.mjs', import.meta.url)), dir, ...roleArgs], { stdio: ['pipe', 'pipe', 'pipe'] });
     let output = '', stderr = ''; child.stdout.on('data', value => output += value); child.stderr.on('data', value => stderr += value);
     const closed = new Promise(resolve => child.on('close', resolve));
     child.stdin.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'update_work_notes', arguments: args } }) + '\n');
@@ -170,4 +170,8 @@ test('repeated assignments retain their briefs, results and run correlation in w
   assert.equal(detail.conversation.find(item => item.reportId === 'implementation-result' || item.message === 'Implementation result retained').assignmentId, 'followup-one');
   assert.equal(detail.conversation.find(item => item.message === 'Documenting the change').assignmentId, 'followup-two');
   assert.ok(detail.links.some(item => item.url === 'https://github.com/example/repo/issues/42'));
+  await rm(path.join(runDir, 'events.jsonl'));
+  await writeFile(path.join(runDir, 'exit.json'), JSON.stringify({ runId: 'documentation-run-123', finalMessage: 'Legacy final reply' }));
+  const legacyDetail = await readWorkerDetail(dir, id, project);
+  assert.equal(legacyDetail.conversation.find(item => item.message === 'Legacy final reply').assignmentId, 'followup-two');
 });

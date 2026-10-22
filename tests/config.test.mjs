@@ -3,10 +3,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, writeFile, copyFile, chmod, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join,resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { appRoot, loadAppConfig } from '../config.mjs';
+import { appRoot, configurationRoot, loadAppConfig } from '../runtime/config/index.mjs';
 const exec = promisify(execFile);
 const environments = [];
 async function setup() {
@@ -98,12 +99,13 @@ test('source package contains only allowlisted code/templates; excludes live sta
   await exec(process.execPath, [join(appRoot, 'cli.mjs'), 'package', '--output', destination]);
   const { stdout } = await exec('tar', ['-tzf', destination]);
   const entries = stdout.trim().split('\n');
-  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs'));
-  for (const file of ['manager-profile.mjs', 'renderer/src/manager/ManagerAvatar.jsx', 'renderer/src/manager/profile.js', 'scripts/manager-profile-native-acceptance.mjs']) assert.ok(entries.includes(file), `Missing manager profile source: ${file}`);
-  for(const file of ['worker-worktree-evidence.mjs','tests/worker-followup.test.mjs','tests/worker-followup-store.test.mjs','scripts/worker-followup-native-acceptance.mjs'])assert.ok(entries.includes(file),`Missing retained-worker follow-up source: ${file}`);
-  for(const file of ['worker-approvals.mjs','tests/worker-app-server.test.mjs','tests/worker-approvals.test.mjs','tests/worker-app-server.test.mjs','tests/worker-bootstrap.test.mjs','tests/helpers/worker-app-server-fixture.mjs'])assert.ok(entries.includes(file),`Missing worker protocol source: ${file}`);
+  const manifest=JSON.parse(await readFile(join(configurationRoot,'scripts/source-manifest.json'),'utf8'));
+  assert.deepEqual([...entries].sort(),[...manifest.files].sort());
+  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('src/http/server.mts'));
+  for(const file of ['src/workers/approval-store.mts','tests/worker-app-server.test.mjs','tests/worker-approvals.test.mjs','tests/worker-app-server.test.mjs','tests/worker-bootstrap.test.mjs','tests/helpers/worker-app-server-fixture.mjs'])assert.ok(entries.includes(file),`Missing worker protocol source: ${file}`);
 
-  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('server.mjs')); assert.ok(entries.includes('conversation-timeline.mjs')); assert.ok(entries.includes('renderer/src/manager/Message.jsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
+  assert.ok(entries.includes('config/set1.example.json')); assert.ok(entries.includes('src/http/server.mts')); assert.ok(entries.includes('src/manager/conversation/timeline.mts')); assert.ok(entries.includes('renderer/src/manager/Message.tsx')); assert.equal(entries.includes('renderer/src/manager/Transcript.jsx'), false);
+  for(const file of ['src/manager/profile.mts','src/workers/worktree-evidence.mts','renderer/src/manager/ManagerAvatar.tsx','renderer/src/manager/profile.ts','scripts/manager-profile-native-acceptance.mjs','tests/worker-followup.test.mjs']) assert.ok(entries.includes(file), `Missing integrated feature source: ${file}`);
   assert.equal(entries.some(path => /(^|\/)(\.orchestration|\.data|\.git|local.json|\.voice-chat.json|server.json)(\/|$)/.test(path)), false);
   assert.ok(entries.includes('docs/MACOS.md')); assert.ok(entries.includes('tests/config.test.mjs'));
 });
@@ -151,4 +153,21 @@ test('project execution plans retain exact scripts and require source provenance
  fixture.config.project.mode='repository';await fixture.save(fixture.config);assert.deepEqual((await fixture.load()).project.worker.environment,{executionPlan:plan});
  for(const invalid of [{...plan,sources:[]},{...plan,setup:{...plan.setup,source:{...source,path:'../outside'}}},{...plan,setup:{...plan.setup,timeoutMs:1}},{...plan,env:{SECRET:'not-accepted'}}]){fixture.config.project.worker.environment={executionPlan:invalid};await fixture.save(fixture.config);await assert.rejects(fixture.load());}
  fixture.config.project.worker.environment={preset:'set1'};await fixture.save(fixture.config);await assert.rejects(fixture.load(),/Unknown project.worker.environment/);
+});
+
+test('compiled resources retain checkout-relative default config and legacy fixture lookup', () => {
+ assert.equal(configurationRoot, resolve(fileURLToPath(new URL('../',import.meta.url))));
+ assert.equal(appRoot, fileURLToPath(new URL('../runtime/',import.meta.url)));
+});
+
+test('legacy numeric-string ports and explicit environment overrides retain their precedence',async()=>{
+ const f=await setup();f.config.runtime.port='4342';await f.save(f.config);assert.equal((await f.load()).port,4342);
+ for(const value of [undefined,null,'invalid',{}]){f.config.runtime.port=value;await f.save(f.config);assert.equal((await f.load({env:{...f.env,AI_MANAGER_PORT:'4343'}})).port,4343);}
+});
+
+test('source archive never includes untracked local JSON or Markdown evidence',async t=>{
+ const local=join(configurationRoot,'docs','source-package-private-probe.json'),destination=join((await setup()).root,'private-probe.tar.gz');
+ await writeFile(local,'{"synthetic":"local-only"}\n',{flag:'wx'});t.after(()=>rm(local,{force:true}));
+ await exec(process.execPath,[join(appRoot,'cli.mjs'),'package','--output',destination]);
+ const {stdout}=await exec('tar',['-tzf',destination]);assert.equal(stdout.includes('source-package-private-probe.json'),false);assert.ok(stdout.includes('scripts/source-manifest.json'));
 });

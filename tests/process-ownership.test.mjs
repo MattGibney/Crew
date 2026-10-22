@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';import {once} from 'node:events';
-import {OwnedProcessTree,snapshotProcesses} from '../process-ownership.mjs';
+import {OwnedProcessTree,snapshotProcesses} from '../runtime/processes/ownership.mjs';
 const live=pid=>{try{process.kill(pid,0);return true;}catch{return false;}};
 test('owned descendants in separate process groups terminate while unrelated process survives',async()=>{
  const unrelated=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'});

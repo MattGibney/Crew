@@ -4,9 +4,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
-import { withStateLock } from '../orchestration-store.mjs';
+import { withStateLock } from '../runtime/orchestration/store.mjs';
 
-const moduleUrl = new URL('../orchestration-store.mjs', import.meta.url).href;
+const moduleUrl = new URL('../runtime/orchestration/store.mjs', import.meta.url).href;
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'crew-lock-race-'));
   t.after(() => fs.rm(dir, { recursive: true, force: true }));

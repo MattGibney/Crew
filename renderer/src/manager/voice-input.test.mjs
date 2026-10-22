@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createVoiceInput, isTalkShortcut, voiceActivityEvent } from './voice-input.js';
+import { createVoiceInput, isTalkShortcut, voiceActivityEvent } from './voice-input.ts';
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 function fixture(acquireOverride) {
   const track = { enabled: true, stopped: 0, stop() { this.stopped++; } };

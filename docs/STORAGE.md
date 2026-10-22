@@ -13,7 +13,7 @@ Crew is the final product name, replacing Relay and Local Voice Manager. The sel
   desktop/<instance-key>/crash-dumps/       Electron crash path
 ```
 
-The exact configuration controls prompt/state paths. `--config` takes priority over `AI_MANAGER_CONFIG`; either selects an explicit configuration and keeps its configured external storage paths. A separate project requires a separate config/state/port. CLI `init`/`start` without an override use the Crew default and run storage checks. Direct `node server.mjs` remains a developer/legacy prototype entry point; normal desktop startup always passes its explicit resolved instance config. Source archives are named crew-<version>-source.tar.gz. Discovery/fixture temporary folders use Crew prefixes.
+The exact configuration controls prompt/state paths. `--config` takes priority over `AI_MANAGER_CONFIG`; either selects an explicit configuration and keeps its configured external storage paths. A separate project requires a separate config/state/port. CLI `init`/`start` without an override use the Crew default and run storage checks. Direct `node runtime/server.mjs` remains a developer/legacy prototype entry point; normal desktop startup always passes its explicit resolved instance config. Source archives are named crew-<version>-source.tar.gz. Discovery/fixture temporary folders use Crew prefixes.
 
 ## Safe legacy handling
 

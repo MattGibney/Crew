@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.js';
+import { formatElapsed, groupWorkers, workerActionRequest, workerActions, workerProgress, workerStatus, workerTiming } from './worker-model.ts';
 const at = '2026-10-21T12:00:00.000Z', now = Date.parse(at);
 const worker = overrides => ({ id: 'task-example', ticket: 'AI-014', status: 'running', runId: 'run-one', brief: 'Read-only audit', attention: [], lifecycleRequests: [], ...overrides });
 test('every task and worktree remains reachable; attention, pending actions and live processes stay active', () => {
@@ -50,7 +50,7 @@ test('queued cards show the controller admission reason without inferring capaci
 });
 
 test('missing worktree retirement is honest history and review requests never authorize a recovery mutation', async()=>{
- const {workerRecoveryReviewRequest}=await import('./worker-model.js');
+ const {workerRecoveryReviewRequest}=await import('./worker-model.ts');
  const retired=worker({status:'disposed',retirement:{reason:'worktree-already-missing',cleanupVerified:false}});
  assert.equal(workerStatus(retired),'Retired');assert.match(workerProgress(retired),/cleanup unverified/);assert.deepEqual(workerActions(retired),[]);
  const request=workerRecoveryReviewRequest(worker({status:'failed',worktree:'/fixture/worker'}));assert.match(request,/"taskId":"task-example"/);assert.match(request,/"expectedRunId":"run-one"/);assert.match(request,/review only/);assert.match(request,/explicitly approve/);
@@ -58,7 +58,7 @@ test('missing worktree retirement is honest history and review requests never au
 });
 
 test('follow-up cards show current assignment, keep pending direction visible and do not reuse an earlier result', async () => {
-  const { currentAssignment, queuedAssignments, workerFollowupRequest, canDiscussFollowup } = await import('./worker-model.js');
+  const { currentAssignment, queuedAssignments, workerFollowupRequest, canDiscussFollowup } = await import('./worker-model.ts');
   const task = worker({ worktree: '/retained/worker', result: { message: 'Old research result' }, progress: 'Implementing approved changes', currentAssignmentId: 'implementation', assignments: [
     { id: 'initial', status: 'completed', ticket: 'GH-42', brief: 'Research only', result: { message: 'Old research result' } },
     { id: 'implementation', status: 'active', ticket: 'GH-42', brief: 'Implement approved changes' },
@@ -78,7 +78,7 @@ test('follow-up cards show current assignment, keep pending direction visible an
 });
 
 test('legacy follow-up selection uses initial identity; held completed follow-ups surface recovery and explicit resume', async () => {
-  const { currentAssignment, workerFollowupRequest } = await import('./worker-model.js');
+  const { currentAssignment, workerFollowupRequest } = await import('./worker-model.ts');
   const legacy = worker({ worktree: '/retained/worker', status: 'completed', result: { message: 'Research complete' } });
   assert.equal(currentAssignment(legacy).id, 'initial');
   assert.match(workerFollowupRequest(legacy), /CREW_WORKER_DIRECTION/);
@@ -99,7 +99,7 @@ test('legacy follow-up selection uses initial identity; held completed follow-up
 });
 
 test('archive projections retain unfinished cleanup and history without leaking archive into counts', async () => {
-  const { workspaceWorkers, archivedWorkers, workerSelectionRemoved } = await import('./worker-model.js');
+  const { workspaceWorkers, archivedWorkers, workerSelectionRemoved } = await import('./worker-model.ts');
   const tasks = ['completed', 'paused', 'stopped', 'failed', 'disposed', 'removed'].map(status => worker({ id: status, projectId: 'one', status, worktree: '/retained', attention: [{ id: 'old' }] }));
   tasks.push(worker({ id: 'pending', status: 'disposed', projectId: 'one', lifecycleRequests: [{ action: 'dispose', status: 'processing' }] }));
   tasks.push(worker({ id: 'live', status: 'disposed', projectId: 'one', execution: { live: true } }));
@@ -120,7 +120,7 @@ test('archive projections retain unfinished cleanup and history without leaking 
 
 
 test('archive preserves authoritative fixture-only legacy scope without exposing foreign history', async () => {
-  const { archivedWorkers } = await import('./worker-model.js');
+  const { archivedWorkers } = await import('./worker-model.ts');
   const legacy = { id: 'legacy', status: 'disposed' };
   const foreign = { id: 'foreign', status: 'disposed', projectId: 'other' };
   assert.deepEqual(archivedWorkers([legacy, foreign], 'current', 'fixture'), [legacy]);
@@ -137,7 +137,7 @@ test('history-only restore is visible and offers no runnable resume or invented 
 
 
 test('history-only restored workers cannot discuss follow-ups or offer retained-worktree recovery', async () => {
-  const { canDiscussFollowup, workerFollowupRequest, workerRecoveryReviewRequest } = await import('./worker-model.js');
+  const { canDiscussFollowup, workerFollowupRequest, workerRecoveryReviewRequest } = await import('./worker-model.ts');
   const restored = worker({ status: 'blocked', worktree: '/removed', archiveRestoration: { requiresRecovery: true }, assignments: [{ id: 'queued', status: 'queued' }] });
   assert.equal(canDiscussFollowup(restored), false);
   assert.throws(() => workerFollowupRequest(restored), /no retained worktree available/);
@@ -166,7 +166,7 @@ test('history-only restoration blocks setup retry even when failed setup and que
 });
 
 test('workflow is explicit visual data and never inferred from execution, report or assignment completion', async () => {
-  const { workerWorkflow } = await import('./worker-model.js');
+  const { workerWorkflow } = await import('./worker-model.ts');
   for (const status of ['running', 'completed', 'paused', 'failed', 'awaiting_answer']) {
     const task = worker({ status, result: { message: 'The business workflow is done' }, assignments: [{ id: 'initial', status: 'completed' }] });
     assert.equal(workerWorkflow(task), null);

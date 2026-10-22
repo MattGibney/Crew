@@ -7,7 +7,7 @@ import {promisify} from 'node:util';
 import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,executionPlanHash,reviewProjectRecovery,applyProjectRecovery} from '../project-environment.mjs';
+import {prepareProjectEnvironment,stopProjectEnvironment,disposeProjectEnvironment,inspectProjectEnvironment,executionPlanHash,reviewProjectRecovery,applyProjectRecovery} from '../runtime/projects/environment.mjs';
 const exec=promisify(execFile);
 async function fixture(t,{ready=true,teardown=true,failSetup=false,gracefulStop=false}={}){
  const dir=await mkdtemp(path.join(tmpdir(),'crew-project-runtime-')),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state'),worktree=path.join(stateDir,'worktrees','worker-unique');await mkdir(repo);await mkdir(path.dirname(worktree),{recursive:true});await mkdir(path.join(stateDir,'runs','project-test'),{recursive:true});
@@ -45,7 +45,7 @@ test('setup-only work without declared teardown preserves any setup-created reso
 test('worker app-server preserves normal Codex network and sandbox configuration',async t=>{
  const dir=await mkdtemp(path.join(tmpdir(),'crew-network-plan-'));t.after(()=>rm(dir,{recursive:true,force:true}));
  const binary=path.join(dir,'fake-codex');await writeFile(binary,workerAppServerFixture(`#!${process.execPath}\nimport fs from 'node:fs';fs.writeFileSync('captured-args.json',JSON.stringify(process.argv.slice(2)));console.log(JSON.stringify({type:'thread.started',thread_id:'network-test'}));console.log(JSON.stringify({type:'turn.completed'}));`),{mode:0o700});
- for(const networkAccess of [undefined,false,true]){const worktree=path.join(dir,String(networkAccess)),runDir=path.join(worktree,'run');await mkdir(runDir,{recursive:true});const config={taskId:'network-test',runId:String(networkAccess),ticket:'AI-012',brief:'Local network opt-in check',stateDir:dir,worktree,executable:binary,mcpScript:path.resolve('orchestration-mcp.mjs'),sandbox:'read-only',timeoutMs:10000,environment:{kind:'project-execution',status:'ready',plan:{networkAccess}},project:{mode:'repository'}};const configPath=path.join(runDir,'config.json');await writeFile(configPath,JSON.stringify(config));await exec(process.execPath,[path.resolve('worker-runner.mjs'),configPath],{timeout:15000});const args=JSON.parse(await readFile(path.join(worktree,'captured-args.json'),'utf8'));assert.ok(args.includes('app-server'));assert.ok(!args.includes('--ignore-user-config'));assert.ok(!args.some(arg=>/^(?:permissions\.crew_project(?:\.|=)|sandbox_mode=|approval_policy=)/.test(arg)));}
+ for(const networkAccess of [undefined,false,true]){const worktree=path.join(dir,String(networkAccess)),runDir=path.join(worktree,'run');await mkdir(runDir,{recursive:true});const config={taskId:'network-test',runId:String(networkAccess),ticket:'AI-012',brief:'Local network opt-in check',stateDir:dir,worktree,executable:binary,mcpScript:path.resolve('runtime/orchestration-mcp.mjs'),workerPrompt:'Read-only disposable fixture.',sandbox:'read-only',timeoutMs:10000,environment:{kind:'project-execution',status:'ready',plan:{networkAccess}},project:{mode:'repository'}};const configPath=path.join(runDir,'config.json');await writeFile(configPath,JSON.stringify(config));await exec(process.execPath,[path.resolve('runtime/workers/runner.mjs'),configPath],{timeout:15000});const args=JSON.parse(await readFile(path.join(worktree,'captured-args.json'),'utf8'));assert.ok(args.includes('app-server'));assert.ok(!args.includes('--ignore-user-config'));assert.ok(!args.some(arg=>/^(?:permissions\.crew_project(?:\.|=)|sandbox_mode=|approval_policy=)/.test(arg)));}
 });
 test('local project permission evidence is verified without copying the ignored file',async t=>{
  const f=await fixture(t);const folder=path.join(f.args.repositoryPath,'.codex');await mkdir(folder);const file=path.join(folder,'config.toml'),content='sandbox_mode = "workspace-write"\n';await writeFile(file,content);f.args.plan.permissionsSource={path:file,sha256:createHash('sha256').update(content).digest('hex')};f.args.plan.start=null;f.args.plan.ready=null;
@@ -55,8 +55,8 @@ test('editing instruction provenance does not block retained runtime resume',asy
  const f=await fixture(t);f.args.plan.sources.push({path:'AGENTS.md',sha256:createHash('sha256').update('Fixture project instructions.\n').digest('hex')});await prepareProjectEnvironment(f.args);await stopProjectEnvironment(f.args);await writeFile(path.join(f.args.worktree,'AGENTS.md'),'Updated project guidance for this task.\n');const resumed=await prepareProjectEnvironment({...f.args,resume:true});assert.equal(resumed.status,'ready');assert.equal((await f.read()).seeds,1);
 });
 test('controller preserves independent worker contexts without automatically preparing configured plans',async t=>{
- const {createController}=await import('../controller.mjs');const {createTask,readTask,requestWorkerAction}=await import('../orchestration-store.mjs');const {pathToFileURL}=await import('node:url');const f=await fixture(t);const sourceDir=path.resolve('.'),binary=path.join(f.dir,'fake-project-worker');
- await writeFile(binary,workerAppServerFixture(`#!${process.execPath}\nimport{readFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration-store.mjs')).href)};const args=process.argv.slice(2),m=JSON.parse(args.find(v=>v.startsWith('mcp_servers.local_orchestration.args=')).slice('mcp_servers.local_orchestration.args='.length));const[,state,,id,runId]=m,task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8'));if(task.environment)process.exit(9);console.log(JSON.stringify({type:'thread.started',thread_id:args.includes('resume')?args[args.indexOf('resume')+1]:'generic-worker-'+Math.random().toString(36).slice(2)}));await reportTask(state,id,runId,{reportId:'progress',kind:'progress',message:'Worker launched without automatic environment commands.'});setInterval(()=>{},1000);`),{mode:0o700});
+ const {createController}=await import('../runtime/workers/controller.mjs');const {createTask,readTask,requestWorkerAction}=await import('../runtime/orchestration/store.mjs');const {pathToFileURL}=await import('node:url');const f=await fixture(t);const sourceDir=path.resolve('runtime'),binary=path.join(f.dir,'fake-project-worker');
+ await writeFile(binary,workerAppServerFixture(`#!${process.execPath}\nimport{readFile}from'node:fs/promises';import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(sourceDir,'orchestration/store.mjs')).href)};const args=process.argv.slice(2),m=JSON.parse(args.find(v=>v.startsWith('mcp_servers.local_orchestration.args=')).slice('mcp_servers.local_orchestration.args='.length));const[,state,,id,runId]=m,task=JSON.parse(await readFile(state+'/tasks/'+id+'.json','utf8'));if(task.environment)process.exit(9);console.log(JSON.stringify({type:'thread.started',thread_id:args.includes('resume')?args[args.indexOf('resume')+1]:'generic-worker-'+Math.random().toString(36).slice(2)}));await reportTask(state,id,runId,{reportId:'progress',kind:'progress',message:'Worker launched without automatic environment commands.'});setInterval(()=>{},1000);`),{mode:0o700});
  const project={id:'generic',name:'Generic fixture project',mode:'repository',readiness:{ready:true},repositories:[{id:'repo',path:f.args.repositoryPath,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs:60000,maxConcurrent:2,environment:{executionPlan:f.args.plan}}};
  const states=[path.join(f.dir,'controller-a'),path.join(f.dir,'controller-b')],controllers=[];const taskId='same-task-request';
  const wait=async fn=>{const until=Date.now()+30000;while(Date.now()<until){const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,100));}throw new Error('Timed out waiting for generic runtime controller.');};
@@ -100,13 +100,13 @@ test('missing graceful project stop leaves its owned runtime alive rather than f
 
 
 test('completed work retains its result while update pause gracefully stops its live project runtime',async t=>{
- const {createController}=await import('../controller.mjs');const {createTask,updateTask,readTask,requestWorkerAction}=await import('../orchestration-store.mjs');const {randomUUID}=await import('node:crypto');
+ const {createController}=await import('../runtime/workers/controller.mjs');const {createTask,updateTask,readTask,requestWorkerAction}=await import('../runtime/orchestration/store.mjs');const {randomUUID}=await import('node:crypto');
  const f=await fixture(t,{gracefulStop:true}),environment=await prepareProjectEnvironment(f.args),runId=randomUUID(),runDir=path.join(f.args.stateDir,'runs',f.args.taskId,runId);await mkdir(runDir);
  await createTask(f.args.stateDir,{requestId:f.args.taskId,ticket:'AI-018',brief:'Already completed local fixture',projectId:'completed-project',repositoryId:'repo'});
  await writeFile(path.join(runDir,'exit.json'),JSON.stringify({runId,stopConfirmed:true,exitCode:0,completedTurn:true,threadId:'completed-chat'}));
  await updateTask(f.args.stateDir,f.args.taskId,n=>{n.status='completed';n.runId=runId;n.runDir=runDir;n.harnessStarted=true;n.worktree=f.args.worktree;n.environment=environment;n.threadId='completed-chat';n.result={message:'Previously verified work',verification:{clean:true}};});
  await requestWorkerAction(f.args.stateDir,{taskId:f.args.taskId,actionId:'pause-completed-runtime',action:'pause',cooperative:true,expectedRunId:runId});
- const controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:{id:'completed-project',mode:'repository',worker:{maxConcurrent:1}},admissionHeld:async()=>true});
+ const controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('runtime'),executable:process.execPath,project:{id:'completed-project',mode:'repository',worker:{maxConcurrent:1}},admissionHeld:async()=>true});
  try{const until=Date.now()+10000;let task;for(;;){task=await readTask(f.args.stateDir,f.args.taskId);if(task.lifecycleRequests.at(-1).status==='completed')break;if(Date.now()>until)throw new Error('Completed runtime did not stop');await new Promise(r=>setTimeout(r,50));await controller.tick();}assert.equal(task.status,'completed');assert.equal(task.result.message,'Previously verified work');assert.equal(task.environment.runtime.status,'stopped');assert.equal((await f.read()).forced,undefined);assert.equal(task.threadId,'completed-chat');assert.equal(task.runId,runId);}
  finally{await controller.stop();}
 });
@@ -172,23 +172,23 @@ test('missing recovery requires absence and no registration, rejects foreign pat
 
 test('controller processes exact reviewed recovery, preserves unrelated workers, refuses dirty disposal and retires missing history honestly',async t=>{
  let controller;t.after(()=>controller?.stop());
- const {createController}=await import('../controller.mjs');const {createTask,updateTask,readTask,requestWorkerRecovery,requestWorkerAction}=await import('../orchestration-store.mjs');
+ const {createController}=await import('../runtime/workers/controller.mjs');const {createTask,updateTask,readTask,requestWorkerRecovery,requestWorkerAction}=await import('../runtime/orchestration/store.mjs');
  const f=await retainedRecovery(t);
  await createTask(f.args.stateDir,{requestId:f.task.id,ticket:'GH-24',brief:'Retained recovery fixture',projectId:f.task.projectId,repositoryId:f.task.repositoryId});
  await updateTask(f.args.stateDir,f.task.id,n=>Object.assign(n,f.task));
  await createTask(f.args.stateDir,{requestId:'unrelated-worker',ticket:'GH-24',brief:'Untouched worker',projectId:f.task.projectId,repositoryId:f.task.repositoryId});await updateTask(f.args.stateDir,'unrelated-worker',n=>{n.status='paused';});
  const other=await readFile(path.join(f.args.stateDir,'tasks','unrelated-worker.json'),'utf8');
- controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:f.project});
+ controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('runtime'),executable:process.execPath,project:f.project});
  const wait=async id=>{const until=Date.now()+15000;for(;;){await controller.tick();const task=await readTask(f.args.stateDir,f.task.id),request=task.lifecycleRequests.find(r=>r.id===id);if(['completed','failed'].includes(request?.status))return{task,request};if(Date.now()>until)throw Error('Recovery did not complete');await new Promise(r=>setTimeout(r,25));}};
  const runtimeFile=path.join(f.dir,'manager-runtime.json');await writeFile(runtimeFile,JSON.stringify({project:f.project}));
- const managerTool=async(name,args)=>{const {spawn}=await import('node:child_process');const child=spawn(process.execPath,[path.resolve('orchestration-mcp.mjs'),f.args.stateDir,'manager',runtimeFile]);let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})+'\n');const code=await new Promise(resolve=>child.once('close',resolve));assert.equal(code,0,errors);const result=JSON.parse(output.trim()).result;assert.equal(result.isError,undefined,result.content[0].text);return JSON.parse(result.content[0].text);};
+ const managerTool=async(name,args)=>{const {spawn}=await import('node:child_process');const child=spawn(process.execPath,[path.resolve('runtime/orchestration-mcp.mjs'),f.args.stateDir,'manager',runtimeFile]);let output='',errors='';child.stdout.on('data',data=>output+=data);child.stderr.on('data',data=>errors+=data);child.stdin.end(JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})+'\n');const code=await new Promise(resolve=>child.once('close',resolve));assert.equal(code,0,errors);const result=JSON.parse(output.trim()).result;assert.equal(result.isError,undefined,result.content[0].text);return JSON.parse(result.content[0].text);};
  const viewed=await managerTool('review_worker_recovery',{taskId:f.task.id,action:'reconcile_plan'}),request={taskId:f.task.id,actionId:'controller-recovery',action:'reconcile_plan',expectedRunId:null,reviewHash:viewed.reviewHash,decision:'Adopt only the reviewed teardown for this environment.'};
  await controller.stop();
  await managerTool('request_worker_recovery',request);
  // Simulate a crash after durable environment adoption but before task completion.
  await updateTask(f.args.stateDir,f.task.id,n=>{n.lifecycleRequests[0].status='processing';});
  await applyProjectRecovery({...f.recovery,task:await readTask(f.args.stateDir,f.task.id),request:{...request,id:request.actionId}});
- controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('.'),executable:process.execPath,project:f.project});
+ controller=await createController({stateDir:f.args.stateDir,sourceDir:path.resolve('runtime'),executable:process.execPath,project:f.project});
  assert.equal((await wait(request.actionId)).request.status,'completed');
  assert.equal((await readTask(f.args.stateDir,f.task.id)).environment.recoveryHistory.length,1);
  assert.equal((await f.read()).seeds,1);
@@ -251,12 +251,12 @@ test('lifecycle invocation snapshots settings before asynchronous command eviden
  assert.equal(value.hooks[0].status,'succeeded');assert.equal(value.plan.setup.command,command);assert.equal((await f.read()).seeds,1);
 });
 for(const kind of ['plan','argv'])test(`controller does not execute configured ${kind} setup or turn a native launch failure into setup retry`,async t=>{
- const {createController}=await import('../controller.mjs');const {createTask,readTask,requestWorkerAction}=await import('../orchestration-store.mjs');
+ const {createController}=await import('../runtime/workers/controller.mjs');const {createTask,readTask,requestWorkerAction}=await import('../runtime/orchestration/store.mjs');
  let controller;t.after(()=>controller?.stop());
  const f=await fixture(t,{failSetup:true,ready:false});f.args.plan.start=null;
  const configured=kind==='plan'?{executionPlan:f.args.plan}:{bootstrap:{command:process.execPath,args:['action.mjs','setup'],timeoutMs:5000}};
  const stateDir=path.join(await realpath(f.dir),'agent-controller'),project={id:'agent-project',mode:'repository',readiness:{ready:false},repositories:[{id:'repo',path:f.args.repositoryPath,baseRef:'main'}],worker:{maxConcurrent:1,environment:configured}};
- controller=await createController({stateDir,sourceDir:path.resolve('.'),executable:path.join(f.dir,'absent-codex'),project});
+ controller=await createController({stateDir,sourceDir:path.resolve('runtime'),executable:path.join(f.dir,'absent-codex'),project});
  await createTask(stateDir,{requestId:'agent-worker',ticket:'45',brief:'Inspect without setup.',projectId:project.id,repositoryId:'repo'});
  const wait=async predicate=>{const until=Date.now()+15000;while(Date.now()<until){await controller.tick();const task=await readTask(stateDir,'agent-worker');if(predicate(task))return task;await new Promise(r=>setTimeout(r,50));}throw new Error('Worker did not reach native transport boundary.');};
  const failed=await wait(task=>task.status==='failed');assert.match(failed.failure,/worker|exited/i);assert.equal(failed.environment,undefined);await assert.rejects(readFile(path.join(failed.worktree,'.test-data/state.json'),'utf8'),{code:'ENOENT'});

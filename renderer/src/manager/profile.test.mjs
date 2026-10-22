@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { managerDisplayName, managerPicture, readProfilePicture, PROFILE_PICTURE_MAX_BYTES } from './profile.js';
+import { managerDisplayName, managerPicture, readProfilePicture, PROFILE_PICTURE_MAX_BYTES } from './profile.ts';
 
 test('old projects and absent names retain Manager presentation', () => {
   for (const profile of [undefined, {}, { name: '' }, { name: '   ' }, { name: null }]) assert.equal(managerDisplayName(profile), 'Manager');

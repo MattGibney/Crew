@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectConfig, environmentChoices } from './model.js';
+import { collectConfig, environmentChoices } from './model.ts';
 
 function fixture() {
   const source = { path: '.codex/environments/environment.toml', sha256: 'a'.repeat(64) };

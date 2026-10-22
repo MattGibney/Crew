@@ -5,14 +5,14 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import path from 'node:path';
 import os from 'node:os';
-import {createController} from '../controller.mjs';
-import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../orchestration-store.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import {createTask,readTask,requestWorkerAction,requestWorkerModel} from '../runtime/orchestration/store.mjs';
 const exec=promisify(execFile);
 async function wait(fn,predicate,label){const end=Date.now()+30000;let value;while(Date.now()<end){value=await fn();if(predicate(value))return value;await new Promise(r=>setTimeout(r,40));}throw Error(`Timed out ${label}: ${JSON.stringify(value)}`);}
 test('real detached runner safely resumes the same context with exact validated model and refuses substitution',async t=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'crew-model-native-')),repo=path.join(dir,'repo'),state=path.join(dir,'state'),binary=path.join(dir,'native.mjs'),log=path.join(dir,'calls.jsonl');await mkdir(repo);await exec('git',['init','-b','main',repo]);await writeFile(path.join(repo,'README.md'),'Synthetic model transition fixture\n');await exec('git',['-C',repo,'add','.']);await exec('git',['-C',repo,'-c','user.name=Fixture','-c','user.email=fixture@localhost.invalid','commit','-m','Fixture']);
  await writeFile(binary,`#!${process.execPath}
-import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../orchestration-store.mjs',import.meta.url).href)};
+import{createInterface}from'node:readline';import{appendFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration/store.mjs',import.meta.url).href)};
 const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 // Exclusive ownership makes accidental overlap a real child-process failure.
 const lock=${JSON.stringify(path.join(dir,'active'))};closeSync(openSync(lock,'wx'));const log=${JSON.stringify(log)},threadId='retained-model-thread',turnId='turn-'+run,send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
@@ -35,7 +35,7 @@ if(m.method==='turn/start'){send({method:'turn/started',params:{threadId,turn:{i
 if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,turn:{id:turnId,status:'interrupted',items:[]}}});}
 `,{mode:0o700});
  const project={id:'model-fixture',name:'Model fixture',mode:'repository',readiness:{ready:true},repositories:[{id:'repo',path:repo,baseRef:'main'}],worker:{sandbox:'read-only',timeoutMs:60000,maxConcurrent:1}},taskId='model-native-worker';
- let controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ let controller=await createController({stateDir:state,sourceDir:path.resolve('runtime'),executable:binary,project});
  const action=async(action,extra={})=>{const task=await readTask(state,taskId);await requestWorkerAction(state,{taskId,actionId:action+'-'+Date.now(),action,expectedRunId:task.runId||null,...extra});};
  t.after(async()=>{try{const task=await readTask(state,taskId);if(!['paused','stopped','failed','completed'].includes(task.status)){await action('pause',{cooperative:true});await wait(()=>readTask(state,taskId),x=>['paused','stopped','failed'].includes(x.status),'cleanup pause');}}finally{await controller.stop();await rm(dir,{recursive:true,force:true});}});
  await createTask(state,{requestId:taskId,ticket:'GH-22',brief:'Use Astra to inspect this fixture. Read-only; no other scope.',projectId:project.id,repositoryId:'repo'});await action('start');
@@ -44,7 +44,7 @@ if(m.method==='turn/interrupt')send({method:'turn/completed',params:{threadId,tu
  await requestWorkerModel(state,request);await controller.tick();assert.equal((await readTask(state,taskId)).runId,initial.runId);assert.equal((await readTask(state,taskId)).status,'running');
  const calls=async()=>JSON.parse('['+(await readFile(log,'utf8')).trim().split('\n').join(',')+']');assert.equal((await calls()).filter(c=>c.method==='model/list').length,0,'model intent does not affect running provider');
  await action('pause',{cooperative:true});const paused=await wait(()=>readTask(state,taskId),x=>x.status==='paused','cooperative pause');const exit=JSON.parse(await readFile(path.join(paused.runDir,'exit.json')));assert.equal(exit.stopConfirmed,true);assert.equal(exit.nativeTurnStatus,'interrupted');
- await controller.stop();controller=await createController({stateDir:state,sourceDir:path.resolve('.'),executable:binary,project});
+ await controller.stop();controller=await createController({stateDir:state,sourceDir:path.resolve('runtime'),executable:binary,project});
  await action('resume');const selected=await wait(()=>readTask(state,taskId),x=>x.status==='blocked'&&x.modelSelection.status==='selected'&&x.execution?.live===false,'resumed selection');
  for(const [key,value]of Object.entries(immutable))assert.deepEqual(selected[key],value,key+' preserved');assert.notEqual(selected.runId,initial.runId);assert.equal(selected.modelSelection.runtime.selectedModel,'fixture-sol');assert.equal(selected.modelSelection.runtime.threadId,initial.threadId);const selectedExit=JSON.parse(await readFile(path.join(selected.runDir,'exit.json')));assert.deepEqual(selectedExit.commands.map(c=>c.command),['early-current-command']);assert.notEqual(selectedExit.finalMessage,'stale old reply');assert.ok(!(await readFile(path.join(selected.runDir,'events.jsonl'),'utf8')).includes('stale-'));
  let rows=await calls();const resume=rows.find(c=>c.method==='thread/resume');assert.equal(resume.params.threadId,initial.threadId);assert.equal(resume.params.model,'fixture-sol');const turn=rows.find(c=>c.method==='turn/start'&&c.run===selected.runId);assert.equal(turn.params.model,'fixture-sol');assert.match(turn.params.input[0].text,/approves Sol/);assert.match(turn.params.input[0].text,/Use Astra/);assert.equal(rows.filter(c=>c.method==='turn/interrupt').length,1);assert.equal(rows.filter(c=>c.method==='thread/start').length,1);

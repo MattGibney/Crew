@@ -9,11 +9,11 @@ import {createHash} from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import {fileURLToPath} from 'node:url';
-import {createController} from '../controller.mjs';
-import * as store from '../orchestration-store.mjs';
-import {listWorkerRequests} from '../worker-approvals.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import * as store from '../runtime/orchestration/store.mjs';
+import {listWorkerRequests} from '../runtime/workers/approval-store.mjs';
 
-const exec=promisify(execFile),sourceDir=fileURLToPath(new URL('..',import.meta.url));
+const exec=promisify(execFile),sourceDir=fileURLToPath(new URL('../runtime/',import.meta.url));
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function wait(read,predicate,label){
  const until=Date.now()+30000;let value;
@@ -93,7 +93,7 @@ async function fixture(t){
  const hook=phase=>({command:`${JSON.stringify(process.execPath)} actions.mjs ${phase}`,source,timeoutMs:10000});
  const plan={schemaVersion:1,sources:[source],setup:hook('setup'),start:null,resume:null,ready:null,stop:null,teardown:hook('teardown')};
  await writeFile(binary,`#!${process.execPath}
-import{createInterface}from'node:readline';import{execFileSync}from'node:child_process';import{appendFileSync,existsSync,readFileSync,writeFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../orchestration-store.mjs',import.meta.url).href)};
+import{createInterface}from'node:readline';import{execFileSync}from'node:child_process';import{appendFileSync,existsSync,readFileSync,writeFileSync,openSync,closeSync,unlinkSync}from'node:fs';import{reportTask}from${JSON.stringify(new URL('../runtime/orchestration/store.mjs',import.meta.url).href)};
 const raw=process.argv.find(x=>x.startsWith('mcp_servers.local_orchestration.args='));const[,state,,task,run]=JSON.parse(raw.slice(raw.indexOf('=')+1));
 const log=${JSON.stringify(log)},gate=${JSON.stringify(gates)}+'/'+run,lock=${JSON.stringify(path.join(dir,'active'))},threadId='followup-retained-thread',turnId='turn-'+run,send=m=>process.stdout.write(JSON.stringify(m)+'\\n');
 process.on('uncaughtException',error=>{appendFileSync(log,JSON.stringify({method:'fixture/error',run,message:error.message,stack:error.stack})+'\\n');process.exit(1);});

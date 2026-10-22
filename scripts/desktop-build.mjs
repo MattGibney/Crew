@@ -26,7 +26,7 @@ function run(executable, argv, env = process.env) {
 try {
   const rendererEnv = { ...process.env };
   for (const name of Object.keys(rendererEnv)) if (/^(CSC_|APPLE_)/.test(name) || ['GH_TOKEN', 'GITHUB_TOKEN'].includes(name)) delete rendererEnv[name];
-  run(process.execPath, [path.join(root, 'node_modules/vite/bin/vite.js'), 'build'], rendererEnv);
+  run(process.execPath, [path.join(root, 'scripts/build.mjs')], rendererEnv);
   const env = { ...process.env };
   // This command NEVER publishes; a separate least-privilege job owns that step.
   delete env.GH_TOKEN; delete env.GITHUB_TOKEN;

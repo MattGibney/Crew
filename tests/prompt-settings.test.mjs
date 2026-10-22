@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, stat, readdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createPromptSettings, promptVersion, buildManagerInstructions, buildWorkerInstructions } from '../prompt-settings.mjs';
+import { createPromptSettings, promptVersion, buildManagerInstructions, buildWorkerInstructions } from '../runtime/manager/instructions/settings.mjs';
 const settings = async (options = {}) => createPromptSettings({ stateDir: await mkdtemp(path.join(os.tmpdir(), 'crew-prompts-')), projectId: 'example', ...options });
 test('initial editors show complete defaults and save replaces them durably without rewriting configured files', async () => {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), 'crew-prompts-'));
@@ -111,7 +111,7 @@ test('default manager owns ordinary delegation and supervision while cleanup and
 });
 
 test('persisted v0.14 defaults upgrade per role without changing active manager or historical worker context',async()=>{
- const {createManagerLifecycle}=await import('../manager-lifecycle.mjs');
+ const {createManagerLifecycle}=await import('../runtime/manager/lifecycle.mjs');
  const old=JSON.parse(await readFile(new URL('./fixtures/prompts-v0.14.0.json',import.meta.url),'utf8'));
  assert.equal(promptVersion(old.manager),'4104031ce2d5130424cc649c52ae5d10347ae1e200fa534c6fff325ab4a14f7a');
  assert.equal(promptVersion(old.worker),'ee36c566b334978c7a21d72e401d373afe510087fb589a13d045847ce0cc2dd8');
@@ -153,4 +153,18 @@ test('persisted customized prompt bytes remain exact when the other pristine rol
   const migrated=JSON.parse(await readFile(file,'utf8'));assert.equal(migrated.prompts.manager,custom);assert.equal(migrated.promptUpgradeHistory.length,1);assert.equal(migrated.promptUpgradeHistory[0].role,'worker');
   assert.equal((await prompts.snapshot('manager')).text,custom);
  }finally{await rm(stateDir,{recursive:true,force:true});}
+});
+
+test('invalid persisted provenance and upgrade hashes fail closed without rewriting prompt evidence',async t=>{
+ const stateDir=await mkdtemp(path.join(os.tmpdir(),'crew-prompt-provenance-'));
+ const {mkdir,rm}=await import('node:fs/promises');t.after(()=>rm(stateDir,{recursive:true,force:true}));
+ const directory=path.join(stateDir,'prompt-settings');await mkdir(directory);
+ const file=path.join(directory,'example.json');
+ const original={schemaVersion:1,projectId:'example',prompts:{manager:'Custom manager',worker:'Custom worker'}};
+ for(const patch of [{promptOrigins:{manager:'inferred'}},{promptOrigins:[]},{promptUpgradeHistory:[{role:'manager',at:new Date().toISOString(),from:{text:'Before',version:'wrong'},toVersion:'a'.repeat(64)}]},{promptUpgradeHistory:[{role:'other',at:new Date().toISOString(),from:{text:'Before',version:promptVersion('Before')},toVersion:'a'.repeat(64)}]}]){
+  const bytes=JSON.stringify({...original,...patch});await writeFile(file,bytes);
+  const prompts=await createPromptSettings({stateDir,projectId:'example'});
+  await assert.rejects(prompts.read(),/provenance|upgrade history/);
+  assert.equal(await readFile(file,'utf8'),bytes);
+ }
 });

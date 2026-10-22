@@ -4,8 +4,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,appendFile,readFile,rm,chmod,mkdir,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {createBridge} from '../codex-bridge.mjs';
-import {updateActivity} from '../update-activity.mjs';
+import {createBridge} from '../runtime/manager/bridge/index.mjs';
+import {updateActivity} from '../runtime/updates/activity.mjs';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate){const deadline=Date.now()+4000;while(Date.now()<deadline){if(await predicate())return;await delay(10);}throw new Error('Synthetic protocol condition did not arrive.');}
 async function fixture(t,{history=[],saved=false,threadDelay=0,turnAckDelay=0,voiceStopFails=false,exitOnEOF=false,projectScoped=false,configuredInstructions=null,timelinePages=null,timelineDelay=0,timelineError=null,writerConflict=false,conflictThreadIds=null,recoveryActive=false,turnsError=null,startupApproval=false,startupThreadNotification=true,startupResultThreadId=null}={}){

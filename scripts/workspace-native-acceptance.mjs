@@ -3,16 +3,16 @@
 const {_electron}=await import(process.env.CREW_PLAYWRIGHT_MODULE||'playwright-core');
 import {mkdtemp,mkdir,writeFile,readFile,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';import {pathToFileURL} from 'node:url';import path from 'node:path';import assert from 'node:assert/strict';import {execFile} from 'node:child_process';import {promisify} from 'node:util';
-const exec=promisify(execFile),root=process.cwd(),dir=await mkdtemp(path.join(tmpdir(),'crew-multi-native-'));
+const exec=promisify(execFile),root=process.cwd(),runtimeRoot=path.join(root,'runtime'),dir=await mkdtemp(path.join(tmpdir(),'crew-multi-native-'));
 console.log('Disposable acceptance directory:',dir);
 const acceptanceExecutable=process.env.CREW_ACCEPTANCE_EXECUTABLE||path.join(root,'node_modules/electron/dist/Electron.app/Contents/MacOS/Electron');
 const binary=path.join(dir,'fake-codex');
-const {createTask,readTask,requestWorkerAction,reportTask}=await import(pathToFileURL(path.join(root,'orchestration-store.mjs')));
+const {createTask,readTask,requestWorkerAction,reportTask}=await import(pathToFileURL(path.join(runtimeRoot,'orchestration/store.mjs')));
 async function until(fn,label){const deadline=Date.now()+30000;while(Date.now()<deadline){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,100));}throw Error('Timed out '+label);}
 
 await writeFile(binary,`#!${process.execPath}
 import{createInterface}from'node:readline';import{appendFileSync}from'node:fs';
-import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(root,'orchestration-store.mjs')).href)};
+import{reportTask}from ${JSON.stringify(pathToFileURL(path.join(runtimeRoot,'orchestration/store.mjs')).href)};
 if(process.argv.includes('--version')){console.log('codex-cli synthetic');process.exit(0);}
 const binding=process.argv.find(a=>a.startsWith('mcp_servers.local_orchestration.args='));
 const [,state,role,taskId,runId]=binding?JSON.parse(binding.slice(binding.indexOf('=')+1)):[];
@@ -39,7 +39,7 @@ for await(const line of createInterface({input:process.stdin})){
 }
 `,{mode:0o700});
 const configPath=path.join(dir,'first','project.json');
-await exec(process.execPath,[path.join(root,'cli.mjs'),'init','--template','fixture','--config',configPath]);
+await exec(process.execPath,[path.join(runtimeRoot,'cli.mjs'),'init','--template','fixture','--config',configPath]);
 const raw=JSON.parse(await readFile(configPath,'utf8'));raw.runtime.port=59164;raw.runtime.codexBinary=binary;raw.project.name='Native project one';await writeFile(configPath,JSON.stringify(raw,null,2)+'\n');await mkdir(path.join(dir,'first','.data'),{recursive:true});await writeFile(path.join(dir,'first','.data','manager-chat.json'),JSON.stringify({threadId:'retained-manager-one'}));
 const before=await readFile(configPath,'utf8');
 const env={...process.env,CREW_APP_DATA:path.join(dir,'app-data'),AI_MANAGER_CONFIG:configPath,AI_MANAGER_CODEX_BINARY:binary,AI_MANAGER_PORT:'59999',VOICE_PORT:'59998'};delete env.ELECTRON_RUN_AS_NODE;
@@ -47,8 +47,8 @@ let electron,nativeProcess;const cleanupJobs=[];
 try{
  electron=await _electron.launch({executablePath:acceptanceExecutable,args:[root,'--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream'],env,timeout:30000});
  nativeProcess=electron.process();nativeProcess.stderr.on('data',data=>process.stderr.write(data));
- let page=await electron.firstWindow({timeout:30000});await page.waitForURL('http://127.0.0.1:59164/**',{timeout:30000});
- await page.getByLabel('Project: Native project one. Manage projects').waitFor();
+ let page=await electron.firstWindow({timeout:30000});page.on('pageerror',error=>console.error('Renderer error:',error.stack||error.message));await page.waitForURL('http://127.0.0.1:59164/**',{timeout:30000});
+ await page.getByLabel('Project: Native project one. Manage projects').waitFor();console.log('Native check: first project renderer ready');
  const a=await page.evaluate(()=>window.crewWorkspaces.snapshot());assert.equal(a.projects.length,1);assert.equal(before,await readFile(configPath,'utf8'));
  await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).fill('Unsent native project one draft');
@@ -56,10 +56,10 @@ try{
  await page.getByRole('tab',{name:'Voice',exact:true}).click();
  await page.getByRole('button',{name:'Connect voice',exact:true}).click();
  await page.getByText('Voice connected',{exact:true}).first().waitFor();
- assert.equal(await page.evaluate(()=>window.__crewMedia.calls),1);
+ assert.equal(await page.evaluate(()=>window.__crewMedia.calls),1);console.log('Native check: synthetic voice connected');
  const voiceBefore=await page.evaluate(()=>fetch('/api/state',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(r=>r.json()));assert.equal(voiceBefore.voiceActive,true);
  await page.getByLabel('Project: Native project one. Manage projects').click();await page.getByRole('button',{name:'Add project',exact:true}).click().catch(error=>{if(!String(error).includes('closed'))throw error;});
- let setup;for(let i=0;i<100;i++){setup=electron.windows().find(p=>p.url().endsWith('setup.html'));if(setup)break;await new Promise(r=>setTimeout(r,100));}assert.ok(setup);await setup.getByRole('heading',{name:'Set up Crew',exact:true}).waitFor();
+ let setup;for(let i=0;i<100;i++){setup=electron.windows().find(p=>p.url().endsWith('setup.html'));if(setup)break;await new Promise(r=>setTimeout(r,100));}assert.ok(setup);await setup.getByRole('heading',{name:'Set up Crew',exact:true}).waitFor();console.log('Native check: second project setup ready');
  const registryFile=path.join(dir,'app-data','Crew','workspaces.json');let reg=JSON.parse(await readFile(registryFile,'utf8'));assert.equal(reg.projects.length,2);const second=reg.projects.find(p=>p.id!==a.selectedId);
  // Existing onboarding remains the production UI; use its supported native save
  // bridge with an explicit synthetic fixture to avoid any real repository/account.
@@ -72,7 +72,7 @@ try{
  for(let i=0;i<100;i++){page=electron.windows().find(p=>p.url().startsWith('http://127.0.0.1:')&&!p.isClosed());if(page)break;await new Promise(r=>setTimeout(r,100));}
  await page.getByRole('tab',{name:'Text',exact:true}).click();
  await page.getByRole('textbox',{name:'Message your manager',exact:true}).waitFor({timeout:30000});
- const b=await page.evaluate(()=>window.crewWorkspaces.snapshot());assert.equal(b.selectedId,second.id);assert.equal(b.projects.length,2);assert.equal(b.projects.find(p=>p.id===second.id).name,'Native project two');
+ console.log('Native check: second project renderer ready');const b=await page.evaluate(()=>window.crewWorkspaces.snapshot());assert.equal(b.selectedId,second.id);assert.equal(b.projects.length,2);assert.equal(b.projects.find(p=>p.id===second.id).name,'Native project two');
  const ordinaryEnv={...env};delete ordinaryEnv.AI_MANAGER_CONFIG;
  await exec(acceptanceExecutable,[root],{env:ordinaryEnv,timeout:30000});
  await until(async()=>(await page.evaluate(()=>window.crewWorkspaces.snapshot())).selectedId===second.id,'ordinary second launch retains selected project');
@@ -89,7 +89,7 @@ try{
  const slots=JSON.parse(await readFile(path.join(dir,'app-data/Crew/capacity/capacity.json'),'utf8'));assert.equal(slots.claims.length,1);
  await page.evaluate(()=>window.crewWorkspaces.setWorkerLimit(2));
  const running=await until(async()=>{const tasks=await Promise.all([readTask(stateA,taskId),readTask(stateB,taskId)]);return tasks.every(t=>t.threadId&&t.execution?.live)?tasks:null;},'both native workers running');
- assert.notEqual(running[0].worktree,running[1].worktree);assert.notEqual(running[0].runId,running[1].runId);
+ console.log('Native check: both synthetic workers running');assert.notEqual(running[0].worktree,running[1].worktree);assert.notEqual(running[0].runId,running[1].runId);
 
 
  await page.evaluate(id=>window.crewWorkspaces.rename({id,name:'Renamed project two'}),second.id);
@@ -137,7 +137,7 @@ try{
  await electron.evaluate(({dialog,Menu})=>{dialog.showMessageBox=async options=>{console.log('Synthetic native dialog:',options.message);return {response:1};};Menu.getApplicationMenu().items[0].submenu.items.find(i=>i.label==='Quit Crew…').click();});
  await until(()=>nativeProcess.exitCode!==null,'native Quit exits the app');
  console.log(JSON.stringify({pass:true,dir,controllers:[marker.pid,otherMarker.pid],projects:reg.projects.map(p=>p.id),syntheticVoiceOnly:true,reopened:true,liveWorkerSwitch:true,globalRace:true,attention:true}));
-}catch(error){console.error(error);if(electron){console.error('WINDOWS',electron.windows().map(p=>p.url()));for(const p of electron.windows())console.error((await p.locator('body').innerText().catch(()=>'' )).slice(0,3500));}throw error;
+}catch(error){console.error(error);if(electron){console.error('WINDOWS',electron.windows().map(p=>p.url()));for(const [index,p] of electron.windows().entries()){await p.screenshot({path:path.join(dir,`native-failure-${index}.png`)}).catch(()=>{});console.error((await p.locator('body').innerText().catch(()=>'' )).slice(0,3500));}}throw error;
 }finally{
  for(const job of cleanupJobs){const task=await readTask(job.stateDir,job.taskId).catch(()=>null);if(task&&!['stopped','paused','disposed','completed','failed'].includes(task.status))await requestWorkerAction(job.stateDir,{taskId:job.taskId,actionId:'acceptance-cleanup',action:'stop',expectedRunId:task.runId||null}).catch(error=>console.error('Synthetic cleanup requires review:',job.stateDir,error.message));}
  if(cleanupJobs.length)await until(async()=>{const tasks=await Promise.all(cleanupJobs.map(job=>readTask(job.stateDir,job.taskId).catch(()=>null)));return tasks.every(task=>!task||['stopped','paused','disposed','completed','failed'].includes(task.status)&&!task.execution?.live);},'synthetic cleanup').catch(error=>console.error(error.message));

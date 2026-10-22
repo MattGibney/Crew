@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createManagerProfile } from '../manager-profile.mjs';
+import { createManagerProfile } from '../runtime/manager/profile.mjs';
 
 test('manager voices persist per project, reject stale writes and retain corrupt evidence', async t => {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'crew-profile-'));
@@ -53,8 +53,8 @@ test('profile patches preserve voice, isolate projects, migrate legacy voice and
 });
 
 test('only explicit name/personality change the native instruction snapshot; picture/voice never enter instructions', async () => {
-  const { managerProfileSnapshot } = await import('../manager-profile.mjs');
-  const { promptSnapshot } = await import('../prompt-settings.mjs');
+  const { managerProfileSnapshot } = await import('../runtime/manager/profile.mjs');
+  const { promptSnapshot } = await import('../runtime/manager/instructions/settings.mjs');
   const original = 'CUSTOM complete replacement instructions';
   assert.deepEqual(managerProfileSnapshot(original), promptSnapshot(original));
   assert.deepEqual(managerProfileSnapshot(original, { voice: 'maple', picture: png }), promptSnapshot(original));

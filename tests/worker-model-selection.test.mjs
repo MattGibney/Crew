@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
-import {requireWorkerModel} from '../worker-model-selection.mjs';
-import {createTask,readTask,updateTask,requestWorkerModel,requestWorkerAction} from '../orchestration-store.mjs';
+import {requireWorkerModel} from '../runtime/workers/model-selection.mjs';
+import {createTask,readTask,updateTask,requestWorkerModel,requestWorkerAction} from '../runtime/orchestration/store.mjs';
 
 test('catalog uses exact native model IDs, follows pages and rejects unavailable aliases and malformed pagination',async()=>{
  const calls=[];const rpc=async(method,args)=>{calls.push({method,args});return args.cursor?{data:[{model:'fixture-astra',id:'astra-display'}],nextCursor:null}:{data:[{model:'fixture-sol'}],nextCursor:'second'};};
@@ -33,7 +33,7 @@ test('model intent targets one current run, preserves immutable brief and does n
 test('manager model tool is project-scoped, idempotent, and never exposed to workers',async t=>{
  const {spawn}=await import('node:child_process');const {writeFile}=await import('node:fs/promises');
  const dir=await mkdtemp(path.join(tmpdir(),'crew-model-mcp-'));t.after(()=>rm(dir,{recursive:true,force:true}));const taskId='model-mcp-worker';await createTask(dir,{requestId:taskId,ticket:'GH-22',brief:'Inspect only',projectId:'test-project'});await updateTask(dir,taskId,n=>{n.runId='model-mcp-run';n.status='running';});const runtime=path.join(dir,'runtime.json');await writeFile(runtime,JSON.stringify({project:{id:'test-project',mode:'repository'}}));
- const call=(role,extra,name,args)=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,[path.resolve('orchestration-mcp.mjs'),dir,role,...extra]);let output='';child.stdout.on('data',d=>output+=d);child.once('error',reject);child.once('close',code=>{try{assert.equal(code,0);resolve(JSON.parse(output.trim()).result);}catch(error){reject(error);}});child.stdin.end(JSON.stringify({id:1,jsonrpc:'2.0',method:'tools/call',params:{name,arguments:args}})+'\n');});
+ const call=(role,extra,name,args)=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,[path.resolve('runtime/orchestration-mcp.mjs'),dir,role,...extra]);let output='';child.stdout.on('data',d=>output+=d);child.once('error',reject);child.once('close',code=>{try{assert.equal(code,0);resolve(JSON.parse(output.trim()).result);}catch(error){reject(error);}});child.stdin.end(JSON.stringify({id:1,jsonrpc:'2.0',method:'tools/call',params:{name,arguments:args}})+'\n');});
  const args={taskId,requestId:'model-mcp-request',expectedRunId:'model-mcp-run',model:'fixture-sol',userDecision:'The user approved Sol.'};assert.equal((await call('manager',[runtime],'set_worker_model',args)).isError,undefined);assert.equal((await call('manager',[runtime],'set_worker_model',args)).isError,undefined);assert.equal((await readTask(dir,taskId)).modelRequests.length,1);
  assert.equal((await call('worker',[taskId,'model-mcp-run'],'set_worker_model',args)).isError,true);
  await writeFile(runtime,JSON.stringify({project:{id:'other-project',mode:'repository'}}));assert.match((await call('manager',[runtime],'set_worker_model',{...args,requestId:'model-mcp-other'})).content[0].text,/another project/);

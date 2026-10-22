@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {activeTasks,archivedTasks,archiveTime,isArchivedTask} from '../worker-archive.mjs';
-import {attentionKeys} from '../attention-keys.mjs';
+import {activeTasks,archivedTasks,archiveTime,isArchivedTask} from '../runtime/shared/worker-archive.mjs';
+import {attentionKeys} from '../runtime/shared/attention-keys.mjs';
 
 test('legacy disposal dates stay honest and archive lists order known times newest first without mutation',()=>{
  const tasks=[{id:'unknown',status:'removed',updatedAt:'2026-10-21T12:00:00Z'},{id:'older',status:'disposed',disposedAt:'2026-10-19T12:00:00Z'},{id:'newer',status:'disposed',archivedAt:'2026-10-20T12:00:00Z'},{id:'completed',status:'completed'},{id:'paused',status:'paused'},{id:'stopped',status:'stopped'}];
@@ -21,7 +21,7 @@ test('legacy removed worker approvals cannot raise attention after archive',()=>
 });
 
 test('permanent delete refuses live, pending, and symlinked evidence while preserving other task records',async t=>{
- const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');const {createTask,updateTask,manageArchivedTask,readTask}=await import('../orchestration-store.mjs');
+ const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');const {createTask,updateTask,manageArchivedTask,readTask}=await import('../runtime/orchestration/store.mjs');
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'crew-archive-records-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const project={id:'archive-test',mode:'repository'};
  const id='archive-safety-worker';await createTask(dir,{requestId:id,ticket:'GH-43',brief:'Safe record fixture',projectId:project.id});
  const perform=(task,action='delete')=>manageArchivedTask(dir,{taskId:id,action,operationId:'safe-delete-operation',expectedRevision:task.revision},project);
@@ -36,7 +36,7 @@ test('permanent delete refuses live, pending, and symlinked evidence while prese
 });
 
 test('an exact verified deletion journal completes after its terminal files were already removed',async t=>{
- const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');const {createTask,updateTask,manageArchivedTask}=await import('../orchestration-store.mjs');
+ const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');const {createTask,updateTask,manageArchivedTask}=await import('../runtime/orchestration/store.mjs');
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'crew-archive-retry-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const project={id:'archive-retry',mode:'repository'};
  const task=await createTask(dir,{requestId:'partial-delete-worker',ticket:'GH-43',brief:'Partial deletion fixture',projectId:project.id});
  const archived=await updateTask(dir,task.id,n=>{n.status='disposed';n.harnessStarted=true;n.runId='17d56d1d-cd6a-4e11-aaf0-e1ea01b01875';n.runDir=path.join(dir,'runs',n.id,n.runId);});
@@ -49,7 +49,7 @@ test('an exact verified deletion journal completes after its terminal files were
 });
 
 test('restore is scoped stale-guarded history-only and suppresses old attention without changing retained evidence',async t=>{
- const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');const {createTask,updateTask,manageArchivedTask,readTask}=await import('../orchestration-store.mjs');
+ const fs=await import('node:fs/promises'),path=await import('node:path'),os=await import('node:os');const {createTask,updateTask,manageArchivedTask,readTask}=await import('../runtime/orchestration/store.mjs');
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'crew-archive-restore-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));const project={id:'archive-restore',mode:'repository'};
  const id='restore-history-worker';await createTask(dir,{requestId:id,ticket:'GH-43',brief:'Preserved original brief',projectId:project.id});
  const archived=await updateTask(dir,id,n=>{n.status='disposed';n.archivedAt='2026-10-21T12:00:00Z';n.disposedAt=n.archivedAt;n.runId='historical-run';n.threadId='retained-thread';n.result={message:'Original verified result',evidence:['retained evidence']};n.question={id:'old-question',runId:n.runId,message:'Historical question'};n.attention=[{id:'old-attention',kind:'question',message:'Historical question'}];});

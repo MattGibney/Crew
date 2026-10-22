@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ManagerReview, managerReviewContext } from '../manager-review.mjs';
+import { ManagerReview, managerReviewContext } from '../runtime/manager/reviews/scheduler.mjs';
 
 const deferred = () => { let resolve; const promise = new Promise(done => resolve = done); return { promise, resolve }; };
 async function fixture(t, overrides = {}) {

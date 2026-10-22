@@ -8,7 +8,7 @@ import {mkdtemp,mkdir,readFile,writeFile,rm} from 'node:fs/promises';
 import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {createUpdateCoordinator} from '../desktop/updater.mjs';
+import {createUpdateCoordinator} from '../runtime/desktop/updater.mjs';
 const require=createRequire(import.meta.url);
 test('real macOS updater checks a two-version HTTP feed, verifies/downloads ZIP, and defers active work without native installation',async t=>{
  const root=await mkdtemp(path.join(tmpdir(),'crew-update-feed-'));t.after(()=>rm(root,{recursive:true,force:true}));

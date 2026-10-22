@@ -9,15 +9,15 @@ import {createHash} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {createController} from '../controller.mjs';
-import {createTask,readTask,currentAssignment,requestWorkerAction} from '../orchestration-store.mjs';
-import {listWorkerRequests} from '../worker-approvals.mjs';
+import {createController} from '../runtime/workers/controller.mjs';
+import {createTask,readTask,currentAssignment,requestWorkerAction} from '../runtime/orchestration/store.mjs';
+import {listWorkerRequests} from '../runtime/workers/approval-store.mjs';
 
 const executable=process.argv[2];
 if(!executable||!path.isAbsolute(executable))throw Error('Supply an absolute installed Codex executable path.');
 const exec=promisify(execFile),sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const continuationDir=process.argv[3]==='--continue'?process.argv[4]:null;
-const sourceDir=fileURLToPath(new URL('..',import.meta.url)),dir=continuationDir?await realpath(continuationDir):await realpath(await mkdtemp(path.join(tmpdir(),'crew-gh50-native-'))),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state'),taskId='native-retained-worker';
+const sourceDir=fileURLToPath(new URL('../runtime/',import.meta.url)),dir=continuationDir?await realpath(continuationDir):await realpath(await mkdtemp(path.join(tmpdir(),'crew-gh50-native-'))),repo=path.join(dir,'repo'),stateDir=path.join(dir,'state'),taskId='native-retained-worker';
 console.log(JSON.stringify({event:'fixture-created',evidenceDir:dir}));
 const hookSource=`import fs from 'node:fs';fs.mkdirSync('.fixture',{recursive:true});const p='.fixture/setup-count';fs.writeFileSync(p,String((fs.existsSync(p)?Number(fs.readFileSync(p,'utf8')):0)+1));`;
 if(!continuationDir){

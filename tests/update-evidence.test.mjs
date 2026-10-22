@@ -4,8 +4,8 @@ import { mkdtemp, mkdir, writeFile, readFile, readdir, rm, symlink } from 'node:
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID, createHash } from 'node:crypto';
-import { inspectUpdateEvidence } from '../update-evidence.mjs';
-import { snapshotProcesses } from '../process-ownership.mjs';
+import { inspectUpdateEvidence } from '../runtime/updates/evidence.mjs';
+import { snapshotProcesses } from '../runtime/processes/ownership.mjs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 
