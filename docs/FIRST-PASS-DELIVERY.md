@@ -31,3 +31,11 @@ Owner-approved on 22 October 2026. Baseline: unified feature branch at `44cb082`
 6. Merge the integrated usable result into main and rebuild a separate test candidate with exact-source provenance. No automatic signed release or installed app replacement.
 
 Progress and private operational evidence are recorded separately during execution.
+
+## Integration checkpoint
+
+The coordinating branch now combines the shared agent editor and usage UI, native usage adapter, scoped browser tools, verified Codex `0.163.0-alpha.11.2` compatibility, and interrupted-project recovery. Main has not yet been updated.
+
+Focused combined typecheck/build and 27 setup/configuration/usage/desktop/Quit checks pass. A disposable real Electron walkthrough confirmed failed-project Quit, explicit recovery of abandoned leases, retention of fixture data, normal Quit and reopen, with zero capture requests. This is source Electron evidence; final packaged and signed-in combined acceptance remains outstanding.
+
+Environment templates and development execution, retained voice artifacts, real selected-agent browser use, the manager-led delegation walkthrough and final packaging are still in progress. Historical real-model evidence is retained separately; it does not replace current combined acceptance.
