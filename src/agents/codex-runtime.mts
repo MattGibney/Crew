@@ -506,6 +506,19 @@ export class CodexAgentRuntime
             false,
           );
       }
+      const profile = input.configuration.profile;
+      const instructions = [
+        profile.systemPrompt,
+        profile.name ? `Agent name: ${profile.name}` : "",
+        profile.personality
+          ? `Agent personality preferences:\n${profile.personality}`
+          : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      // Bind the actual native developer-instruction channel at thread creation.
+      // Collaboration-mode settings alone can acknowledge bytes without making
+      // them part of the model's initial context on the pinned native build.
       openingSent = true;
       safeToClose = false;
       const opened = record(
@@ -515,6 +528,7 @@ export class CodexAgentRuntime
             ? {
                 cwd: launch.cwd,
                 ephemeral: false,
+                developerInstructions: instructions,
                 experimentalRawEvents: false,
                 runtimeWorkspaceRoots: [launch.cwd],
                 permissions: nativePermissions.profileId,
@@ -524,6 +538,7 @@ export class CodexAgentRuntime
                 threadId: input.thread.threadId,
                 cwd: launch.cwd,
                 excludeTurns: true,
+                developerInstructions: instructions,
                 runtimeWorkspaceRoots: [launch.cwd],
                 permissions: nativePermissions.profileId,
                 approvalPolicy: nativePermissions.approvalPolicy,
@@ -632,16 +647,6 @@ export class CodexAgentRuntime
           "Native settings cannot preserve the selected mode/model.",
           -32602,
         );
-      const profile = input.configuration.profile;
-      const instructions = [
-        profile.systemPrompt,
-        profile.name ? `Agent name: ${profile.name}` : "",
-        profile.personality
-          ? `Agent personality preferences:\n${profile.personality}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
       if (modeSettings.developer_instructions !== instructions) {
         const sequence = current.settingsSequence;
         await current.peer.rpc("thread/settings/update", {
