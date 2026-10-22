@@ -623,3 +623,22 @@ old-call completion before new started, null native identity, old/unknown deltas
 An exact-session typed transcript item takes precedence even when a flat transcript arrived
 first. This one-way switch enables keyed live display and suppresses subsequent flat duplicates;
 it does not relax session identity checks or publish unkeyed text through the desktop bridge.
+
+### Bundled patch compatibility (23 October 2026, #88/#107)
+
+The desktop bundle changed from `0.163.0-alpha.11` to `0.163.0-alpha.11.2`
+during acceptance. The exact-version gate initially blocked it before opening a
+project. Both exact builds are now supported; other versions still fail closed.
+Configuration and the effective named permissions remain verified at runtime.
+
+The new patch passed a production isolated-provider configuration/usage read,
+plus an actual model flow with an allowed fixture read, no inherited synthetic
+environment value, denied direct network access and authenticated MCP allow/deny
+checks. A fresh process resumed the same thread with the same named profile and
+no escalation. Because the model declined protected-read attempts, a separate
+public `command/exec` probe applied that exact named profile to disposable
+fixtures: the allowed read succeeded, protected read and read-only write failed,
+the environment value stayed absent and the network canary received no request.
+All owned native exits were confirmed. No physical microphone, auth copying,
+real service action or reset redemption was involved. Voice acoustic acceptance
+is separate from these patch-policy and subscription checks.
