@@ -16,10 +16,12 @@ import { crewActions } from "./validation.mjs";
 import type {
   AccessOwnerView,
   OwnerConnectionSetupChoice,
+  OwnerRuntimeDefaults,
 } from "./owner-contracts.mjs";
 export type {
   AccessOwnerView,
   OwnerConnectionSetupChoice,
+  OwnerRuntimeDefaults,
 } from "./owner-contracts.mjs";
 
 export interface AccessOwnerApiOptions {
@@ -27,6 +29,8 @@ export interface AccessOwnerApiOptions {
   vault: EncryptedCredentialVault;
   projectId: string;
   ownerUserId: string;
+  /** Trusted production runtime references enable setup before any agent exists. */
+  runtimeDefaults?: OwnerRuntimeDefaults | null;
   listAgents(): Promise<Agent[]>;
   setupChoices(): Promise<OwnerConnectionSetupChoice[]>;
   capabilities(connectionId: string): Promise<ServiceCapability[]>;
@@ -76,6 +80,12 @@ export function createAccessOwnerApi(
   if (authenticatedUserId !== options.ownerUserId)
     throw new Error("Authenticated project owner required.");
   const actor: Actor = { type: "user", userId: authenticatedUserId };
+  const runtimeDefaults: OwnerRuntimeDefaults | null = options.runtimeDefaults
+    ? {
+        modelAccessId: id(options.runtimeDefaults.modelAccessId),
+        configRef: id(options.runtimeDefaults.configRef),
+      }
+    : null;
   const authorization = options.authorization;
   let tail: Promise<unknown> = Promise.resolve();
   async function saveConnection(args: Record<string, unknown>) {
@@ -224,6 +234,7 @@ export function createAccessOwnerApi(
       return {
         ...state,
         projectId: options.projectId,
+        runtimeDefaults: runtimeDefaults ? { ...runtimeDefaults } : null,
         agents: agents.map((agent) => ({
           ...agent,
           access: {
@@ -306,6 +317,31 @@ export function createAccessOwnerApi(
               "permissionGroupIds",
               "serviceConnectionIds",
             ]);
+            const configuredAgents = await options.listAgents();
+            const current =
+              input.id === null
+                ? null
+                : (await authorization.snapshot(actor)).presets.find(
+                    (preset) => preset.id === input.id,
+                  );
+            const knownRuntime =
+              (runtimeDefaults !== null &&
+                runtimeDefaults.modelAccessId === draft.modelAccessId &&
+                runtimeDefaults.configRef === draft.configRef) ||
+              configuredAgents.some(
+                (agent) =>
+                  agent.projectId === options.projectId &&
+                  agent.archivedAt === null &&
+                  agent.runtime.modelAccessId === draft.modelAccessId &&
+                  agent.runtime.configRef === draft.configRef,
+              ) ||
+              (current != null &&
+                current.modelAccessId === draft.modelAccessId &&
+                current.configRef === draft.configRef);
+            if (!knownRuntime)
+              throw new Error(
+                "Choose the configured project runtime or an existing agent template.",
+              );
             return authorization.savePreset(
               actor,
               {
