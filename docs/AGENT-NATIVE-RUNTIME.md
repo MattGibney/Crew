@@ -23,12 +23,16 @@ configuration snapshot and opaque subscription reference, and returns either a b
     env: { /* the complete environment; never merged with process.env */ },
   },
   skills: [/* { id, revision, nativePath: "/isolated/path/SKILL.md" } */],
+  nativePermissions: { profileId: "provider-owned-profile", approvalPolicy: "never" },
 }
 ```
 
 This is a private trusted-process seam, never an agent-configurable executable or environment.
-#89 must resolve the opaque references, enforce the actual filesystem/process/network/configuration,
-OS credential and personal-tool boundaries, and preserve supported native approvals. A declaration
+The policy field is optional in the TypeScript shape for staged provider integration, but absence
+or invalid metadata blocks before native spawn. There is no legacy fallback.
+#89 must resolve opaque references and enforce the native model-tool filesystem/network/configuration
+boundary. The pinned native host is trusted to read its Crew model auth. Host-control RPCs must not
+be exposed as model tools; the adapter never reads or copies auth values. A declaration
 that isolation is ready is not proof. The adapter validates exact caller identity, selected skill
 revision bindings and native discovery of those paths. It checks `account/read` for `chatgpt`
 authentication and rejects an API-key environment; it does not read or copy authentication files.
@@ -260,7 +264,7 @@ does not by itself make those capabilities ready. No personal profile/install, p
 business service or repository worktree was modified by the native probe.
 
 
-## Installed-runtime resume restriction discovered during composition
+## Historical resume restriction discovered during composition
 
 The installed 0.163.0-alpha.11 accepts `environments: []` on thread/start and
 turn/start. Its ThreadResumeParams has no environment selection field. A real
@@ -293,3 +297,180 @@ its deny rules. The current provider's outer OS policy allows the native process
 access to its own private runtime root; that policy alone does not exclude that root
 from native tool descendants. Full resumed handoff isolation remains unresolved,
 and this probe did not change the production launch policy or relax its hold.
+
+The final bounded composition probe ran that same sequence under Crew's actual
+`nativeSeatbeltPolicy` (a fresh synthetic root and no allowed network ports). Idle
+thread creation and naming succeeded. After confirmed process exit, same-chat
+resume with the named profile failed before any turn while loading local
+environment instructions: `fs sandbox helper failed with status exit status: 71:
+sandbox-exec: sandbox_apply: Operation not permitted`. Both native processes exited
+normally. The previous standalone profile result therefore cannot be promoted to
+evidence that the profile composes with Crew's outer OS boundary.
+
+Disposition: no usable full same-chat resume/realtime route has been established
+with the current pair of boundaries. The observed failure is specific to this
+installed runtime and Crew outer policy, not proof that macOS or the native runtime
+cannot support a different configuration. Removing the outer boundary or granting
+unrestricted native execution would discard the existing containment claim and was
+not attempted. Owner sign-in alone cannot repair this local pre-turn failure.
+After resolving boundary composition, effective permission enforcement in a real
+server-created handoff still needs its own bounded synthetic-private-file check;
+selection metadata and standalone command execution are insufficient evidence.
+
+The final minimal OS controls narrowed this further without running Codex or
+reading real private files. An inert outer `(allow default)` profile allowed a
+second sandbox. Adding only a deny-read rule for one synthetic private directory
+correctly blocked its canary read, allowed a single `/usr/bin/true`, and made a
+second sandbox around `/usr/bin/true` fail with exit 71 and the same error. The
+installed Apple SDK's `sandbox.h` documents that `sandbox_init` errors when the
+process is already sandboxed. No supported narrow permission addition has been
+established that lets this restrictive outer Seatbelt policy coexist with the
+native runtime's own sandbox initialization. Loosening unrelated path allowances
+is not a supported repair.
+
+The smallest alternative is an explicit trust-boundary change: run the pinned
+app-server as a trusted host process and let native named permissions be the sole
+model-tool sandbox, with exact deny rules for Crew private state and personal
+credential roots and no escalation beyond those rules. This is a candidate, not
+accepted isolation: complete model-tool coverage and a server-created handoff
+must be verified after owner sign-in before removing the current hold. It drops
+the claim that Crew's outer OS policy confines the app-server itself. If that
+process-wide guarantee is required, a separate OS isolation layer, such as an
+isolated runtime VM with no personal-file mounts, is needed instead of nesting
+Seatbelt. Neither alternative was implemented or authorized by this investigation;
+no install, account, credentials, native launch policy or production access changed.
+
+## Historical disposable native-owned permission investigation
+
+A subsequent owner-directed investigation tested the native boundary on its own,
+without changing production launch code. It used a separate synthetic HOME and
+CODEX_HOME, synthetic Crew/auth/vault roots and a synthetic credential file outside
+the main fixture. No personal files or real credentials were read or copied.
+
+The filesystem rules below were verified across resume; environment inheritance
+was checked separately with the same profile and the explicit `inherit` setting:
+
+```toml
+default_permissions = "crew-probe"
+cli_auth_credentials_store = "file"
+forced_login_method = "chatgpt"
+approval_policy = "never"
+allow_login_shell = false
+shell_environment_policy.inherit = "none"
+
+[permissions.crew-probe]
+extends = ":read-only"
+
+[permissions.crew-probe.filesystem]
+":root" = "deny"
+":minimal" = "read"
+"/synthetic-fixture" = "deny"
+"/synthetic-fixture/workspace" = "read"
+```
+
+The literal fixture paths above stand for canonical disposable paths. The thread
+was created and named without model input, its process exited, and a fresh process
+resumed the same ID using `permissions: "crew-probe"`; the selected profile was
+returned. The filesystem/execution matrix and separate environment check produced
+these results:
+
+| Surface | Observed result |
+| --- | --- |
+| `command/exec`, selected or configured default profile | Allowed workspace read; denied synthetic Crew, auth, vault and outside credential reads. |
+| `command/exec` with `shell_environment_policy.inherit="none"` | Neither the synthetic transport-token nor personal-token environment canary reached the process. |
+| Host `fs/readFile`, `fs/readDirectory`, `fs/getMetadata` | Could read or inspect denied fixture paths; these RPCs are not governed by the command profile. |
+| Host `fs/writeFile`, `fs/copy` | Mutated/copied the synthetic private data; resulting bytes were checked. |
+| Host `process/spawn`, `thread/shellCommand` | Could read the private canary, consistent with their explicit unsandboxed host-control contract. |
+
+The host read of the synthetic auth marker demonstrates that the native process
+retains file access while sandboxed commands do not. It does not prove a valid
+subscription session: the malformed marker produced no account, while an earlier
+token-shaped synthetic fixture triggered an unauthorized workspace-routing check.
+Only genuine owner sign-in can establish working model authentication. No model
+inference was invoked. The explicit host shell command did create a user-shell
+turn and corresponding native events, so this matrix is not a zero-turn fixture.
+
+Installed protocol inspection also covers host watchers/search, Git diffs,
+configuration/skill/plugin readers and native history readers. Those host methods
+are not a model-tool inventory. There is no complete effective model-tool catalogue
+or no-model client invocation for native `apply_patch`, image viewing or possible
+dedicated file/search tools in this generated API. MCP and connector inventories
+cover only their own surfaces. Their presence, absence or host-RPC behavior cannot
+prove complete model exposure or denial.
+
+Disposition: this is a concrete candidate command policy and a verified separation
+between trusted host controls and sandboxed execution, not accepted full model
+isolation. Keep host filesystem/process/shell RPCs out of agent-facing tools.
+After owner sign-in, the remaining bounded acceptance is to exercise the available
+native model file/command/edit/image surfaces against synthetic protected markers,
+then stop, resume the same chat in a fresh process and trigger one server-managed
+realtime handoff with synthetic media. Confirm denied markers, allowed workspace
+work, unchanged selected policy, exact handoff identity and no credential canaries
+in tool environments. Do not probe real auth values. Production restrictions stay
+unchanged until that evidence and the trust-boundary choice are accepted.
+
+## Owner-confirmed boundary and real-model acceptance
+
+The owner has since clarified the intended product boundary: the pinned native
+app-server is trusted to access its own Crew model authentication. Model tools
+must not read Crew vault or personal-service credentials, or bypass owner-approved
+tools and workspaces. A VM or process-wide protection against that trusted native
+host is not a product requirement. The earlier discussion of that stronger
+guarantee is historical investigation, not an outstanding owner decision.
+
+The candidate therefore retains Crew-only HOME/config, existing authentication in
+place, current session authorization and broker-only production tool exposure.
+Native named filesystem/network permissions would replace the incompatible outer
+Seatbelt layer for model tools. Host filesystem, process and shell RPCs remain
+trusted adapter controls and must never become agent-facing tools. Native profile
+selection and verification must cover thread creation, fresh-process same-chat
+resume, explicit turns and server-managed realtime handoffs.
+
+The owner authorized candidate implementation while acceptance continued. The adapter now binds
+`permissions` and `approvalPolicy: "never"` on start, resume and explicit turns. It verifies the
+returned profile, approval policy, cwd/root list and exactly one local environment. A settings or
+workspace mismatch latches a configuration rejection and blocks later text/realtime input. The
+foundation keeps the exact session/turn references while reporting unknown state. Native command
+and file requests may only be declined or cancelled; a broker grant cannot expand native policy.
+The provider must independently provision and verify the effective named profile.
+
+### Current bounded evidence
+
+Real signed-in acceptance used the owner's explicitly handed-off, idle Crew auth home in place.
+Only the pinned native host accessed authentication. No auth values, personal service files or
+personal configuration were read/copied, and no new sign-in was started. Disposable test helpers,
+markers and detailed evidence remain outside the repository.
+
+| Check | Observed result and limit |
+| --- | --- |
+| Genuine subscription inference | Completed native model turns using ChatGPT authentication. |
+| Allowed native file/image surfaces | A workspace canary read and permitted image view succeeded. |
+| Tool environment | Actual `printenv` for synthetic transport/private environment canaries returned no values. |
+| Direct tool network | Actual loopback curl failed; the live synthetic endpoint recorded zero requests. |
+| Authenticated MCP | Allowed synthetic read succeeded; forbidden operation reached the broker and was explicitly denied. No retries or external action. |
+| Same-chat fresh-process resume | Same native ID returned the named profile, never-approve policy and exact local cwd/roots. |
+| Synthetic realtime handoff | Subscription WebRTC connected. Generated speech produced one native completed coding turn; retained history contains the server-created realtime delegation. The test sent no `turn/start`. |
+| Protected file/image/edit checks | Models reported permission denials and protected fixture bytes stayed unchanged. The inspected public item stream/history omits some pre-execution failures, so those claims alone do not establish per-tool denial coverage. |
+| Production adapter typed path | Native resume and exact profile-settings acknowledgement, genuine text delivery/completion, Stop, fresh-process same-thread restart and a second Stop passed through the actual adapter. |
+| Profile behavior | A simple answer omitted a synthetic prefix despite exact native settings acknowledgement. Settings acceptance therefore does not yet establish that saved profile instructions reach the model. |
+
+The stress profile intentionally enabled native command tools to exercise enforcement; production
+retains additional native-tool disablement and requires its own combined candidate validation.
+The exact authenticated Crew/services MCP endpoints use documented native dispatch approval
+configuration, while current Crew session/group/broker policy remains authoritative. Global native
+approval stays `never`; native dispatch trust is not a service grant.
+
+Earlier synthetic attempts are preserved as failures: v3 text output was rejected, the WebSocket
+audio route required API-key auth, and a WebRTC text append acknowledged without a handoff. No
+API-key fallback was used. The successful attempt fed generated speech through a synthetic browser
+audio track; it acquired no physical microphone, played no speaker audio and did not fabricate a
+human utterance. All owned peers and the temporary browser were closed after the check.
+
+The pinned runtime did not emit `bemItemPromoted` for the real handoff. Ordinary native turn events
+still drive activity, completion and Stop. Each newly observed nonterminal turn invalidates exact-session
+preparation readiness; completion and voice closure do not restore a stale readiness report. The probe's promotion-specific result therefore remains
+incomplete even though independent native history confirms delegation and completion. Production
+must not label a turn as owner voice solely because it overlaps a voice call or contains delegation
+text. Public-history provenance and human acoustic acceptance remain separate checks. Typed app
+validation can proceed against the candidate; none of this implies installed-product acceptance,
+release permission, or complete coverage of every model-accessible tool.
