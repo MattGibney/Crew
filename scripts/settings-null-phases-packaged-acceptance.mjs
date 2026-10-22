@@ -1,8 +1,9 @@
 // GH74: actual packaged Settings and environment store; disposable profile only.
 // CREW_ACCEPTANCE_EXECUTABLE=/absolute/Crew.app/Contents/MacOS/Crew node scripts/settings-null-phases-packaged-acceptance.mjs
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, readFile, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, writeFile, realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
+import {createHash} from 'node:crypto';
 import path from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -14,12 +15,26 @@ const version=JSON.parse(await readFile(path.join(bundled,'package.json'),'utf8'
 if(process.env.CREW_ACCEPTANCE_EXPECTED_VERSION)assert.equal(version,process.env.CREW_ACCEPTANCE_EXPECTED_VERSION);
 const output=await mkdtemp(path.join(tmpdir(),'crew-gh74-settings-')),configPath=path.join(output,'project','project.json'),binary=path.join(output,'synthetic-codex'),protocol=path.join(output,'protocol.jsonl');
 const port=Number(process.env.CREW_ACCEPTANCE_PORT||59474),run=promisify(execFile),nullPhases=['setup','ready','resume','stop','teardown'];
-const errors=[],proof={ticket:'GH74',output,executable,version,syntheticProvider:true,physicalMicrophoneCalls:0};
+const errors=[],proof={ticket:'GH74',output,executable,version,syntheticProvider:true,physicalMicrophoneCalls:0,explicitQuitReturns:[]};
 let app,native,page;
 console.log(JSON.stringify({event:'settings-null-phases-fixture',output,executable,version}));
 async function until(fn,label){const end=Date.now()+45000;while(Date.now()<end){if(await fn())return;await new Promise(resolve=>setTimeout(resolve,100));}throw Error('Timed out '+label);}
+async function returnFromOwnedQuit(){
+ if(page?.url().startsWith(`http://127.0.0.1:${port}/`)){
+  const action=async value=>page.evaluate(async action=>{const response=await fetch('/api/updates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action})});if(!response.ok)throw Error('Disposable Quit recovery request failed');return response.json();},value);
+  const before=(await action('status')).workspacePlan;
+  if(before?.purpose==='quit'&&before.phase==='canceled'){
+   const registry=JSON.parse(await readFile(path.join(output,'native-profile','Crew','workspaces.json'),'utf8'));
+   assert.equal(registry.projects.length,1);assert.equal(await realpath(registry.projects[0].configPath),await realpath(configPath));
+   assert.deepEqual(before.projects.map(project=>project.id),[registry.projects[0].id],'Only the exact disposable project Quit hold may be released.');
+   await action('return-to-work');const after=(await action('status')).workspacePlan;assert.equal(after.id,before.id);assert.equal(after.phase,'complete');
+   proof.explicitQuitReturns.push({planId:before.id,purpose:before.purpose,beforePhase:before.phase,action:'return-to-work',afterPhase:after.phase});
+  }
+ }
+}
 async function quit(){
  if(!native||native.exitCode!==null||native.signalCode!==null)return;
+ await returnFromOwnedQuit();
  await app.evaluate(({dialog,Menu})=>{dialog.showMessageBox=async()=>({response:1});Menu.getApplicationMenu().items[0].submenu.items.find(item=>item.label==='Quit Crew…').click();});
  await until(()=>native.exitCode!==null||native.signalCode!==null,'normal owned native Quit');
  await app.close().catch(()=>{});
@@ -35,6 +50,9 @@ async function launch(){
  page=await app.firstWindow();page.on('pageerror',error=>errors.push(error.message));await page.waitForURL(`http://127.0.0.1:${port}/**`,{timeout:45000});
  // Reload under the capture guard before exercising Settings.
  await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).waitFor();
+ await returnFromOwnedQuit();
+ // Clear the prior held Prepare notice only after the explicit owned Return.
+ if(proof.explicitQuitReturns.length)await page.reload();
 }
 function assertPlan(value,command){for(const phase of nullPhases)assert.equal(value[phase],null,phase+' remains null');assert.equal(value.start.command,command);}
 try{
@@ -58,8 +76,11 @@ if(['turn/start','turn/steer'].includes(m.method)){
 }}
 `,{mode:0o700});
  await run(process.execPath,[path.join(bundled,'cli.mjs'),'init','--template','fixture','--config',configPath]);
- const raw=JSON.parse(await readFile(configPath,'utf8'));raw.runtime.port=port;raw.runtime.codexBinary=binary;raw.project.name='GH74 null phases';
- const source={path:'AGENTS.md',sha256:'a'.repeat(64)},original='printf gh74-not-executed',edited='printf gh74-saved-not-executed';
+ const repository=path.join(output,'repository');await mkdir(repository);
+ await run('git',['init','-b','main',repository]);await writeFile(path.join(repository,'AGENTS.md'),'GH74 disposable settings fixture. No project commands authorized.\n');
+ await run('git',['-C',repository,'add','AGENTS.md']);await run('git',['-C',repository,'-c','user.name=GH74 Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-m','Initialize disposable settings fixture']);
+ const raw=JSON.parse(await readFile(configPath,'utf8'));raw.runtime.port=port;raw.runtime.codexBinary=binary;raw.project.name='GH74 null phases';raw.project.mode='repository';raw.project.repositories=[{id:'gh74-fixture',name:'GH74 disposable fixture',path:repository,baseRef:'main',components:[]}];raw.project.linear={teamId:'gh74-synthetic-team',teamKey:'FIX',projectId:null};
+ const source={path:'AGENTS.md',sha256:createHash('sha256').update(await readFile(path.join(repository,'AGENTS.md'))).digest('hex')},original='printf gh74-not-executed',edited='printf gh74-saved-not-executed';
  raw.project.worker.environment={executionPlan:{schemaVersion:1,sources:[source],...Object.fromEntries(nullPhases.map(phase=>[phase,null])),start:{command:original,source,timeoutMs:1000}}};
  await writeFile(configPath,JSON.stringify(raw,null,2)+'\n');
  const state=path.resolve(path.dirname(configPath),raw.runtime.dataDir);await mkdir(state,{recursive:true});await writeFile(path.join(state,'manager-chat.json'),JSON.stringify({threadId:'gh74-manager'}));
