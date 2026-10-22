@@ -346,7 +346,9 @@ export function AgentsApp({
                           input.expectedRevision ?? primary.profile.revision,
                       });
                     },
-                    "Profile saved. Use Start or Restart to apply it.",
+                    primary.runtime.threadId
+                      ? "Profile saved. Restart to apply changed instructions."
+                      : "Profile saved. Start will use these instructions.",
                   );
                   return success ? saved : null;
                 }}
@@ -890,6 +892,10 @@ function AgentSessionPanel({
     pending.has(`lifecycle-${agent.id}`);
   const pendingProfile =
     !session.appliedConfiguration ||
+    Boolean(
+      agent.runtime.threadId &&
+      !session.appliedConfiguration.instructionsDigest,
+    ) ||
     session.appliedConfiguration.profileRevision !== agent.profile.revision ||
     !sameSkills(agent, skills);
   return (
@@ -900,7 +906,9 @@ function AgentSessionPanel({
             session.observedState === "started" ? "secondary" : "outline"
           }
         >
-          {session.observedState}
+          {session.instructionPreparation?.state === "compacting"
+            ? "Applying instructions"
+            : session.observedState}
         </Badge>
         <div className="flex flex-wrap gap-2">
           {(["start", "stop", "restart"] as const).map((action) => (
@@ -932,14 +940,26 @@ function AgentSessionPanel({
         </div>
       </div>
       <p className="text-xs leading-5 text-muted-foreground">
-        Stop preserves the conversation, notes and resources. Start never
-        connects voice or creates an assignment.
+        Stop preserves the chat, notes and resources. Start never connects voice
+        or creates an assignment.
       </p>
-      {pendingProfile && (
+      {pendingProfile && session.instructionPreparation?.state !== "compacting" && (
         <p role="status" className="text-sm text-muted-foreground">
-          {session.observedState === "started"
+          {agent.runtime.threadId
             ? "Saved instructions or skills are waiting for Restart."
             : "Start applies your saved instructions and skills."}
+        </p>
+      )}
+      {session.instructionPreparation?.state === "compacting" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          Updating instructions in this chat. Codex is summarizing its active
+          context; the readable chat history is kept. This uses model allowance.
+        </p>
+      )}
+      {session.instructionPreparation?.state === "uncertain" && (
+        <p role="status" className="text-sm text-muted-foreground">
+          The instruction update could not be confirmed. The existing chat is
+          retained; check the session error before retrying.
         </p>
       )}
       {session.lastError && (
@@ -1117,7 +1137,9 @@ function AgentDetail({
                           input.expectedRevision ?? agent.profile.revision,
                       });
                     },
-                    "Profile saved. Use Start or Restart to apply it.",
+                    agent.runtime.threadId
+                      ? "Profile saved. Restart to apply changed instructions."
+                      : "Profile saved. Start will use these instructions.",
                   );
                   return success ? saved : null;
                 }}
@@ -2037,7 +2059,10 @@ function ProfileEditor({
           <p>
             These instructions define this agent’s behavior. Permissions are
             managed separately. Saving does not start a turn or alter active
-            instructions; explicit Start or Restart applies the saved profile.
+            instructions. Start uses the profile for a new chat. For an existing
+            chat, use Restart to apply changed instructions; Codex summarizes
+            active context while keeping the readable chat history. This uses
+            model allowance. Unchanged instructions do not trigger that work.
           </p>
         </div>
       </details>
