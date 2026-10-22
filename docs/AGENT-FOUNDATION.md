@@ -51,6 +51,13 @@ Call `recover()` before serving a reopened store. Bind agent tools only through 
 session transport; bind the owner API only to the local owner's control surface. Inject #89 panels
 through `AgentsApp.settingsPanels`; no credential-entry form is implemented in this track.
 
+The native tool catalogue describes nested inputs, including message content blocks,
+editable profile fields, local/ticket work and each environment argument shape. For
+example, `job_create` takes `{ "input": { "work": { "type": "local", "title": "…",
+"objective": "…" } } }`. Agents should discover these shapes from MCP rather than
+need an owner to explain an undocumented payload. Record validation and current
+authorization still govern execution; schema discovery grants no permission.
+
 #89 must use `foundation.executionAllowed(caller)` in its fresh execution admission path before
 `admissionUsesFoundationBarrier` may be enabled. Without this composition assertion,
 `reserveExecution` blocks. Once reserved, foundation sends/starts and fresh broker admission are
