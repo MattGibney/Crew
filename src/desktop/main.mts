@@ -639,7 +639,14 @@ async function request(method: string, value: unknown) {
     return;
   }
   const host = requiredProject(text(input.projectId));
-  if (method === "browser") return host.browser.request(input);
+  if (method === "browser") {
+    if (
+      (quit.holding() || updates.holding()) &&
+      !["state", "bounds", "close"].includes(String(input.action))
+    )
+      throw new Error("Crew is completing its execution reservation.");
+    return host.browser.request(input);
+  }
   if (method === "ownerSnapshot") return host.application.ownerApi.snapshot();
   if (method === "ownerCommand")
     return ownerCommand(host, text(input.command), input.args);

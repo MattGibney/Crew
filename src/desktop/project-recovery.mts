@@ -19,6 +19,7 @@ const leases = [
   "access/controller.lock",
   "environments/environments.lock",
   "native-transport/transport.lock",
+  "environment-templates/environment-templates.lock",
 ];
 export class ProjectRecoveryError extends Error {
   readonly code = "project_recovery";
