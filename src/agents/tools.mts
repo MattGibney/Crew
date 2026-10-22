@@ -41,10 +41,25 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: object({ agentId: id }),
     },
     {
+      name: "agent_creation_presets",
+      description:
+        "List owner-approved creation choices. These choices do not grant administration rights.",
+      inputSchema: object({}),
+    },
+    {
       name: "agent_create",
       description:
-        "Create the same persistent agent model with an explicit profile and runtime references. Does not Start.",
-      inputSchema: object({ input: { type: "object" } }),
+        "Create a provisioned persistent agent from an exact owner-approved preset revision; reports to the creating agent. Does not Start.",
+      inputSchema: object({
+        input: object(
+          {
+            presetId: id,
+            expectedPresetRevision: { type: "integer", minimum: 1 },
+            name: string,
+          },
+          ["presetId", "expectedPresetRevision"],
+        ),
+      }),
     },
     {
       name: "agent_profile_save",
@@ -120,6 +135,17 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       description:
         "Read visible working notes without starting or interrupting an agent.",
       inputSchema: object({ agentId: id }),
+    },
+    {
+      name: "environment_action",
+      description:
+        "Explicit environment action using the configured project integration. Does not change agent or chat identity.",
+      inputSchema: object({
+        agentId: id,
+        action: { enum: ["create", "attach", "execute", "dispose"] },
+        requestId: id,
+        arguments: { type: "object" },
+      }),
     },
     {
       name: "environments_read",
@@ -270,9 +296,9 @@ export function createFoundationAgentTools(
           await records.authorize(principal, "agents.read", {
             type: "project",
           });
-          return foundation.store
-            .snapshot()
-            .agents.map(({ scratchpad, resources, ...identity }) => identity);
+          return (await foundation.agentViews()).map(
+            ({ scratchpad, resources, ...identity }) => identity,
+          );
         case "agent_read": {
           const agentId = identifier(args.agentId);
           await records.authorize(principal, "agents.read", {
@@ -280,16 +306,23 @@ export function createFoundationAgentTools(
             agentId,
           });
           // Scratchpad has an independent capability; do not leak notes via identity reads.
-          const agent = foundation.store
-            .snapshot()
-            .agents.find((entry) => entry.id === agentId)!;
+          const agent = (await foundation.agentViews()).find(
+            (entry) => entry.id === agentId,
+          )!;
           const { scratchpad, resources, ...identity } = agent;
           return identity;
         }
+        case "agent_creation_presets":
+          await records.authorize(principal, "agents.create", {
+            type: "project",
+          });
+          return foundation.creationPresets();
         case "agent_create":
-          return records.createAgent(
+          return foundation.createFromPreset(
             principal,
-            args.input as unknown as CreateAgentInput,
+            args.input as unknown as Parameters<
+              typeof foundation.createFromPreset
+            >[1],
           );
         case "agent_profile_save":
           return records.updateProfile(
@@ -326,6 +359,11 @@ export function createFoundationAgentTools(
             identifier(args.agentId),
             args.expectedRevision as number,
             args.markdown as string,
+          );
+        case "environment_action":
+          return foundation.environment(
+            principal,
+            args as unknown as Parameters<typeof foundation.environment>[1],
           );
         case "scratchpad_read":
         case "environments_read": {

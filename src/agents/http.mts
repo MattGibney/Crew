@@ -1,4 +1,8 @@
-import { createServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import { open, lstat, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
@@ -12,6 +16,9 @@ export async function startFoundationHttp(options: {
   api: FoundationOwnerApi;
   rendererDirectory: string;
   port?: number;
+  /** Trusted owner session check, in addition to Host/Origin checks. Never infer
+   * ownership from a renderer-supplied actor or loopback address. */
+  authenticateOwner(request: IncomingMessage): Promise<boolean> | boolean;
 }) {
   const root = await realpath(options.rendererDirectory);
   const path = join(root, "agents.html");
@@ -45,6 +52,11 @@ export async function startFoundationHttp(options: {
     )
       return send(403, { error: "Same-origin access required." });
     try {
+      if (
+        request.url?.startsWith("/api/") &&
+        !(await options.authenticateOwner(request))
+      )
+        return send(401, { error: "Authenticated owner session required." });
       if (request.method === "GET" && request.url === "/api/agents")
         return send(200, await options.api.snapshot());
       if (request.method === "GET" && request.url === "/api/agents/events") {

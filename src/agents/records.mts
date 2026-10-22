@@ -287,6 +287,7 @@ export class FoundationRecords {
   async createAgent(
     principal: FoundationPrincipal,
     input: CreateAgentInput,
+    provisioning?: { presetId: string; presetRevision: number },
   ): Promise<Agent> {
     record(
       input,
@@ -301,10 +302,16 @@ export class FoundationRecords {
     return this.store.update((state) => {
       this.actor(state, principal);
       const now = new Date().toISOString();
-      const reportsTo = input.reportsTo ?? {
-        type: "user",
-        userId: state.ownerUserId,
-      };
+      const creator = this.actor(state, principal);
+      if (
+        principal.type === "agent" &&
+        input.reportsTo !== undefined &&
+        !sameActor(input.reportsTo, creator)
+      )
+        throw new Error(
+          "Only the owner can choose another reporting relationship.",
+        );
+      const reportsTo = input.reportsTo ?? creator;
       validateActor(state, reportsTo);
       const agent: Agent = {
         id: randomUUID(),
@@ -340,6 +347,13 @@ export class FoundationRecords {
         resources: [],
       };
       state.agents.push(agent);
+      if (provisioning)
+        state.provisioning.push({
+          agentId: agent.id,
+          ...provisioning,
+          state: "pending",
+          error: null,
+        });
       return agent;
     });
   }
@@ -388,6 +402,8 @@ export class FoundationRecords {
         systemPrompt: next.systemPrompt,
       });
       if (reportsTo !== undefined) {
+        if (principal.type !== "owner")
+          throw new Error("Only the owner can change reporting relationships.");
         validateActor(state, reportsTo);
         agent.reportsTo = structuredClone(reportsTo);
       }
@@ -842,6 +858,7 @@ export class FoundationRecords {
       id,
       projectId: state.projectId,
       sender,
+      visibility: "public",
       recipientAgentId,
       jobId,
       replyToMessageId,
