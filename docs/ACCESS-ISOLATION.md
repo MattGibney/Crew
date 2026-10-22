@@ -42,8 +42,10 @@ a fresh account read must confirm the stored ChatGPT account.
 Authentication is stored by Codex in the new native home using its supported file
 credential store. Native account state is distinct from Crew service connections and
 the encrypted vault. Subscription availability is not model entitlement: a real completed
-turn is still needed to verify inference. Current validation reaches `sign_in_required`;
-it does **not** claim a completed owner sign-in or subscription-backed response.
+turn is still needed to verify inference. In the coordinated 22 October 2026 owner run,
+the UI track confirmed a fresh native `account/read` reported signed in after the owner
+completed browser OAuth. This establishes the owner sign-in path, not a subscription-backed
+model response or the proposed native model-tool permission boundary.
 
 ## Confirmed native process shutdown
 
@@ -199,6 +201,9 @@ fresh disposable native home. Its only listener was `127.0.0.1:1455`; original b
 canaries still passed under the login policy, and normal owner/model policies retained
 no inbound permission. The authorization URL passed the same official-origin/length
 constraints as the UI. No browser was opened or authentication completed by that check.
+Separately, the subsequent owner browser ceremony completed and the UI track confirmed
+signed-in state through a fresh native account read. The owner flow used the preserved
+Crew authentication home; no credential values were read or copied by this review.
 
 The separate workspace executor inspected a disposable script, edited it and ran its test
 successfully. It also denied an outside canary and read-only mutation, showed a clean
@@ -222,7 +227,7 @@ Actual Electron 44.9.2 safeStorage plus the real vault passed synthetic store/re
 second-process reopen, stale-reference denial and deletion. This proves host OS storage
 integration, not signed/installed Crew application identity or process isolation.
 
-Still required for the full #86 acceptance: owner sign-in and real inference; same-thread
+Still required for the full #86 acceptance: real inference; same-thread
 Start/Stop/Restart/profile application through the composed app; authenticated native Crew
 MCP; real agent-mediated project work; actual configured service verification; and packaged
 launch/Quit/reopen. Physical microphone capture and signed automatic updates were not tested.
