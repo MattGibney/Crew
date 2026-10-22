@@ -402,6 +402,7 @@ export function createBridge({
       const historyProjection = { activeTurnId, status, canonicalTimeline };
       try {
         await hydrateHistory({
+          reconcileRecent: origins.reconcileRecent,
           rpc,
           statePath,
           threadId,
@@ -636,7 +637,10 @@ export function createBridge({
     completed: (id) => completedTurns.has(id),
     provenance: {
       begin: (requestId, origin, turnId) =>
-        origins.begin(requestId, origin, turnId, timeline.snapshot()),
+        origins.begin(requestId, origin, turnId, timeline.snapshot(), [
+          ...completedTurns,
+          ...(activeTurnId ? [activeTurnId] : []),
+        ]),
       acknowledged: origins.acknowledged,
       failed: origins.failed,
     },

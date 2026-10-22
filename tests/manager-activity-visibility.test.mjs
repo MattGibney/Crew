@@ -60,3 +60,17 @@ test('failed internal dispatch does not classify the next real human turn as bac
  await origins.begin('human',undefined,null,[]);await origins.acknowledged('human-turn');
  assert.equal(origins.hidden({id:'human',turnId:'human-turn',role:'user',text:'Hello'}),false);await origins.flush();
 });
+
+test('crash before native acknowledgement recovers only the new turn beyond the saved native frontier',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'crew-crash-activity-'));t.after(()=>rm(dir,{recursive:true,force:true}));const file=join(dir,'manager.json');
+ const first=createApplicationOrigins(file);await first.ready;
+ await first.begin('request',{source:'scheduled-review',operationId:'review'},null,[],['old-1','old-empty','old-2']);await first.flush();
+ // Restart before any notification/acknowledgement recorded the new turn ID.
+ const restored=createApplicationOrigins(file);await restored.ready;
+ await restored.reconcileRecent(['new-internal','old-2','old-empty']);
+ assert.equal(restored.hidden({id:'new-input',turnId:'new-internal',role:'user',text:'Unrelated native item ID'}),true);
+ assert.equal(restored.hidden({id:'new-output',turnId:'new-internal',role:'assistant',text:'Background response'}),true);
+ assert.equal(restored.hidden({id:'older-unloaded',turnId:'much-older',role:'user',text:'Older visible history'}),false);
+ assert.equal(restored.hidden({id:'old-visible',turnId:'old-2',role:'assistant',text:'Earlier answer'}),false);
+ await restored.flush();
+});
