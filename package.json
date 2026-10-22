@@ -1,6 +1,6 @@
 {
   "name": "crew-local",
-  "version": "0.17.0",
+  "version": "0.17.1",
   "private": true,
   "type": "module",
   "description": "A local, subscription-backed Codex voice manager with isolated project workers.",
@@ -18,7 +18,7 @@
     "start": "node runtime/cli.mjs start",
     "stop": "node runtime/cli.mjs stop",
     "package": "node runtime/cli.mjs package",
-    "test": "node --import tsx --test --test-concurrency=2 tests/*.test.mjs renderer/src/manager/*.test.mjs renderer/src/setup/*.test.mjs",
+    "test": "node --import tsx --test --test-reporter=tap --test-concurrency=2 tests/*.test.mjs renderer/src/manager/*.test.mjs renderer/src/setup/*.test.mjs",
     "desktop:dev": "npm run build && electron .",
     "desktop:build:mac": "node scripts/desktop-build.mjs",
     "renderer:build": "vite build",
