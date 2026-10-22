@@ -324,8 +324,11 @@ export function createAccessOwnerApi(
         if (!options.connectionSetup)
           throw new Error("Guided service setup is unavailable.");
         try {
-          if (name === "verifyConnectionDraft")
-            return await options.connectionSetup.verify(input);
+          if (name === "verifyConnectionDraft") {
+            const pending = options.connectionSetup.verify(input);
+            input.credential = null;
+            return await pending;
+          }
           if (name === "discardConnectionDraft")
             return await options.connectionSetup.discard(input);
           const saved = await options.connectionSetup.save(input);

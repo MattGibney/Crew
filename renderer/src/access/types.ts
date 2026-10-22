@@ -7,6 +7,7 @@ import type {
   Revision,
   ServiceConnection,
 } from "../../../src/agents/contracts.mjs";
+import type { OwnerConnectionSetupChoice } from "../../../src/access/owner-contracts.mjs";
 
 /** Presentation gating only. The owner transport must authenticate every callback. */
 export interface OwnerPanelProps {
@@ -39,13 +40,7 @@ export type WorkspacePermissionChoice = {
 };
 
 /** Trusted gateway configuration choices, never arbitrary shell commands or paths. */
-export type ConnectionSetupChoice = {
-  id: string;
-  label: string;
-  service: ServiceConnection["service"];
-  transport: ServiceConnection["transport"];
-  authenticationMethods: ServiceConnection["authentication"]["method"][];
-};
+export type ConnectionSetupChoice = OwnerConnectionSetupChoice;
 
 export type ConnectionDraft = Pick<
   ServiceConnection,

@@ -63,6 +63,7 @@
     "renderer/src/access/OwnerAccessSettings.tsx",
     "renderer/src/access/PermissionGroupsPanel.tsx",
     "renderer/src/access/README.md",
+    "renderer/src/access/ServiceConnectionWizard.tsx",
     "renderer/src/access/ServiceConnectionsPanel.tsx",
     "renderer/src/access/index.ts",
     "renderer/src/access/shared.tsx",
