@@ -1,4 +1,5 @@
 import { openProjectEvents } from "./events.mjs";
+import { createPreparationCoordinator } from "../preparation/coordinator.mjs";
 import { readRequestBody } from "./request-body.mjs";
 import { runtimeRoot, resourceURL } from "../shared/paths.mjs";
 import { parseArchiveAction } from "./input.mjs";
@@ -295,6 +296,11 @@ const synchronizePlan = (plan: PausePlan | null) => {
   broadcast({ type: "update-plan-state", plan });
 };
 updatePlan = createUpdatePlan({
+  preparation: createPreparationCoordinator({
+    stateDir: orchestrationDir,
+    projectId: project.id,
+    sendManager: (text, requestId) => bridge.startWork(text, requestId),
+  }),
   stateDir: orchestrationDir,
   version,
   getView: async () =>
@@ -306,7 +312,7 @@ updatePlan = createUpdatePlan({
     const state = bridge.state(),
       lifecycle = manager.view();
     return ["running", "stopped"].includes(lifecycle.state)
-      ? state
+      ? { ...state, lifecycleState: lifecycle.state }
       : {
           ...state,
           status: `manager-lifecycle-${lifecycle.state}`,
@@ -511,8 +517,10 @@ const server = http.createServer(async (req, res) => {
       activity,
       publishWorkerApprovals,
       hasClient: () => clients.size > 0,
-      shutdownRequest: () => {
-        setImmediate(() => void shutdown().then(() => process.exit(0)));
+      shutdownRequest: ({ prepared = false } = {}) => {
+        setImmediate(
+          () => void shutdown({ prepared }).then(() => process.exit(0)),
+        );
       },
     });
     return send(reply.status, reply.body);
@@ -525,7 +533,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 let shuttingDown: Promise<void> | undefined;
-async function shutdown() {
+async function shutdown({ prepared = false } = {}) {
   managerReview.stop();
   clearInterval(scratchpadTimer);
   clearInterval(updatePlanTimer);
@@ -535,8 +543,10 @@ async function shutdown() {
     for (const client of clients) client.end();
     clients.clear();
     updates.close();
-    await bridge.stopVoice({ preserveWork: false });
-    await bridge.shutdown();
+    await bridge.stopVoice(
+      prepared ? { cooperative: true } : { preserveWork: false },
+    );
+    await bridge.shutdown({ cooperative: prepared });
     await controller.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     try {

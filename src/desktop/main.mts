@@ -67,6 +67,9 @@ const locked = app.requestSingleInstanceLock({
 let registry: Registry,
   tray: ReturnType<typeof createWorkspaceTray> | undefined,
   updater: DesktopUpdater,
+  quitPreparation: Awaited<
+    ReturnType<typeof createApplicationUpdates>
+  >["quitPreparation"],
   workspacePause: ReturnType<typeof createWorkspacePauseUpdate>,
   quitting = false,
   transition = false,
@@ -361,31 +364,27 @@ async function addProject() {
 }
 async function quitCrew() {
   if (quitting) return;
+  if (!quitPreparation)
+    throw Error(
+      "Crew is still initializing its shared preparation coordinator. Wait, then retry Quit.",
+    );
+  const existing = workspacePause.status();
+  if (existing?.purpose === "quit" && existing.phase !== "complete")
+    return quitPreparation.begin();
   if (gate.isReserved())
     throw Error("An update is preparing. Wait for it to finish.");
-  await Promise.all([...hosts.values()].map((h) => h.poll()));
-  const view = snapshot(),
-    unknown = view.projects.some((p) => p.active === null),
-    active = view.projects.reduce((sum, p) => sum + (p.active || 0), 0);
   const result = await dialog.showMessageBox({
-    type: unknown || active ? "warning" : "question",
-    message: "Quit Crew for all projects?",
-    detail: `${unknown ? "Some project activity is unavailable." : `${active} tasks are active across ${view.projects.length} projects.`}\nClosing the window keeps project controllers running. Quit disconnects voice and stops every owned controller. Detached workers and their evidence remain available when you reopen Crew.`,
-    buttons: ["Keep running", "Quit Crew"],
+    type: "question",
+    message: "Prepare all projects and quit Crew?",
+    detail:
+      "Crew asks each active manager and worker to reach a sensible checkpoint, save continuation notes and confirm readiness. The control window stays available for progress and approvals. Controllers close only after every project is ready. Closing a window alone keeps Crew running.",
+    buttons: ["Keep running", "Prepare and quit"],
     defaultId: 0,
     cancelId: 0,
     noLink: true,
   });
   if (result.response !== 1) return;
-  quitting = true;
-  try {
-    for (const host of hosts.values()) await host.quit();
-    tray?.destroy();
-    app.quit();
-  } catch (error) {
-    quitting = false;
-    throw error;
-  }
+  await quitPreparation.begin();
 }
 async function resolveUpdateRecovery() {
   const result = await dialog.showMessageBox({
@@ -414,6 +413,10 @@ async function initializeUpdates() {
     lease,
     restartHandoff,
     changed,
+    finishQuit() {
+      tray?.destroy();
+      app.quit();
+    },
     attempt,
     reservationPending,
     recordReservationFailure,
@@ -437,6 +440,7 @@ async function initializeUpdates() {
   updater = controls.updater;
   workspacePause = controls.workspacePause;
   updateReservation = controls.updateReservation;
+  quitPreparation = controls.quitPreparation;
 }
 const requests = createWorkspaceRequests({
   selected,

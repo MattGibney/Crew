@@ -30,6 +30,7 @@ interface RunnerControlOptions {
   interruptTurn: () => void;
   finish: () => Promise<void>;
   capture: () => Promise<void>;
+  observePreparation?: () => Promise<void>;
   onCooperative: () => void;
   onError: (message: string) => void;
   requestContext: () => { stateDir: string; taskId: string; runId: string };
@@ -51,6 +52,7 @@ export function createRunnerControl({
   interruptTurn,
   finish,
   capture,
+  observePreparation,
   onCooperative,
   onError,
   requestContext,
@@ -130,8 +132,10 @@ export function createRunnerControl({
       cooperative = true;
       onCooperative();
       const { turnId, ending, turnStartPending } = snapshot();
-      if (turnId && !ending) interruptTurn();
-      else if (!ending && !turnStartPending) void finish();
+      if (!request.settleNaturally) {
+        if (turnId && !ending) interruptTurn();
+        else if (!ending && !turnStartPending) void finish();
+      }
       control.stopPromise = waitOwnedNatural(tree, {
         onBlocked: (state) =>
           atomic("cooperative-stop.json", {
@@ -160,6 +164,8 @@ export function createRunnerControl({
         await capture();
         stage = "lifecycle control read";
         await acceptControl();
+        stage = "agent preparation read";
+        await observePreparation?.();
         stage = "native decision read";
         for (const decision of await workerRequestDecisions(requestContext())) {
           const request = nativeRequests.get(decision.approvalId);

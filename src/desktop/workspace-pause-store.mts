@@ -1,6 +1,12 @@
 import { readFile, mkdir, open, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { parseObservedPreparation } from "../preparation/observed.mjs";
+function parsePurpose(value: unknown): "update" | "quit" {
+  if (value !== "update" && value !== "quit")
+    throw new Error("Invalid preparation purpose.");
+  return value;
+}
 import {
   record,
   parseJSON,
@@ -10,6 +16,7 @@ import {
 } from "./validation.mjs";
 import type { PauseTarget } from "./update-contracts.mjs";
 export interface SavedProject {
+  preparation?: import("../preparation/coordinator.mjs").ObservedPreparation;
   id: string;
   name: string;
   configPath: string;
@@ -19,8 +26,10 @@ export interface SavedProject {
   phase: string | null;
   targets: PauseTarget[];
   managerInterrupted?: boolean;
+  reasons?: string[];
 }
 export interface PauseJournal {
+  purpose?: "update" | "quit";
   schema: number;
   kind: string;
   consent: boolean;
@@ -143,7 +152,9 @@ function decodeJournal(input: unknown): PauseJournal {
     const project = record(input);
     if (
       typeof project.beginRequested !== "boolean" ||
-      !Array.isArray(project.targets)
+      !Array.isArray(project.targets) ||
+      (project.reasons !== undefined &&
+        (!Array.isArray(project.reasons) || !project.reasons.every(isString)))
     )
       throw new Error("Invalid grouped project.");
     return {
@@ -171,10 +182,17 @@ function decodeJournal(input: unknown): PauseJournal {
         };
       }),
       managerInterrupted: project.managerInterrupted === true,
+      ...(project.reasons === undefined ? {} : { reasons: project.reasons }),
+      ...(project.preparation === undefined
+        ? {}
+        : { preparation: parseObservedPreparation(project.preparation) }),
     };
   });
   return {
     schema: value.schema,
+    ...(value.purpose === undefined
+      ? {}
+      : { purpose: parsePurpose(value.purpose) }),
     kind: string(value.kind, "Plan kind"),
     consent: value.consent,
     id: string(value.id, "Plan ID"),

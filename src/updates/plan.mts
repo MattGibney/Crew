@@ -9,6 +9,7 @@ import type {
 } from "./contracts.mjs";
 import { parsePausePlan } from "./plan-store.mjs";
 interface UpdatePlanOptions {
+  preparation?: import("../preparation/coordinator.mjs").PreparationCoordinator;
   stateDir: string;
   version: string;
   getView: () => Promise<ActivityView>;
@@ -21,6 +22,7 @@ interface UpdatePlanOptions {
     action: "pause" | "resume";
     expectedRunId: string | null;
     cooperative?: boolean;
+    settleNaturally?: boolean;
   }) => Promise<unknown>;
   activity: () => Promise<ActivityResult>;
   onChange?: (plan: PausePlan | null) => void;
@@ -113,6 +115,7 @@ export async function readUpdatePlan(
   return data;
 }
 export function createUpdatePlan({
+  preparation,
   stateDir,
   version,
   getView,
@@ -243,7 +246,128 @@ export function createUpdatePlan({
       shutdownConfirmed(task)
     );
   }
+  async function drainPrepared() {
+    const tasks = await viewTasks();
+    addTargets(tasks);
+    await save();
+    if (!current().voiceClosed) {
+      await stopVoice();
+      current().voiceClosed = true;
+      progress("Voice disconnected; agent preparation will not reconnect it.");
+      await save();
+    }
+    const manager = await getManager();
+    await preparation!.begin(current(), manager, tasks);
+    const observed = await preparation!.tick(current(), manager, tasks);
+    current().preparation = observed;
+    const reasons: string[] = [];
+    for (const participant of observed.participants) {
+      if (participant.required && participant.response?.state !== "ready")
+        reasons.push(
+          `${participant.role === "manager" ? "Manager" : `Worker ${participant.taskId}`}: ${participant.response?.note || participant.delivery.error || "waiting for the agent's explicit preparation acknowledgement."}`,
+        );
+      if (
+        participant.required &&
+        participant.response?.state === "ready" &&
+        !participant.settled
+      )
+        reasons.push(
+          `${participant.role === "manager" ? "Manager" : `Worker ${participant.taskId}`}: ${participant.settlementReason}`,
+        );
+    }
+    for (const target of current().targets) {
+      const task = tasks.find((task) => task.id === target.taskId);
+      const participant = observed.participants.find(
+        (p) => p.role === "worker" && p.taskId === target.taskId,
+      );
+      if (!task || !participant) {
+        reasons.push(
+          `Worker ${target.taskId} preparation evidence is unavailable.`,
+        );
+        continue;
+      }
+      if (participant.required && participant.response?.state !== "ready") {
+        target.progress =
+          participant.response?.state ||
+          (participant.delivery.state === "acknowledged"
+            ? "awaiting-agent-readiness"
+            : "preparation-requested");
+        continue;
+      }
+      if ((task.runId || null) !== target.originalRunId)
+        return blocked(
+          `Worker ${target.taskId} changed runs during preparation. Review its retained context.`,
+        );
+      if (
+        pauseConfirmed(task, target) &&
+        task.lifecycleRequests?.some(
+          (action) =>
+            action.id === target.pauseActionId &&
+            action.cooperative === true &&
+            action.settleNaturally === true,
+        )
+      ) {
+        target.pauseConfirmed = true;
+        target.progress = "prepared-and-settled";
+        continue;
+      }
+      const action = task.lifecycleRequests?.find(
+        (action) => action.id === target.pauseActionId,
+      );
+      if (
+        action?.status === "completed" &&
+        action.action === "pause" &&
+        action.cooperative === true &&
+        action.settleNaturally === true &&
+        (action.expectedRunId ?? null) === target.originalRunId &&
+        task.status === "completed" &&
+        shutdownConfirmed(task)
+      ) {
+        target.resumeEligible = false;
+        target.progress = "prepared-and-finished";
+        continue;
+      }
+      if (action?.status === "failed")
+        return blocked(
+          `Worker ${target.taskId} preparation settlement could not be confirmed. Review its lifecycle evidence.`,
+        );
+      if (!action) {
+        target.progress = participant.required
+          ? "ready-awaiting-final-messages"
+          : "settling-held-queue";
+        await save();
+        await requestAction({
+          taskId: target.taskId,
+          actionId: target.pauseActionId,
+          action: "pause",
+          expectedRunId: target.originalRunId,
+          cooperative: true,
+          settleNaturally: true,
+        });
+      }
+      reasons.push(
+        `Worker ${target.taskId}: waiting for the final turn, durable result and verified natural shutdown.`,
+      );
+    }
+    const fresh = await activity();
+    if (!fresh?.safe)
+      reasons.push(
+        ...(fresh?.reasons?.length
+          ? fresh.reasons
+          : ["Fresh idle evidence is unavailable."]),
+      );
+    current().reasons = [...new Set(reasons)];
+    if (!reasons.length) {
+      current().phase = "ready";
+      progress(
+        "All required agents acknowledged preparation and final execution is safely settled.",
+      );
+    } else current().phase = "draining";
+    await save();
+    return clone(plan);
+  }
   async function drain() {
+    if (preparation) return drainPrepared();
     if (now() - Date.parse(current().createdAt) > timeoutMs)
       return blocked(
         "Pausing timed out. Review retained work; no process was force-stopped.",
@@ -342,14 +466,39 @@ export function createUpdatePlan({
         "Manager turn changed while draining; review retained conversation before updating.",
       );
     if (interruptTurn) {
-      current().manager.interruptTurnId = interruptTurn;
-      current().manager.interruptRequested = true;
-      await save();
-      await interruptManager({ expectedTurnId: interruptTurn });
-      progress(
-        "Requested manager interruption; waiting for terminal evidence.",
-      );
-      await save();
+      // Queuing worker pauses crosses asynchronous boundaries. The captured
+      // manager turn may have finished, acquired an approval, or been replaced.
+      const latest = await getManager();
+      if (idleManager(latest)) {
+        progress("Manager finished before interruption was needed.");
+      } else if (latest?.approvals?.length) {
+        reasons.push(
+          "Resolve pending manager approvals; updates never answer them automatically.",
+        );
+      } else if (latest?.activeTurnId !== interruptTurn) {
+        return blocked(
+          "Manager turn changed while draining; review retained conversation before updating.",
+        );
+      } else {
+        current().manager.interruptTurnId = interruptTurn;
+        current().manager.interruptRequested = true;
+        await save();
+        try {
+          await interruptManager({ expectedTurnId: interruptTurn });
+          progress(
+            "Requested manager interruption; waiting for terminal evidence.",
+          );
+        } catch (error) {
+          // A completion notification can win even the final read/RPC race.
+          // Only positive idle evidence permits this; newer/unknown work and
+          // approvals retain the interruption failure and admission hold.
+          if (!idleManager(await getManager())) throw error;
+          progress(
+            "Manager terminal evidence confirmed after interruption raced completion.",
+          );
+        }
+        await save();
+      }
     }
     const fresh = await activity();
     if (!fresh || fresh.safe !== true)
@@ -362,6 +511,34 @@ export function createUpdatePlan({
     if (!reasons.length) {
       current().phase = "ready";
       progress("All captured work is safely paused. Ready to install.");
+    }
+    await save();
+    return clone(plan);
+  }
+  async function observeHeldPause() {
+    // Blocking/canceling stops side effects, not observation of requests already
+    // issued. Never turn late proof into installation or automatic resumption.
+    const tasks = await viewTasks();
+    if (preparation && current().preparation)
+      current().preparation = await preparation.tick(
+        current(),
+        await getManager(),
+        tasks,
+      );
+    for (const target of current().targets) {
+      const task = tasks.find((item) => item.id === target.taskId);
+      if (task && pauseConfirmed(task, target)) {
+        if (!target.pauseConfirmed)
+          progress(
+            "Worker pause confirmed by lifecycle and process evidence.",
+            target.taskId,
+          );
+        target.pauseConfirmed = true;
+        target.progress = "paused";
+      } else if (task && TERMINAL.has(task.status) && shutdownConfirmed(task)) {
+        target.resumeEligible = false;
+        target.progress = "finished-before-pause";
+      }
     }
     await save();
     return clone(plan);
@@ -442,16 +619,27 @@ export function createUpdatePlan({
   return {
     ready,
     status,
-    begin: ({ targetVersion }: { targetVersion: string }) =>
+    begin: ({
+      targetVersion,
+      purpose = "update",
+    }: {
+      targetVersion: string;
+      purpose?: "update" | "quit";
+    }) =>
       transact(async () => {
         if (
           typeof targetVersion !== "string" ||
           !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][\w.-]+)?$/.test(targetVersion) ||
-          targetVersion === version
+          (targetVersion === version && purpose !== "quit") ||
+          !["update", "quit"].includes(purpose)
         )
           throw new Error("A different valid target version is required.");
         if (isUpdatePlanHolding(plan)) {
-          if (current().targetVersion === targetVersion) return clone(plan);
+          if (
+            current().targetVersion === targetVersion &&
+            (current().purpose || "update") === purpose
+          )
+            return clone(plan);
           throw new Error("An update plan is already holding work.");
         }
         const manager = await getManager();
@@ -462,6 +650,7 @@ export function createUpdatePlan({
           consent: true,
           id: randomUUID(),
           targetVersion,
+          purpose,
           fromVersion: version,
           phase: "draining",
           createdAt: stamp(),
@@ -486,8 +675,14 @@ export function createUpdatePlan({
       transact(async () => {
         if (!plan) return null;
         try {
-          if (current().phase === "draining") return await drain();
+          if (
+            current().phase === "draining" ||
+            (preparation && current().phase === "ready")
+          )
+            return await drain();
           if (current().phase === "resuming") return await resume();
+          if (["blocked", "canceled"].includes(current().phase))
+            return await observeHeldPause();
         } catch (error) {
           return blocked(`Update coordination failed: ${errorMessage(error)}`);
         }
@@ -503,12 +698,34 @@ export function createUpdatePlan({
         )
           return { marked: false, plan: clone(plan) };
         const fresh = await activity();
+        if (preparation) {
+          const observed = await preparation.tick(
+            current(),
+            await getManager(),
+            await viewTasks(),
+          );
+          current().preparation = observed;
+          if (
+            observed.participants.some(
+              (participant) =>
+                participant.required &&
+                (participant.response?.state !== "ready" ||
+                  !participant.settled),
+            )
+          ) {
+            await blocked(
+              "An agent's readiness or final execution changed before shutdown. Review preparation before retrying.",
+            );
+            return { marked: false, plan: clone(plan) };
+          }
+        }
         if (!fresh || fresh.safe !== true) {
           await blocked(
             "Activity changed before install. Review work before retrying.",
           );
           return { marked: false, plan: clone(plan) };
         }
+        await preparation?.complete(current());
         current().phase = "installing";
         current().reasons = [];
         progress("Install reserved; paused-work evidence retained.");
@@ -542,6 +759,7 @@ export function createUpdatePlan({
             "Installation has begun; recover retained work after restart.",
           );
         current().phase = "canceled";
+        await preparation?.cancel(current());
         current().reasons = [
           "Paused work is retained. Choose Resume paused work to continue.",
         ];
@@ -623,6 +841,7 @@ export function createUpdatePlan({
             "Only canceled or blocked update work can return to manager review.",
           );
         current().phase = "complete";
+        await preparation?.complete(current());
         current().reasons = [];
         progress(
           "User returned to work. Queued work may continue; paused workers remain paused for manager review. No resume requests were created.",
@@ -634,6 +853,15 @@ export function createUpdatePlan({
       transact(async () => {
         if (!plan) return null;
         if (current().phase === "installing") {
+          if (current().purpose === "quit") {
+            current().phase = "canceled";
+            current().reasons = [
+              "Crew was prepared for shutdown. Work and continuation are retained; choose Return to work or Resume paused work explicitly.",
+            ];
+            await preparation?.cancel(current());
+            await save();
+            return clone(plan);
+          }
           if (version !== current().targetVersion)
             return blocked(
               "The target version was not installed. Paused work is retained; choose Resume paused work.",

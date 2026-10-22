@@ -4,6 +4,7 @@ import type { ApprovalResponse } from "../workers/approvals.mjs";
 export interface ApiInput {
   action: string;
   targetVersion: string;
+  purpose?: "update" | "quit";
   planId: string;
   token: string;
   taskId: string;
@@ -33,9 +34,16 @@ export function parseApiInput(value: unknown): ApiInput {
     throw new Error("Invalid native request identity.");
   if (value.voice !== undefined && typeof value.voice !== "string")
     throw new Error("Invalid voice.");
+  if (
+    value.purpose !== undefined &&
+    value.purpose !== "update" &&
+    value.purpose !== "quit"
+  )
+    throw new Error("Invalid preparation purpose.");
   return {
     action: field("action"),
     targetVersion: field("targetVersion"),
+    ...(value.purpose === undefined ? {} : { purpose: value.purpose }),
     planId: field("planId"),
     token: field("token"),
     taskId: field("taskId"),

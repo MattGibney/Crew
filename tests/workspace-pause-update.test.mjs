@@ -13,7 +13,7 @@ async function fixture(t,{childPhase='ready'}={}){
   const configPath=join(directory,id+'.json');await writeFile(configPath,'{}');children.set(id,null);activity.set(id,{safe:true,reasons:[]});
   const host={api:async route=>{calls.push(`${id}:${route}`);return route==='update-plan-status'?{plan:structuredClone(children.get(id))}:activity.get(id);},updateToken:async(route,input)=>{
    calls.push(`${id}:${route}`);assert.equal(paused,true,'global hold precedes child mutation');let child=children.get(id);
-   if(route==='update-plan-begin'){const journal=JSON.parse(await readFile(path,'utf8'));assert.equal(journal.captureComplete,true);assert.equal(journal.projects.length,values.length);child={id:randomUUID(),kind:'pause-update',consent:true,targetVersion:input.targetVersion,phase:childPhase,targets:[{taskId:id+'-worker',progress:'paused'}],manager:{interrupted:id==='beta'}};children.set(id,child);return {plan:structuredClone(child)};}
+   if(route==='update-plan-begin'){const journal=JSON.parse(await readFile(path,'utf8'));assert.equal(journal.captureComplete,true);assert.equal(journal.projects.length,values.length);child={id:randomUUID(),kind:'pause-update',consent:true,targetVersion:input.targetVersion,purpose:input.purpose||'update',phase:childPhase,targets:[{taskId:id+'-worker',progress:'paused'}],manager:{interrupted:id==='beta'}};children.set(id,child);return {plan:structuredClone(child)};}
    assert.equal(input.planId,child.id);assert.equal(input.targetVersion,child.targetVersion);
    if(route==='update-plan-installing'){if(child.phase!=='ready')return {marked:false,plan:structuredClone(child)};child.phase='installing';return {marked:true,plan:structuredClone(child)};}
    if(route==='update-plan-blocked'){if(!['complete','canceled'].includes(child.phase))child.phase='blocked';return {plan:structuredClone(child)};}
@@ -121,4 +121,23 @@ test('cancel after partial recovery skips complete children and retains hold for
  const f=await fixture(t);await f.engine.begin({targetVersion:'1.1.0'});const normal=f.values[1].host.updateToken;
  f.values[1].host.updateToken=async(route,input)=>route==='update-plan-installing'?{marked:false}:normal(route,input);const plan=f.engine.status();await f.engine.markInstalling({planId:plan.id,targetVersion:plan.targetVersion});
  f.children.get('alpha').phase='complete';await f.engine.cancel();assert.equal(f.engine.status().phase,'canceled');assert.equal(f.children.get('alpha').phase,'complete');assert.equal(f.children.get('beta').phase,'canceled');assert.equal(f.paused,true);
+});
+
+test('blocked grouped status refreshes exact child pause proof and shows the concrete project blocker without releasing holds',async t=>{
+ const f=await fixture(t,{childPhase:'draining'});await f.engine.begin({targetVersion:'1.1.0'});
+ const child=f.children.get('beta');child.phase='blocked';child.reasons=['Resolve pending manager approval before updating.'];child.targets[0].progress='pause-requested';
+ await f.engine.tick();assert.equal(f.engine.status().phase,'blocked');
+ assert.match(f.engine.status().reasons.join(),/Hidden.*pending manager approval/);
+ const mutations=f.calls.filter(call=>call.includes(':update-plan-')&&!call.endsWith('update-plan-status')).length;
+ child.targets[0].progress='paused';child.manager.interrupted=true;await f.engine.tick();
+ assert.equal(f.engine.status().targets.find(target=>target.projectId==='beta').progress,'paused');assert.equal(f.engine.status().manager.interrupted,true);
+ assert.equal(f.engine.status().phase,'blocked');assert.equal(f.paused,true);assert.equal(f.calls.includes('global:false'),false);
+ assert.equal(f.calls.filter(call=>call.includes(':update-plan-')&&!call.endsWith('update-plan-status')).length,mutations,'observation never repeats pause, resume or installation');
+ const reopened=await f.make('1.0.0');await reopened.tick();assert.equal(reopened.status().targets.find(target=>target.projectId==='beta').progress,'paused');assert.match(reopened.status().reasons.join(),/pending manager approval/);assert.equal(f.paused,true);
+});
+
+test('Quit shares all-project preparation but reopening preserves held continuation without automatic resume',async t=>{
+ const f=await fixture(t);const plan=await f.engine.begin({purpose:'quit',targetVersion:'1.0.0'});assert.equal(plan.purpose,'quit');assert.equal(plan.phase,'ready');assert.ok([...f.children.values()].every(child=>child.purpose==='quit'));const marked=await f.engine.markInstalling({planId:plan.id,targetVersion:plan.targetVersion});assert.equal(marked.marked,true);
+ for(const child of f.children.values())child.phase='canceled';const reopened=await f.make('1.0.0');await reopened.recover();assert.equal(reopened.status().phase,'canceled');assert.equal(reopened.status().purpose,'quit');assert.equal(f.paused,true);assert.equal(f.calls.some(call=>call.endsWith('update-plan-resume')),false);assert.equal(f.calls.includes('global:false'),false);
+ await reopened.releaseForReview();assert.equal(f.paused,false);assert.equal(f.calls.some(call=>call.endsWith('update-plan-resume')),false);
 });

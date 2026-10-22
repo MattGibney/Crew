@@ -21,6 +21,8 @@ const request = objectWith(["id", "action", "status", "at"], {
   status: string,
   at: string,
   expectedRunId: nullableString,
+  cooperative: { type: "boolean" },
+  settleNaturally: { type: "boolean" },
 });
 const report = objectWith(["reportId", "runId", "kind", "message"], {
   reportId: string,

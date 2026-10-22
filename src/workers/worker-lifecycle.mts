@@ -1,3 +1,4 @@
+import { inspectUpdateEvidence } from "../updates/evidence.mjs";
 import { createWorkerDisposal } from "./worker-disposal.mjs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -11,6 +12,7 @@ import { readRunnerRecord as json } from "./evidence.mjs";
 import {
   atomic,
   confirmedExit,
+  connectionEnded,
   attention,
   requireRunDir,
 } from "./controller-evidence.mjs";
@@ -72,6 +74,60 @@ export function createWorkerLifecycle({
   }
   const dispose = createWorkerDisposal({ stateDir, project, fixture });
   async function completeStop(task: TaskRecord, request?: LifecycleRequest) {
+    if (request?.settleNaturally === true) {
+      if (
+        request.cooperative !== true ||
+        request.action !== "pause" ||
+        (request.expectedRunId ?? null) !== (task.runId || null)
+      )
+        throw new Error(
+          "Natural preparation settlement has a changed lifecycle identity",
+        );
+      // Agents own resource stopping. Observe all captured execution afresh;
+      // neither a ready tool response nor an old exit flag authorizes commands.
+      const observed = await inspectUpdateEvidence({
+        stateDir,
+        view: { tasks: [task] },
+      });
+      const evidence = observed.tasks[0]?.updateEvidence;
+      if (
+        !evidence ||
+        !["absent", "stopped"].includes(evidence.worker) ||
+        !["absent", "stopped"].includes(evidence.runtime) ||
+        evidence.hooks.some(
+          (hook) => !["absent", "stopped"].includes(hook.state),
+        )
+      )
+        return true;
+      await updateTask(stateDir, task.id, (next) => {
+        if ((next.runId || null) !== request.expectedRunId)
+          throw new Error("Worker run changed before natural settlement");
+        const current = next.lifecycleRequests.find(
+          (item) => item.id === request.id,
+        );
+        if (
+          !current ||
+          current.action !== "pause" ||
+          current.settleNaturally !== true ||
+          current.cooperative !== true ||
+          (current.expectedRunId ?? null) !== (next.runId || null)
+        )
+          throw new Error(
+            "Natural preparation action changed before settlement",
+          );
+        if (next.status !== "completed") next.status = "paused";
+        next.endedAt ||= now();
+        if (next.execution)
+          next.execution = {
+            ...next.execution,
+            live: false,
+            endedAt: next.endedAt,
+          };
+        current.status = "completed";
+        current.handledAt = now();
+      });
+      return true;
+    }
     if (task.environment?.kind !== "project-execution") return false;
     if (!operations.has(task.id)) {
       const action =
@@ -160,7 +216,9 @@ export function createWorkerLifecycle({
           : null;
         if (
           request.cooperative === true &&
-          confirmedExit(task, exit) &&
+          (confirmedExit(task, exit) ||
+            (request.settleNaturally === true &&
+              connectionEnded(task, exit))) &&
           !launches.has(task.id)
         ) {
           const result = task.reports.find(
@@ -208,11 +266,14 @@ export function createWorkerLifecycle({
           });
           return task;
         }
-        const priorEnvironment = await reconcileEnvironment({
-          stateDir,
-          taskId: task.id,
-          stop: request.cooperative !== true,
-        });
+        const priorEnvironment =
+          request.settleNaturally === true
+            ? null
+            : await reconcileEnvironment({
+                stateDir,
+                taskId: task.id,
+                stop: request.cooperative !== true,
+              });
         if (priorEnvironment?.pending) {
           await updateTask(stateDir, task.id, (n) => {
             n.status = request.action === "pause" ? "pausing" : "stopping";
@@ -220,11 +281,20 @@ export function createWorkerLifecycle({
           });
           return await readTask(stateDir, task.id);
         }
-        if (exit && task.harnessStarted && !confirmedExit(task, exit))
+        if (
+          exit &&
+          task.harnessStarted &&
+          !confirmedExit(task, exit) &&
+          !(request.settleNaturally === true && connectionEnded(task, exit))
+        )
           throw new Error(
             "Worker commands have no matching confirmed terminal record. No stop completion was claimed.",
           );
-        if (!task.harnessStarted || confirmedExit(task, exit)) {
+        if (
+          !task.harnessStarted ||
+          confirmedExit(task, exit) ||
+          (request.settleNaturally === true && connectionEnded(task, exit))
+        ) {
           if (await completeStop(task, request))
             return await readTask(stateDir, task.id);
           await updateTask(stateDir, task.id, (n) => {
@@ -252,6 +322,7 @@ export function createWorkerLifecycle({
           requestId: request.id,
           action: request.action,
           cooperative: request.cooperative === true,
+          settleNaturally: request.settleNaturally === true,
           at: now(),
         });
         task = await updateTask(stateDir, task.id, (n) => {

@@ -1,5 +1,6 @@
 import { Ajv } from "ajv";
 import type { PausePlan } from "./contracts.mjs";
+import { parseObservedPreparation } from "../preparation/observed.mjs";
 const text = { type: "string" };
 const validate = new Ajv({ strict: false }).compile<PausePlan>({
   type: "object",
@@ -25,6 +26,8 @@ const validate = new Ajv({ strict: false }).compile<PausePlan>({
     consent: { const: true },
     id: text,
     targetVersion: text,
+    purpose: { enum: ["update", "quit"] },
+    preparation: { type: "object" },
     fromVersion: text,
     phase: text,
     createdAt: text,
@@ -89,5 +92,7 @@ export function parsePausePlan(text: string): PausePlan {
     throw new Error(
       "Update plan is malformed; review retained state before starting work.",
     );
-  return data;
+  return data.preparation
+    ? { ...data, preparation: parseObservedPreparation(data.preparation) }
+    : data;
 }

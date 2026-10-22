@@ -86,6 +86,10 @@ export function createWorkspacePauseParticipants({
   };
   function remember(project: SavedProject, child: PausePlan) {
     project.phase = child.phase;
+    project.preparation = child.preparation;
+    project.reasons = (child.reasons || [])
+      .slice(0, 64)
+      .map((reason) => reason.slice(0, 1000));
     project.targets = (child.targets || [])
       .slice(0, 4096)
       .filter((target) => typeof target.taskId === "string")
@@ -118,6 +122,7 @@ export function createWorkspacePauseParticipants({
     }
     if (
       !approvedPauseChild(child, active().targetVersion) ||
+      (child.purpose || "update") !== (active().purpose || "update") ||
       child.id !== project.childPlanId
     )
       throw new Error(

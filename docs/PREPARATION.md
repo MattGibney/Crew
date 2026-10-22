@@ -1,0 +1,27 @@
+# Agent preparation for restart and shutdown (GitHub #62)
+
+## Confirmed direction
+
+Explicit **Prepare and update** and **Quit Crew** use a shared preparation protocol. Crew asks relevant manager and implementation agents to find sensible stopping points, preserve useful context for continuation, and explicitly report that they are ready. Agents decide what preserving work requires. Crew does not require a commit or clean working tree. Closing a window retains the existing background-work behavior. This does not control OS updates or promise safe handling of forced power loss.
+
+This replaces automatic interruption as the meaning of update preparation. A project workflow label such as Paused is arbitrary agent-owned data and is never a restart acknowledgement. A delivery attempt, native delivery acknowledgement, agent preparation response, final turn/result receipt, pending approval and owned-process shutdown are distinct facts.
+
+## Design checkpoint
+
+The native parent holds new ordinary work across all projects and captures an immutable purpose (update or quit), exact project/controller identities and per-participant request identities. Project controllers persist preparation requests and agent responses. Managers and live implementation workers receive the request in their existing native conversation through supported native steering/start operations. Queued work remains held; already stopped execution is labelled separately from agent-reported readiness, never given a fabricated acknowledgement. If existing execution cannot receive a request, show the concrete unavailable/input reason rather than force stopping it.
+
+A preparation request gives the reason and tells agents to use ordinary native tools and existing project instructions to preserve context, then report ready, preparing, needs-input or blocked through a bound orchestration tool. Every response is scoped to the exact preparation/participant/request and worker run or manager conversation. Readiness/context is committed durably before the tool returns. Exact retries are idempotent; changed/stale/cross-project or cross-run responses fail closed. Agents may revise their response while preparation is still open; no ordinary workflow update grants shutdown consent.
+
+Ready is a necessary agent acknowledgement, not permission to cut off a final response. Crew continues receiving native events and persistence, then requires the relevant turn/result to settle, no pending start or approval, and fresh verified owned execution/resource evidence. Natural connection closure must not kill agent-started service descendants. A persistent runtime still needs an explicit agent-owned safe stopping decision; unknown ownership blocks.
+
+All participants and projects must satisfy the barrier before final native shutdown. Updates retain the exclusive installation reservation and signed updater checks; explicit Quit uses the same preparation barrier and then shuts down owned controllers. No forced signal, teardown, hidden approval response or replacement worker conversation is used to manufacture readiness. Cancel retains work and context; returning to ordinary work is explicit. Restart recovery preserves the exact journal and continuation evidence rather than replaying preparation or work blindly.
+
+The shared UI shows purpose, project, manager/worker identity, request delivery, latest agent explanation and readiness separately from execution settlement. Needs-input participants link back to their existing manager-mediated request/approval surfaces. If the window was closed, explicit Quit may show the existing control window so progress and decisions remain available; it must not start microphone capture or reconnect voice.
+
+## Inherited bug evidence
+
+The originating 0.15.0 and current typed source both reproduce a race: the manager finishes during awaited worker-pause enqueue, then strict interruption rejects the captured turn because the active turn is now null. The child/group then freezes blocked progress, leaving a confirmed paused worker labelled pause-requested. This is an inherited race, not evidence that the TypeScript migration introduced it. The actual user's precise cause remains unverified until matched to their blocker text/state. The narrow race/observation fix is retained as regression protection, but does not alone complete the shared preparation design.
+
+## Delivery and acceptance
+
+[Issue #62](https://github.com/MattGibney/Crew/issues/62) owns implementation. Deliver a reviewable PR into main, with no merge/release/version bump. Validate durable correlation, request and response retries/recovery, natural completion races, manager/worker agent decisions, pending input/approvals, idle/ended/paused work, all-project barriers, canceled/blocked refresh and safe final shutdown. Use real disposable native peers/processes and a packaged Electron profile with synthetic media; preserve the user's installed app/profile, live workers and business services. Keep known portable-profile updater relaunch and Quit #39 limitations separate unless evidence links them.

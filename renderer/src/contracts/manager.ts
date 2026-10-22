@@ -193,7 +193,44 @@ export interface ProjectInfo {
   mode: string;
   readiness: { ready: boolean; issues: string[] };
 }
+export interface PreparationParticipant {
+  id: string;
+  role: "manager" | "worker";
+  taskId: string | null;
+  taskLabel?: string;
+  runId: string | null;
+  threadId: string | null;
+  requestId: string;
+  required: boolean;
+  message: string;
+  projectId?: string;
+  projectName?: string;
+  delivery: {
+    state: "pending" | "attempted" | "acknowledged" | "failed" | "uncertain";
+    at: string;
+    nativeTurnId?: string;
+    error?: string;
+  };
+  response: null | {
+    responseId: string;
+    state: "preparing" | "ready" | "needs-input" | "blocked";
+    note: string;
+    continuation?: string;
+    at: string;
+  };
+  settled?: boolean;
+  settlementReason?: string;
+}
+export interface AgentPreparation {
+  id: string;
+  purpose: "update" | "quit";
+  phase: string;
+  participants: PreparationParticipant[];
+}
 export interface UpdatePlan {
+  id?: string;
+  purpose?: "update" | "quit";
+  preparation?: AgentPreparation | null;
   phase: string;
   projects?: { id: string; name: string; phase?: string }[];
   targets?: {
