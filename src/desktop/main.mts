@@ -228,15 +228,17 @@ async function openProject(project: DesktopProject) {
           );
         },
         privateSend: async (input, isCurrent) => {
-          if (!(await isCurrent())) return { accepted: false };
-          await composed.foundation.sendInternal({
-            id: input.id,
-            source: "schedule",
-            sourceId: input.origin.scheduleId,
-            recipientAgentId: input.agentId,
-            content: [{ type: "text", text: input.instruction }],
-          });
-          return { accepted: true };
+          const message = await composed.foundation.sendInternal(
+            {
+              id: input.id,
+              source: "schedule",
+              sourceId: input.origin.scheduleId,
+              recipientAgentId: input.agentId,
+              content: [{ type: "text", text: input.instruction }],
+            },
+            isCurrent,
+          );
+          return { accepted: message !== null };
         },
         changed: () =>
           surface?.notify({
