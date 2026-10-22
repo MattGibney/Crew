@@ -716,6 +716,8 @@ export type RuntimeEvent = {
     }
 );
 export interface PreparationReadiness {
+  preparationId: Id;
+  requiredAfter: Timestamp;
   agentId: Id;
   sessionId: Id;
   state: "pending" | "ready" | "blocked";
@@ -790,6 +792,8 @@ export interface ProjectSkillSource {
 }
 /** Explicit environment operations. No job/status/lifecycle inference. */
 export interface AgentEnvironmentService {
+  resources?(agentId: Id): Agent["resources"] | Promise<Agent["resources"]>;
+  list?(caller: CallerContext, agentId: Id): Promise<JsonValue>;
   invoke(input: {
     caller: CallerContext;
     agentId: Id;
