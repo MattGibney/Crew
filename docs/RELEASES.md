@@ -2,7 +2,7 @@
 
 ## Crew 0.17.3 Settings hotfix
 
-The human authorized PR75 and one signed patch after 0.17.2. Valid unused project lifecycle phases may be null; Settings now decodes them without rejecting the view, while configured commands and direct hooks retain structural validation. No user configuration reset or migration is required. All 753 current tests and strict typing pass; final packaged/publication evidence is tracked in [REL-0.17.3](../tickets/REL-0.17.3.md).
+The human authorized PR75 and one signed patch after 0.17.2. Valid unused project lifecycle phases may be null; Settings now decodes them without rejecting the view, while configured commands and direct hooks retain structural validation. No user configuration reset or migration is required. [Crew 0.17.3](https://github.com/MattGibney/Crew/releases/tag/v0.17.3) is public/latest from immutable 857ae5b97dfda9f462206914766f495f6d3f54bc. Local and signed hosted regression each pass 753/753. [Workflow 39764624021](https://github.com/MattGibney/Crew/actions/runs/39764624021) passes signing/notarization/publication; independent six-asset/hash/feed/signature/staple/Gatekeeper/DMG and 386-file tagged-build parity checks pass. Final signed native Settings with the real backend/store preserves null phases, source/runtime fields and the saved edit across reload/relaunch; normal Quits and process/port cleanup pass with no physical microphone or ordinary model work. This is save/relaunch persistence, not automatic portable-root updater acceptance. See [REL-0.17.3](../tickets/REL-0.17.3.md).
 
 ## Crew 0.17.2 production evidence
 
