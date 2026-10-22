@@ -1,6 +1,9 @@
 import type {
   BrokerCallOptions,
   CallerContext,
+  CredentialVault,
+  BrokerInvocation,
+  ExecutionPermit,
   JsonObject,
   OperationReceipt,
   ServiceConnection,
@@ -83,4 +86,31 @@ export function assertHttpEndpoint(
   )
     throw new Error("Unsupported trusted endpoint configuration.");
   return url;
+}
+
+/** The real vault supplies both CAS metadata and its own unforgeable replacement
+ * handle. Connection revisions are unrelated to credential revisions. */
+export interface GatewayCredentialVault extends CredentialVault {
+  metadataForReference(reference: string): Promise<{
+    credentialRef: string;
+    revision: number;
+    deleted: boolean;
+  }>;
+  withReplacement<T>(
+    connectionId: string,
+    material: Uint8Array,
+    use: (handle: TrustedCredentialHandle) => Promise<T>,
+  ): Promise<T>;
+}
+
+/** Production composition supplies the SAME admission gate used by final
+ * Quit/update reservation. run obtains a live-session lease, redeems the fresh
+ * permit inside that lease, invokes dispatch and retains the lease until settled.
+ * A preliminary async validateCaller is never an implementation of this port. */
+export interface GatewayExecutionAdmission {
+  run<T>(
+    invocation: BrokerInvocation,
+    permit: ExecutionPermit,
+    dispatch: () => Promise<T>,
+  ): Promise<{ state: "denied" } | { state: "admitted"; result: T }>;
 }

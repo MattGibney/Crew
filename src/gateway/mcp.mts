@@ -5,7 +5,7 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
-import type { BrokerResult, CallerContext } from "../agents/contracts.mjs";
+import type { BrokerResult, CallerContext, JsonObject } from "../agents/contracts.mjs";
 import type { DurableOperationBroker } from "./broker.mjs";
 import { jsonObject, normalizeArguments } from "./json.mjs";
 
@@ -88,7 +88,7 @@ export function createGatewayMcpServer(options: {
   authenticatedCaller(): Promise<CallerContext | null>;
   /** Durable host/native request identity, stable across delivery retry/reconnect.
    * Never reuse it for a different operation in the same authenticated session. */
-  invocationIdForRequest(requestId: string | number): Promise<string>;
+  invocationIdForRequest(requestId: string | number, request: JsonObject): Promise<string>;
 }): Server {
   const server = new Server(
     { name: "crew-service-gateway", version: "1.0.0" },
@@ -117,7 +117,10 @@ export function createGatewayMcpServer(options: {
   server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
     const caller = await options.authenticatedCaller();
     if (!caller) throw new Error("Authenticated Crew session required.");
-    let invocationId = await options.invocationIdForRequest(extra.requestId);
+    let invocationId = await options.invocationIdForRequest(extra.requestId, {
+      name: request.params.name,
+      arguments: jsonObject(request.params.arguments ?? {}),
+    });
     try {
       if (controls.has(request.params.name)) {
         const args = normalizeArguments(
@@ -135,13 +138,10 @@ export function createGatewayMcpServer(options: {
               : await options.broker.reconcile(caller, invocationId);
         return response(result, invocationId);
       }
-      // Transport clients may retain this metadata across uncertain result delivery.
-      const supplied = request.params._meta?.["crew/invocationId"];
-      if (supplied !== undefined) {
-        if (typeof supplied !== "string" || !supplied || supplied.length > 160)
-          throw new Error("Invalid invocation ID.");
-        invocationId = supplied;
-      }
+      // New invocation identity comes only from the authenticated native mapping.
+      // The explicit resume/reconcile controls select already-owned saved operations.
+      if (request.params._meta?.["crew/invocationId"] !== undefined)
+        throw new Error("Use crew_resume_operation for retained invocations.");
       const result = await options.broker.invokeTool(
         caller,
         invocationId,
