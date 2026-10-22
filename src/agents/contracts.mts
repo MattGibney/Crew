@@ -70,6 +70,8 @@ export interface Agent {
     pictureRef: string | null;
     personality: string;
     systemPrompt: string;
+    /** Optional per-agent voice override; absent legacy values mean null. */
+    voice?: string | null;
   };
   skills: { skillId: Id; enabled: boolean }[];
   access: {

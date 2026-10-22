@@ -1,4 +1,5 @@
 import type {
+  Agent,
   CrewAction,
   CrewPermission,
   PermissionGroup,
@@ -12,6 +13,10 @@ export interface AgentSetupDraft {
   agentId: string | null;
   name: string;
   instructions: string;
+  personality: string;
+  pictureRef: string | null;
+  voice: string | null;
+  skills: Agent["skills"];
   folderAccess: AgentFolderAccess;
   groupMode: "new" | "existing";
   groupName: string;
@@ -51,6 +56,7 @@ export interface AgentSetupReview {
     assignment: number | null;
     projectSettings: number;
     profile: number | null;
+    skills?: { id: string; revision: number }[];
   };
 }
 export interface AgentSetupRecord {
@@ -70,6 +76,11 @@ export type SetupRecord = AgentSetupRecord;
 export type AgentSetupState = AgentSetupRecord;
 export interface AgentSetupRequests {
   "setup.read": Record<string, never>;
+  "setup.open": {
+    expectedRevision: number | null;
+    mode: "create" | "repair";
+    agentId?: string;
+  };
   "setup.new": {
     expectedRevision: number | null;
     mode: "create" | "repair";

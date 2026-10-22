@@ -3,17 +3,19 @@ import type { AgentsClient } from "./client";
 import { ManagerAvatar } from "../manager/ManagerAvatar";
 import { managerPicture } from "../manager/profile";
 
+export type AgentImageClient = Pick<AgentsClient, "readImage" | "saveImage">;
+
 // References are immutable and the cache is scoped to the selected project client.
 const pictures = new WeakMap<
-  AgentsClient,
+  AgentImageClient,
   Map<string, Promise<string | null>>
 >();
 export function useAgentPicture(
-  client: AgentsClient,
+  client: AgentImageClient,
   imageRef: string | null | undefined,
 ) {
   const [loaded, setLoaded] = useState<{
-    client: AgentsClient;
+    client: AgentImageClient;
     ref: string;
     picture: string | null;
   } | null>(null);
@@ -55,7 +57,7 @@ export function AgentPicture({
   picture,
   className,
 }: {
-  client: AgentsClient;
+  client: AgentImageClient;
   imageRef?: string | null;
   /** A local draft, including explicit removal, overrides the saved reference. */
   picture?: string | null;

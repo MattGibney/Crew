@@ -142,6 +142,13 @@ export async function openUnifiedRegistry(directory: string) {
         project.voice = voice;
       });
     },
+    retireLegacyVoice(id: string) {
+      return update(async (draft) => {
+        const project = draft.projects.find((row) => row.id === id);
+        if (!project) throw new Error("Select a registered project.");
+        delete project.voice;
+      });
+    },
   };
 }
 

@@ -187,13 +187,17 @@ const agent = object({
   createdAt: timestamp,
   updatedAt: timestamp,
   archivedAt: nullable(timestamp),
-  profile: object({
-    revision,
-    name: text(1000),
-    pictureRef: nullable(id),
-    personality: text(),
-    systemPrompt: text(),
-  }),
+  profile: object(
+    {
+      revision,
+      name: text(1000),
+      pictureRef: nullable(id),
+      personality: text(),
+      systemPrompt: text(),
+      voice: nullable(id),
+    },
+    ["voice"],
+  ),
   skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 1000),
   access: object({
     permissionGroupIds: array(id, 1000),
