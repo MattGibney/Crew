@@ -63,7 +63,7 @@ try {
   await page.locator('[data-worker-id="fixture-task-7"]').click();
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('heading', { name: 'Queued follow-ups (1)', exact: true }).waitFor();
-  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Workflow: Awaiting client feedback', { exact: true }).first().waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Status: Awaiting client feedback', { exact: true }).first().waitFor();
   await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Execution: Working', { exact: true }).first().waitFor();
   const history = page.getByRole('region', { name: 'Assignment history' });
   await history.locator('summary').click();
@@ -74,11 +74,11 @@ try {
   await post({ orchestration: state });
   await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Execution: Turn ended', { exact: true }).first().waitFor();
   assert.equal(retained.workflowState.value, 'Awaiting client feedback');
-  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Workflow: Awaiting client feedback', { exact: true }).first().waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Status: Awaiting client feedback', { exact: true }).first().waitFor();
   retained.workflowState = { ...retained.workflowState, value: 'Ready for product review', actor: 'manager', requestId: 'workflow-ready', at: new Date().toISOString() };
   retained.workflowHistory.push(retained.workflowState);
   await post({ orchestration: state });
-  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Workflow: Ready for product review', { exact: true }).first().waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Status: Ready for product review', { exact: true }).first().waitFor();
   await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel('Execution: Turn ended', { exact: true }).first().waitFor();
   await page.screenshot({ path: path.join(output, 'retained-followup-overview.png'), fullPage: true });
   await page.getByRole('button', { name: 'Send direction', exact: true }).click();
@@ -92,7 +92,7 @@ try {
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   retained.workflowState = { ...retained.workflowState, value: 'Awaiting product and accessibility review of the retained implementation before confirming business readiness' };
   await post({ orchestration: state });
-  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel(`Workflow: ${retained.workflowState.value}`, { exact: true }).first().waitFor();
+  await page.getByRole('region', { name: 'Worker detail', exact: true }).getByLabel(`Status: ${retained.workflowState.value}`, { exact: true }).first().waitFor();
   await page.setViewportSize({ width: 740, height: 900 });
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'Workflow and execution states fit narrow detail');
   await page.screenshot({ path: path.join(output, 'workflow-direction-narrow.png'), fullPage: true });

@@ -6,6 +6,8 @@ export interface ToolSchema {
   minLength?: number;
   maxLength?: number;
   maxItems?: number;
+  minimum?: number;
+  maximum?: number;
   pattern?: string;
   enum?: string[];
   items?: ToolSchema;

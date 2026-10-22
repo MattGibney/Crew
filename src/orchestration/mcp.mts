@@ -91,6 +91,7 @@ async function callTool(name: unknown, input: unknown) {
       taskId?: string;
       requestId: string;
       state: string;
+      progressPercent?: number | null;
     }>();
     const id = role === "worker" ? taskId! : args.taskId!;
     scoped(await readTask(stateDir, id));
@@ -98,6 +99,7 @@ async function callTool(name: unknown, input: unknown) {
       taskId: id,
       requestId: args.requestId,
       state: args.state,
+      progressPercent: args.progressPercent,
       actor: role,
       runId: role === "worker" ? runId : null,
     });

@@ -20,54 +20,40 @@ import {
   pendingAttention,
   workerProgress,
   workerWorkflow,
-  workerStatus,
   workerTiming,
 } from "./worker-model.js";
 
 export function WorkerStatus({ task }: { task: WorkerTask }) {
-  const tone = ["failed", "blocked"].includes(task.status)
-    ? "border-destructive/25 bg-destructive/10 text-destructive"
-    : ["awaiting_answer", "paused"].includes(task.status) ||
-        pendingAttention(task).length
-      ? "border-chart-4/35 bg-chart-4/10 text-foreground"
-      : task.status === "completed"
-        ? "border-chart-2/30 bg-chart-2/10 text-foreground"
-        : ["running", "launching", "verifying"].includes(task.status)
-          ? "border-primary/20 bg-primary/10 text-primary"
-          : "border-border bg-muted text-muted-foreground";
   const workflow = workerWorkflow(task);
+  const progress = task.workflowState?.progressPercent;
   return (
-    <>
-      {workflow && (
-        <Badge
-          variant="outline"
-          aria-label={`Workflow: ${workflow}`}
-          title={workflow}
-          className="max-w-64 text-[10px]"
-        >
-          <span className="truncate">{workflow}</span>
-        </Badge>
-      )}
+    <span className="flex flex-wrap items-center gap-1.5">
       <Badge
         variant="outline"
-        aria-label={`Execution: ${workerStatus(task)}`}
-        className={`shrink-0 gap-1.5 text-[10px] ${tone}`}
+        aria-label={`Status: ${workflow || "Not reported"}`}
+        title={workflow || "No agent status reported"}
+        className="max-w-64 text-[10px]"
       >
-        <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />
-        {workerStatus(task)}
+        <span className="truncate">{workflow || "Not reported"}</span>
       </Badge>
-      {(task.pendingApprovalCount || 0) > 0 && (
-        <Badge
-          variant="outline"
-          aria-label="Native approval needed"
-          className="shrink-0 text-[10px]"
+      {typeof progress === "number" && (
+        <span
+          className="text-[10px] text-muted-foreground"
+          aria-label={`Reported progress: ${progress}%`}
+          title="Agent-reported estimate; may change"
         >
-          Needs approval
-        </Badge>
+          {progress}%
+        </span>
       )}
-    </>
+      {(task.pendingApprovalCount || 0) > 0 && (
+        <span className="text-[10px] text-muted-foreground">
+          Native approval needed
+        </span>
+      )}
+    </span>
   );
 }
+
 function WorkerCard({
   task,
   now,

@@ -314,15 +314,19 @@ export function orchestrationTools(
   tools.push({
     name: "set_workflow_state",
     description:
-      "Set an explicit project workflow label, in the project own terms, for this worker. This never changes native execution status and is never inferred from reports, completion or process liveness. Reuse requestId for exact retries; prior labels remain in history.",
+      "Set the explicit agent-reported status and optional progress estimate for this worker, in the project own terms. This never changes native execution status and is never inferred from reports, completion or process liveness. Reuse requestId for exact retries; prior labels remain in history.",
     inputSchema: object(
       {
         ...(role === "manager" ? { taskId: taskIdentifier } : {}),
         requestId: taskIdentifier,
-        state: string(
-          "Arbitrary project workflow label, e.g. Ready for review",
-          400,
-        ),
+        progressPercent: {
+          type: ["number", "null"],
+          minimum: 0,
+          maximum: 100,
+          description:
+            "Optional agent-reported estimate, 0–100. May increase or decrease. Omit to retain the previous estimate; null clears it. Crew never calculates progress or infers completion.",
+        },
+        state: string("Arbitrary agent-set status, e.g. Ready for review", 400),
       },
       [...(role === "manager" ? ["taskId"] : []), "requestId", "state"],
     ),

@@ -105,12 +105,14 @@ export async function setWorkflowState(
     taskId,
     requestId,
     state,
+    progressPercent,
     actor = "manager",
     runId = null,
   }: {
     taskId: string;
     requestId: string;
     state: string;
+    progressPercent?: number | null;
     actor?: string;
     runId?: string | null;
   },
@@ -118,6 +120,15 @@ export async function setWorkflowState(
   identifier(taskId);
   identifier(requestId, "workflow request ID");
   text(state, "workflow state", 400);
+  if (
+    progressPercent !== undefined &&
+    progressPercent !== null &&
+    (typeof progressPercent !== "number" ||
+      !Number.isFinite(progressPercent) ||
+      progressPercent < 0 ||
+      progressPercent > 100)
+  )
+    throw new Error("Invalid reported progress percentage");
   if (!["manager", "worker"].includes(actor))
     throw new Error("Invalid workflow actor");
   if (actor === "worker") text(runId, "bound worker run ID", 160);
@@ -130,7 +141,10 @@ export async function setWorkflowState(
         (actor === "manager" || event.runId === runId),
     );
     if (existing) {
-      if (existing.value !== state)
+      if (
+        existing.value !== state ||
+        existing.reportedProgressPercent !== progressPercent
+      )
         throw new Error("Workflow request ID reused with changed content");
       return;
     }
@@ -138,6 +152,11 @@ export async function setWorkflowState(
       throw new Error("Stale worker run");
     const event = {
       value: state,
+      ...(progressPercent !== undefined
+        ? { progressPercent, reportedProgressPercent: progressPercent }
+        : task.workflowState?.progressPercent !== undefined
+          ? { progressPercent: task.workflowState.progressPercent }
+          : {}),
       requestId,
       actor,
       runId: actor === "worker" ? runId : task.runId || null,
@@ -150,7 +169,7 @@ export async function setWorkflowState(
       id: `workflow:${actor}:${runId || "manager"}:${requestId}`,
       actor,
       kind: "workflow",
-      message: `Project workflow: ${state}`,
+      message: `Project workflow: ${state}${progressPercent === undefined ? "" : progressPercent === null ? " · Progress estimate cleared" : ` · Reported progress: ${progressPercent}%`}`,
       at: event.at,
       runId: event.runId,
       assignmentId: event.assignmentId,
