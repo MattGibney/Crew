@@ -201,6 +201,10 @@ export function createWorkerDirections({
         task = await readTask(stateDir, task.id);
       }
     }
+    // Settling the ended turn is history observation; selecting its next
+    // assignment is ordinary work admission. Preserve both result and queued
+    // direction while preparation, manager lifecycle or update holds admissions.
+    if (await admissionHeld({ taskId: task.id, resume: true })) return task;
     if (
       task.lifecycleRequests?.some(
         (r) =>

@@ -10,12 +10,14 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {createBridge} from '../runtime/manager/bridge/index.mjs';
 import {createController} from '../runtime/workers/controller.mjs';
-import {createTask,readTask,requestWorkerAction} from '../runtime/orchestration/store.mjs';
+import {createWorkerDirections} from '../runtime/workers/worker-directions.mjs';
+import {createTask,readTask,updateTask,requestWorkerAction,requestWorkerFollowup} from '../runtime/orchestration/store.mjs';
 import {createUpdatePlan,readUpdatePlan,isUpdatePlanHolding} from '../runtime/updates/plan.mjs';
 import {inspectUpdateEvidence} from '../runtime/updates/evidence.mjs';
 import {updateActivity} from '../runtime/updates/activity.mjs';
 import {createPreparationCoordinator} from '../runtime/preparation/coordinator.mjs';
 import {readPreparation} from '../runtime/preparation/store.mjs';
+import {listWorkerRequests} from '../runtime/workers/approval-store.mjs';
 import {createWorkspacePauseUpdate} from '../runtime/desktop/workspace-pause-update.mjs';
 import {workspaceUpdateActivity} from '../runtime/desktop/workspace-update.mjs';
 import {createPauseUpdateCoordinator} from '../runtime/desktop/updater.mjs';
@@ -52,10 +54,10 @@ async function tool(name,args){
  await closed;if(!received||failure)throw Error(failure||'Missing bound MCP response');return result;
 }
 async function poll(){if(polling||ending)return;polling=true;try{
- if(role==='manager'&&existsSync(${JSON.stringify(record.controls)}+'/request-approval')&&!approvalSent){approvalSent=true;send({id:9000,method:'item/commandExecution/requestApproval',params:{threadId,turnId,itemId:'human-decision',command:'synthetic permission requiring a human'}});}
- if(role==='manager'&&approvalSent&&!approvalWithdrawn&&existsSync(${JSON.stringify(record.controls)}+'/withdraw-approval')){approvalWithdrawn=true;send({method:'serverRequest/resolved',params:{threadId,requestId:9000}});}
+ if((role==='manager'?existsSync(${JSON.stringify(record.controls)}+'/request-approval'):existsSync(base+'.request-approval'))&&!approvalSent){approvalSent=true;send({id:9000,method:'item/commandExecution/requestApproval',params:{threadId,turnId,itemId:'human-decision',command:'synthetic permission requiring a human'}});}
+ if(approvalSent&&!approvalWithdrawn&&(role==='manager'?existsSync(${JSON.stringify(record.controls)}+'/withdraw-approval'):existsSync(base+'.withdraw-approval'))){approvalWithdrawn=true;send({method:'serverRequest/resolved',params:{threadId,requestId:9000}});}
  if(delivered){
-  if(role==='worker'&&!workflow){await tool('set_workflow_state',{requestId:'workflow-paused-request',state:'Paused'});workflow=true;log({kind:'workflow-only'});}
+  if(role==='worker'&&!workflow){await tool('set_workflow_state',{requestId:'workflow-working-request',state:'Implementing',progressPercent:40});await tool('set_workflow_state',{requestId:'workflow-ready-request',state:'Ready for review',progressPercent:100});workflow=true;log({kind:'workflow-only'});}
   let desired='none';try{desired=readFileSync(base+'.response','utf8').trim();}catch{}
   if(desired!=='none'&&desired!==reported){const request=await tool('get_preparation_request',{});if(!request)throw Error('Bound actor has no preparation request');
    await tool('report_preparation',{preparationId:request.preparationId,participantId:request.participantId,requestId:request.requestId,responseId:actor+'-'+desired,state:desired,note:desired==='needs-input'?'Fixture human decision required.':'Fixture context saved for '+request.purpose+'.',continuation:'Retain '+threadId+' and the dirty fixture file; no project command was needed.'});reported=desired;log({kind:'reported',state:desired});
@@ -128,8 +130,13 @@ async function fixture(t,purpose){
 
 for(const purpose of ['update','quit'])test(`agent-owned ${purpose} waits for every bound acknowledgement and final native turn across selected and hidden projects`,{timeout:120000},async t=>{
  const f=await fixture(t,purpose),[selected,hidden]=f.records;
+ const followup={taskId:activeId,requestId:'direction-after-preparation',brief:'Keep this exact queued direction for ordinary continuation after the user returns to work.',expectedRunId:selected.original.runId};
+ await requestWorkerFollowup(selected.stateDir,followup);const queuedTask=await readTask(selected.stateDir,activeId),queuedDirection=queuedTask.assignments.find(item=>item.id===followup.requestId),initialAssignmentId=queuedTask.currentAssignmentId;
+ await writeFile(actorFile(selected,'worker')+'.request-approval','retain pending worker input');
  await until(async()=>{await f.tick();return(await Promise.all(f.records.map(record=>readPreparation(record.stateDir)))).every(plan=>plan?.participants.filter(p=>p.required).every(p=>p.delivery.state==='acknowledged'))&&(await Promise.all(f.records.map(record=>calls(record,'worker')))).every(entries=>entries.some(entry=>entry.kind==='workflow-only'));},'all existing native conversations steered exactly once');
- for(const record of f.records){const prep=await readPreparation(record.stateDir);assert.equal(prep.purpose,purpose);assert.ok(prep.participants.filter(p=>p.required).every(p=>p.response===null));assert.equal((await readTask(record.stateDir,activeId)).lifecycleRequests.length,0,'workflow Paused is not an acknowledgement');}
+ for(const record of f.records){const prep=await readPreparation(record.stateDir);assert.equal(prep.purpose,purpose);assert.ok(prep.participants.filter(p=>p.required).every(p=>p.response===null));const task=await readTask(record.stateDir,activeId);assert.equal(task.lifecycleRequests.length,0,'Ready for review at 100% is not a preparation acknowledgement');assert.equal(task.workflowState.value,'Ready for review');assert.equal(task.workflowState.progressPercent,100);assert.deepEqual(task.workflowHistory.slice(-2).map(event=>event.progressPercent),[40,100]);assert.equal(task.status,'running');assert.equal(task.runId,record.original.runId);}
+ await until(async()=>(await listWorkerRequests({stateDir:selected.stateDir,pendingOnly:true})).some(request=>request.taskId===activeId),'pending bound worker approval');
+ assert.deepEqual((await readTask(selected.stateDir,activeId)).assignments.find(item=>item.id===followup.requestId),queuedDirection);
  assert.equal(f.group.status().phase,'draining');
  for(const record of f.records){await f.response(record,'manager','ready');await f.response(record,'worker',record===hidden?'needs-input':'ready');}
  await until(async()=>{await f.tick();return(await readPreparation(hidden.stateDir)).participants.find(p=>p.role==='worker'&&p.taskId===activeId)?.response?.state==='needs-input';},'hidden worker needs-input report');
@@ -137,19 +144,22 @@ for(const purpose of ['update','quit'])test(`agent-owned ${purpose} waits for ev
  await writeFile(path.join(selected.controls,'request-approval'),'native input');await until(()=>selected.bridge.state().approvals.length===1,'pending manager native approval');
  await f.response(hidden,'worker','ready');
  await until(async()=>{await f.tick();return(await Promise.all(f.records.map(record=>readPreparation(record.stateDir)))).every(plan=>plan.participants.filter(p=>p.required).every(p=>p.response?.state==='ready'));},'all explicit ready acknowledgements');
- assert.equal(f.group.status().phase,'draining','ready acknowledgements cannot end native turns');assert.equal(selected.bridge.state().approvals.length,1);
+ assert.equal(f.group.status().phase,'draining','ready acknowledgements cannot end native turns');assert.equal(selected.bridge.state().approvals.length,1);assert.equal((await listWorkerRequests({stateDir:selected.stateDir,pendingOnly:true})).filter(request=>request.taskId===activeId).length,1,'progress and preparation never answer the native worker request');
  assert.equal((await f.group.markInstalling({planId:f.group.status().id,targetVersion:f.targetVersion})).marked,false);
+ await writeFile(actorFile(selected,'worker')+'.withdraw-approval','native worker request withdrawn');await until(async()=>(await listWorkerRequests({stateDir:selected.stateDir,pendingOnly:true})).length===0,'worker native approval withdrawal without a response');
  await writeFile(path.join(selected.controls,'withdraw-approval'),'native request withdrawn');await until(()=>selected.bridge.state().approvals.length===0,'native approval withdrawal without a response');
  for(const record of f.records)await f.finish(record,'manager');
  await until(async()=>{await f.tick();return f.records.every(record=>record.bridge.state().status==='completed');},'both managers final messages');
  assert.equal(f.group.status().phase,'draining','live workers remain an independent barrier');
- await f.finish(selected,'worker');await until(async()=>{await f.tick();return(await readTask(selected.stateDir,activeId)).execution?.live===false;},'selected worker natural exit');
+ await f.finish(selected,'worker');await until(async()=>{await f.tick();const task=await readTask(selected.stateDir,activeId);return task.execution?.live===false&&Boolean(task.result);},'selected worker natural exit and durable result');
  assert.equal(f.group.status().phase,'draining','hidden worker keeps shared installation and Quit blocked');
+ const selectedSettled=await readTask(selected.stateDir,activeId);assert.deepEqual(selectedSettled.assignments.find(item=>item.id===followup.requestId),queuedDirection,'preparation holds the exact queued direction instead of selecting another assignment');assert.equal(selectedSettled.currentAssignmentId,initialAssignmentId);assert.ok(selectedSettled.result,'the settled original result stays attached during preparation');
  await f.finish(hidden,'worker');await until(async()=>{await f.tick();return f.group.status().phase==='ready';},'all-project agent acknowledgements and fresh natural settlement');
  const grouped=f.group.status();assert.equal(grouped.purpose,purpose);assert.equal(grouped.projects.length,2);assert.equal(grouped.targets.filter(target=>target.taskId===activeId).length,2,'duplicate worker IDs retain project boundaries');
  assert.ok(!grouped.targets.some(target=>target.taskId===completedId));
  for(const record of f.records){
   const task=await readTask(record.stateDir,activeId),prep=await readPreparation(record.stateDir),nativeCalls=await calls(record,'worker'),managerCalls=await calls(record,'manager');
+  assert.equal(task.workflowState.progressPercent,100);assert.deepEqual(task.workflowHistory.slice(-2).map(event=>event.progressPercent),[40,100]);
   assert.equal(task.runId,record.original.runId);assert.equal(task.threadId,record.original.threadId);assert.equal(task.worktree,record.original.worktree);assert.equal(task.execution.live,false);
   const proof=(await record.view()).tasks.find(task=>task.id===activeId).updateEvidence;assert.ok(['stopped','absent'].includes(proof.worker));assert.ok(['stopped','absent'].includes(proof.runtime));
   assert.ok(task.lifecycleRequests.every(request=>request.action==='pause'&&request.settleNaturally===true&&request.cooperative===true));
@@ -174,4 +184,13 @@ for(const purpose of ['update','quit'])test(`agent-owned ${purpose} waits for ev
   await update.restart();assert.deepEqual(consumers,['install-disposable-bundle']);
  }
  assert.equal(await globalAdmissionPaused(f.capacity),true);assert.deepEqual(await readTask(selected.stateDir,completedId),f.completed);
+});
+
+test('returning to ordinary admissions selects the retained direction once without rewriting the completed assignment',async t=>{
+ const stateDir=await mkdtemp(path.join(tmpdir(),'crew-prepared-directions-')),taskId='held-direction-worker',runId='retained-completed-run',runDir=path.join(stateDir,'runs',taskId,runId),worktree=path.join(stateDir,'worktree');t.after(()=>rm(stateDir,{recursive:true,force:true}));await mkdir(runDir,{recursive:true});await mkdir(worktree);
+ await createTask(stateDir,{requestId:taskId,ticket:'GH-62',brief:'Preserve this completed assignment',projectId:'project'});await updateTask(stateDir,taskId,task=>{task.runId=runId;task.runDir=runDir;task.threadId='retained-thread';task.worktree=worktree;task.harnessStarted=true;task.status='completed';task.result={message:'Original durable result',evidence:['Retained evidence']};});await writeFile(path.join(runDir,'exit.json'),JSON.stringify({runId,connectionClosed:true,stopConfirmed:true,completedTurn:true,exitCode:0,threadId:'retained-thread'}));await requestWorkerFollowup(stateDir,{taskId,requestId:'retained-direction',brief:'Ordinary authorized continuation after the hold clears'});
+ const original=await readTask(stateDir,taskId),completed=structuredClone(original.assignments[0]),queued=structuredClone(original.assignments[1]);let held=true;
+ const directions=createWorkerDirections({stateDir,launches:new Map(),operations:new Map(),admissionHeld:async()=>held,ownedRunnerAlive:async()=>false,getProcessSnapshot:()=>new Map(),verify:async()=>assert.fail('Completed history must not be reverified'),fail:async()=>assert.fail('Completed history must not fail')});
+ await directions.activateFollowup(original);let task=await readTask(stateDir,taskId);assert.equal(task.status,'completed');assert.deepEqual(task.result,original.result);assert.deepEqual(task.assignments[0],completed);assert.deepEqual(task.assignments[1],queued);
+ held=false;await directions.activateFollowup(task);task=await readTask(stateDir,taskId);assert.equal(task.currentAssignmentId,'retained-direction');assert.equal(task.status,'resume_queued');assert.equal(task.runId,runId,'Selection alone never launches another native run');assert.deepEqual(task.assignments[0],completed);assert.equal(task.assignments[1].status,'active');const selected=structuredClone(task);await directions.activateFollowup(task);assert.deepEqual(await readTask(stateDir,taskId),selected);
 });

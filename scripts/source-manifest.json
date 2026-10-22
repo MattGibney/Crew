@@ -91,6 +91,7 @@
     "renderer/src/manager/hooks/useManagerRequests.ts",
     "renderer/src/manager/hooks/useManagerSounds.ts",
     "renderer/src/manager/main.tsx",
+    "renderer/src/manager/manager-schedules.test.mjs",
     "renderer/src/manager/manager-voice.test.mjs",
     "renderer/src/manager/manager-voice.ts",
     "renderer/src/manager/preparation.test.mjs",
@@ -375,6 +376,7 @@
     "tests/manager-profile.test.mjs",
     "tests/manager-review-admission.test.mjs",
     "tests/manager-review.test.mjs",
+    "tests/manager-schedules-preparation.test.mjs",
     "tests/manager-schedules.test.mjs",
     "tests/manager-scratchpad-integration.test.mjs",
     "tests/manager-scratchpad.test.mjs",
@@ -481,6 +483,7 @@
     "tickets/REL-0.16.0.md",
     "tickets/REL-0.16.1.md",
     "tickets/REL-0.16.2.md",
+    "tickets/REL-0.17.0.md",
     "tsconfig.json",
     "tsconfig.renderer.json",
     "vite.config.js"

@@ -119,8 +119,15 @@ export function createManagerReviews({
             {
               origin: { source: "scheduled-review", operationId: schedule.id },
               background: true,
+              // Delivery publishes workStarting for this very request. Recheck
+              // lifecycle and holds here; delivery itself checks native turn,
+              // voice and approval activity without rejecting its own queue.
               canReview: () =>
-                !review.stopped && schedules.current(schedule) && eligible(),
+                !review.stopped &&
+                schedules.current(schedule) &&
+                manager.view().state === "running" &&
+                !held() &&
+                !updateAdmission.reserved,
               beforeReview: async () =>
                 !(await globalAdmissionPaused(
                   process.env.CREW_GLOBAL_CAPACITY_DIR,

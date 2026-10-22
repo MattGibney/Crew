@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ManagerProps, ManagerSchedule } from "../../contracts/manager.js";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,8 @@ export function ManagerSchedules({
     [editing, setEditing] = useState<string | null>(null),
     [saving, setSaving] = useState(false),
     [error, setError] = useState("");
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   useEffect(() => {
     if (!visible) return;
     const timer = setInterval(
@@ -52,13 +54,26 @@ export function ManagerSchedules({
   };
   const save = async () => {
     if (!draft || !revision || saving || stale) return;
+    const submitted = draft;
     setSaving(true);
     setError("");
     try {
-      await manager.saveManagerSchedules(draft, revision);
-      setDraft(null);
-      setRevision(null);
-      onNotify("Manager schedules saved.");
+      const result = await manager.saveManagerSchedules(submitted, revision);
+      const confirmedRevision = result.managerSchedules?.revision;
+      if (!confirmedRevision)
+        throw new Error(
+          "Saved schedules could not be confirmed. Your edits are kept; reload saved settings before trying again.",
+        );
+      if (draftRef.current === submitted) {
+        setDraft(null);
+        setRevision(null);
+        onNotify("Manager schedules saved.");
+      } else {
+        setRevision(confirmedRevision);
+        onNotify(
+          "Manager schedules saved. Your newer edits are still unsaved.",
+        );
+      }
     } catch (e) {
       setError(errorText(e));
     } finally {

@@ -1,0 +1,9 @@
+# REL-0.17.0 — Worker progress, manager schedules and shared preparation
+
+The human explicitly authorized the grouped integration of PRs [67](https://github.com/MattGibney/Crew/pull/67), [68](https://github.com/MattGibney/Crew/pull/68) and [69](https://github.com/MattGibney/Crew/pull/69), followed by combined testing, merge and one signed/notarized stable release. Published 0.16.2 and current main were inspected before selecting the next feature version, 0.17.0. Repository presentation PR54 and ticket-only ideas are excluded.
+
+Full histories are retained through an isolated integration branch. Shared application-origin provenance is integrated once. Initial source conflicts were adjacent documentation/test additions; both assertions/requirements are retained. Strict initial combined typechecking passes. Final combined tests, compiled UI, packaged acceptance, current-source/newly reachable-history privacy audit and publication are pending.
+
+Acceptance must prove reported status/100% does not grant preparation readiness; scheduling cannot cross stopped-manager, approval or preparation holds; internal work stays out of human chat; queued directions, approvals, prompts, worktrees and history survive. Agents decide checkpoint/context without forced commits, clean trees, automatic approvals or force-stop shortcuts. Use disposable profiles and synthetic media, preserving the installed app, user workers/auth and business services.
+
+Release credentials remain encrypted GitHub secrets; inspect names/status only. Never rewrite prior published artifacts/tags. Verify the deliberate workflow, public feed/checksums, signed/notarized payload and packaged-source parity independently. Native manual-profile launch/continuity is separate from automatic installation; preserve the known portable-root automatic relaunch boundary and issue39 evidence limits.
