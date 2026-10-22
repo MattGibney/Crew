@@ -243,6 +243,7 @@ export type CrewAction =
   | "skills.read"
   | "skills.write"
   | "skills.assign"
+  | "browser.control"
   | "environments.read"
   | "environments.create"
   | "environments.attach"

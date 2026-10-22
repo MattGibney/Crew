@@ -63,7 +63,7 @@ export interface UnifiedApplicationOptions {
     authorization: ProjectAuthorizationService;
     runAuthorized<T>(
       caller: CallerContext,
-      action: "skills.read" | "skills.write",
+      action: "skills.read" | "skills.write" | "browser.control",
       operation: () => Promise<T>,
     ): Promise<T>;
   }): AgentToolExtension;
@@ -501,27 +501,34 @@ export async function startUnifiedApplication(
       reconcileOperation: (operationId: string) =>
         environments!.reconcileOperation(owner, operationId),
     };
+    const additionalTools = options.agentTools?.({
+      authorization,
+      runAuthorized: (caller, action, operation) =>
+        gate.run(async () => {
+          if (closing || !foundation!.executionAllowed(caller))
+            throw new Error("This native session cannot admit tool work.");
+          await foundation!.records.authorize(
+            { type: "agent", caller },
+            action,
+            { type: "project" },
+          );
+          if (action === "skills.write" || action === "browser.control")
+            await foundation!.noteExecutionAdmitted(caller);
+          return operation();
+        }),
+    });
     mcp = await startAgentMcpHost({
       privateDirectory: join(root, "native-transport"),
       foundation,
       broker: gateway.broker,
-      additionalTools: options.agentTools?.({
-        authorization,
-        runAuthorized: (caller, action, operation) =>
-          gate.run(async () => {
-            if (closing || !foundation!.executionAllowed(caller))
-              throw new Error("This native session cannot admit skill work.");
-            await foundation!.records.authorize(
-              { type: "agent", caller },
-              action,
-              { type: "project" },
-            );
-            if (action === "skills.write")
-              await foundation!.noteExecutionAdmitted(caller);
-            return operation();
-          }),
-      }),
+      additionalTools,
     });
+    if (additionalTools?.subscribe)
+      cleanupSubscriptions.push(
+        additionalTools.subscribe(() => {
+          void mcp?.refreshTools();
+        }),
+      );
     cleanupSubscriptions.push(
       authorization.subscribe(() => {
         void mcp?.refreshTools();

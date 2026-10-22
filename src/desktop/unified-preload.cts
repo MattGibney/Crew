@@ -18,6 +18,7 @@ const allowed = new Set([
   "copyText",
   "openWebLink",
   "updates",
+  "browser",
 ]);
 contextBridge.exposeInMainWorld(
   "crewDesktop",
