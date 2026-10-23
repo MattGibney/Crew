@@ -635,3 +635,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Do not show a Current contact selector in Settings. Selecting a Team member card opens that agent’s workspace; Settings configures agents rather than choosing the current chat.
 
 - Keep the Agents settings list header compact: one Agents heading with Create agent alongside it, then the type tabs. Avoid a repeated project label, secondary Your agents heading or duplicated introductory copy. Retain guidance inside the creation/editing flow.
+
+- Agent Settings tables keep per-agent Edit and Archive actions in a labelled vertical ellipsis menu, rather than separate row buttons. Preserve keyboard menu navigation and the existing action behavior.

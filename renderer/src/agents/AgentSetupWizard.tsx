@@ -13,9 +13,17 @@ import {
   ArrowRight,
   Check,
   Plus,
+  EllipsisVertical,
+  Pencil,
   Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -672,40 +680,67 @@ export function AgentSetupWizard(props: Props) {
                               {agent.profile.voice ?? "Native default"}
                             </td>
                             <td className="px-4 py-3 text-right">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                disabled={busy || record?.phase === "applying"}
-                                onClick={() => begin("repair", agent.id)}
-                              >
-                                Edit {agent.profile.name}
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                disabled={
-                                  busy || saving || record?.phase === "applying"
-                                }
-                                title="Stop its session and archive the agent. Its records are retained."
-                                onClick={() =>
-                                  void run(async () => {
-                                    await command("archiveAgent", {
-                                      agentId: agent.id,
-                                    });
-                                    setNotice(
-                                      `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
-                                    );
-                                    await refresh().catch(() =>
-                                      setError(
-                                        "Agent archived. Refresh the project to see the updated list.",
-                                      ),
-                                    );
-                                  })
-                                }
-                              >
-                                <Archive aria-hidden="true" />
-                                Archive {agent.profile.name}
-                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger
+                                  render={
+                                    <Button variant="ghost" size="icon" />
+                                  }
+                                  aria-label={`Actions for ${agent.profile.name}`}
+                                  disabled={
+                                    busy ||
+                                    saving ||
+                                    record?.phase === "applying"
+                                  }
+                                >
+                                  <EllipsisVertical
+                                    aria-hidden="true"
+                                    className="size-4"
+                                  />
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent>
+                                  <DropdownMenuItem
+                                    disabled={
+                                      busy || record?.phase === "applying"
+                                    }
+                                    onClick={() => begin("repair", agent.id)}
+                                  >
+                                    <Pencil
+                                      aria-hidden="true"
+                                      className="size-4"
+                                    />{" "}
+                                    Edit
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem
+                                    disabled={
+                                      busy ||
+                                      saving ||
+                                      record?.phase === "applying"
+                                    }
+                                    title="Stop its session and archive the agent. Its records are retained."
+                                    onClick={() =>
+                                      void run(async () => {
+                                        await command("archiveAgent", {
+                                          agentId: agent.id,
+                                        });
+                                        setNotice(
+                                          `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
+                                        );
+                                        await refresh().catch(() =>
+                                          setError(
+                                            "Agent archived. Refresh the project to see the updated list.",
+                                          ),
+                                        );
+                                      })
+                                    }
+                                  >
+                                    <Archive
+                                      aria-hidden="true"
+                                      className="size-4"
+                                    />
+                                    Archive
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </td>
                           </tr>
                         ))}
