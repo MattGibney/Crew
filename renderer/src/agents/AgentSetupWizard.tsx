@@ -22,7 +22,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Choice } from "../access/shared";
 import { AgentPicture, type AgentImageClient } from "./AgentPicture";
-import { AgentManagerSelection } from "./AgentManagerSelection";
 import { AgentEnvironmentTemplate } from "./AgentEnvironmentTemplate";
 import { readProfilePicture } from "../manager/profile";
 import type { AgentConfigurationOptions } from "../../../src/application/agent-configuration-contracts.mjs";
@@ -554,14 +553,7 @@ export function AgentSetupWizard(props: Props) {
               {firstUse ? "Get started" : "Create agent"}
             </Button>
           )}
-          {!firstUse && (
-            <AgentManagerSelection
-              snapshot={snapshot}
-              command={command}
-              refresh={refresh}
-              onNotify={setNotice}
-            />
-          )}
+
           {!firstUse && (
             <div className="space-y-4">
               <div
