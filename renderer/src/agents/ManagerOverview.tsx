@@ -85,7 +85,7 @@ function ManagerCard({
       </h2>
       <p className="mt-2 line-clamp-3 min-h-15 text-sm leading-5 text-muted-foreground">
         {agent.profile.personality.trim() ||
-          "Open this manager’s chat to discuss work and coordinate their team."}
+          "Open this team member’s chat to discuss work and coordinate their team."}
       </p>
       <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
         <span className="inline-flex items-center gap-1.5">
@@ -128,10 +128,10 @@ export function ManagerOverview({
             id="managers-heading"
             className="text-2xl font-semibold tracking-tight sm:text-3xl"
           >
-            Managers
+            Team members
           </h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Choose a manager to chat, review their work, and coordinate their
+            Choose a team member to chat, review their work, and coordinate their
             team.
           </p>
         </div>
@@ -173,7 +173,7 @@ export function ManagerOverview({
           <span className="mb-4 flex size-12 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
             <Users aria-hidden="true" className="size-6" />
           </span>
-          <h2 className="text-lg font-semibold">No managers yet</h2>
+          <h2 className="text-lg font-semibold">No team members yet</h2>
           <p className="mb-5 mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
             Create an agent who reports to you to start a chat and build your
             team.

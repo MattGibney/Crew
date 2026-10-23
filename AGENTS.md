@@ -623,7 +623,7 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Keep preview interactions in browser memory and resettable. No owner-profile reads, live API proxy, credentials, model turns, native commands or physical media. Browser permission/CSP restrictions supplement the synthetic bridge; never weaken the installed app's IPC boundary to enable a design preview.
 - Use current components, shared semantic theme and representative fixtures rather than building a second copy of the product UI. Preview acceptance is presentation evidence, not provider/runtime or native microphone acceptance.
 
-## Manager overview navigation (#137)
+## Team member overview navigation (#137)
 
-- The project opens on a responsive Managers card grid of active owner-facing agents (`reportsTo.type === "user"`). This is a presentation of reporting links, not a separate manager class or an inference from agent-creation permissions. Child workers stay in their selected manager's workspace; archived agents stay in Settings.
-- Cards select the same persistent agent through the existing revision-checked owner operation, then open its chat/workers/notes/browser. Keep a Managers return action and visible selected identity instead of the Talk to selector. Preserve drafts and voice-switch rejection; navigation must never launch work, start a session or activate capture.
+- The project opens on a responsive Team members card grid of active owner-facing agents (`reportsTo.type === "user"`). This is a presentation of reporting links, not a separate manager class or an inference from agent-creation permissions. Child workers stay in their selected manager's workspace; archived agents stay in Settings.
+- Cards select the same persistent agent through the existing revision-checked owner operation, then open its chat/workers/notes/browser. Keep a Team members return action and visible selected identity instead of the Talk to selector. Preserve drafts and voice-switch rejection; navigation must never launch work, start a session or activate capture.

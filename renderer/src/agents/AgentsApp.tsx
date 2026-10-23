@@ -544,7 +544,7 @@ export function AgentsApp({
             }}
           >
             <ArrowLeft aria-hidden="true" />
-            Managers
+            Team members
           </Button>
           {primary && (
             <span className="min-w-0 truncate text-sm font-semibold">
