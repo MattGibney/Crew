@@ -641,3 +641,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Archive from an agent row opens a destructive alert dialog naming the agent, with Cancel focused by default and explicit Archive confirmation. Explain retained history and restoration. Format observed session labels with initial capitals in Settings.
 
 - When the user links a specific shadcn example, inspect and use its actual component composition and styling. The destructive archive dialog follows the linked Base UI small example: centered media/title/description and two equal footer actions, not a custom wide left-aligned approximation.
+
+## Official shadcn/ui components
+
+- Prefer actual shadcn/ui components throughout Crew. Install the official component from the appropriate registry using the shadcn CLI and use its generated components directly. Do not approximate examples with custom markup, manually recreate registry components, or treat using the same underlying Base UI primitive as equivalent.
+- Check the project’s configured shadcn base/style before installing. Preserve the canonical theme and branding, and compose the installed components using their supported variants and props. If the user links an example, follow its actual component composition.
