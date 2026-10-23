@@ -1,3 +1,4 @@
+import { InheritedPermissions } from "./InheritedPermissions";
 import { useId, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -253,21 +254,9 @@ export function AgentEditorForm({
               )}
             </div>
           )}
-          <div className="grid gap-6 border-t pt-5 sm:grid-cols-2">
-            <div>
-              <h3 className="text-sm font-medium">Inherited permissions</h3>
-              <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-                {actions.map((action) => (
-                  <li key={action}>
-                    {access?.crewCapabilities.find(
-                      (entry) => entry.action === action,
-                    )?.label ?? action}
-                  </li>
-                ))}
-                {!actions.length && <li>No permissions granted.</li>}
-              </ul>
-            </div>
-            <div className="space-y-4">
+          <div className="space-y-6 border-t pt-5">
+            <InheritedPermissions actions={actions} />
+            <div className="grid gap-6 border-t pt-5 sm:grid-cols-2">
               <div>
                 <h3 className="text-sm font-medium">Inherited skills</h3>
                 <ul className="mt-2 space-y-1 text-xs text-muted-foreground">

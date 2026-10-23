@@ -664,3 +664,4 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Sticky agent-editor actions need a mostly opaque theme background with backdrop blur, including the top scroll inset and side padding, so form content cannot remain sharply visible above or behind the title and Save/Cancel controls.
 
 - Agent editor sections are unboxed, separated by official shadcn Separator horizontal rules. Do not wrap Identity, Instructions, Access, Environment or Runtime sections in cards or bordered panels.
+- Agent access summaries use readable action names grouped by purpose, with installed shadcn tooltips explaining each capability. Keep summaries derived from group membership; presentation must not imply broader permissions or bypass resource limits and approvals.
