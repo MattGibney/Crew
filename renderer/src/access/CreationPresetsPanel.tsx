@@ -56,7 +56,7 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
   if (!props.isOwner) return <OwnerRequired />;
   return (
     <AccessSection
-      title="New agent presets"
+      title="Available templates"
       description="Approve a profile, groups and service identities that a manager may apply when creating a new agent. Managers cannot edit these approvals or grant themselves access."
       action={
         <Button
@@ -66,15 +66,15 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
           }
           onClick={() => setEditing("new")}
         >
-          Create preset
+          Create template
         </Button>
       }
     >
       {!props.agents.length && (
         <p className="text-sm text-muted-foreground">
           {props.runtimeDefaults
-            ? "Create a preset to choose the first agent's profile and access. It will use the configured project runtime."
-            : "Configure project model access before creating the first preset."}
+            ? "Create a template to choose the first agent's profile and access. It will use the configured project runtime."
+            : "Configure project model access before creating the first template."}
         </p>
       )}
       <div className="space-y-2">
@@ -89,7 +89,7 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
                   (selectedValue ?? "") || null,
                   props.creationDefaults.revision,
                 ),
-              "Creation default saved.",
+              "Default template saved.",
               "Could not change the default. Refresh and try again.",
             )
           }
@@ -130,7 +130,7 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
       <div className="divide-y">
         {!props.presets.length && (
           <p className="py-4 text-sm text-muted-foreground">
-            No approved presets yet.
+            No agent templates yet.
           </p>
         )}
         {props.presets.map((preset) => (
@@ -238,8 +238,8 @@ function PresetEditor({
                   profile: { name, pictureRef, personality, systemPrompt },
                 },
               }),
-            "Creation preset saved.",
-            "Could not save the preset. Refresh its current revision and references.",
+            "Agent template saved.",
+            "Could not save the template. Refresh its current revision and references.",
           )
         )
           onClose();
@@ -249,16 +249,16 @@ function PresetEditor({
         props.presets.find((row) => row.id === preset.id)?.revision !==
           preset.revision && (
           <p role="alert" className="text-sm text-destructive">
-            The saved preset changed. Your draft is retained. Cancel and reopen
-            Update before saving.
+            The saved template changed. Your draft is retained. Cancel and
+            reopen Update before saving.
           </p>
         )}
       <fieldset disabled={action.busy} className="space-y-4">
         <legend className="font-medium">
-          {preset ? `Update ${preset.name}` : "Create preset"}
+          {preset ? `Update ${preset.name}` : "Create template"}
         </legend>
         <div>
-          <Label htmlFor={`${id}-name`}>Preset name</Label>
+          <Label htmlFor={`${id}-name`}>Template name</Label>
           <Input
             id={`${id}-name`}
             required

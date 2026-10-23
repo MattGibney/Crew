@@ -8,6 +8,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BookOpen,
+  LayoutTemplate,
   CalendarClock,
   FolderOpen,
   LogIn,
@@ -198,6 +199,14 @@ export function createProjectPresentation(
       ...(
         [
           {
+            id: "agent-templates",
+            label: "Agent templates",
+            icon: LayoutTemplate,
+            section: "templates",
+            description:
+              "Define starting profiles, environments and group memberships for new agents.",
+          },
+          {
             id: "connections",
             label: "Connections",
             icon: Plug,
@@ -362,7 +371,7 @@ function AccessSettings({
   refreshProject,
   visible,
 }: {
-  section: "connections" | "groups" | "approvals";
+  section: "connections" | "groups" | "templates" | "approvals";
   projectId: string;
   command: Command;
   subscribe: Subscribe;

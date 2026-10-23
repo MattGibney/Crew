@@ -38,7 +38,7 @@ export function OwnerAccessSettings({
   section,
 }: {
   snapshot: AccessOwnerView;
-  section: "connections" | "groups" | "approvals";
+  section: "connections" | "groups" | "templates" | "approvals";
   isOwner: boolean;
   onCommand(name: string, args: unknown): Promise<unknown>;
   onNotify(message: string): void;
@@ -203,6 +203,10 @@ export function OwnerAccessSettings({
               </section>
             </>
           )}
+        </>
+      )}
+      {section === "templates" && (
+        <>
           <CreationPresetsPanel
             {...common}
             presets={snapshot.presets}
