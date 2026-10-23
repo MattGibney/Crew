@@ -319,7 +319,7 @@ export function AgentsApp({
         {
           id: "crew-sessions",
           label: "Sessions",
-          description: "Manage the live manager session for this project.",
+          description: "Manage the selected agent session for this project.",
           icon: Radio,
           render: () =>
             primary ? (
@@ -545,6 +545,34 @@ export function AgentsApp({
               aria-label="Manager workspace"
               className={`${view === "conversation" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col overflow-hidden`}
             >
+              {client.selectContact && snapshot.projectSettings && (
+                <label className="flex items-center gap-3 border-b px-5 py-2 text-sm">
+                  Talk to
+                  <select
+                    className="min-w-0 rounded-md border bg-background px-2 py-1"
+                    aria-label="Talk to agent"
+                    value={primary?.id ?? ""}
+                    disabled={pending.has("contact")}
+                    onChange={(event) =>
+                      void act("contact", () =>
+                        client.selectContact!(
+                          event.target.value,
+                          snapshot.projectSettings!.revision,
+                        ),
+                      )
+                    }
+                  >
+                    {!primary && <option value="">Choose an agent</option>}
+                    {snapshot.agents
+                      .filter((agent) => !agent.archivedAt)
+                      .map((agent) => (
+                        <option value={agent.id} key={agent.id}>
+                          {agent.profile.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
               {primary ? (
                 <Conversation
                   key={primary.id}
@@ -2931,7 +2959,8 @@ function agentName(id: string, snapshot: AgentsSnapshot) {
 }
 function primaryAgentId(snapshot: AgentsSnapshot | null): string | null {
   return snapshot?.projectSettings
-    ? snapshot.projectSettings.primaryAgentId
+    ? (snapshot.projectSettings.contactAgentId ??
+        snapshot.projectSettings.primaryAgentId)
     : (snapshot?.primaryAgentId ?? null);
 }
 

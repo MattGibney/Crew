@@ -185,6 +185,12 @@ export function createOwnerApi(
               typeof foundation.createFromPreset
             >[1],
           );
+        case "setContactAgent":
+          return foundation.setContact(
+            principal,
+            args.agentId === null ? null : text(args.agentId),
+            args.expectedRevision as number,
+          );
         case "setPrimaryAgent":
           return foundation.setPrimary(
             principal,

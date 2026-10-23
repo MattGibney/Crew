@@ -8,6 +8,7 @@ const projectActions = new Set<CrewAction>([
   "jobs.create",
   "skills.read",
   "skills.write",
+  "resources.read",
   "browser.control",
   "environments.create",
 ]);

@@ -85,6 +85,10 @@ export type AgentsClientEvent =
 
 /** Owner control plane. The server authenticates the owner; no actor is supplied by forms. */
 export interface AgentsClient {
+  selectContact?(
+    agentId: Id | null,
+    expectedRevision: number,
+  ): Promise<unknown>;
   recoverSession?(agentId: Id): Promise<RuntimeResult<null>>;
   readSnapshot(): Promise<AgentsSnapshot>;
   readVoiceArtifacts?(

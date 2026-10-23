@@ -1,3 +1,9 @@
+import {
+  ProjectResourceCatalogue,
+  projectResources,
+} from "../resources/catalogue.mjs";
+import { createProjectResourceTools } from "../resources/tools.mjs";
+import { combineAgentToolExtensions } from "./tool-extensions.mjs";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
@@ -111,6 +117,7 @@ export async function startUnifiedApplication(
   let foundation: AgentFoundation | undefined;
   let environments: ProjectEnvironmentService | undefined;
   let environmentTemplates: ProjectEnvironmentTemplateCatalogue | undefined;
+  let resources: ProjectResourceCatalogue | undefined;
   let voice: PrimaryAgentVoice | undefined;
   let voiceArtifacts: VoiceTranscriptArtifacts | undefined;
   let voiceArtifactRevision = 0;
@@ -498,7 +505,10 @@ export async function startUnifiedApplication(
       currentPrimaryBinding: () => {
         const state = store.snapshot();
         const agent = state.agents.find(
-          (row) => row.id === state.projectSettings.primaryAgentId,
+          (row) =>
+            row.id ===
+            (state.projectSettings.contactAgentId ??
+              state.projectSettings.primaryAgentId),
         );
         return agent?.runtime.threadId && agent.runtime.session.sessionId
           ? {
@@ -655,7 +665,44 @@ export async function startUnifiedApplication(
       inspectOperation: (operationId: string) =>
         environments!.inspectOperation(owner, operationId),
     };
-    const additionalTools = options.agentTools?.({
+    resources = await ProjectResourceCatalogue.open(
+      join(root, "resources"),
+      options.projectId,
+    );
+    const resourceList = async (caller?: CallerContext) => {
+      const access = await authorization.snapshot(owner);
+      const assigned = caller
+        ? await authorization.accessFor(caller.agentId)
+        : null;
+      return projectResources({
+        references: resources!.list(),
+        workspaces: environments!.ownerSnapshot(owner).workspaces,
+        connections: access.connections,
+        ...(assigned
+          ? {
+              groups: access.groups.filter((group) =>
+                assigned.permissionGroupIds.includes(group.id),
+              ),
+            }
+          : {}),
+      });
+    };
+    const resourceTools = createProjectResourceTools({
+      run: (caller, operation) =>
+        gate.run(async () => {
+          if (closing || !foundation!.executionAllowed(caller))
+            throw Error("This native session cannot inspect resources.");
+          await foundation!.records.authorize(
+            { type: "agent", caller },
+            "resources.read",
+            { type: "project" },
+          );
+          return operation();
+        }),
+      list: (caller) => resourceList(caller),
+      subscribe: (listener) => resources!.subscribe(listener),
+    });
+    const suppliedTools = options.agentTools?.({
       authorization,
       runAuthorized: (caller, action, operation) =>
         gate.run(async () => {
@@ -671,6 +718,10 @@ export async function startUnifiedApplication(
           return operation();
         }),
     });
+    const additionalTools = combineAgentToolExtensions([
+      resourceTools,
+      ...(suppliedTools ? [suppliedTools] : []),
+    ]);
     mcp = await startAgentMcpHost({
       privateDirectory: join(root, "native-transport"),
       foundation,
@@ -769,15 +820,25 @@ export async function startUnifiedApplication(
       snapshot: async () => ({
         ...(await baseOwnerApi.snapshot()),
         setupDefaults: unifiedRuntimeDefaults,
+        projectResources: await resourceList(),
       }),
       command: async (name: string, args: unknown) => {
         if (closing) throw new Error("Crew is closing.");
+        if (name === "resources.list") return resourceList();
+        if (name === "resources.saveReference") {
+          if (!args || typeof args !== "object" || Array.isArray(args))
+            throw Error("Reference fields are required.");
+          return resources!.save(
+            args as Parameters<ProjectResourceCatalogue["save"]>[0],
+          );
+        }
         return baseOwnerApi.command(name, args);
       },
       subscribe(listener: (event: unknown) => void) {
         const stops = [
           baseOwnerApi.subscribe(listener),
           authorization.subscribe(() => listener({ kind: "changed" })),
+          resources!.subscribe(() => listener({ kind: "changed" })),
         ];
         if (options.skills.subscribe)
           stops.push(
@@ -946,6 +1007,7 @@ export async function startUnifiedApplication(
             );
             await finishStep("connectionSetup", () => connectionSetup.close());
             await finishStep("accessStore", () => accessStore!.close());
+            await finishStep("projectResources", () => resources!.close());
             closedSteps.add("resources");
           }
           await foundation!.dispose(reservationId);
@@ -957,6 +1019,7 @@ export async function startUnifiedApplication(
     };
   } catch (error) {
     for (const stop of cleanupSubscriptions) stop();
+    await resources?.close().catch(() => {});
     await voice?.dispose().catch(() => {});
     await voiceArtifacts?.dispose().catch(() => {});
     await mcp?.close().catch(() => {});

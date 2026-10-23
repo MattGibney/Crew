@@ -63,6 +63,7 @@ export const crewActions = [
   "skills.read",
   "skills.write",
   "skills.assign",
+  "resources.read",
   "browser.control",
   "environments.read",
   "environments.create",

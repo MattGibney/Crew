@@ -30,6 +30,8 @@ export function createDesktopClient(bridge: DesktopBridge, projectId: string) {
   const command = async <T>(command: string, args: unknown): Promise<T> =>
     (await bridge.request("ownerCommand", { projectId, command, args })) as T;
   const client: AgentsClient = {
+    selectContact: (agentId, expectedRevision) =>
+      command("setContactAgent", { agentId, expectedRevision }),
     readSnapshot: async () =>
       (await bridge.request("ownerSnapshot", { projectId })) as AgentsSnapshot,
     subscribe(listener) {

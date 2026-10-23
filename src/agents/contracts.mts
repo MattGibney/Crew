@@ -245,6 +245,7 @@ export type CrewAction =
   | "skills.read"
   | "skills.write"
   | "skills.assign"
+  | "resources.read"
   | "browser.control"
   | "environments.read"
   | "environments.create"
@@ -275,6 +276,8 @@ export interface PermissionGroup {
     crew: CrewPermission[];
     services: { connectionId: Id; capabilities: string[] }[];
     environmentPolicyIds: Id[];
+    /** Nonsecret project references; executable resources use canonical policy/connection grants. */
+    resourceIds?: Id[];
   };
 }
 /** Trusted control-plane only. Agents receive ServiceConnectionView. */
@@ -778,6 +781,8 @@ export interface ProjectAgentSettings {
   projectId: Id;
   revision: Revision;
   primaryAgentId: Id | null;
+  /** Owner-selected direct contact; absent/null falls back to the primary agent. */
+  contactAgentId?: Id | null;
 }
 /** Access owns this data and its revision-checked administration. No credentials. */
 export interface AgentCreationPreset {
