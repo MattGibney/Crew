@@ -47,7 +47,7 @@ import type {
 import type { PrimaryVoiceClient, PrimaryVoiceEvent } from "./voice/client";
 import type { ProjectPresentation } from "./DesktopApplication";
 import type { AgentsSnapshot } from "./client";
-import { AgentSetupWizard } from "./AgentSetupWizard";
+import { AgentSettings } from "./AgentSettings";
 
 type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
@@ -165,13 +165,12 @@ export function createProjectPresentation(
         description:
           "Create and configure your team’s roles, personalities and voices.",
         render: ({ snapshot, refresh, visible, openSettings }) => (
-          <AgentSetupWizard
+          <AgentSettings
             snapshot={snapshot}
             refresh={refresh}
             command={command}
             subscribe={onOwnerChange}
             visible={visible}
-            renderSignIn={signIn}
             onOpenConnections={() => openSettings("access")}
           />
         ),
@@ -255,14 +254,13 @@ export function createProjectPresentation(
       if (context.snapshot.agents.some((agent) => !agent.archivedAt))
         return null;
       return (
-        <AgentSetupWizard
+        <AgentSettings
           snapshot={context.snapshot}
           refresh={context.refresh}
           command={command}
           subscribe={onOwnerChange}
           visible={context.visible}
           firstUse
-          renderSignIn={signIn}
           onOpenConnections={() => context.openSettings("access")}
         />
       );

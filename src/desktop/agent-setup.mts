@@ -507,6 +507,23 @@ export async function openAgentSetup(options: Options) {
     const groups = snapshot.access.groups.filter((group) =>
       draft.groupIds.includes(group.id),
     );
+    if (draft.groupMode === "existing") {
+      // Memberships are the source of access. The editor does not maintain a
+      // separate folder permission choice that could contradict those groups.
+      const policyIds = new Set(
+        groups.flatMap((group) => group.grants.environmentPolicyIds),
+      );
+      const workspaces = snapshot.environments.workspaces.filter(
+        (workspace) =>
+          policyIds.has(workspace.policy.id) &&
+          workspace.workspace.path === options.project.directory,
+      );
+      draft.folderAccess = workspaces.some((workspace) => workspace.writable)
+        ? "read_write"
+        : workspaces.length
+          ? "read_only"
+          : "none";
+    }
     const inheritedSkills = groups.flatMap(
       (group) => group.grants.skillIds ?? [],
     );
@@ -1350,6 +1367,39 @@ export async function openAgentSetup(options: Options) {
             ),
             true,
           );
+        } else if (name === "setup.discard") {
+          const args = object(input, ["expectedRevision"]);
+          check(args.expectedRevision);
+          if (!journal || !["draft", "reviewed"].includes(journal.record.phase))
+            throw new AgentSetupError(
+              "Only an unapplied editor draft can be discarded. Finish or reconcile saved changes first.",
+            );
+          // Keep unrelated retained drafts. Promote the most recently retained
+          // record exactly as opening it would, with a new revision so stale
+          // editor requests cannot overwrite it. No application APIs are called.
+          const retained = clone(journal.retained);
+          const previous = retained.pop();
+          if (previous) {
+            previous.record.revision = journal.record.revision + 1;
+            if (previous.record.review)
+              previous.record.review.draftRevision = previous.record.revision;
+            await save({
+              schema: 1,
+              projectId: journal.projectId,
+              ...previous,
+              retained,
+            });
+          } else {
+            await rm(path);
+            const directory = await open(root, constants.O_RDONLY);
+            try {
+              await directory.sync();
+            } finally {
+              await directory.close();
+            }
+            journal = null;
+            options.changed?.();
+          }
         } else if (name === "setup.save") {
           const args = object(input, ["expectedRevision", "draft"]);
           check(args.expectedRevision);

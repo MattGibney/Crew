@@ -35,3 +35,15 @@ Typecheck and production build, plus disposable preview checks for team/worker l
 ## Shared product components
 
 `OnlineStatus` in `renderer/src/components/online-status.tsx` displays an Online/Offline label with the shared dot and 16px halo. Pass an `online` boolean; standard span props such as `title` and `className` are supported. Callers own runtime-specific availability mapping. This is a product indicator, not a recreated shadcn registry component.
+
+## Single-page agent editor
+
+Settings uses `AgentSettings`, `AgentEditorForm` and `useEditorEnvironment` for one shared create/edit page. Identity, instructions, access, environment and runtime are visible together, with sticky Save/Create and Cancel actions. There are no steps, Continue buttons, autosaved wizard progress or inline sign-in. Name is validated beside its field. Supported runtime/account configuration remains in Subscription & usage; no unsupported per-agent model selector is invented.
+
+Group membership is the editor's access input. Permissions, skills, connections and folder policies are inherited and displayed read-only; group/service creation stays in Connections & access. The backend normalizes folder access from selected groups instead of retaining a separate stale wizard choice.
+
+Edits stay local until Save. Save uses the existing revision-checked journal validation/apply path, without a separate review screen. Cancel discards only an unapplied draft through `setup.discard`; stale, completed or partially applying journals cannot be discarded. Already partially applied saves remain recoverable through Retry save. Neither Save nor Cancel starts sessions or voice capture, or resets chat history. Picture uploads create a private image asset immediately, but do not alter the agent profile until Save; cancellation leaves no selected reference on the agent.
+
+Environment selection is staged with the form, then assigned using its own revision-checked owner operation after the agent save. These operations are not one atomic transaction: if assignment fails, the UI explicitly reports that the agent was saved but the environment was not, and directs the user to reopen/retry. Selecting a template never provisions an environment.
+
+Validation includes fictional preview creation, editing and reopening saved values, cancel/reopen preserving profile and template, required-name validation, group-derived summaries and deferred environment assignment. Disposable backend checks verify revision-safe discard, retained-draft recovery, rejection during partial application, no agent writes on discard and folder-access derivation. Typecheck/build are separate from installed desktop/provider acceptance.

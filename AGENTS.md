@@ -654,3 +654,9 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Agent Settings tables present observed started sessions as Online and other session states as Offline, with a green or grey dot inside a pale circular halo to the left of the label. Keep the underlying session state available in the tooltip; availability is separate from agent-reported work progress.
 
 - Reuse the shared OnlineStatus component for Online/Offline indicators. It owns labels, dot colours and halo sizing; consumers determine availability and pass any runtime detail as a tooltip.
+
+## Single-page agent editing (#137)
+
+- Create and Edit use the same sectioned agent editor, not a wizard. Keep Save/Create and Cancel visible at the top; no step navigation, Continue buttons or autosaved wizard-progress UI. Use official installed shadcn components.
+- Identity, instructions, existing group memberships, staged environment template and supported runtime information belong here. Permissions, skills, connections and folder access derive from groups and are displayed read-only; sign-in, group creation and connection creation stay in dedicated Settings.
+- Cancel must discard only unapplied editor intent without changing an agent or template. Do not embed an independently saving environment selector inside a form promising global Save/Cancel. Keep revision checks, recoverable applying-state errors and truthful partial-success notices.

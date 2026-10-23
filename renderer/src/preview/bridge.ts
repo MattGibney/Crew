@@ -116,6 +116,18 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
   function setup(project: PreviewProject, command: string, args: Row) {
     let record = (project.extras.setup ?? null) as AgentSetupRecord | null;
     if (command === "setup.read") return record;
+    if (command === "setup.discard") {
+      if (
+        !record ||
+        args.expectedRevision !== record.revision ||
+        !["draft", "reviewed"].includes(record.phase)
+      )
+        throw new Error(
+          "Only the current unapplied editor draft can be discarded.",
+        );
+      project.extras.setup = null;
+      return null;
+    }
     if (command === "setup.open" || command === "setup.new") {
       const existing = args.agentId ? agent(project, args.agentId) : null;
       const draft: AgentSetupDraft = {
@@ -153,6 +165,45 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
       record.revision++;
       if (command === "setup.save") {
         record.draft = args.draft as AgentSetupDraft;
+        if (record.draft.groupMode === "existing") {
+          const groups = project.access.groups.filter((group) =>
+            record!.draft.groupIds.includes(group.id),
+          );
+          record.draft.skills = [
+            ...new Set(groups.flatMap((group) => group.grants.skillIds ?? [])),
+          ].map((skillId) => ({ skillId, enabled: true }));
+          record.draft.serviceConnectionIds = [
+            ...new Set(
+              groups.flatMap((group) =>
+                group.grants.services.map((grant) => grant.connectionId),
+              ),
+            ),
+          ];
+          const directory =
+            project.extras.projectFolder ??
+            `/Preview/${project.snapshot.projectName}`;
+          const workspaces = object(project.extras.environments).workspaces;
+          const selectedWorkspaces = (
+            Array.isArray(workspaces) ? workspaces : []
+          )
+            .map(object)
+            .filter(
+              (workspace) =>
+                object(workspace.workspace).path === directory &&
+                groups.some((group) =>
+                  group.grants.environmentPolicyIds.includes(
+                    String(object(workspace.policy).id),
+                  ),
+                ),
+            );
+          record.draft.folderAccess = selectedWorkspaces.some(
+            (workspace) => workspace.writable,
+          )
+            ? "read_write"
+            : selectedWorkspaces.length
+              ? "read_only"
+              : "none";
+        }
         record.phase = "draft";
       }
       if (command === "setup.review") {
