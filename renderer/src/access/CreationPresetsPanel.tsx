@@ -1,3 +1,4 @@
+import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -97,9 +98,19 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
   const action = useAccessAction(props.onNotify);
   const id = useId();
   if (!props.isOwner) return <OwnerRequired />;
+  if (editing)
+    return (
+      <PresetEditor
+        key={editing === "new" ? "new" : editing.id}
+        {...props}
+        preset={editing === "new" ? null : editing}
+        onClose={() => setEditing(null)}
+      />
+    );
   return (
     <AccessSection
       fullWidth
+      separator={false}
       title="Available templates"
       description="Approve a profile, groups and service identities that a manager may apply when creating a new agent. Managers cannot edit these approvals or grant themselves access."
       action={
@@ -273,14 +284,6 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {editing && (
-        <PresetEditor
-          key={editing === "new" ? "new" : editing.id}
-          {...props}
-          preset={editing === "new" ? null : editing}
-          onClose={() => setEditing(null)}
-        />
-      )}
       <div className="overflow-x-auto rounded-lg border">
         <Table className="w-full text-left text-sm">
           <TableCaption className="sr-only">
@@ -425,64 +428,72 @@ function PresetEditor({
         : current[field].filter((item) => item !== value),
     }));
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !action.busy) onClose();
+    <form
+      className="min-w-0 space-y-8"
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const { name, pictureRef, personality, systemPrompt } = draft.profile;
+        if (
+          await action.run(
+            () =>
+              props.onSave({
+                id: preset?.id ?? null,
+                expectedRevision: preset?.revision ?? null,
+                draft: {
+                  ...draft,
+                  profile: { name, pictureRef, personality, systemPrompt },
+                },
+              }),
+            "Agent template saved.",
+            "Could not save the template. Refresh its current revision and references.",
+          )
+        )
+          onClose();
       }}
     >
-      <DialogContent
-        className="flex max-h-[85dvh] flex-col sm:max-w-2xl"
-        showCloseButton={!action.busy}
-      >
-        <DialogHeader>
-          <DialogTitle>
+      <div className="sticky -top-10 z-20 -mx-4 -mt-10 flex flex-wrap items-start justify-between gap-3 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/70 supports-backdrop-filter:backdrop-blur-md">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h1 className="text-xl font-semibold tracking-tight">
             {preset ? "Edit template" : "Create template"}
-          </DialogTitle>
-          <DialogDescription>
+          </h1>
+          <p className="text-sm leading-6 text-muted-foreground">
             {preset
-              ? `Configure ${preset.name}.`
-              : "Choose the starting profile and groups for new agents."}
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="flex min-h-0 flex-col gap-5"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const { name, pictureRef, personality, systemPrompt } =
-              draft.profile;
-            if (
-              await action.run(
-                () =>
-                  props.onSave({
-                    id: preset?.id ?? null,
-                    expectedRevision: preset?.revision ?? null,
-                    draft: {
-                      ...draft,
-                      profile: { name, pictureRef, personality, systemPrompt },
-                    },
-                  }),
-                "Agent template saved.",
-                "Could not save the template. Refresh its current revision and references.",
-              )
-            )
-              onClose();
-          }}
-        >
-          <div className="min-h-0 space-y-4 overflow-y-auto px-1">
-            {preset &&
-              props.presets.find((row) => row.id === preset.id)?.revision !==
-                preset.revision && (
-                <p role="alert" className="text-sm text-destructive">
-                  The saved template changed. Your draft is retained. Cancel and
-                  reopen Edit before saving.
-                </p>
-              )}
-            <fieldset disabled={action.busy} className="space-y-4">
-              <legend className="sr-only">
-                {preset ? `Update ${preset.name}` : "Create template"}
-              </legend>
-              <div>
+              ? `Configure ${preset.name} for future agents.`
+              : "Set the starting profile and access for new agents."}
+          </p>
+        </div>
+        <FormActions
+          label={preset ? "Save changes" : "Create template"}
+          busy={action.busy}
+          disabled={!draft.name.trim() || !draft.profile.name.trim()}
+          onCancel={onClose}
+        />
+      </div>
+      <div className="space-y-10 pb-8">
+        {preset &&
+          props.presets.find((row) => row.id === preset.id)?.revision !==
+            preset.revision && (
+            <p role="alert" className="text-sm text-destructive">
+              The saved template changed. Your draft is retained. Cancel and
+              reopen Edit before saving.
+            </p>
+          )}
+        <fieldset disabled={action.busy} className="min-w-0 space-y-10">
+          <legend className="sr-only">
+            {preset ? `Update ${preset.name}` : "Create template"}
+          </legend>
+          <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">
+                Template
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Name this reusable configuration and choose whether it can be
+                used to create agents.
+              </p>
+            </div>
+            <div className="space-y-5">
+              <div className="space-y-2">
                 <Label htmlFor={`${id}-name`}>Template name</Label>
                 <Input
                   id={`${id}-name`}
@@ -540,7 +551,27 @@ function PresetEditor({
                   </p>
                 </div>
               )}
-              <div>
+              <Choice
+                checked={draft.enabled}
+                onChange={(enabled) => setDraft({ ...draft, enabled })}
+              >
+                Available for new agents
+              </Choice>
+            </div>
+          </section>
+          <Separator />
+          <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">
+                Identity
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Set the default name and personality for agents created from
+                this template.
+              </p>
+            </div>
+            <div className="space-y-5">
+              <div className="space-y-2">
                 <Label htmlFor={`${id}-agent-name`}>Default agent name</Label>
                 <Input
                   id={`${id}-agent-name`}
@@ -570,57 +601,67 @@ function PresetEditor({
                   }
                 />
               </div>
-              <div>
-                <Label htmlFor={`${id}-instructions`}>Instructions</Label>
-                <Textarea
-                  id={`${id}-instructions`}
-                  rows={6}
-                  value={draft.profile.systemPrompt}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      profile: {
-                        ...draft.profile,
-                        systemPrompt: event.target.value,
-                      },
-                    })
+            </div>
+          </section>
+          <Separator />
+          <section className="space-y-4">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">
+                Instructions
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Define responsibilities, standards and workflow. Personality is
+                added separately.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label className="sr-only" htmlFor={`${id}-instructions`}>
+                Instructions
+              </Label>
+              <Textarea
+                id={`${id}-instructions`}
+                rows={6}
+                value={draft.profile.systemPrompt}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    profile: {
+                      ...draft.profile,
+                      systemPrompt: event.target.value,
+                    },
+                  })
+                }
+              />
+            </div>
+          </section>
+          <Separator />
+          <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">Access</h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Choose one or more groups. New agents inherit their permissions,
+                skills, connections and resources.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <p className="sr-only">Permission groups</p>
+              {props.groups.map((group) => (
+                <Choice
+                  key={group.id}
+                  checked={draft.permissionGroupIds.includes(group.id)}
+                  onChange={(checked) =>
+                    toggle("permissionGroupIds", group.id, checked)
                   }
-                />
-              </div>
-              <Choice
-                checked={draft.enabled}
-                onChange={(enabled) => setDraft({ ...draft, enabled })}
-              >
-                Available for new agents
-              </Choice>
-              <div>
-                <p className="font-medium text-sm">Permission groups</p>
-                {props.groups.map((group) => (
-                  <Choice
-                    key={group.id}
-                    checked={draft.permissionGroupIds.includes(group.id)}
-                    onChange={(checked) =>
-                      toggle("permissionGroupIds", group.id, checked)
-                    }
-                    description={group.description}
-                  >
-                    {group.name}
-                  </Choice>
-                ))}
-              </div>
-            </fieldset>
-            <ErrorMessage>{action.error}</ErrorMessage>
-          </div>
-          <DialogFooter>
-            <FormActions
-              label={preset ? "Save changes" : "Create template"}
-              busy={action.busy}
-              disabled={!draft.name.trim() || !draft.profile.name.trim()}
-              onCancel={onClose}
-            />
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+                  description={group.description}
+                >
+                  {group.name}
+                </Choice>
+              ))}
+            </div>
+          </section>
+        </fieldset>
+        <ErrorMessage>{action.error}</ErrorMessage>
+      </div>
+    </form>
   );
 }

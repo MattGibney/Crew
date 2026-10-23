@@ -684,6 +684,6 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Group permission choices show readable operation names, not raw upstream snake_case names or internal connection/capability IDs. Keep IDs unchanged in stored grants and callbacks; avoid repeating descriptions that only restate the label.
 
-- Agent templates use the same full-width shadcn table and vertical-ellipsis Edit menu as agents, connections and permission groups. Show availability, group/connection counts and the default template. Create/Edit uses a centred Dialog with scrolling content and explicit actions.
+- Agent templates use the same full-width shadcn table and vertical-ellipsis Edit menu as agents, connections and permission groups. Show availability, group/connection counts and the default template. Create/Edit uses a full-page sectioned editor matching agents, with a sticky 70% background/medium-blur header and ghost Cancel plus primary Save/Create. Default selection stays in a dialog; omit the separator below the template table.
 
 - Agent templates has one heading. The header ellipsis offers Change default in a dialog with explicit save/cancel. Row menus include destructive Remove confirmation; removal preserves existing agents and atomically clears a removed default, using owner authorization and revision checks.

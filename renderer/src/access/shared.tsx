@@ -27,12 +27,14 @@ export function AccessSection({
   description,
   action,
   fullWidth = false,
+  separator = true,
   children,
 }: {
   title: string;
   description: string;
   action?: ReactNode;
   fullWidth?: boolean;
+  separator?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
@@ -69,7 +71,7 @@ export function AccessSection({
           {children}
         </div>
       </div>
-      <Separator />
+      {separator && <Separator />}
     </section>
   );
 }
