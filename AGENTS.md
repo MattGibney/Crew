@@ -679,3 +679,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Service names in connection tables include their brand logo through the reusable ServiceLogo component. Bundle authentic assets locally, retain visible names and use a generic fallback for unknown providers.
 
 - Keep Connections and Groups & permissions as separate Settings pages. Connections owns service accounts and authentication; Groups & permissions owns group grants, creation presets, access requests and approvals. Agent editor links should name and open the specific destination.
+
+- Permission groups use the same full-width shadcn table treatment as agents and connections, with group descriptions, access counts and a vertical-ellipsis Edit menu. Create/Edit opens a centred Dialog with internally scrolling content and explicit actions.
