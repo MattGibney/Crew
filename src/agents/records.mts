@@ -525,6 +525,22 @@ export class FoundationRecords {
     return this.store.update((state) => {
       this.actor(state, principal);
       const agent = getAgent(state, agentId);
+      if (
+        principal.type === "agent" &&
+        (agent.reportsTo.type !== "agent" ||
+          agent.reportsTo.agentId !== principal.caller.agentId)
+      )
+        throw new Error(
+          "Only the owner or this agent's current reporting manager can archive it.",
+        );
+      if (
+        archived &&
+        (agent.runtime.session.observedState !== "stopped" ||
+          agent.runtime.session.activeTurnId !== null)
+      )
+        throw new Error(
+          "Agent must have a confirmed stopped session before archival.",
+        );
       const now = new Date().toISOString();
       agent.archivedAt = archived ? (agent.archivedAt ?? now) : null;
       agent.updatedAt = now;

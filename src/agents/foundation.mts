@@ -140,8 +140,13 @@ export class AgentFoundation implements AgentLifecycle {
     );
   }
 
-  async creationPresets() {
-    return this.options.provisioning?.listPresets() ?? [];
+  async creationPresets(principal?: FoundationPrincipal) {
+    const actor = principal
+      ? await this.records.authorize(principal, "agents.create", {
+          type: "project",
+        })
+      : undefined;
+    return this.options.provisioning?.listPresets(actor) ?? [];
   }
 
   async createFromPreset(
@@ -169,7 +174,7 @@ export class AgentFoundation implements AgentLifecycle {
     const actor = await this.records.authorize(principal, "agents.create", {
       type: "project",
     });
-    const preset = (await this.options.provisioning.listPresets()).find(
+    const preset = (await this.options.provisioning.listPresets(actor)).find(
       (row) => row.id === input.presetId,
     );
     if (
@@ -573,6 +578,25 @@ export class AgentFoundation implements AgentLifecycle {
     if (result.state === "acknowledged" && action !== "stop")
       void this.pump(agentId).catch(() => {});
     return result;
+  }
+
+  /** Retire without deleting native history, notes or owned resources. */
+  async archive(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<Agent> {
+    return this.serial(agentId, async () => {
+      await this.records.authorize(principal, "agents.archive", {
+        type: "agent",
+        agentId,
+      });
+      const stopped = await this.stopLocked(agentId, "stop");
+      if (stopped.state !== "acknowledged")
+        throw new Error(
+          "Agent retirement requires a confirmed Stop; history and resources are retained.",
+        );
+      return this.records.archive(principal, agentId);
+    });
   }
 
   private async startLocked(

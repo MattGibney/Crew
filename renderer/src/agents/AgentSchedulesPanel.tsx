@@ -68,7 +68,6 @@ export function AgentSchedulesPanel({
                 disabled={Boolean(agent.archivedAt)}
               >
                 {agent.profile.name}
-                {agent.id === primaryAgentId ? " (manager)" : ""}
                 {agent.archivedAt ? " (archived)" : ""}
               </option>
             ))}
@@ -109,7 +108,6 @@ export function AgentSchedulesPanel({
                 selectedId === id &&
                 Boolean(agent && !agent.archivedAt)
               }
-              isPrimary={id === primaryAgentId}
               onNotify={onNotify}
             />
           </div>
@@ -123,13 +121,11 @@ function AgentScheduleEditor({
   client,
   agentId,
   visible,
-  isPrimary,
   onNotify,
 }: {
   client: AgentSchedulesClient;
   agentId: string;
   visible: boolean;
-  isPrimary: boolean;
   onNotify: (message: string) => void;
 }) {
   const [saved, setSaved] = useState<SavedSchedules | undefined>();
@@ -201,7 +197,7 @@ function AgentScheduleEditor({
           saveManagerSchedules: save,
         }}
         visible={visible}
-        subject={isPrimary ? "manager" : "agent"}
+        subject="agent"
         onNotify={onNotify}
       />
     </>

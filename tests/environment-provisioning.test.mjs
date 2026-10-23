@@ -7,6 +7,7 @@ import { AccessStore } from "../src/access/state.mts";
 import { ProjectAuthorizationService } from "../src/access/authorization.mts";
 import { FoundationStore } from "../src/agents/store.mts";
 import { AgentFoundation } from "../src/agents/foundation.mts";
+import { createFoundationAgentTools } from "../src/agents/tools.mts";
 import { ProjectEnvironmentTemplateCatalogue } from "../src/agents/environment-templates.mts";
 import { withEnvironmentTemplateProvisioning } from "../src/agents/environment-provisioning.mts";
 
@@ -110,7 +111,7 @@ async function fixture(t) {
       );
       f.configure(wrapped);
     },
-    configure(provisioning) {
+    configure(provisioning, overrides = {}) {
       foundation = new AgentFoundation({
         store: foundationStore,
         provisioning,
@@ -128,6 +129,7 @@ async function fixture(t) {
           assert.fail("No runtime configuration during provisioning");
         },
         admissionUsesFoundationBarrier: true,
+        ...overrides,
       });
     },
     async close() {
@@ -152,7 +154,8 @@ async function fixture(t) {
           skills: [],
           modelAccessId: "subscription",
           configRef: "runtime",
-          permissionGroupIds: [id === "manager" ? "create" : "worker"],
+          permissionGroupIds:
+            id === "manager" ? ["create", "worker"] : ["worker"],
           serviceConnectionIds: [],
           ...(environmentTemplate === undefined ? {} : { environmentTemplate }),
         },
@@ -395,7 +398,7 @@ test("pin prevalidation and assignment CAS prevent partial or conflicting templa
 
   const preset = await f.preset("cas", { id: template.id, revision: 1 });
   const delegate = {
-    listPresets: () => f.access.listPresets(),
+    listPresets: (actor) => f.access.listPresets(actor),
     accessFor: (id) => f.access.accessFor(id),
     async applyPreset(input) {
       const access = await f.access.applyPreset(input);
@@ -428,4 +431,282 @@ test("pin prevalidation and assignment CAS prevent partial or conflicting templa
     }),
     /preset changed/,
   );
+});
+
+test("delegation discovers only current subset presets, never passes creation power, while owners retain all choices", async (t) => {
+  const f = await fixture(t);
+  const worker = await f.preset("worker");
+  const manager = (await f.access.listPresets()).find(
+    (row) => row.id === "manager",
+  );
+  const outside = await f.access.saveGroup(
+    owner,
+    {
+      id: "outside",
+      projectId: "project",
+      name: "outside",
+      description: "",
+      revision: 1,
+      updatedAt: new Date().toISOString(),
+      grants: {
+        crew: [{ action: "history.read" }],
+        services: [],
+        environmentPolicyIds: [],
+      },
+    },
+    null,
+  );
+  const specialist = await f.access.savePreset(
+    owner,
+    {
+      ...worker,
+      id: "specialist",
+      name: "specialist",
+      permissionGroupIds: [outside.id],
+    },
+    null,
+  );
+  const actor = { type: "agent", agentId: f.manager.id };
+  const tools = createFoundationAgentTools(f.foundation, f.principal.caller);
+  assert.deepEqual(
+    (await tools.call("agent_creation_presets", {})).map((row) => row.id),
+    [worker.id],
+  );
+  assert.deepEqual(
+    (await f.foundation.creationPresets(f.principal)).map((row) => row.id),
+    [worker.id],
+  );
+  assert.deepEqual(
+    (await f.wrapped.listPresets(actor)).map((row) => row.id),
+    [worker.id],
+  );
+  assert.deepEqual(
+    (await f.foundation.creationPresets()).map((row) => row.id).sort(),
+    [manager.id, specialist.id, worker.id].sort(),
+  );
+  const before = f.store.snapshot().agents.length;
+  await assert.rejects(f.child(manager), /unavailable/);
+  await assert.rejects(f.child(specialist), /unavailable/);
+  assert.equal(
+    f.store.snapshot().agents.length,
+    before,
+    "preflight avoids ineligible orphan records",
+  );
+  const child = await f.child(worker);
+  assert.deepEqual(child.access.permissionGroupIds, ["worker"]);
+  assert.deepEqual(child.reportsTo, actor);
+  const ownerCreated = await f.foundation.createFromPreset(ownerPrincipal, {
+    presetId: manager.id,
+    expectedPresetRevision: manager.revision,
+  });
+  assert.deepEqual(ownerCreated.access.permissionGroupIds, [
+    "create",
+    "worker",
+  ]);
+});
+
+test("access transaction rejects stale subset, revoked creation and newly creation-capable child groups", async (t) => {
+  for (const change of ["subset", "creation", "group-grant"]) {
+    const f = await fixture(t);
+    const preset = await f.preset(`worker-${change}`);
+    f.configure({
+      listPresets: (actor) => f.wrapped.listPresets(actor),
+      accessFor: (id) => f.wrapped.accessFor(id),
+      async applyPreset(input) {
+        if (change === "group-grant") {
+          await f.access.saveGroup(
+            owner,
+            {
+              id: "worker",
+              projectId: "project",
+              name: "worker",
+              description: "",
+              revision: 1,
+              updatedAt: new Date().toISOString(),
+              grants: {
+                crew: [{ action: "agents.create" }],
+                services: [],
+                environmentPolicyIds: [],
+              },
+            },
+            1,
+          );
+        } else {
+          await f.access.setAssignments(
+            owner,
+            f.manager.id,
+            change === "subset" ? ["create"] : ["worker"],
+            [],
+            1,
+          );
+        }
+        return f.wrapped.applyPreset(input);
+      },
+    });
+    await assert.rejects(f.child(preset), /retained with failed provisioning/);
+    const failed = f.store
+      .snapshot()
+      .provisioning.find((row) => row.presetId === preset.id);
+    assert.equal(failed.state, "failed");
+    assert.equal(await f.access.assignment(failed.agentId), null, change);
+    assert.equal(
+      f.store.snapshot().agents.find((row) => row.id === failed.agentId).runtime
+        .threadId,
+      null,
+    );
+  }
+});
+
+test("direct access provisioning independently rejects escalation after stale discovery", async (t) => {
+  const f = await fixture(t);
+  const preset = await f.preset("worker");
+  const unprovisioned = await f.foundation.records.createAgent(f.principal, {
+    profile,
+    modelAccessId: "subscription",
+    configRef: "runtime",
+  });
+  await f.access.saveGroup(
+    owner,
+    {
+      id: "worker",
+      projectId: "project",
+      name: "worker",
+      description: "",
+      revision: 1,
+      updatedAt: new Date().toISOString(),
+      grants: {
+        crew: [{ action: "agents.create" }],
+        services: [],
+        environmentPolicyIds: [],
+      },
+    },
+    1,
+  );
+  await assert.rejects(
+    f.access.applyPreset(f.input(unprovisioned.id, preset)),
+    /cannot grant agents.create/,
+  );
+  assert.equal(await f.access.assignment(unprovisioned.id), null);
+});
+
+test("retirement stops only current children and retains notes, native identity and resources", async (t) => {
+  const f = await fixture(t);
+  await f.access.saveGroup(
+    owner,
+    {
+      id: "create",
+      projectId: "project",
+      name: "create",
+      description: "",
+      revision: 1,
+      updatedAt: new Date().toISOString(),
+      grants: {
+        crew: [{ action: "agents.create" }, { action: "agents.archive" }],
+        services: [],
+        environmentPolicyIds: [],
+      },
+    },
+    1,
+  );
+  const preset = await f.preset("worker");
+  const child = await f.child(preset);
+  const specialist = await f.foundation.createFromPreset(ownerPrincipal, {
+    presetId: preset.id,
+    expectedPresetRevision: preset.revision,
+  });
+  const stops = [];
+  let acknowledge = false;
+  f.configure(f.wrapped, {
+    runtime: {
+      async stop(binding) {
+        stops.push(binding);
+        return acknowledge
+          ? {
+              state: "acknowledged",
+              value: { stoppedAt: new Date().toISOString() },
+            }
+          : {
+              state: "failed",
+              error: {
+                code: "runtime_error",
+                message: "Controlled stop rejection",
+              },
+            };
+      },
+    },
+    access: { release: async () => {} },
+    broker: {
+      settlement: async () => ({
+        inFlightInvocationIds: [],
+        uncertainInvocationIds: [],
+      }),
+    },
+  });
+  await f.store.update((state) => {
+    const current = state.agents.find((row) => row.id === child.id);
+    current.runtime.threadId = "retained-native-thread";
+    Object.assign(current.runtime.session, {
+      sessionId: "child-session",
+      desiredState: "started",
+      observedState: "started",
+      activeTurnId: "child-turn",
+    });
+    current.scratchpad.markdown = "Retained handover notes";
+    current.resources = [
+      {
+        id: "workspace",
+        kind: "worktree",
+        location: "/retained/workspace",
+        metadata: {},
+      },
+    ];
+  });
+  const retained = f.store.snapshot().agents.find((row) => row.id === child.id);
+  const tools = createFoundationAgentTools(f.foundation, f.principal.caller);
+  await f.foundation.records.updateProfile(ownerPrincipal, child.id, 1, {
+    reportsTo: owner,
+  });
+  await assert.rejects(
+    tools.call("agent_archive", { agentId: child.id }),
+    /permission denied/,
+  );
+  await f.foundation.records.updateProfile(ownerPrincipal, child.id, 2, {
+    reportsTo: { type: "agent", agentId: f.manager.id },
+  });
+  await assert.rejects(
+    tools.call("agent_archive", { agentId: specialist.id }),
+    /permission denied/,
+  );
+  assert.equal(stops.length, 0);
+  await assert.rejects(
+    f.foundation.records.archive(f.principal, child.id),
+    /confirmed stopped/,
+  );
+  await assert.rejects(
+    tools.call("agent_archive", { agentId: child.id }),
+    /confirmed Stop/,
+  );
+  assert.equal(
+    f.store.snapshot().agents.find((row) => row.id === child.id).archivedAt,
+    null,
+  );
+  acknowledge = true;
+  const retired = await tools.call("agent_archive", { agentId: child.id });
+  assert.ok(retired.archivedAt);
+  assert.equal(retired.runtime.session.observedState, "stopped");
+  assert.equal(retired.runtime.session.activeTurnId, null);
+  assert.equal(retired.runtime.threadId, retained.runtime.threadId);
+  assert.deepEqual(retired.scratchpad, retained.scratchpad);
+  assert.deepEqual(retired.resources, retained.resources);
+  assert.ok(
+    (await f.foundation.archive(ownerPrincipal, specialist.id)).archivedAt,
+    "owner can retire an unrelated specialist",
+  );
+  await f.reopen();
+  const persisted = f.store
+    .snapshot()
+    .agents.find((row) => row.id === child.id);
+  assert.ok(persisted.archivedAt);
+  assert.equal(persisted.runtime.threadId, retained.runtime.threadId);
+  assert.deepEqual(persisted.resources, retained.resources);
 });

@@ -16,7 +16,7 @@ or authentication providers.
 
 Existing-agent edits never change the manager selection. This prevents reopening
 an old manager's draft from silently restoring its former role after the owner
-selects another manager. Creation can explicitly choose the new manager; later
+selects another manager. The first created agent can establish the retained compatibility fallback; later
 role changes use the table's revision-checked selector.
 
 `setup.open` resumes a retained draft for the exact create/edit target, preserving
@@ -118,3 +118,7 @@ prepare an environment or install packages. A new agent must first be saved,
 then reopened to receive a template. Pending template choices survive recent
 agent switching in bounded project-scoped memory, rather than being promised
 as a durable draft across app shutdown.
+
+## Specialist teams (#131)
+
+Agent setup no longer requires an exclusive manager choice. New owner-created specialists report directly to the owner. The saved current-contact selection switches text, voice, notes, sessions and browser context without changing reporting relationships or starting work. Existing primary IDs remain compatible fallback values. Saved profile edits and retained native chats keep their existing semantics. See [specialist teams](SPECIALIST-TEAMS.md).

@@ -8,7 +8,7 @@
 
 [Download for Mac](https://github.com/MattGibney/Crew/releases/latest) · [Set up a project](#set-up-a-project) · [Documentation](#documentation) · [Report a bug](https://github.com/MattGibney/Crew/issues/new) · [Contributing](CONTRIBUTING.md)
 
-Talk to your manager, delegate work to agents, and follow their progress without juggling separate chats. Crew uses your existing ChatGPT/Codex subscription for model access. Each registered project has its own agents, native chats, profiles, skills, service connections and execution records.
+Talk to a team of specialist agents, let permitted specialists delegate to their own workers, and follow each agent’s progress in its own chat. Crew uses your existing ChatGPT/Codex subscription for model access. Each registered project has its own agents, native chats, profiles, skills, service connections and execution records.
 
 Crew provides the interface, records and tools. Agents decide how to do their work using the instructions and skills you provide. Permission groups control capabilities, while connected-service credentials stay in Crew's execution gateway.
 
@@ -24,7 +24,7 @@ create/edit flow:
 2. Set the agent's name, personality, instructions, voice and selected skills.
 3. Choose permission groups and explicit project-folder access. Connect any services
    you want, choosing your own account or an agent account. External tracking is optional.
-4. Select the agent that acts as manager and explicitly **Start** it when ready.
+4. Create the specialists you need, select one with **Talk to**, and explicitly **Start** it when ready.
 
 Shared groups, connection setup and approved creation presets remain in
 **Connections & access**. In **Workspace**, create optional environment templates
@@ -46,7 +46,7 @@ are shown separately.
 
 ## Conversation and background work
 
-Type to the primary agent or select **Connect voice**. Explicit Connect authorizes microphone capture after connection and permission. Mute intent survives reconnection; navigation does not recapture or end an established call. End call, project switching and closing the window release media. Choose the next call's voice in that agent's settings. New completed calls retain separately labelled voice transcripts; calls from before capture was implemented cannot be recovered from model memory.
+Choose a specialist with **Talk to**, then type in its chat or select **Connect voice**. Explicit Connect authorizes microphone capture after connection and permission. Mute intent survives reconnection; navigation does not recapture or end an established call. End call, project switching and closing the window release media. Choose the next call's voice in that agent's settings. Typed and retained voice messages appear in one chronological chat; calls from before capture was implemented cannot be recovered from model memory.
 
 Workers remain available through the compact worker panel and worker history. Their workflow labels are separate from native process activity. Profile pictures use the normal choose, preview and remove controls.
 

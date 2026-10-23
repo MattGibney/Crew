@@ -812,7 +812,8 @@ export interface ExecutionAdmissionGate {
 }
 /** Trusted composition port. Access is the only assignment/preset authority. */
 export interface AgentProvisioning {
-  listPresets(): Promise<AgentCreationPreset[]>;
+  /** Omitted actor is trusted owner enumeration; agent callers see only delegable choices. */
+  listPresets(actor?: Actor): Promise<AgentCreationPreset[]>;
   applyPreset(input: {
     actor: Actor;
     agentId: Id;

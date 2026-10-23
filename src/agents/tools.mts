@@ -162,13 +162,13 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "agent_creation_presets",
       description:
-        "List owner-approved creation choices. These choices do not grant administration rights.",
+        "List eligible owner-approved creation choices using your current groups. Child groups must be a subset of yours and cannot grant agents.create.",
       inputSchema: object({}),
     },
     {
       name: "agent_create",
       description:
-        "Create a provisioned persistent agent from an exact owner-approved preset revision; reports to the creating agent. Does not Start.",
+        "Create a persistent child from an exact approved preset revision using a subset of your current groups, excluding every group that grants agents.create. Reports to you; does not Start.",
       inputSchema: object({
         input: object(
           {
@@ -202,7 +202,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "agent_archive",
       description:
-        "Archive visibility only, without stopping a session or disposing resources.",
+        "Retire your own child after a confirmed Stop, preserving native history, notes and resources. Requires agents.archive; unrelated agents cannot be retired.",
       inputSchema: object({ agentId: id }),
     },
     {
@@ -505,7 +505,7 @@ export function createFoundationAgentTools(
           await records.authorize(principal, "agents.create", {
             type: "project",
           });
-          return foundation.creationPresets();
+          return foundation.creationPresets(principal);
         case "agent_create":
           return foundation.createFromPreset(
             principal,
@@ -528,7 +528,7 @@ export function createFoundationAgentTools(
           return foundation.lifecycle(principal, agentId, action);
         }
         case "agent_archive":
-          return records.archive(principal, identifier(args.agentId));
+          return foundation.archive(principal, identifier(args.agentId));
         case "agent_history":
           return foundation.history(
             principal,

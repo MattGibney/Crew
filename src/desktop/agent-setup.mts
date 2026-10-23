@@ -464,9 +464,7 @@ export async function openAgentSetup(options: Options) {
       step: mode === "repair" ? 2 : 0,
       mode,
       agentId: agent?.id ?? null,
-      name:
-        agent?.profile.name ??
-        (snapshot.owner.projectSettings.primaryAgentId ? "Agent" : "Manager"),
+      name: agent?.profile.name ?? "Agent",
       instructions: agent?.profile.systemPrompt ?? "",
       personality: agent?.profile.personality ?? "",
       pictureRef: agent?.profile.pictureRef ?? null,
@@ -771,20 +769,8 @@ export async function openAgentSetup(options: Options) {
       warnings.push(
         "The new named group can be reused by other agents. Later edits to a shared group affect all its members.",
       );
-    if (draft.mode === "create") {
-      const manager =
-        !draft.makePrimary &&
-        snapshot.owner.agents.find(
-          (row) =>
-            row.id === snapshot.owner.projectSettings.primaryAgentId &&
-            !row.archivedAt,
-        );
-      warnings.push(
-        manager
-          ? `This agent will report to ${manager.profile.name}, the current primary agent.`
-          : "This agent will report directly to you.",
-      );
-    }
+    if (draft.mode === "create")
+      warnings.push("This agent will report directly to you.");
     return {
       draftRevision: journal!.record.revision + 1,
       directory: options.project.directory,
@@ -1209,20 +1195,10 @@ export async function openAgentSetup(options: Options) {
             next.checkpoint.creationAttempted = true;
           });
           try {
-            const manager =
-              !draft.makePrimary &&
-              snapshot.owner.agents.find(
-                (row) =>
-                  row.id === snapshot.owner.projectSettings.primaryAgentId &&
-                  !row.archivedAt,
-              );
             await options.application.ownerApi.command("createAgent", {
               input: {
                 presetId: journal!.checkpoint.presetId,
                 expectedPresetRevision: journal!.checkpoint.preset!.revision,
-                ...(manager
-                  ? { reportsTo: { type: "agent", agentId: manager.id } }
-                  : {}),
               },
             });
           } catch {

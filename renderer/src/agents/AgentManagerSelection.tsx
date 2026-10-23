@@ -16,7 +16,10 @@ export function AgentManagerSelection({
   onNotify(message: string): void;
 }) {
   const savedId =
-    snapshot.projectSettings?.primaryAgentId ?? snapshot.primaryAgentId ?? null;
+    snapshot.projectSettings?.contactAgentId ??
+    snapshot.projectSettings?.primaryAgentId ??
+    snapshot.primaryAgentId ??
+    null;
   const revision = snapshot.projectSettings?.revision;
   const [draft, setDraft] = useState<{
     id: string;
@@ -34,19 +37,21 @@ export function AgentManagerSelection({
     setError("");
     let acknowledged = false;
     try {
-      await command("setPrimaryAgent", {
+      await command("setContactAgent", {
         agentId: submitted.id,
         expectedRevision: submitted.revision,
       });
       acknowledged = true;
       setDraft((current) => (current === submitted ? null : current));
       await refresh();
-      onNotify("Manager saved. Existing sessions are unchanged.");
-    } catch {
+      onNotify("Contact saved. Existing sessions are unchanged.");
+    } catch (cause) {
       setError(
         acknowledged
-          ? "Manager saved. The view could not be refreshed; refresh agents to see the current saved choice."
-          : "The manager could not be selected. Refresh to check the saved choice before trying again.",
+          ? "Contact saved. The view could not be refreshed; refresh agents to see the current saved choice."
+          : cause instanceof Error
+            ? cause.message
+            : "The contact could not be selected. Refresh to check the saved choice before trying again.",
       );
       await refresh().catch(() => {});
     } finally {
@@ -56,10 +61,11 @@ export function AgentManagerSelection({
   return (
     <section className="space-y-4 border-b py-6">
       <div>
-        <h2 className="font-semibold tracking-tight">Manager</h2>
+        <h2 className="font-semibold tracking-tight">Current contact</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          The agent you talk to as your manager. Changing this choice does not
-          start or stop a session.
+          Choose whose conversation, voice, browser and notes to open.
+          Disconnect any current voice call before switching. Selecting starts
+          no work.
         </p>
       </div>
       <div className="flex flex-wrap items-end gap-3">
@@ -101,12 +107,12 @@ export function AgentManagerSelection({
       </div>
       {!agents.length && (
         <p className="text-sm text-muted-foreground">
-          Create an agent below, then choose it as your manager.
+          Create an agent below, then choose it as your contact.
         </p>
       )}
       {stale && (
         <p role="alert" className="text-sm text-destructive">
-          The manager choice changed elsewhere.{" "}
+          The contact choice changed elsewhere.{" "}
           <button
             type="button"
             className="underline"

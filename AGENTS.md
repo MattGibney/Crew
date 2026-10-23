@@ -599,3 +599,11 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Connection creation boundary (#129)
 
 - Create and verify service connections only in Settings → Connections & access. Agent setup/editing selects already saved named connections through group access; it must not embed provider catalogues, credential entry or a connection-creation wizard. Empty saved catalogues show an honest empty state and a navigation action to Settings, retaining the agent draft. Multiple named accounts of one service and shared group membership remain supported.
+
+
+## Specialist team and delegation (#131)
+
+- The owner now communicates directly with several specialist agents by text or voice. The earlier single-human-contact/sole-manager rule is superseded. Preserve one common agent runtime, separate native chats, saved profiles/voices and group-derived access; one connected voice call at a time remains supported.
+- Owner-created specialists report to the owner, independent of the retained primary fallback. Agent-created children report to their creator. Existing reporting relationships are historical/current user data and must not be rewritten on upgrade.
+- Agent delegation may use only current approved presets whose child groups are a subset of the creator's current groups and do not grant agent creation. A domain worker group plus a supplemental manager group supplies the intended distinction without different agent types. Enforce fresh authority at provisioning, not only discovery; owner-created managers remain possible.
+- Retirement means confirmed stop plus archive, preserving chat, notes, work and resource records. It does not authorize deleting shared resources or discarding files. Keep setup and views usable without choosing one exclusive manager; switching contact never starts a session, sends an assignment or opens a microphone.
