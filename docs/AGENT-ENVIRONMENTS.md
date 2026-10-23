@@ -49,14 +49,14 @@ The journal is bounded to 10,000 operation receipts and 32 MiB. Reaching either 
 
 ## Optional project templates (#108)
 
-`ProjectEnvironmentTemplateCatalogue` stores reusable named definitions and agent assignments in private project state. Templates describe existing tool installations and explicit nonsecret configuration. Permission groups still decide whether an agent may read or execute in an approved workspace. No template creates a group, assigns a permission, installs tools, starts a turn or runs project setup.
+`ProjectEnvironmentTemplateCatalogue` stores reusable named definitions and agent assignments in private project state. Templates describe existing tool installations and explicit nonsecret configuration. Permission groups still decide whether an agent may read or execute in an approved workspace. No template creates a group, assigns a permission, installs tools or runs project setup. Template updates can queue a durable internal notice through the agent's ordinary message path.
 
 The typed owner surface is `environmentOwnerApi.templates`:
 
 - `snapshot()` returns current templates and assignments.
 - `save({id,expectedRevision,draft})` creates or revises a definition with revision checking.
 - `assign({agentId,expectedRevision,templateId,templateRevision})` pins a particular immutable revision, or clears the assignment with null template fields.
-- `inspect({templateId,templateRevision})` explicitly checks optional Node/npm requirements through bounded sandboxed version commands. It distinguishes missing, inaccessible, incompatible and unavailable evidence. It never installs anything or reads shell profiles/npm credentials.
+- `inspect({templateId,templateRevision})` explicitly checks optional executable requirements through bounded sandboxed version commands. It distinguishes missing, inaccessible, incompatible and unavailable evidence. It never installs anything or reads shell profiles/npm credentials.
 
 Drafts contain a name/description, optional `tools` requirements, exact `executableDirectories` and `readableDirectories`, an explicit nonsecret `environment` map, optional capabilities, and preparation instructions/argv examples. Existing Node/npm installations may need both their executable directory and the package directory containing npm's JavaScript files. There is no inherited login PATH, host npm cache or credential configuration. A minimal template can leave all these fields empty.
 
@@ -77,3 +77,54 @@ Owner-approved creation presets may contain `environmentTemplate: {id, revision}
 - Optional `capabilities.inboundPorts` explicitly approves incoming TCP on exact high ports across all interfaces. It defaults to absent/empty, is never inferred from outbound access, and cannot be supplied by agent command arguments. This separate owner choice supports real dev servers without claiming a loopback-only boundary. Review the exposed port list before assigning such a template.
 - Unix sockets default to denied. An optional `hostDocker` template setting requires an explicit socket and `hostAccessAcknowledged: true`: this is broad trusted host authority, including daemon-wide operations and host mounts beyond workspace restrictions. It is never inferred from Node/npm, network access or assignment. Commands use a clean private Docker configuration, without personal Docker credential inheritance. Preserve unrelated containers/volumes and inspect existing services before invoking setup or teardown.
 - Existing project instructions and setup/start/teardown scripts remain authoritative and unchanged. A successful version check or disposable package task does not prove a customer application's setup, network readiness, cleanup, native manager delegation or human acceptance.
+
+## Agent-owned template lifecycle (#127)
+
+A project template is a reusable definition. Each persistent agent owns its preparation decisions and private working context; shared folder/repository grants remain separate. A marketing agent can select a media-tool template and inspect or prepare its private context without attaching a code repository. Crew does not assign development workflow, install a template, run suggested setup, or automatically rebuild an environment.
+
+Three revisions have distinct meanings:
+
+- **Desired definition:** the latest saved revision of the agent's selected template. Every update retains immutable definition bytes and creates a durable notice for each currently assigned agent.
+- **Selected assignment:** the exact revision chosen for the agent's next preparation. Owner assignment and the authenticated agent's explicit reconciliation update this metadata through revision checks.
+- **Applied preparation:** the exact template/assignment revision, tool directory identities, runtime home and configuration retained on an attached environment. Template edits and reconciliation never replace this snapshot. Explicit `environment_action` preparation verifies the selection and applies it only after the existing live/uncertain execution checks settle.
+
+`environment_template_read {}` is authenticated to the current caller alone. It returns both complete selected/desired definitions, current assignment, preparation-required status, private context records, agent-reported preparation notes and applied environment revisions. Metadata inspection needs no shared-folder permission. It neither grants access to another agent nor bypasses folder/policy authorization. A stale or stopped native session cannot use the lifecycle tools.
+
+The agent can then choose among these explicit operations:
+
+| Tool                             | Input                                           | Effect                                                                                                                                                                                 |
+| -------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `environment_context_prepare`    | `{expectedAssignmentRevision}`                  | Creates/reuses the caller's private context and empty HOME for the exact selected template revision. No shared-folder grant, installation or command execution.                        |
+| `environment_template_reconcile` | `{expectedAssignmentRevision,templateRevision}` | Selects the inspected revision for later preparation. Existing contexts, applied configurations, services and chat remain intact.                                                      |
+| `environment_preparation_report` | `{expectedAssignmentRevision,state,summary}`    | Retains the caller's bounded nonsecret assessment: `preparation_required`, `prepared` or `blocked`. This is agent testimony, not independently verified setup or executable readiness. |
+
+`preparationRequired` is a communication signal: it stays true until a current-assignment `prepared` report exists, and becomes true again when a newer desired definition exists. It never blocks agent communication or determines task workflow. Independently verified version probes and actual applied revisions remain separate fields. Agents can use existing tools for their own preparation/rebuild plan, report blockers, preserve partial work and choose to retain an older context while work continues.
+
+Private contexts live under the trusted per-project runtime-cache root, keyed by agent identity and template revision. Explicit workspace preparation reuses that agent/revision context across its attachments; a new template revision creates a separate home/cache context. Legacy prepared runtime roots remain retained and valid. Controller authentication, credential vaults, shared folders and optional Git worktrees remain separate. These directories are private working data on the same host, not a VM or a claim of hostile-agent isolation.
+
+**Current command boundary:** private-context creation and preparation reports work for agents without an approved shared folder. Shell/file execution within that private context alone is not yet exposed as a separate executor target. Actual shell commands still require an owner-approved workspace policy and ordinary environment permissions, through `environment_action`. Private context creation does not silently publish a folder policy. Service-only agents can use their permitted service tools and retain a private preparation report without a repository. Do not claim a full package installation or unrestricted private working filesystem from the existence of a context directory.
+
+### Template change notification evidence
+
+Template save commits all affected-agent notices in the same private catalogue transaction as the new revision. A trusted outbox sends them through `AgentFoundation.sendInternal` with stable message IDs and `source: preparation`. Lost enqueue responses reuse those IDs; startup replays pending outbox records and the foundation deduplicates the durable intent. `enqueuedAt` means accepted into that durable internal inbox, not native receipt or execution. Foundation message delivery retains its own queued/acknowledged/uncertain state. A stopped agent retains its queued notice until its normal session starts; notices wait behind active work and private-input restrictions. There is no scheduled worker or generated owner assignment.
+
+No command runs during save, assignment, reconciliation or notice delivery. An idle running agent may receive the internal notice through its ordinary native message path and decide how to act. Delivery failure does not roll back a successfully saved definition; the outbox remains inspectable and pending notices are retried on the next save/startup or explicit trusted `deliverNotifications()` call. Notices and old contexts are bounded retained evidence, with no automatic eviction or destructive cleanup.
+
+### General executable requirements
+
+Templates accept up to 32 unique bare executable names, beyond Node/npm. Requirements resolve through approved executable directories plus the executor's existing system-tool paths; arbitrary executable paths, inherited login PATH and credentials remain excluded. Example:
+
+```json
+[
+  { "name": "git", "versionRequirement": ">=2" },
+  {
+    "name": "ffmpeg",
+    "versionRequirement": ">=7",
+    "versionArguments": ["-version"]
+  }
+]
+```
+
+`versionArguments` is an optional bounded owner-approved argv list; it defaults to `["--version"]`. The explicit inspector runs the probe through the same bounded read-only sandbox and private execution receipts. Numeric two/three-part versions in ordinary output are normalized for the existing supported numeric range grammar. Missing/inaccessible tools, failed probes, incompatible versions and unavailable numeric compatibility stay distinct. A successful probe with no requested range establishes only that the executable answered its configured probe. No host installation, personal configuration or shared-service access is inferred.
+
+Guidance for first use and responding to updates belongs in editable agent instructions/skills and the tool descriptions. The bundled manager/worker prompts include an optional workflow example; saved owner profiles and retained native instructions are not silently rewritten by template saves.

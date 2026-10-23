@@ -89,11 +89,12 @@ export function decodeAgentTemplateSnapshot(
         !text(row.name, 120) ||
         !text(row.description, 4096, true) ||
         !Array.isArray(row.tools) ||
-        row.tools.length > 2 ||
+        row.tools.length > 32 ||
         !row.tools.every(
           (tool) =>
             tool &&
-            ["node", "npm"].includes(tool.name) &&
+            text(tool.name, 64) &&
+            /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(tool.name) &&
             (tool.versionRequirement === null ||
               text(tool.versionRequirement, 120)),
         ) ||
@@ -490,7 +491,7 @@ function TemplateSummary({
           ? template.tools
               .map(
                 (tool) =>
-                  `${tool.name === "node" ? "Node.js" : "npm"}${tool.versionRequirement ? ` ${tool.versionRequirement}` : " (no version constraint)"}`,
+                  `${tool.name === "node" ? "Node.js" : tool.name}${tool.versionRequirement ? ` ${tool.versionRequirement}` : " (no version constraint)"}`,
               )
               .join(", ")
           : "none specified"}

@@ -262,6 +262,39 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       inputSchema: environmentInput,
     },
     {
+      name: "environment_template_read",
+      description:
+        "Read your assigned and desired template definitions, durable change notifications, private context and actual applied workspace revisions. A preparation-required report is metadata, never a task workflow gate. Inspect before first work and after change notices. Templates do not grant shared-folder access or install tools.",
+      inputSchema: object({}),
+    },
+    {
+      name: "environment_context_prepare",
+      description:
+        "Explicitly create your private working context/home for the exact assigned template. Available without a shared project folder; it grants no shared-resource or shell authority, installs nothing and runs no setup. Files are retained per agent and template revision. Shared-folder commands still require approved environment_action policies.",
+      inputSchema: object({
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+      }),
+    },
+    {
+      name: "environment_template_reconcile",
+      description:
+        "Explicitly select an inspected template revision for your next preparation. Requires exact assignment revision. Preserves current prepared execution snapshots, files, chat and running work; runs no command and starts no worker. Decide when to prepare/rebuild, then use environment_action prepare and explicit existing commands.",
+      inputSchema: object({
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+        templateRevision: { type: "integer", minimum: 1 },
+      }),
+    },
+    {
+      name: "environment_preparation_report",
+      description:
+        "Retain your own preparation-required, prepared or blocked report and bounded nonsecret summary for the exact assignment. Agent-reported only: does not establish executable readiness, run commands or alter applied snapshots.",
+      inputSchema: object({
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+        state: { enum: ["preparation_required", "prepared", "blocked"] },
+        summary: { type: "string", maxLength: 8192 },
+      }),
+    },
+    {
       name: "environments_read",
       description:
         "Discover this agent's permitted project folders, read-only/read-write policies, attached environments and assigned optional template. Use environment_action to attach, explicitly prepare the exact assignment revision, then execute or start documented commands. Discovery, assignment and preparation never automatically run project setup or install tools.",
@@ -486,6 +519,30 @@ export function createFoundationAgentTools(
             identifier(args.agentId),
             args.expectedRevision as number,
             args.markdown as string,
+          );
+        case "environment_template_read":
+          return foundation.environmentTemplate(
+            principal,
+            "read",
+            args as JsonObject,
+          );
+        case "environment_context_prepare":
+          return foundation.environmentTemplate(
+            principal,
+            "context",
+            args as JsonObject,
+          );
+        case "environment_template_reconcile":
+          return foundation.environmentTemplate(
+            principal,
+            "reconcile",
+            args as JsonObject,
+          );
+        case "environment_preparation_report":
+          return foundation.environmentTemplate(
+            principal,
+            "report",
+            args as JsonObject,
           );
         case "environment_action":
           return foundation.environment(principal, {

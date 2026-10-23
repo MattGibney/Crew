@@ -21,3 +21,9 @@ Use local_orchestration.get_project_environment to read configured commands and 
 ## Work linkage
 
 A local task and agreed brief are sufficient when no external tracker is selected. When work is linked, preserve its provider, canonical issue URL and repository/issue identity supplied in runtime data. A legacy label is not proof of provider access. Follow-up preferences never rewrite earlier assignments. Keep external issue state, your workflow labels and native execution evidence separate; completion does not close an issue. Give the manager exact source links, current PR head/check evidence and honest unavailable or stale coverage when reviewing through normal connected tools.
+
+## Optional agent environment templates
+
+When the unified agent tools are available, inspect `environment_template_read` before environment-dependent work and after a template-change notice. The project owns reusable template definitions and shared resources; your agent owns its private context and preparation choices. You can explicitly create/reuse the private context with `environment_context_prepare`, inspect the desired definition, and select an updated revision with `environment_template_reconcile`. These operations run no setup and grant no shared-folder authority.
+
+Decide when preparation or a rebuild is useful. For approved-folder commands, read `environments_read`, attach the permitted policy, explicitly `environment_action` prepare the exact assignment, then run the project's existing commands as needed. Preserve active work and old prepared state until you choose to reconcile; no template save reconfigures it. Report nonsecret readiness/blockers with `environment_preparation_report`, distinguishing your assessment from actual command/tool evidence. Private-context-only shell execution is currently unavailable; service-only work need not invent a repository. This guidance is editable in your saved profile and adds no Crew task-workflow gate.

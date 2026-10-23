@@ -8,15 +8,18 @@ import {
   unlink,
   type FileHandle,
 } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import type { Actor, Agent, CallerContext } from "./contracts.mjs";
 import { satisfiesToolVersion } from "../toolchains/tool-requirements.mjs";
 
 export interface EnvironmentToolRequirement {
-  name: "node" | "npm";
+  /** Bare executable name; resolved only through approved executable roots. */
+  name: string;
   versionRequirement: string | null;
+  /** Explicit bounded version probe arguments; defaults to --version. */
+  versionArguments?: string[];
 }
 export interface EnvironmentTemplateDraft {
   name: string;
@@ -87,15 +90,35 @@ export interface EnvironmentPreparationPlan {
   assignment: EnvironmentTemplateAssignment;
   template: EnvironmentTemplate;
 }
+export interface EnvironmentTemplateNotification {
+  id: string;
+  agentId: string;
+  templateId: string;
+  templateRevision: number;
+  createdAt: string;
+  enqueuedAt: string | null;
+}
+export interface AgentEnvironmentPreparationReport {
+  agentId: string;
+  assignmentRevision: number;
+  state: "preparation_required" | "prepared" | "blocked";
+  summary: string;
+  updatedAt: string;
+}
 export interface EnvironmentTemplateSnapshot {
   templates: EnvironmentTemplate[];
   assignments: EnvironmentTemplateAssignment[];
+  notifications?: EnvironmentTemplateNotification[];
 }
 export interface EnvironmentTemplateCatalogueOptions {
   directory: string;
   projectId: string;
   ownerUserId: string;
   protectedDirectories: string[];
+  /** Optional private working context root, never a grant to shared resources. */
+  contextDirectory?: string;
+  /** Idempotent trusted ingress. Persisted notices are replayed after restart. */
+  notify?(notification: EnvironmentTemplateNotification): Promise<void>;
   /** Raw foundation identities, without recursive environment-resource projection. */
   listAgents(): Promise<Agent[]>;
   /** Explicit bounded inspection through trusted host/executor tooling. Saving and
@@ -104,12 +127,22 @@ export interface EnvironmentTemplateCatalogueOptions {
     template: EnvironmentTemplate,
   ): Promise<EnvironmentTemplateInspection>;
 }
+interface AgentPrivateContext {
+  agentId: string;
+  templateId: string;
+  templateRevision: number;
+  directory: string;
+  preparedAt: string;
+}
 interface CatalogueState {
   schema: 1;
   projectId: string;
   ownerUserId: string;
   versions: EnvironmentTemplate[];
   assignments: EnvironmentTemplateAssignment[];
+  notifications?: EnvironmentTemplateNotification[];
+  preparationReports?: AgentEnvironmentPreparationReport[];
+  privateContexts?: AgentPrivateContext[];
 }
 const MAX_BYTES = 8 * 1024 * 1024;
 const identifier = (value: unknown): value is string =>
@@ -214,14 +247,32 @@ export function validateEnvironmentTemplateDraft(
   ]);
   boundedText(draft.name, 120, false);
   boundedText(draft.description, 4096);
-  if (!Array.isArray(draft.tools) || draft.tools.length > 2)
-    throw new Error("Choose optional supported Node/npm requirements.");
+  if (!Array.isArray(draft.tools) || draft.tools.length > 32)
+    throw new Error("Choose at most 32 optional executable requirements.");
   const names = new Set<string>();
   for (const entry of draft.tools) {
-    const tool = object(entry, ["name", "versionRequirement"]);
-    if ((tool.name !== "node" && tool.name !== "npm") || names.has(tool.name))
+    const tool = object(entry, [
+      "name",
+      "versionRequirement",
+      "versionArguments",
+    ]);
+    if (
+      typeof tool.name !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(tool.name) ||
+      names.has(tool.name)
+    )
       throw new Error("Invalid or duplicate template tool.");
     names.add(tool.name);
+    if (tool.versionArguments !== undefined) {
+      if (
+        !Array.isArray(tool.versionArguments) ||
+        tool.versionArguments.length > 8 ||
+        !tool.versionArguments.length
+      )
+        throw new Error("Invalid version probe arguments.");
+      for (const argument of tool.versionArguments)
+        boundedText(argument, 256, false);
+    }
     if (tool.versionRequirement !== null) {
       boundedText(tool.versionRequirement, 120, false);
       satisfiesToolVersion("22.0.0", tool.versionRequirement);
@@ -315,11 +366,13 @@ export function validateEnvironmentTemplateDraft(
 }
 
 /** One project-owned catalogue. Immutable versions retain assignment/preparation
- * provenance; changing a definition never changes an assigned revision. */
+ * provenance; changing a definition never changes an applied revision. Desired
+ * revisions and durable notices remain separate until an agent reconciles. */
 export class ProjectEnvironmentTemplateCatalogue {
   private tail: Promise<unknown> = Promise.resolve();
   private closed = false;
   private failed = false;
+  private delivery: Promise<void> | null = null;
   private readonly listeners = new Set<() => void>();
   private constructor(
     private readonly options: EnvironmentTemplateCatalogueOptions,
@@ -422,6 +475,9 @@ export class ProjectEnvironmentTemplateCatalogue {
       "ownerUserId",
       "versions",
       "assignments",
+      "notifications",
+      "preparationReports",
+      "privateContexts",
     ]);
     if (
       state.schema !== 1 ||
@@ -466,6 +522,96 @@ export class ProjectEnvironmentTemplateCatalogue {
       const key = `${id}:${revision}`;
       if (versions.has(key)) throw new Error("Duplicate template revision.");
       versions.add(key);
+    }
+    if (state.notifications !== undefined) {
+      if (
+        !Array.isArray(state.notifications) ||
+        state.notifications.length > 10000
+      )
+        throw new Error("Invalid template notification journal.");
+      const ids = new Set<string>();
+      for (const entry of state.notifications) {
+        const row = object(entry, [
+          "id",
+          "agentId",
+          "templateId",
+          "templateRevision",
+          "createdAt",
+          "enqueuedAt",
+        ]);
+        if (
+          !identifier(row.id) ||
+          ids.has(row.id) ||
+          !identifier(row.agentId) ||
+          !identifier(row.templateId) ||
+          !isRevision(row.templateRevision) ||
+          !versions.has(`${row.templateId}:${row.templateRevision}`) ||
+          !Number.isFinite(Date.parse(String(row.createdAt))) ||
+          (row.enqueuedAt !== null &&
+            !Number.isFinite(Date.parse(String(row.enqueuedAt))))
+        )
+          throw new Error("Invalid template notification.");
+        ids.add(row.id);
+      }
+    }
+    if (state.preparationReports !== undefined) {
+      if (
+        !Array.isArray(state.preparationReports) ||
+        state.preparationReports.length > 4096
+      )
+        throw new Error("Invalid preparation reports.");
+      const agents = new Set<string>();
+      for (const entry of state.preparationReports) {
+        const row = object(entry, [
+          "agentId",
+          "assignmentRevision",
+          "state",
+          "summary",
+          "updatedAt",
+        ]);
+        if (
+          !identifier(row.agentId) ||
+          agents.has(row.agentId) ||
+          !isRevision(row.assignmentRevision) ||
+          !["preparation_required", "prepared", "blocked"].includes(
+            String(row.state),
+          ) ||
+          !Number.isFinite(Date.parse(String(row.updatedAt)))
+        )
+          throw new Error("Invalid preparation report.");
+        boundedText(row.summary, 8192);
+        agents.add(row.agentId);
+      }
+    }
+    if (state.privateContexts !== undefined) {
+      if (
+        !Array.isArray(state.privateContexts) ||
+        state.privateContexts.length > 4096
+      )
+        throw new Error("Invalid private contexts.");
+      const identities = new Set<string>();
+      for (const entry of state.privateContexts) {
+        const row = object(entry, [
+          "agentId",
+          "templateId",
+          "templateRevision",
+          "directory",
+          "preparedAt",
+        ]);
+        const key = `${row.agentId}:${row.templateId}:${row.templateRevision}`;
+        if (
+          !identifier(row.agentId) ||
+          !identifier(row.templateId) ||
+          !isRevision(row.templateRevision) ||
+          !versions.has(`${row.templateId}:${row.templateRevision}`) ||
+          identities.has(key) ||
+          typeof row.directory !== "string" ||
+          !isAbsolute(row.directory) ||
+          !Number.isFinite(Date.parse(String(row.preparedAt)))
+        )
+          throw new Error("Invalid private context.");
+        identities.add(key);
+      }
     }
     const assignments = new Set<string>();
     for (const entry of state.assignments) {
@@ -584,6 +730,7 @@ export class ProjectEnvironmentTemplateCatalogue {
     return structuredClone({
       templates: [...latest.values()],
       assignments: this.state.assignments,
+      notifications: this.state.notifications ?? [],
     });
   }
   resolvePinned(templateId: string, revision: number): EnvironmentTemplate {
@@ -625,7 +772,7 @@ export class ProjectEnvironmentTemplateCatalogue {
       input.draft,
       this.options.protectedDirectories,
     );
-    return this.transaction((state) => {
+    const saved = await this.transaction((state) => {
       const id = input.id ?? randomUUID();
       const previous = state.versions
         .filter((row) => row.id === id)
@@ -647,8 +794,22 @@ export class ProjectEnvironmentTemplateCatalogue {
         updatedAt: new Date().toISOString(),
       };
       state.versions.push(saved);
+      for (const assignment of state.assignments.filter(
+        (row) => row.templateId === saved.id,
+      )) {
+        (state.notifications ??= []).push({
+          id: randomUUID(),
+          agentId: assignment.agentId,
+          templateId: saved.id,
+          templateRevision: saved.revision,
+          createdAt: saved.updatedAt,
+          enqueuedAt: null,
+        });
+      }
       return saved;
     });
+    void this.deliverNotifications().catch(() => {});
+    return saved;
   }
   async assign(
     actor: Actor,
@@ -912,8 +1073,256 @@ export class ProjectEnvironmentTemplateCatalogue {
       ),
     };
   }
+  /** Trusted internal delivery uses stable IDs; uncertain delivery is retried,
+   * never acknowledged merely because the owner UI saw a subscription event. */
+  deliverNotifications(): Promise<void> {
+    if (this.delivery) return this.delivery;
+    this.delivery = (async () => {
+      if (!this.options.notify) return;
+      const attempted = new Set<string>();
+      let failed = false;
+      for (;;) {
+        const row = (this.state.notifications ?? []).find(
+          (entry) => !entry.enqueuedAt && !attempted.has(entry.id),
+        );
+        if (!row) break;
+        attempted.add(row.id);
+        try {
+          await this.options.notify(structuredClone(row));
+          await this.transaction((state) => {
+            const saved = state.notifications!.find(
+              (entry) => entry.id === row.id,
+            )!;
+            saved.enqueuedAt ??= new Date().toISOString();
+          });
+        } catch {
+          failed = true;
+        }
+      }
+      if (failed)
+        throw new Error(
+          "Some template notices remain pending; retained IDs allow safe retry.",
+        );
+    })().finally(() => {
+      this.delivery = null;
+    });
+    return this.delivery;
+  }
+  /** Readable even without shared-folder access. Native caller verification is
+   * performed by the foundation, never inferred from a supplied agent ID. */
+  async agentSnapshot(agentId: string) {
+    await this.verifyAgent(agentId);
+    const assignment = this.assignment(agentId);
+    const desiredTemplate = assignment?.templateId
+      ? this.state.versions
+          .filter((row) => row.id === assignment.templateId)
+          .reduce((a, b) => (a.revision > b.revision ? a : b))
+      : null;
+    const preparationReport =
+      (this.state.preparationReports ?? []).find(
+        (row) => row.agentId === agentId,
+      ) ?? null;
+    return structuredClone({
+      assignment,
+      preparationRequired: Boolean(
+        assignment?.templateId &&
+        (desiredTemplate?.revision !== assignment.templateRevision ||
+          preparationReport?.assignmentRevision !== assignment.revision ||
+          preparationReport?.state !== "prepared"),
+      ),
+      assignedTemplate:
+        assignment?.templateId && assignment.templateRevision
+          ? this.resolvePinned(
+              assignment.templateId,
+              assignment.templateRevision,
+            )
+          : null,
+      desiredTemplate,
+      reconciliationRequired: Boolean(
+        desiredTemplate &&
+        desiredTemplate.revision !== assignment?.templateRevision,
+      ),
+      notifications: (this.state.notifications ?? []).filter(
+        (row) => row.agentId === agentId,
+      ),
+      preparationReport,
+      preparationReportAuthority:
+        "Agent-reported only; this does not verify commands or change an execution snapshot.",
+      privateContextState:
+        "Private working data only; shared-folder grants and command readiness remain separate.",
+      privateContexts: (this.state.privateContexts ?? []).filter(
+        (row) => row.agentId === agentId,
+      ),
+      privateContextDirectory: this.options.contextDirectory
+        ? join(
+            this.options.contextDirectory,
+            createHash("sha256").update(agentId).digest("hex").slice(0, 24),
+          )
+        : null,
+    });
+  }
+  async reconcile(
+    agentId: string,
+    input: { expectedAssignmentRevision: number; templateRevision: number },
+  ) {
+    if (
+      !isRevision(input.expectedAssignmentRevision) ||
+      !isRevision(input.templateRevision)
+    )
+      throw new Error(
+        "Exact assignment and desired template revision required.",
+      );
+    return this.transaction(async (state) => {
+      await this.verifyAgent(agentId);
+      const assignment = state.assignments.find(
+        (row) => row.agentId === agentId,
+      );
+      if (
+        !assignment?.templateId ||
+        assignment.revision !== input.expectedAssignmentRevision
+      )
+        throw new Error(
+          "Template assignment changed; inspect it before reconciling.",
+        );
+      if (
+        !state.versions.some(
+          (row) =>
+            row.id === assignment.templateId &&
+            row.revision === input.templateRevision,
+        )
+      )
+        throw new Error("Exact template revision unavailable.");
+      if (assignment.templateRevision !== input.templateRevision) {
+        assignment.templateRevision = input.templateRevision;
+        assignment.revision++;
+        assignment.updatedAt = new Date().toISOString();
+      }
+      return assignment;
+    });
+  }
+  /** Explicit agent choice creates only empty private working/context directories.
+   * It executes no template command and never claims tools/installations are ready. */
+  async preparePrivateContext(
+    agentId: string,
+    input: { expectedAssignmentRevision: number },
+  ) {
+    if (
+      !isRevision(input.expectedAssignmentRevision) ||
+      !this.options.contextDirectory
+    )
+      throw new Error("Exact assignment and private context root required.");
+    const root = this.options.contextDirectory;
+    directories([root], this.options.protectedDirectories);
+    const assignment = this.assignment(agentId);
+    if (
+      !assignment?.templateId ||
+      !assignment.templateRevision ||
+      assignment.revision !== input.expectedAssignmentRevision
+    )
+      throw new Error(
+        "Template assignment changed; inspect before preparation.",
+      );
+    await this.verifyAgent(agentId);
+    const agentRoot = join(
+      root,
+      createHash("sha256").update(agentId).digest("hex").slice(0, 24),
+    );
+    const directory = join(
+      agentRoot,
+      createHash("sha256")
+        .update(`${assignment.templateId}:${assignment.templateRevision}`)
+        .digest("hex")
+        .slice(0, 24),
+    );
+    // Verify every created root before use; never follow a swapped symlink or
+    // repair ownership by chmod/chown. Existing agent data is retained unchanged.
+    for (const path of [root, agentRoot, directory, join(directory, "home")]) {
+      await mkdir(path, { recursive: true, mode: 0o700 });
+      const info = await lstat(path);
+      if (
+        (await realpath(path)) !== path ||
+        !info.isDirectory() ||
+        info.mode & 0o077 ||
+        info.uid !== process.getuid?.()
+      )
+        throw new Error(
+          "Private context must be canonical and owner-controlled.",
+        );
+    }
+    return this.transaction((state) => {
+      const current = state.assignments.find((row) => row.agentId === agentId);
+      if (JSON.stringify(current) !== JSON.stringify(assignment))
+        throw new Error(
+          "Template assignment changed during private context preparation.",
+        );
+      const existing = (state.privateContexts ??= []).find(
+        (row) =>
+          row.agentId === agentId &&
+          row.templateId === assignment.templateId &&
+          row.templateRevision === assignment.templateRevision,
+      );
+      if (existing) {
+        if (existing.directory !== directory)
+          throw new Error(
+            "Retained private context root changed; preserve it for recovery.",
+          );
+        return existing;
+      }
+      const saved: AgentPrivateContext = {
+        agentId,
+        templateId: assignment.templateId!,
+        templateRevision: assignment.templateRevision!,
+        directory,
+        preparedAt: new Date().toISOString(),
+      };
+      state.privateContexts.push(saved);
+      return saved;
+    });
+  }
+  async reportPreparation(
+    agentId: string,
+    input: {
+      expectedAssignmentRevision: number;
+      state: AgentEnvironmentPreparationReport["state"];
+      summary: string;
+    },
+  ) {
+    boundedText(input.summary, 8192);
+    if (
+      !isRevision(input.expectedAssignmentRevision) ||
+      !["preparation_required", "prepared", "blocked"].includes(input.state)
+    )
+      throw new Error("Invalid preparation report.");
+    return this.transaction(async (state) => {
+      await this.verifyAgent(agentId);
+      const assignment = state.assignments.find(
+        (row) => row.agentId === agentId,
+      );
+      if (
+        !assignment?.templateId ||
+        assignment.revision !== input.expectedAssignmentRevision
+      )
+        throw new Error(
+          "Template assignment changed; inspect it before reporting.",
+        );
+      const report: AgentEnvironmentPreparationReport = {
+        agentId,
+        assignmentRevision: assignment.revision,
+        state: input.state,
+        summary: input.summary,
+        updatedAt: new Date().toISOString(),
+      };
+      const current = (state.preparationReports ??= []).find(
+        (row) => row.agentId === agentId,
+      );
+      if (current) Object.assign(current, report);
+      else state.preparationReports.push(report);
+      return report;
+    });
+  }
   async close(): Promise<void> {
     if (this.closed) return;
+    await this.delivery?.catch(() => {});
     this.closed = true;
     await this.tail;
     this.listeners.clear();

@@ -2,7 +2,6 @@ import { constants } from "node:fs";
 import {
   lstat,
   mkdir,
-  mkdtemp,
   open,
   realpath,
   rename,
@@ -1137,16 +1136,46 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     )
       throw new PreparationUnavailable("Runtime cache root changed.");
     this.runtimeRoot = root;
-    const cacheRoot = await mkdtemp(join(root.path, `${environment.id}-`));
+    const agentRoot = join(
+      root.path,
+      createHash("sha256")
+        .update(environment.agentId)
+        .digest("hex")
+        .slice(0, 24),
+    );
+    await mkdir(agentRoot, { recursive: true, mode: 0o700 });
+    if ((await this.identifyDirectory(agentRoot, true)).path !== agentRoot)
+      throw new PreparationUnavailable("Agent runtime root must be canonical.");
+    const cacheRoot = join(
+      agentRoot,
+      createHash("sha256")
+        .update(`${template.id}:${template.revision}`)
+        .digest("hex")
+        .slice(0, 24),
+    );
+    await mkdir(cacheRoot, { mode: 0o700 }).catch((error) => {
+      if (error.code !== "EEXIST") throw error;
+    });
     const runtimeRoot = await this.identifyDirectory(cacheRoot, true);
+    if (runtimeRoot.path !== cacheRoot)
+      throw new PreparationUnavailable("Agent context must be canonical.");
     const homePath = join(cacheRoot, "home");
-    await mkdir(homePath, { mode: 0o700 });
+    await mkdir(homePath, { mode: 0o700 }).catch((error) => {
+      if (error.code !== "EEXIST") throw error;
+    });
     const runtimeHome = await this.identifyDirectory(homePath, true);
+    if (runtimeHome.path !== homePath)
+      throw new PreparationUnavailable("Agent home must be canonical.");
     const cacheDirectories: DirectoryIdentity[] = [];
     for (const name of ["npm", "nx", "nx-workspace"]) {
       const path = join(cacheRoot, name);
-      await mkdir(path, { mode: 0o700 });
-      cacheDirectories.push(await this.identifyDirectory(path, true));
+      await mkdir(path, { mode: 0o700 }).catch((error) => {
+        if (error.code !== "EEXIST") throw error;
+      });
+      const identity = await this.identifyDirectory(path, true);
+      if (identity.path !== path)
+        throw new PreparationUnavailable("Agent cache must be canonical.");
+      cacheDirectories.push(identity);
     }
     const refreshed = await source.resolvePreparation(request);
     if (
@@ -1681,6 +1710,23 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         observations.every((row) => row.processesSettled),
       observedAt: now(),
     };
+  }
+  /** Trusted self-projection: no folder grants or command execution. */
+  templateState(agentId: string): JsonObject[] {
+    return this.state.environments
+      .filter((row) => row.agentId === agentId)
+      .map((row) => ({
+        environmentId: row.id,
+        preparation: row.preparation
+          ? {
+              templateId: row.preparation.templateId,
+              templateRevision: row.preparation.templateRevision,
+              assignmentRevision: row.preparation.assignmentRevision,
+              privateContextDirectory: row.preparation.runtimeRoot.path,
+              runtimeHome: row.preparation.runtimeHome?.path ?? null,
+            }
+          : null,
+      }));
   }
   async list(caller: CallerContext, agentId: string): Promise<JsonValue> {
     validCaller(caller, this.options.projectId);

@@ -68,6 +68,13 @@ export interface FoundationOptions {
   admission?: ExecutionAdmissionGate;
   provisioning?: AgentProvisioning;
   environments?: AgentEnvironmentService;
+  environmentTemplates?: {
+    invoke(
+      caller: CallerContext,
+      action: "read" | "reconcile" | "report" | "context",
+      input: import("./contracts.mjs").JsonObject,
+    ): Promise<JsonValue>;
+  };
   /** Synchronous trusted voice admission state, checked again under the shared gate. */
   privateInputBlocked?: (binding: RuntimeBinding) => boolean;
   /** Local durable activity only. Must never wait on remote work while reserving. */
@@ -323,6 +330,28 @@ export class AgentFoundation implements AgentLifecycle {
         return state.projectSettings;
       }),
     );
+  }
+
+  async environmentTemplate(
+    principal: FoundationPrincipal,
+    action: "read" | "reconcile" | "report" | "context",
+    input: import("./contracts.mjs").JsonObject,
+  ) {
+    if (principal.type !== "agent")
+      throw new Error("Current authenticated agent session required.");
+    return this.admit(async () => {
+      if (!this.executionAllowed(principal.caller))
+        throw new Error("Current authenticated agent session required.");
+      if (!this.options.environmentTemplates)
+        throw new Error("Environment template lifecycle unavailable.");
+      // Only the authenticated caller's own metadata is exposed. Shared resources
+      // and command execution retain their independent ordinary authorization.
+      return this.options.environmentTemplates.invoke(
+        principal.caller,
+        action,
+        input,
+      );
+    });
   }
 
   async environmentList(principal: FoundationPrincipal, agentId: string) {

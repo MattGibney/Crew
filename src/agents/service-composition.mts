@@ -222,12 +222,48 @@ export async function startUnifiedApplication(
       },
     });
     const owner = { type: "user" as const, userId: options.ownerUserId };
+    const agentContextRoot = join(
+      homedir(),
+      ".crew",
+      "workspace-caches",
+      createHash("sha256").update(root).digest("hex").slice(0, 24),
+    );
     environmentTemplates = await ProjectEnvironmentTemplateCatalogue.open({
       directory: join(root, "environment-templates"),
       projectId: options.projectId,
       ownerUserId: options.ownerUserId,
       protectedDirectories: [root],
       listAgents: async () => store.snapshot().agents,
+      contextDirectory: agentContextRoot,
+      notify: async (notice) => {
+        if (!foundation)
+          throw new Error("Foundation notification ingress unavailable.");
+        const queued = await foundation.sendInternal(
+          {
+            id: notice.id,
+            source: "preparation",
+            sourceId: `environment-template:${notice.id}`,
+            recipientAgentId: notice.agentId,
+            content: [
+              {
+                type: "text",
+                text: `Your environment template changed to revision ${notice.templateRevision}. Read environment_template_read to inspect the exact updated definition and your preparation-required state. Decide when/how to reconcile or rebuild with environment_template_reconcile, environment_action prepare, and existing project tools. No setup ran and no active execution was reconfigured. Report readiness or blockers with environment_preparation_report. This notification does not assign a task or prescribe workflow.`,
+              },
+            ],
+          },
+          async () =>
+            store
+              .snapshot()
+              .agents.some(
+                (agent) =>
+                  agent.id === notice.agentId && agent.archivedAt === null,
+              ),
+        );
+        if (!queued)
+          throw new Error(
+            "Template recipient is unavailable; notice remains pending.",
+          );
+      },
       inspect: (template) =>
         inspectEnvironmentTemplate(template, join(root, "environments")),
     });
@@ -242,12 +278,7 @@ export async function startUnifiedApplication(
       startExecution: startMacWorkspaceProcess,
       inspectExecution: inspectMacWorkspaceProcess,
       stopExecution: stopMacWorkspaceProcess,
-      runtimeDirectory: join(
-        homedir(),
-        ".crew",
-        "workspace-caches",
-        createHash("sha256").update(root).digest("hex").slice(0, 24),
-      ),
+      runtimeDirectory: agentContextRoot,
       templateSource: {
         resolvePreparation: (input) =>
           environmentTemplates!.resolvePreparation(input),
@@ -391,6 +422,47 @@ export async function startUnifiedApplication(
       admission: gate,
       admissionUsesFoundationBarrier: true,
       environments,
+      environmentTemplates: {
+        invoke: async (caller, action, input) => {
+          const allowed =
+            action === "read"
+              ? []
+              : action === "context"
+                ? ["expectedAssignmentRevision"]
+                : action === "reconcile"
+                  ? ["expectedAssignmentRevision", "templateRevision"]
+                  : ["expectedAssignmentRevision", "state", "summary"];
+          if (Object.keys(input).some((key) => !allowed.includes(key)))
+            throw new Error("Unknown template lifecycle argument.");
+          if (action === "context")
+            await environmentTemplates!.preparePrivateContext(
+              caller.agentId,
+              input as unknown as Parameters<
+                ProjectEnvironmentTemplateCatalogue["preparePrivateContext"]
+              >[1],
+            );
+          if (action === "reconcile")
+            await environmentTemplates!.reconcile(
+              caller.agentId,
+              input as unknown as Parameters<
+                ProjectEnvironmentTemplateCatalogue["reconcile"]
+              >[1],
+            );
+          if (action === "report")
+            await environmentTemplates!.reportPreparation(
+              caller.agentId,
+              input as unknown as Parameters<
+                ProjectEnvironmentTemplateCatalogue["reportPreparation"]
+              >[1],
+            );
+          return JSON.parse(
+            JSON.stringify({
+              ...(await environmentTemplates!.agentSnapshot(caller.agentId)),
+              appliedEnvironments: environments!.templateState(caller.agentId),
+            }),
+          );
+        },
+      },
       privateInputBlocked: (binding) =>
         voice?.privateInputBlocked(binding) ?? false,
       executionSettlement: async (caller) => {
@@ -486,6 +558,7 @@ export async function startUnifiedApplication(
       },
     });
     await foundation.recover();
+    await environmentTemplates.deliverNotifications().catch(() => {});
     // The foundation writer lock owns this artifact store's entire lifetime.
     // Damage to optional voice display evidence must not hide existing agents.
     try {
