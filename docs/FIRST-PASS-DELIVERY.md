@@ -32,10 +32,28 @@ Owner-approved on 22 October 2026. Baseline: unified feature branch at `44cb082`
 
 Progress and private operational evidence are recorded separately during execution.
 
-## Integration checkpoint
+## Combined acceptance checkpoint
 
-The coordinating branch now combines the shared agent editor and usage UI, native usage adapter, scoped browser tools, verified Codex `0.163.0-alpha.11.2` compatibility, and interrupted-project recovery. Main has not yet been updated.
+The coordinating branch combines all implementation histories, owner agent settings,
+read-only usage, optional environment templates and managed commands, retained voice
+artifacts, browser/annotations, native compatibility and interrupted-project recovery.
 
-Focused combined typecheck/build and 27 setup/configuration/usage/desktop/Quit checks pass. A disposable real Electron walkthrough confirmed failed-project Quit, explicit recovery of abandoned leases, retention of fixture data, normal Quit and reopen, with zero capture requests. This is source Electron evidence; final packaged and signed-in combined acceptance remains outstanding.
+Current-source typecheck/build and 38 focused setup/configuration/usage/environment/
+desktop/Quit checks pass. Real subscription-backed checks confirmed browser actions,
+annotation-image consumption and a manager–worker task: the manager delegated a local
+job, the worker wrote the exact requested file and requested review, the manager
+independently read its bytes, answered the review and reported completion. Existing
+native chat identities were retained. Settings saves/inspection left the manager idle.
 
-Environment templates and development execution, retained voice artifacts, real selected-agent browser use, the manager-led delegation walkthrough and final packaging are still in progress. Historical real-model evidence is retained separately; it does not replace current combined acceptance.
+Set1's unchanged setup and commands ran in a disposable worktree. Browser rendering
+and API health passed; API watch/inspector were explicitly disabled through supported
+command options. Exact owned processes stopped and fixture Compose resources were
+removed. Shared services and reported fixture database/bucket residuals were retained.
+
+New public voice artifacts passed real generated-audio retention across call close,
+Restart and state reopen, without physical input. Human acoustic/device acceptance,
+old uncaptured calls and live business-service validation remain separate limitations.
+
+Final packaged provenance/Quit/reopen and main integration are the remaining delivery
+steps. See [the current checklist](UNIFIED-AGENT-COMPLETION.md); unsigned local candidate
+validation does not publish a release or replace the owner's installed application.
