@@ -629,3 +629,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Cards select the same persistent agent through the existing revision-checked owner operation, then open its chat/workers/notes/browser. Keep a Team members return action and visible selected identity instead of the Talk to selector. Preserve drafts and voice-switch rejection; navigation must never launch work, start a session or activate capture.
 
 - Team member cards use the agent’s saved profile picture, with initials only when no picture is available. Populated UI preview agents should include sample profile pictures through the normal image-reference path.
+
+- Settings > Agents separates active Team members (reporting to the user) from Worker agents (reporting to another agent), and shows who each reports to. These remain the same agent model; group permissions do not determine this presentation.

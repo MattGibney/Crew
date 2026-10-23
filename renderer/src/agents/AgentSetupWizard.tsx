@@ -549,96 +549,131 @@ export function AgentSetupWizard(props: Props) {
               onNotify={setNotice}
             />
           )}
-          {!firstUse && (
-            <div className="overflow-x-auto rounded-lg border">
-              <table className="w-full text-left text-sm">
-                <caption className="sr-only">
-                  Project agents and their saved configuration
-                </caption>
-                <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-3 font-medium">Agent</th>
-                    <th className="px-4 py-3 font-medium">Role</th>
-                    <th className="px-4 py-3 font-medium">Session</th>
-                    <th className="px-4 py-3 font-medium">Voice</th>
-                    <th className="px-4 py-3 font-medium">
-                      <span className="sr-only">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {agents.map((agent) => (
-                    <tr key={agent.id}>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <AgentPicture
-                            client={imageClient}
-                            imageRef={agent.profile.pictureRef}
-                            className="size-9"
-                          />
-                          <span className="font-medium">
-                            {agent.profile.name}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {agent.reportsTo.type === "user"
-                          ? "Specialist"
-                          : "Worker"}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {agent.runtime.session.observedState}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {agent.profile.voice ?? "Native default"}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={busy || record?.phase === "applying"}
-                          onClick={() => begin("repair", agent.id)}
-                        >
-                          Edit {agent.profile.name}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={
-                            busy || saving || record?.phase === "applying"
-                          }
-                          title="Stop its session and archive the agent. Its records are retained."
-                          onClick={() =>
-                            void run(async () => {
-                              await command("archiveAgent", {
-                                agentId: agent.id,
-                              });
-                              setNotice(
-                                `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
-                              );
-                              await refresh().catch(() =>
-                                setError(
-                                  "Agent archived. Refresh the project to see the updated list.",
-                                ),
-                              );
-                            })
-                          }
-                        >
-                          <Archive aria-hidden="true" />
-                          Archive {agent.profile.name}
-                        </Button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {!agents.length && (
-                <p className="px-4 py-8 text-sm text-muted-foreground">
-                  Create agents with their own role, personality and voice.
-                </p>
-              )}
-            </div>
-          )}
+          {!firstUse &&
+            [
+              {
+                title: "Team members",
+                description: "Agents who report directly to you.",
+                rows: agents.filter((agent) => agent.reportsTo.type === "user"),
+              },
+              {
+                title: "Worker agents",
+                description: "Agents who report to another agent.",
+                rows: agents.filter(
+                  (agent) => agent.reportsTo.type === "agent",
+                ),
+              },
+            ].map(({ title, description, rows }) => (
+              <section key={title} aria-label={title} className="space-y-3">
+                <div>
+                  <h3 className="font-semibold tracking-tight">
+                    {title}{" "}
+                    <span className="text-sm font-normal text-muted-foreground">
+                      ({rows.length})
+                    </span>
+                  </h3>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {description}
+                  </p>
+                </div>
+                <div className="overflow-x-auto rounded-lg border">
+                  <table className="w-full text-left text-sm">
+                    <caption className="sr-only">
+                      {title} and their saved configuration
+                    </caption>
+                    <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
+                      <tr>
+                        <th className="px-4 py-3 font-medium">Agent</th>
+                        <th className="px-4 py-3 font-medium">Reports to</th>
+                        <th className="px-4 py-3 font-medium">Session</th>
+                        <th className="px-4 py-3 font-medium">Voice</th>
+                        <th className="px-4 py-3 font-medium">
+                          <span className="sr-only">Actions</span>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {rows.map((agent) => (
+                        <tr key={agent.id}>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <AgentPicture
+                                client={imageClient}
+                                imageRef={agent.profile.pictureRef}
+                                className="size-9"
+                              />
+                              <span className="font-medium">
+                                {agent.profile.name}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {agent.reportsTo.type === "user"
+                              ? "You"
+                              : (snapshot.agents.find(
+                                  (parent) =>
+                                    parent.id ===
+                                    (agent.reportsTo.type === "agent"
+                                      ? agent.reportsTo.agentId
+                                      : null),
+                                )?.profile.name ?? "Unavailable agent")}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {agent.runtime.session.observedState}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {agent.profile.voice ?? "Native default"}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={busy || record?.phase === "applying"}
+                              onClick={() => begin("repair", agent.id)}
+                            >
+                              Edit {agent.profile.name}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={
+                                busy || saving || record?.phase === "applying"
+                              }
+                              title="Stop its session and archive the agent. Its records are retained."
+                              onClick={() =>
+                                void run(async () => {
+                                  await command("archiveAgent", {
+                                    agentId: agent.id,
+                                  });
+                                  setNotice(
+                                    `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
+                                  );
+                                  await refresh().catch(() =>
+                                    setError(
+                                      "Agent archived. Refresh the project to see the updated list.",
+                                    ),
+                                  );
+                                })
+                              }
+                            >
+                              <Archive aria-hidden="true" />
+                              Archive {agent.profile.name}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {!rows.length && (
+                    <p className="px-4 py-8 text-sm text-muted-foreground">
+                      {title === "Team members"
+                        ? "No team members yet."
+                        : "No worker agents yet."}
+                    </p>
+                  )}
+                </div>
+              </section>
+            ))}
         </div>
       ) : (
         <>
