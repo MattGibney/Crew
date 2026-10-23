@@ -367,7 +367,7 @@ export function AgentSettings(props: Props) {
         }}
       />
       <div
-        className={`flex flex-wrap items-start justify-between gap-3 ${active ? "sticky top-0 z-20 bg-background py-3" : ""}`}
+        className={`flex flex-wrap items-start justify-between gap-3 ${active ? "sticky -top-10 z-20 -mx-4 -mt-10 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/90 supports-backdrop-filter:backdrop-blur-md" : ""}`}
       >
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
