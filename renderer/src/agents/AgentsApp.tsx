@@ -1338,44 +1338,24 @@ function AgentSessionRow({
                 <RotateCw className="size-4" /> Recover session
               </Button>
             )}
-          {needsRecovery ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label={`More session actions for ${agent.profile.name}`} disabled={busy || Boolean(agent.archivedAt)} />}><MoreVertical className="size-4" /></DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {(["start", "stop", "restart"] as const).map((action) => <DropdownMenuItem key={action} aria-label={`${action[0].toUpperCase() + action.slice(1)} session for ${agent.profile.name}`} onClick={() => void act(`lifecycle-${agent.id}`, () => client.lifecycle(agent.id, action))}>
-                  {action === "start" ? <Play /> : action === "stop" ? <Square /> : <RotateCw />}{action[0].toUpperCase() + action.slice(1)}
-                </DropdownMenuItem>)}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          ) : <>
-          {(["start", "stop", "restart"] as const).map((action) => (
-            <Button
-              key={action}
-              aria-label={`${action[0].toUpperCase() + action.slice(1)} session for ${agent.profile.name}`}
-              variant="outline"
-              disabled={
-                busy ||
-                Boolean(agent.archivedAt) ||
-                (action === "start" && session.observedState === "started") ||
-                (action === "stop" && session.observedState === "stopped")
-              }
-              onClick={() =>
-                void act(`lifecycle-${agent.id}`, () =>
-                  client.lifecycle(agent.id, action),
-                )
-              }
-            >
-              {action === "start" ? (
-                <Play />
-              ) : action === "stop" ? (
-                <Square />
-              ) : (
-                <RotateCw />
-              )}
-              {action[0].toUpperCase() + action.slice(1)}
-            </Button>
-          ))}
-          </>}
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label={`Session actions for ${agent.profile.name}`} disabled={busy || Boolean(agent.archivedAt)} />}>
+              <MoreVertical className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(["start", "stop", "restart"] as const).map((action) => (
+                <DropdownMenuItem
+                  key={action}
+                  aria-label={`${action[0].toUpperCase() + action.slice(1)} session for ${agent.profile.name}`}
+                  disabled={busy || Boolean(agent.archivedAt) || (action === "start" && session.observedState === "started") || (action === "stop" && session.observedState === "stopped")}
+                  onClick={() => void act(`lifecycle-${agent.id}`, () => client.lifecycle(agent.id, action))}
+                >
+                  {action === "start" ? <Play /> : action === "stop" ? <Square /> : <RotateCw />}
+                  {action[0].toUpperCase() + action.slice(1)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         </div>
       </TableCell>
