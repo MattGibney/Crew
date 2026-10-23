@@ -693,3 +693,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Sessions lists all non-archived project agents, including team members and workers, rather than only the current contact. Keep each status, pending configuration notice, recovery path and lifecycle action scoped to the stable agent ID; opening Sessions starts no work.
 
 - Session error rows stay compact: show a clear status, a recovery action and an overflow menu for other lifecycle actions. Put diagnostic/recovery explanations in an explicit details disclosure; preserve all error text and configuration notices without stacking long paragraphs or a bordered error box in the default row.
+
+- Sessions bulk selection uses stable agent IDs and includes only non-archived agents. Bulk Start/Stop/Restart reuse the per-agent lifecycle transport and lock, skip inapplicable or busy sessions, prevent overlapping batches, and report acknowledged/skipped/failed results. Selecting agents starts no work; never report command acknowledgement as verified native liveness.

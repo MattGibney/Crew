@@ -1,3 +1,4 @@
+import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { TriangleAlert, ChevronDown, MoreVertical } from "lucide-react";
 import { Table, TableCaption, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
@@ -398,27 +399,7 @@ export function AgentsApp({
           label: "Sessions",
           description: "Manage sessions for your team members and worker agents.",
           icon: Radio,
-          render: () => (
-            <div className="space-y-5">
-              <div className="overflow-x-auto rounded-lg border">
-                <Table className="w-full text-left text-sm">
-                  <TableCaption className="sr-only">All active agents and their sessions</TableCaption>
-                  <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground"><TableRow>
-                    <TableHead className="px-4 py-3 font-medium">Agent</TableHead>
-                    <TableHead className="px-4 py-3 font-medium">Status</TableHead>
-                    <TableHead className="px-4 py-3 font-medium"><span className="sr-only">Session controls</span></TableHead>
-                  </TableRow></TableHeader>
-                  <TableBody className="divide-y">
-                    {snapshot.agents.filter((agent) => !agent.archivedAt).map((agent) => (
-                      <AgentSessionPanel key={agent.id} agent={agent} skills={snapshot.skills} pending={pending} act={act} client={client} />
-                    ))}
-                    {!snapshot.agents.some((agent) => !agent.archivedAt) && <TableRow><TableCell colSpan={3} className="px-4 py-8 text-muted-foreground">No active agents. Create or restore an agent in Settings.</TableCell></TableRow>}
-                  </TableBody>
-                </Table>
-              </div>
-              <p className="text-xs leading-5 text-muted-foreground">Stop preserves the chat, notes and resources. Start never connects voice or creates an assignment.</p>
-            </div>
-          ),
+          render: () => <AgentSessionsSettings agents={snapshot.agents} skills={snapshot.skills} pending={pending} act={act} client={client} />,
         },
         ...settingsPanels.map((panel) => ({
           ...panel,
@@ -1022,21 +1003,239 @@ function AgentWorkerList({
   );
 }
 
+function AgentSessionsSettings({
+  agents,
+  skills,
+  client,
+  pending,
+  act,
+}: {
+  agents: Agent[];
+  skills: Skill[];
+  client: AgentsClient;
+  pending: Set<string>;
+  act: Action;
+}) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState("");
+  const bulkLock = useRef(false);
+  const mounted = useRef(true);
+  const latest = useRef({ agents, pending, act });
+  latest.current = { agents, pending, act };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    const activeIds = new Set(
+      agents.filter((agent) => !agent.archivedAt).map((agent) => agent.id),
+    );
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => activeIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [agents]);
+  const active = agents.filter((agent) => !agent.archivedAt);
+  const selected = active.filter((agent) => selectedIds.has(agent.id));
+  const eligible = (agent: Agent, action: "start" | "stop" | "restart") =>
+    !agent.archivedAt &&
+    !latest.current.pending.has(`lifecycle-${agent.id}`) &&
+    !["starting", "stopping"].includes(agent.runtime.session.observedState) &&
+    !(
+      action === "start" && agent.runtime.session.observedState === "started"
+    ) &&
+    !(action === "stop" && agent.runtime.session.observedState === "stopped");
+  const runBulk = async (action: "start" | "stop" | "restart") => {
+    if (bulkLock.current) return;
+    const targets = selected.map((agent) => ({
+      id: agent.id,
+      name: agent.profile.name,
+    }));
+    if (!targets.length) return;
+    bulkLock.current = true;
+    setRunning(true);
+    setResult(
+      `${action[0].toUpperCase() + action.slice(1)} requested for ${targets.length} agents…`,
+    );
+    let completed = 0,
+      skipped = 0;
+    const failed: string[] = [];
+    try {
+      for (const target of targets) {
+        if (!mounted.current) break;
+        const current = latest.current.agents.find(
+          (agent) => agent.id === target.id,
+        );
+        if (!current || !eligible(current, action)) {
+          skipped++;
+          continue;
+        }
+        try {
+          const success = await latest.current.act(
+            `lifecycle-${target.id}`,
+            () => client.lifecycle(target.id, action),
+          );
+          if (success) completed++;
+          else failed.push(target.name);
+        } catch {
+          failed.push(target.name);
+        }
+      }
+      if (mounted.current)
+        setResult(
+          `${action[0].toUpperCase() + action.slice(1)}: ${completed} acknowledged${skipped ? `, ${skipped} skipped` : ""}${failed.length ? `. Failed or unconfirmed: ${failed.join(", ")}.` : "."}`,
+        );
+    } finally {
+      bulkLock.current = false;
+      if (mounted.current) setRunning(false);
+    }
+  };
+  return (
+    <div className="space-y-5">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <p className="text-sm font-medium">{selected.length} selected</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={running}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Clear selection
+            </Button>
+          </div>
+          <div
+            role="group"
+            aria-label="Bulk session actions"
+            className="flex flex-wrap gap-2"
+          >
+            {(["start", "stop", "restart"] as const).map((action) => (
+              <Button
+                key={action}
+                variant="outline"
+                disabled={
+                  running || !selected.some((agent) => eligible(agent, action))
+                }
+                onClick={() => void runBulk(action)}
+              >
+                {action === "start" ? (
+                  <Play />
+                ) : action === "stop" ? (
+                  <Square />
+                ) : (
+                  <RotateCw />
+                )}
+                {action[0].toUpperCase() + action.slice(1)} selected
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
+      {result && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {result}
+        </p>
+      )}
+      <div className="overflow-x-auto rounded-lg border">
+        <Table className="w-full text-left text-sm">
+          <TableCaption className="sr-only">
+            All active agents and their sessions
+          </TableCaption>
+          <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground">
+            <TableRow>
+              <TableHead className="w-10 px-4 py-3">
+                <Checkbox
+                  aria-label="Select all agents"
+                  disabled={running || !active.length}
+                  checked={!!active.length && selected.length === active.length}
+                  indeterminate={
+                    selected.length > 0 && selected.length < active.length
+                  }
+                  onCheckedChange={(checked) => {
+                    setSelectedIds(
+                      checked
+                        ? new Set(active.map((agent) => agent.id))
+                        : new Set(),
+                    );
+                    setResult("");
+                  }}
+                />
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">Agent</TableHead>
+              <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                <span className="sr-only">Session controls</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="divide-y">
+            {active.map((agent) => (
+              <AgentSessionPanel
+                key={agent.id}
+                agent={agent}
+                skills={skills}
+                pending={pending}
+                act={act}
+                client={client}
+                selected={selectedIds.has(agent.id)}
+                locked={running}
+                onSelect={(checked) => {
+                  setSelectedIds((current) => {
+                    const next = new Set(current);
+                    if (checked) next.add(agent.id);
+                    else next.delete(agent.id);
+                    return next;
+                  });
+                  setResult("");
+                }}
+              />
+            ))}
+            {!active.length && (
+              <TableRow>
+                <TableCell
+                  colSpan={4}
+                  className="px-4 py-8 text-muted-foreground"
+                >
+                  No active agents. Create or restore an agent in Settings.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        Stop preserves the chat, notes and resources. Start never connects voice
+        or creates an assignment.
+      </p>
+    </div>
+  );
+}
+
 function AgentSessionPanel({
   agent,
   skills,
   client,
   pending,
   act,
+  selected,
+  onSelect,
+  locked,
 }: {
   agent: Agent;
   skills: Skill[];
   client: AgentsClient;
   pending: Set<string>;
   act: Action;
+  selected: boolean;
+  onSelect(checked: boolean): void;
+  locked: boolean;
 }) {
   const session = agent.runtime.session;
-  const busy =
+  const busy = locked ||
     ["starting", "stopping"].includes(session.observedState) ||
     pending.has(`lifecycle-${agent.id}`);
   const needsRecovery = ["unknown", "error"].includes(session.observedState);
@@ -1049,7 +1248,8 @@ function AgentSessionPanel({
     session.appliedConfiguration.profileRevision !== agent.profile.revision ||
     !sameSkills(agent, skills);
   return (
-    <TableRow>
+    <TableRow data-state={selected ? "selected" : undefined}>
+      <TableCell className="px-4 py-3 align-top"><Checkbox aria-label={`Select ${agent.profile.name}`} checked={selected} disabled={locked} onCheckedChange={(checked) => onSelect(!!checked)} /></TableCell>
       <TableCell className="px-4 py-3 align-top">
         <div className="flex items-center gap-3">
           <AgentPicture imageRef={agent.profile.pictureRef} client={client} className="size-10 shrink-0" />
