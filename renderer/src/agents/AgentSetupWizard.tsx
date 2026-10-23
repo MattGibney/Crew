@@ -697,7 +697,7 @@ export function AgentSetupWizard(props: Props) {
                               >
                                 <span
                                   aria-hidden="true"
-                                  className={`flex size-6 shrink-0 items-center justify-center rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500/10" : "bg-gray-400/10"}`}
+                                  className={`flex size-4 shrink-0 items-center justify-center rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500/10" : "bg-gray-400/10"}`}
                                 >
                                   <span
                                     className={`size-2.5 rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500" : "bg-gray-400"}`}
