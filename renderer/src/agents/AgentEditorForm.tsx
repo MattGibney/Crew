@@ -1,3 +1,5 @@
+import { Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InheritedPermissions } from "./InheritedPermissions";
@@ -130,7 +132,21 @@ export function AgentEditorForm({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor={`${id}-personality`}>Personality</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor={`${id}-personality`}>Personality</Label>
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger render={<Button type="button" variant="ghost" size="icon" className="size-5 text-muted-foreground" aria-label="About personality" />}>
+                    <Info className="size-3.5" aria-hidden="true" />
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-72 leading-5">
+                    Describe their tone, communication style and approach to working with you.
+                    For example: “Warm and direct. Keeps answers concise, offers a clear recommendation,
+                    and asks questions when unsure.” Put responsibilities and workflows in System prompt below.
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </div>
             <Textarea
               id={`${id}-personality`}
               rows={3}
