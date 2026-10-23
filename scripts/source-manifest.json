@@ -133,6 +133,7 @@
     "renderer/src/components/ui/popover.tsx",
     "renderer/src/components/ui/progress.tsx",
     "renderer/src/components/ui/radio-group.tsx",
+    "renderer/src/components/ui/select.tsx",
     "renderer/src/components/ui/separator.tsx",
     "renderer/src/components/ui/sonner.tsx",
     "renderer/src/components/ui/switch.tsx",

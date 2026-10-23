@@ -1,3 +1,9 @@
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 import { useState } from "react";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
 import { PermissionGroupsPanel } from "./PermissionGroupsPanel";
@@ -53,37 +59,47 @@ export function OwnerAccessSettings({
   };
   return (
     <div className="min-w-0 space-y-10">
-      {connecting ? (
-        <ServiceConnectionWizard
-          {...common}
-          snapshot={snapshot}
-          onCommand={onCommand}
-          onCancel={() => setConnecting(false)}
-          onComplete={() => setConnecting(false)}
-        />
-      ) : (
-        <ServiceConnectionsPanel
-          {...common}
-          onConnect={
-            snapshot.canGuideConnections ? () => setConnecting(true) : undefined
-          }
-          connections={snapshot.connections}
-          setupChoices={snapshot.setupChoices}
-          onVerify={
-            snapshot.canVerifyConnections
-              ? (connectionId, expectedRevision) =>
-                  command("verifyConnection", {
-                    connectionId,
-                    expectedRevision,
-                  })
-              : undefined
-          }
-          onSave={(change) => command("saveConnection", change)}
-          onRemove={(connectionId, expectedRevision) =>
-            command("removeConnection", { connectionId, expectedRevision })
-          }
-        />
+      {connecting && (
+        <Dialog open>
+          <DialogContent
+            className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl"
+            showCloseButton={false}
+          >
+            <DialogTitle className="sr-only">Add connection</DialogTitle>
+            <DialogDescription className="sr-only">
+              Connect a service account and review access.
+            </DialogDescription>
+            <ServiceConnectionWizard
+              {...common}
+              snapshot={snapshot}
+              onCommand={onCommand}
+              onCancel={() => setConnecting(false)}
+              onComplete={() => setConnecting(false)}
+            />
+          </DialogContent>
+        </Dialog>
       )}
+      <ServiceConnectionsPanel
+        {...common}
+        onConnect={
+          snapshot.canGuideConnections ? () => setConnecting(true) : undefined
+        }
+        connections={snapshot.connections}
+        setupChoices={snapshot.setupChoices}
+        onVerify={
+          snapshot.canVerifyConnections
+            ? (connectionId, expectedRevision) =>
+                command("verifyConnection", {
+                  connectionId,
+                  expectedRevision,
+                })
+            : undefined
+        }
+        onSave={(change) => command("saveConnection", change)}
+        onRemove={(connectionId, expectedRevision) =>
+          command("removeConnection", { connectionId, expectedRevision })
+        }
+      />
       {snapshot.catalogue
         .filter((item) => item.state !== "available")
         .map((item) => {

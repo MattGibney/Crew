@@ -674,3 +674,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - All settings pages follow the agent editor visual language: a single compact page heading, aligned actions, 70% sticky background with medium backdrop blur, generous section spacing and unboxed content separated by horizontal rules. Use two-column section introductions for forms and full-width layouts for tables and long editors. Service connections use the official shadcn Table and row action menus.
 
 - Settings tables match the Agents table composition: rounded-lg border, muted header, px-4 py-3 cells, medium primary labels, muted supporting values and ghost icon row menus. Using the same Table primitive alone is not enough for visual consistency.
+
+- Connection creation and editing open in a centred official shadcn Dialog, not an expanded table row or side sheet. Keep the table mounted behind the dialog, scroll long forms internally and retain explicit Cancel/Save actions and busy-state protection.
