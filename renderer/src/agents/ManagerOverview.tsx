@@ -66,11 +66,11 @@ function ManagerCard({
         className="group items-stretch justify-start whitespace-normal flex h-full min-w-0 flex-1 flex-col p-6 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
       >
         <div className="mb-6 flex items-start justify-between gap-3">
-          <Avatar className="size-16 rounded-2xl">
+          <Avatar className="size-16 rounded-[25%] after:rounded-[25%]">
             {picture && (
-              <AvatarImage src={picture} alt="" className="rounded-2xl" />
+              <AvatarImage src={picture} alt="" className="rounded-[25%]" />
             )}
-            <AvatarFallback className="rounded-2xl text-xl font-semibold">
+            <AvatarFallback className="overflow-hidden rounded-[25%] text-xl font-semibold">
               {initials}
             </AvatarFallback>
           </Avatar>
