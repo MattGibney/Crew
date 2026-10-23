@@ -1174,7 +1174,7 @@ function AgentSessionsSettings({
           </TableHeader>
           <TableBody className="divide-y">
             {active.map((agent) => (
-              <AgentSessionPanel
+              <AgentSessionRow
                 key={agent.id}
                 agent={agent}
                 skills={skills}
@@ -1215,24 +1215,32 @@ function AgentSessionsSettings({
   );
 }
 
-function AgentSessionPanel({
+function AgentSessionPanel(props: { agent: Agent; skills: Skill[]; client: AgentsClient; pending: Set<string>; act: Action }) {
+  return <div className="overflow-x-auto rounded-lg border"><Table>
+    <TableCaption className="sr-only">Session for {props.agent.profile.name}</TableCaption>
+    <TableHeader><TableRow><TableHead>Agent</TableHead><TableHead>Status</TableHead><TableHead><span className="sr-only">Session controls</span></TableHead></TableRow></TableHeader>
+    <TableBody><AgentSessionRow {...props} /></TableBody>
+  </Table></div>;
+}
+
+function AgentSessionRow({
   agent,
   skills,
   client,
   pending,
   act,
-  selected,
+  selected = false,
   onSelect,
-  locked,
+  locked = false,
 }: {
   agent: Agent;
   skills: Skill[];
   client: AgentsClient;
   pending: Set<string>;
   act: Action;
-  selected: boolean;
-  onSelect(checked: boolean): void;
-  locked: boolean;
+  selected?: boolean;
+  onSelect?(checked: boolean): void;
+  locked?: boolean;
 }) {
   const session = agent.runtime.session;
   const busy = locked ||
@@ -1249,7 +1257,7 @@ function AgentSessionPanel({
     !sameSkills(agent, skills);
   return (
     <TableRow data-state={selected ? "selected" : undefined}>
-      <TableCell className="px-4 py-3 align-top"><Checkbox aria-label={`Select ${agent.profile.name}`} checked={selected} disabled={locked} onCheckedChange={(checked) => onSelect(!!checked)} /></TableCell>
+      {onSelect && <TableCell className="px-4 py-3 align-top"><Checkbox aria-label={`Select ${agent.profile.name}`} checked={selected} disabled={locked} onCheckedChange={(checked) => onSelect(!!checked)} /></TableCell>}
       <TableCell className="px-4 py-3 align-top">
         <div className="flex items-center gap-3">
           <AgentPicture imageRef={agent.profile.pictureRef} client={client} className="size-10 shrink-0" />
