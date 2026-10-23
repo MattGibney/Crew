@@ -418,7 +418,6 @@ export function AgentEditorForm({
                   <dt className="text-muted-foreground">Network access</dt><dd>{selectedTemplate.capabilities.network ? "Enabled" : "Disabled"}</dd>
                   <dt className="text-muted-foreground">Package downloads</dt><dd>{selectedTemplate.capabilities.packageDownloads ? "Enabled" : "Disabled"}</dd>
                 </dl>
-                <p className="text-xs leading-5 text-muted-foreground">Template requirements, not confirmation that tools are installed. The agent prepares its environment separately.</p>
               </div>
             </div>
           ) : !environment.loading && !environment.error && (
