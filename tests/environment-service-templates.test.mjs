@@ -933,3 +933,128 @@ test(
     );
   },
 );
+
+test("equivalent folder setup reuses authority while retained aliases and distinct tool policies survive reopen", async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "crew124-folders-")),
+  );
+  const controller = join(root, "controller"),
+    directory = join(controller, "environments"),
+    workspace = join(root, "workspace"),
+    tools = join(root, "tools");
+  for (const folder of [controller, workspace, tools])
+    await mkdir(folder, { mode: 0o700 });
+  const owner = { type: "user", userId: "owner" },
+    caller = { projectId: "project", agentId: "agent", sessionId: "session" };
+  let tail = Promise.resolve();
+  const options = {
+    directory,
+    protectedDirectories: [controller],
+    projectId: "project",
+    ownerUserId: "owner",
+    admission: {
+      run(fn) {
+        const result = tail.then(fn);
+        tail = result.catch(() => {});
+        return result;
+      },
+    },
+    authorize: async () => {},
+    verifyExecution: async () => {},
+    noteExecutionAdmitted: async () => {},
+    execute: async () => {
+      throw Error("No commands should run");
+    },
+    observeExecution: async () => {
+      throw Error("No processes should run");
+    },
+  };
+  let service = await ProjectEnvironmentService.open(options);
+  t.after(async () => {
+    await service.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  const approval = (policyId, writable, executableDirectories = []) => ({
+    policyId,
+    workspaceDirectory: workspace,
+    writable,
+    executableDirectories,
+  });
+  await service.approveWorkspace(owner, approval("legacy-read", false), null);
+  const attached = await service.invoke({
+    caller,
+    agentId: "agent",
+    requestId: "attach-retained",
+    action: "attach",
+    arguments: { policyId: "legacy-read" },
+  });
+  const originalAttachment = service.ownerSnapshot(owner).environments;
+  assert.equal(originalAttachment.length, 1);
+  assert.equal(attached.executionSettled, true);
+  const write = await service.approveWorkspace(
+    owner,
+    approval("settings-write", true),
+    null,
+  );
+  const setup = await service.prepareFolderAccess(owner, {
+    workspaceDirectory: workspace,
+    access: "read_write",
+  });
+  assert.equal(setup.policy.id, write.policy.id);
+  const concurrent = await Promise.all(
+    ["random-one", "random-two"].map((id) =>
+      service.approveWorkspace(owner, approval(id, true), null),
+    ),
+  );
+  assert.ok(concurrent.every((row) => row.policy.id === write.policy.id));
+  assert.equal(service.ownerSnapshot(owner).workspaces.length, 2);
+  await service.approveWorkspace(
+    owner,
+    approval("tool-enabled", true, [tools]),
+    null,
+  );
+  // Updating an existing authority may make two historical IDs equivalent.
+  // Preserve both rather than rewriting its attached environment or references.
+  await service.approveWorkspace(owner, approval("legacy-read", true), 1);
+  const { equivalentWorkspaceChoices } =
+    await import("../src/agents/workspace-identity.mts");
+  const choices = equivalentWorkspaceChoices(
+    service.ownerSnapshot(owner).workspaces,
+  );
+  assert.equal(choices.length, 2);
+  assert.deepEqual(choices[0].policyIds, ["legacy-read", "settings-write"]);
+  assert.deepEqual(
+    service.ownerSnapshot(owner).environments,
+    originalAttachment,
+  );
+  await service.close();
+  service = await ProjectEnvironmentService.open(options);
+  assert.equal(service.ownerSnapshot(owner).workspaces.length, 3);
+  assert.deepEqual(
+    service.ownerSnapshot(owner).environments,
+    originalAttachment,
+  );
+  const repeated = await service.prepareFolderAccess(owner, {
+    workspaceDirectory: workspace,
+    access: "read_write",
+  });
+  assert.equal(repeated.policy.id, "legacy-read");
+  assert.equal(service.ownerSnapshot(owner).workspaces.length, 3);
+  const { groupWorkspaceChoices } =
+    await import("../renderer/src/access/workspace-choices.ts");
+  const { workspaceConfigurationKey, workspaceConfigurationDescription } =
+    await import("../src/agents/workspace-identity.mts");
+  const rendered = groupWorkspaceChoices(
+    service
+      .ownerSnapshot(owner)
+      .workspaces.map((row) => ({
+        policy: row.policy,
+        label: row.workspace.path,
+        description: workspaceConfigurationDescription(row),
+        configurationKey: workspaceConfigurationKey(row),
+      })),
+  );
+  assert.equal(rendered.length, 2);
+  assert.deepEqual(rendered[0].policyIds, ["legacy-read", "settings-write"]);
+  assert.notEqual(rendered[0].description, rendered[1].description);
+});

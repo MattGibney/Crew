@@ -30,6 +30,7 @@ export interface VoiceTranscriptArtifact {
     done: boolean;
     /** First observed item order within this call, not a native timeline position. */
     ordinal: number;
+    /** First observed time; existing artifacts keep their recorded observation. */
     observedAt: Timestamp;
   }[];
 }
@@ -567,8 +568,8 @@ export class VoiceTranscriptArtifacts {
           ),
         );
       previous.event = event.delta
-        ? { ...previous.event, text, observedAt: event.observedAt }
-        : event;
+        ? { ...previous.event, text }
+        : { ...event, observedAt: previous.event.observedAt };
       return previous.promise;
     }
     if (this.pendingRecords.size >= MAX_PENDING_ITEMS)
@@ -662,7 +663,7 @@ export class VoiceTranscriptArtifacts {
         text,
         done: event.done,
         ordinal: existing?.ordinal ?? artifact.items.length,
-        observedAt: event.observedAt,
+        observedAt: existing?.observedAt ?? event.observedAt,
       };
       if (existing) artifact.items[existing.ordinal] = item;
       else artifact.items.push(item);

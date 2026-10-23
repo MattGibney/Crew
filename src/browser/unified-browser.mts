@@ -47,6 +47,9 @@ export function createUnifiedProjectBrowser(options: {
   type Workspace = { tabs: Map<string, Tab>; active: string | null };
   const workspaces = new Map<string, Workspace>();
   let selected: string | null = null;
+  let externalAuthorization:
+    ((agentId: string) => Promise<boolean>) | undefined;
+  let unsubscribeAccess: (() => void) | undefined;
   let queue = Promise.resolve();
   const subscribers = new Set<() => void>();
   let bounds: Record<string, unknown> | null = null;
@@ -144,6 +147,9 @@ export function createUnifiedProjectBrowser(options: {
       service: createBrowserTab({
         ...options,
         ownerAgentId: id,
+        canBrowseExternal: () =>
+          externalAuthorization?.(id).catch(() => false) ??
+          Promise.resolve(false),
         tabId,
         publish: () => publish(),
       }),
@@ -289,13 +295,34 @@ export function createUnifiedProjectBrowser(options: {
       });
     },
     tools(context: {
-      authorization: Pick<ProjectAuthorizationService, "canDiscoverBrowser">;
+      authorization: Pick<ProjectAuthorizationService, "canDiscoverBrowser"> &
+        Partial<
+          Pick<
+            ProjectAuthorizationService,
+            "canUseExternalBrowser" | "subscribe"
+          >
+        >;
       runAuthorized<T>(
         caller: CallerContext,
         action: "browser.control",
         operation: () => Promise<T>,
       ): Promise<T>;
     }): AgentToolExtension {
+      externalAuthorization = context.authorization.canUseExternalBrowser?.bind(
+        context.authorization,
+      );
+      if (!unsubscribeAccess && context.authorization.subscribe)
+        unsubscribeAccess = context.authorization.subscribe(() => {
+          // Close revoked public views to end already established sockets and
+          // page JavaScript too. Every new request independently checks authority.
+          void Promise.all(
+            [...workspaces.values()].flatMap((ws) =>
+              [...ws.tabs.values()].map((tab) => tab.service.refreshAccess()),
+            ),
+          )
+            .then(publish)
+            .catch(() => {});
+        });
       // Schema discovery is independent of whether a page has been opened.
       const schema = createBrowserTab({
         ...options,
@@ -322,7 +349,7 @@ export function createUnifiedProjectBrowser(options: {
             {
               name: "browser_new_tab",
               description:
-                "Create and select your own tab; URL must be an explicit local preview URL. Omit URL for a blank tab.",
+                "Create and select your own tab. Local previews are loopback HTTP only. Public HTTP/HTTPS requires current browser.control AND browser.external group grants; private networks and Crew remain blocked. Omit URL for a blank tab.",
               inputSchema: shape({ url: { type: "string" } }, []),
             },
             {

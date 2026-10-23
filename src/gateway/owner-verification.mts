@@ -1,3 +1,4 @@
+import { gmailOAuthBundle, gmailRequest } from "./gmail.mjs";
 import type {
   ServiceCapability,
   ServiceConnection,
@@ -40,6 +41,10 @@ export class GatewayOwnerConnectionVerifier {
       vault: GatewayCredentialVault;
       connections: GatewayConnections;
       registry: TrustedGatewayRegistry;
+      prepareCredential?(
+        connection: ServiceConnection,
+        expectedRevision: number,
+      ): Promise<number>;
       discoverCapabilities(
         connection: ServiceConnection,
         options: { signal: AbortSignal },
@@ -69,7 +74,8 @@ export class GatewayOwnerConnectionVerifier {
     try {
       signal.throwIfAborted();
       if (
-        connection.authentication.method !== "token" ||
+        (connection.authentication.method !== "token" &&
+          connection.authentication.method !== "oauth") ||
         connection.authentication.credentialRef !==
           expectedCredential.credentialRef ||
         !Number.isSafeInteger(expectedCredential.revision) ||
@@ -81,6 +87,17 @@ export class GatewayOwnerConnectionVerifier {
         return unavailable(
           "Identity verification is unavailable for this connection.",
         );
+      if (
+        connection.authentication.method === "oauth" &&
+        this.options.prepareCredential
+      )
+        expectedCredential = {
+          ...expectedCredential,
+          revision: await this.options.prepareCredential(
+            connection,
+            expectedCredential.revision,
+          ),
+        };
       await this.assertCurrent(connection, expectedCredential);
       return await this.options.vault.withCredential(
         expectedCredential.credentialRef,
@@ -90,9 +107,17 @@ export class GatewayOwnerConnectionVerifier {
           try {
             identity = await handle.use(async (material) => {
               signal.throwIfAborted();
-              const token = new TextDecoder("utf-8", { fatal: true }).decode(
+              let token = new TextDecoder("utf-8", { fatal: true }).decode(
                 material,
               );
+              if (connection.authentication.method === "oauth") {
+                if (provider !== "gmail-oauth-token")
+                  throw new Error("Unsupported owner OAuth bundle.");
+                const bundle = gmailOAuthBundle(token);
+                for (const value of Object.values(bundle))
+                  if (typeof value === "string") sanitizer.add(value);
+                token = bundle.access_token as string;
+              }
               if (
                 !token ||
                 token.length > 16_384 ||
@@ -213,6 +238,21 @@ export class GatewayOwnerConnectionVerifier {
     sanitizer: Sanitizer,
     signal: AbortSignal,
   ): Promise<ServiceConnection["identity"]> {
+    if (provider === "gmail-oauth-token") {
+      const profile = await gmailRequest(token, "gmail_profile", {}, signal);
+      if (
+        typeof profile.emailAddress !== "string" ||
+        !profile.emailAddress.includes("@") ||
+        profile.emailAddress.length > 256 ||
+        sanitizer.text(profile.emailAddress) !== profile.emailAddress
+      )
+        throw new Error("Gmail mailbox identity unavailable.");
+      return {
+        displayName: profile.emailAddress,
+        emailAddress: profile.emailAddress,
+        externalAccountId: profile.emailAddress,
+      };
+    }
     const github = provider === "github-pat";
     const response = await fetch(
       github ? "https://api.github.com/user" : "https://api.linear.app/graphql",

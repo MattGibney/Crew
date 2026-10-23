@@ -1,3 +1,4 @@
+import { gmailRequest, gmailTools } from "./gmail.mjs";
 import { spawn } from "node:child_process";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
@@ -8,6 +9,7 @@ import type {
   AuthorizationService,
   BrokerCallOptions,
   BrokerInvocation,
+  JsonObject,
   ExecutionPermit,
   ExecutorResult,
   OperationReceipt,
@@ -83,6 +85,17 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       throw new Error("Unsupported executor configuration.");
     return config;
   }
+  /** Trusted owner setup only; does not discover tools or grant access. */
+  async prepareOwnerCredential(
+    connection: ServiceConnection,
+    expectedRevision: number,
+  ): Promise<number> {
+    return this.credentials.prepareOwnerCredential(
+      connection,
+      await this.configuration(connection),
+      expectedRevision,
+    );
+  }
   async listCapabilities(
     connection: ServiceConnection,
   ): Promise<ServiceCapability[]> {
@@ -101,42 +114,77 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       connection,
       config,
       async (_handle, token, sanitizer) => {
+        if (config.type === "mcp" && config.adapter === "gmail-rest") {
+          if (config.url !== "https://gmail.googleapis.com" || !token)
+            throw new Error("Unsupported Gmail configuration.");
+          // Catalogue verification establishes that the explicitly provided token
+          // can reach this mailbox, rather than treating static schemas as auth.
+          const profile = await gmailRequest(
+            token,
+            "gmail_profile",
+            {},
+            options.signal,
+          );
+          if (
+            connection.identity.emailAddress &&
+            profile.emailAddress !== connection.identity.emailAddress
+          )
+            throw new Error(
+              "Gmail credential belongs to a different mailbox; create a new connection.",
+            );
+        }
         const tools =
-          config.type === "cli"
-            ? config.operations.map((tool) => ({
-                name: tool.name,
-                description: tool.description,
-                inputSchema: tool.inputSchema,
-                outputSchema: null,
-              }))
-            : await this.withMcp(
-                config,
-                token,
-                async (client) => {
-                  const tools = [];
-                  let cursor: string | undefined;
-                  const seen = new Set<string>();
-                  do {
-                    const page = await client.listTools(
-                      cursor ? { cursor } : {},
-                      { timeout: config.timeoutMs, signal: options.signal },
-                    );
-                    tools.push(...page.tools);
-                    if (
-                      tools.length > 500 ||
-                      seen.size >= 20 ||
-                      (page.nextCursor && seen.has(page.nextCursor))
-                    )
-                      throw new Error(
-                        "Upstream catalogue exceeds supported bounds.",
+          config.type === "mcp" && config.adapter === "gmail-rest"
+            ? gmailTools
+                .filter(
+                  (tool) =>
+                    config.gmailWrite ||
+                    [
+                      "gmail_profile",
+                      "gmail_messages_list",
+                      "gmail_message_read",
+                    ].includes(tool.name),
+                )
+                .map((tool) => ({
+                  ...tool,
+                  inputSchema: structuredClone(tool.inputSchema),
+                  outputSchema: null,
+                }))
+            : config.type === "cli"
+              ? config.operations.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  inputSchema: tool.inputSchema,
+                  outputSchema: null,
+                }))
+              : await this.withMcp(
+                  config,
+                  token,
+                  async (client) => {
+                    const tools = [];
+                    let cursor: string | undefined;
+                    const seen = new Set<string>();
+                    do {
+                      const page = await client.listTools(
+                        cursor ? { cursor } : {},
+                        { timeout: config.timeoutMs, signal: options.signal },
                       );
-                    cursor = page.nextCursor;
-                    if (cursor) seen.add(cursor);
-                  } while (cursor);
-                  return tools;
-                },
-                options.signal,
-              );
+                      tools.push(...page.tools);
+                      if (
+                        tools.length > 500 ||
+                        seen.size >= 20 ||
+                        (page.nextCursor && seen.has(page.nextCursor))
+                      )
+                        throw new Error(
+                          "Upstream catalogue exceeds supported bounds.",
+                        );
+                      cursor = page.nextCursor;
+                      if (cursor) seen.add(cursor);
+                    } while (cursor);
+                    return tools;
+                  },
+                  options.signal,
+                );
         options.signal?.throwIfAborted();
         const names = new Set<string>();
         return tools.map((tool): ServiceCapability => {
@@ -253,6 +301,67 @@ export class TrustedServiceExecutor implements ServiceExecutor {
               evidence,
               options,
             );
+          if (config.adapter === "gmail-rest") {
+            if (config.url !== "https://gmail.googleapis.com" || !token)
+              return noExecution("Gmail connection is unavailable.", evidence);
+            const profile = await gmailRequest(
+              token,
+              "gmail_profile",
+              {},
+              options.signal,
+            );
+            if (
+              !connection.identity.emailAddress ||
+              profile.emailAddress !== connection.identity.emailAddress
+            )
+              return noExecution(
+                "Gmail mailbox identity changed. Reverify or create a new connection.",
+                evidence,
+              );
+            const tool = gmailTools.find(
+              (tool) =>
+                capabilityId(connection.id, tool.name) ===
+                invocation.operation.operation,
+            );
+            if (
+              !tool ||
+              (!config.gmailWrite &&
+                ![
+                  "gmail_profile",
+                  "gmail_messages_list",
+                  "gmail_message_read",
+                ].includes(tool.name)) ||
+              normalizeArguments(
+                tool.inputSchema as unknown as JsonObject,
+                invocation.operation.arguments,
+              ).argumentsFingerprint !==
+                invocation.operation.argumentsFingerprint
+            )
+              return noExecution(
+                "Gmail operation or schema changed.",
+                evidence,
+              );
+            return dispatch(async () => ({
+              state: "succeeded",
+              externalReference: null,
+              content: [
+                {
+                  type: "data",
+                  value: jsonObject(
+                    sanitizer.value(
+                      await gmailRequest(
+                        token,
+                        tool.name,
+                        invocation.operation.arguments,
+                        options.signal,
+                        connection.identity.emailAddress ?? undefined,
+                      ),
+                    ),
+                  ),
+                },
+              ],
+            }));
+          }
           return this.withMcp(config, token, async (client) => {
             const capabilities = await this.discoverForCall(
               client,

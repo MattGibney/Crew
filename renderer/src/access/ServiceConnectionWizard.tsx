@@ -850,10 +850,7 @@ function ConnectionWizardContent(props: ServiceConnectionWizardProps) {
                         Crew actions:{" "}
                         {group.grants.crew.length
                           ? group.grants.crew
-                              .map(
-                                (grant) =>
-                                  `${grant.action} (${grant.scope.type === "self" ? "this agent" : grant.scope.type === "project" ? "entire project" : `selected agents: ${grant.scope.agentIds.join(", ")}`})`,
-                              )
+                              .map((grant) => grant.action)
                               .join("; ")
                           : "none"}
                         .

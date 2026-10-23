@@ -38,7 +38,12 @@ import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
-import { SavedVoiceArtifacts } from "./SavedVoiceArtifacts";
+import { useVoiceArtifacts } from "./useVoiceArtifacts";
+import {
+  conversationTimeline,
+  reconcilePendingVoice,
+} from "./conversation-timeline";
+import type { LiveTranscriptItem } from "./voice/live-transcript";
 import { WorkerReference } from "../manager/worker/WorkerReference";
 import { WebLink } from "../manager/WebLink";
 import { Input } from "@/components/ui/input";
@@ -75,6 +80,7 @@ export interface AgentSettingsPanel {
   description?: string;
   icon?: LucideIcon;
   render(context: {
+    openSettings: (pageId: string) => void;
     snapshot: AgentsSnapshot;
     refresh: () => Promise<void>;
     visible: boolean;
@@ -105,7 +111,7 @@ export interface AgentsAppProps {
     visible: boolean;
     mode: "voice" | "compact" | "hidden";
     controlsTarget: HTMLElement | null;
-    transcriptTarget: HTMLElement | null;
+    onTranscript: (items: LiveTranscriptItem[]) => void;
   }) => ReactNode;
   headerActions?: ReactNode;
   headerUpdates?: ReactNode;
@@ -169,8 +175,8 @@ export function AgentsApp({
   const [inputMode, setInputMode] = useState<"text" | "voice">("voice");
   const [composerVoiceTarget, setComposerVoiceTarget] =
     useState<HTMLElement | null>(null);
-  const [transcriptTarget, setTranscriptTarget] = useState<HTMLElement | null>(
-    null,
+  const [liveTranscript, setLiveTranscript] = useState<LiveTranscriptItem[]>(
+    [],
   );
   const [secondaryVoiceTarget, setSecondaryVoiceTarget] =
     useState<HTMLElement | null>(null);
@@ -314,7 +320,7 @@ export function AgentsApp({
         {
           id: "crew-sessions",
           label: "Sessions",
-          description: "Manage the live manager session for this project.",
+          description: "Manage the selected agent session for this project.",
           icon: Radio,
           render: () =>
             primary ? (
@@ -540,6 +546,34 @@ export function AgentsApp({
               aria-label="Manager workspace"
               className={`${view === "conversation" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col overflow-hidden`}
             >
+              {client.selectContact && snapshot.projectSettings && (
+                <label className="flex items-center gap-3 border-b px-5 py-2 text-sm">
+                  Talk to
+                  <select
+                    className="min-w-0 rounded-md border bg-background px-2 py-1"
+                    aria-label="Talk to agent"
+                    value={primary?.id ?? ""}
+                    disabled={pending.has("contact")}
+                    onChange={(event) =>
+                      void act("contact", () =>
+                        client.selectContact!(
+                          event.target.value,
+                          snapshot.projectSettings!.revision,
+                        ),
+                      )
+                    }
+                  >
+                    {!primary && <option value="">Choose an agent</option>}
+                    {snapshot.agents
+                      .filter((agent) => !agent.archivedAt)
+                      .map((agent) => (
+                        <option value={agent.id} key={agent.id}>
+                          {agent.profile.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
               {primary ? (
                 <Conversation
                   key={primary.id}
@@ -555,7 +589,7 @@ export function AgentsApp({
                   inputMode={inputMode}
                   onInputMode={setInputMode}
                   voiceTarget={setComposerVoiceTarget}
-                  transcriptTarget={setTranscriptTarget}
+                  liveTranscript={liveTranscript}
                   hasVoice={Boolean(renderVoice)}
                   onOpenSettings={() => openSettings("crew-sessions")}
                   attention={
@@ -740,7 +774,7 @@ export function AgentsApp({
                     ? "voice"
                     : "compact"
                   : "compact",
-            transcriptTarget,
+            onTranscript: setLiveTranscript,
             controlsTarget:
               view === "conversation"
                 ? composerVoiceTarget
@@ -1237,7 +1271,7 @@ function Conversation({
   inputMode = "text",
   onInputMode,
   voiceTarget,
-  transcriptTarget,
+  liveTranscript = [],
   hasVoice = false,
   onOpenSettings,
   attention,
@@ -1254,7 +1288,7 @@ function Conversation({
   inputMode?: "text" | "voice";
   onInputMode?: (mode: "text" | "voice") => void;
   voiceTarget?: (node: HTMLDivElement | null) => void;
-  transcriptTarget?: (node: HTMLDivElement | null) => void;
+  liveTranscript?: LiveTranscriptItem[];
   hasVoice?: boolean;
   onOpenSettings?: () => void;
   attention?: ReactNode;
@@ -1276,6 +1310,29 @@ function Conversation({
     visible,
     version: historyVersion,
   });
+  const voiceHistory = useVoiceArtifacts({
+    agent,
+    client,
+    revision: snapshot.voiceArtifactsRevision ?? 0,
+    visible:
+      visible &&
+      snapshot.voiceArtifactsRevision != null &&
+      Boolean(client.readVoiceArtifacts),
+  });
+  const pendingVoice = useRef<LiveTranscriptItem[]>([]);
+  pendingVoice.current = reconcilePendingVoice(
+    pendingVoice.current,
+    readOnly ? [] : liveTranscript,
+    voiceHistory.artifacts,
+    agent.runtime.threadId,
+  );
+  const timeline = conversationTimeline(
+    items,
+    voiceHistory.artifacts,
+    pendingVoice.current,
+    agent.runtime.threadId,
+  );
+  const picture = useAgentPicture(client, agent.profile.pictureRef);
   const draftKey = `crew-agent-draft:${snapshot.projectId}:${agent.id}`;
   const [draft, setDraft] = useState(() => readComposerDraft(draftKey));
   useEffect(() => {
@@ -1406,7 +1463,7 @@ function Conversation({
                   </Button>
                 </MessageScrollerItem>
               )}
-              {!items.length && (
+              {!timeline.length && !voiceHistory.loading && (
                 <MessageScrollerItem messageId="conversation-empty">
                   <p className="text-center text-sm text-muted-foreground">
                     {loading || (!loaded && agent.runtime.threadId)
@@ -1421,18 +1478,130 @@ function Conversation({
                   </p>
                 </MessageScrollerItem>
               )}
-              {items.map((item) => (
+              {(voiceHistory.loading ||
+                voiceHistory.error ||
+                voiceHistory.warning ||
+                voiceHistory.cursor ||
+                timeline.some(
+                  (row) =>
+                    row.type === "native" &&
+                    (!row.timestamp ||
+                      row.item.timestampSource === "native_turn"),
+                )) && (
                 <MessageScrollerItem
-                  key={item.runtimeRef}
-                  messageId={item.runtimeRef}
-                  scrollAnchor={item.sender.type === "user"}
+                  messageId="timeline-notices"
+                  className="space-y-2 text-xs text-muted-foreground"
                 >
-                  <HistoryItem
-                    item={item}
-                    snapshot={snapshot}
-                    client={client}
-                    managerDirection={readOnly && item.sender.type === "agent"}
-                  />
+                  {voiceHistory.loading && (
+                    <p role="status">Loading voice transcripts…</p>
+                  )}
+                  {voiceHistory.error && (
+                    <p role="alert">
+                      {voiceHistory.error}
+                      {voiceHistory.artifacts.length
+                        ? " Showing the last loaded transcripts; they may be stale."
+                        : ""}{" "}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => void voiceHistory.refresh()}
+                      >
+                        Retry voice history
+                      </Button>
+                    </p>
+                  )}
+                  {voiceHistory.warning && (
+                    <p role="alert">{voiceHistory.warning}</p>
+                  )}
+                  {voiceHistory.cursor && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={voiceHistory.loading}
+                      onClick={() => void voiceHistory.loadEarlier()}
+                    >
+                      Load earlier voice messages
+                    </Button>
+                  )}
+                  {timeline.some(
+                    (row) => row.type === "native" && !row.timestamp,
+                  ) && (
+                    <p>
+                      Some message times are unavailable. Their original chat
+                      order is preserved; their order relative to voice messages
+                      cannot be verified.
+                    </p>
+                  )}
+                  {timeline.some(
+                    (row) =>
+                      row.type === "native" &&
+                      row.item.timestampSource === "native_turn",
+                  ) && (
+                    <p>
+                      Some messages use their native turn's start time; exact
+                      message times are unavailable.
+                    </p>
+                  )}
+                </MessageScrollerItem>
+              )}
+              {timeline.map((row) => (
+                <MessageScrollerItem key={row.id} messageId={row.id}>
+                  {row.type === "native" ? (
+                    <HistoryItem
+                      item={row.item}
+                      snapshot={snapshot}
+                      client={client}
+                      managerDirection={
+                        readOnly && row.item.sender.type === "agent"
+                      }
+                    />
+                  ) : (
+                    <Message
+                      message={{
+                        id: row.id,
+                        role: row.item.role,
+                        text: row.item.text,
+                        source: "voice",
+                        status: row.item.done
+                          ? "complete"
+                          : !row.item.ended &&
+                              (row.artifact?.state === "active" ||
+                                !row.artifact)
+                            ? "streaming"
+                            : "partial",
+                      }}
+                      label={
+                        row.item.role === "user" ? "You" : agent.profile.name
+                      }
+                      ariaLabel={
+                        row.item.role === "user"
+                          ? "Your message"
+                          : `${agent.profile.name} message`
+                      }
+                      profile={{
+                        name: agent.profile.name,
+                        picture,
+                        voice: null,
+                        version: "voice-projection",
+                      }}
+                      copyable
+                    >
+                      {row.timestamp && (
+                        <time
+                          dateTime={row.timestamp}
+                          className="mt-2 block text-[11px] text-muted-foreground"
+                        >
+                          {formatDate(row.timestamp)}
+                        </time>
+                      )}
+                      {row.artifact?.state === "interrupted" &&
+                        !row.item.done && (
+                          <p className="text-xs text-muted-foreground">
+                            Call interrupted; the final words may be missing.
+                          </p>
+                        )}
+                    </Message>
+                  )}
                 </MessageScrollerItem>
               ))}
               {hasVoice &&
@@ -1440,24 +1609,8 @@ function Conversation({
                 snapshot.voiceArtifactsRevision == null && (
                   <MessageScrollerItem messageId="voice-history-limit">
                     <p className="text-xs text-muted-foreground">
-                      Live voice transcripts are currently available only during
-                      the call. They are not restored from chat history.
+                      Voice transcripts cannot be restored in this host.
                     </p>
-                  </MessageScrollerItem>
-                )}
-              {!readOnly && (
-                <div ref={transcriptTarget} className="empty:hidden" />
-              )}
-              {snapshot.voiceArtifactsRevision != null &&
-                client.readVoiceArtifacts && (
-                  <MessageScrollerItem messageId="saved-voice-artifacts">
-                    <SavedVoiceArtifacts
-                      key={`${agent.id}:${agent.runtime.threadId}`}
-                      agent={agent}
-                      client={client}
-                      revision={snapshot.voiceArtifactsRevision}
-                      visible={visible}
-                    />
                   </MessageScrollerItem>
                 )}
               {(intents.length > 0 || receipts.length > 0) && (
@@ -1721,6 +1874,14 @@ function HistoryItem({
       profile={{ name, picture, voice: null, version: "native-projection" }}
       copyable={!own}
     >
+      {item.timestamp && (
+        <time
+          dateTime={item.timestamp}
+          className="mt-2 block text-[11px] text-muted-foreground"
+        >
+          {formatDate(item.timestamp)}
+        </time>
+      )}
       {attachments.length > 0 && (
         <div className="mt-3">
           <Content blocks={attachments} client={client} />
@@ -2541,6 +2702,7 @@ function SettingsView({
           {panels.map((item) => (
             <div key={item.id} hidden={panel?.id !== item.id}>
               {item.render({
+                openSettings: setActive,
                 snapshot,
                 refresh,
                 visible: visible && panel?.id === item.id,
@@ -2799,7 +2961,8 @@ function agentName(id: string, snapshot: AgentsSnapshot) {
 }
 function primaryAgentId(snapshot: AgentsSnapshot | null): string | null {
   return snapshot?.projectSettings
-    ? snapshot.projectSettings.primaryAgentId
+    ? (snapshot.projectSettings.contactAgentId ??
+        snapshot.projectSettings.primaryAgentId)
     : (snapshot?.primaryAgentId ?? null);
 }
 

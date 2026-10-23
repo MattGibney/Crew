@@ -14,6 +14,9 @@ export function withEnvironmentTemplateProvisioning(
   return {
     listPresets: () => provisioning.listPresets(),
     accessFor: (agentId) => provisioning.accessFor(agentId),
+    ...(provisioning.skillsFor
+      ? { skillsFor: provisioning.skillsFor.bind(provisioning) }
+      : {}),
     async applyPreset(input) {
       input = structuredClone(input);
       const preset = (await provisioning.listPresets()).find(

@@ -95,7 +95,12 @@ export async function inspectEnvironmentTemplate(
           writableRoots: [],
           environment: template.environment,
         },
-        { command: `${tool.name} --version`, timeoutMs: 10_000 },
+        {
+          command: [tool.name, ...(tool.versionArguments ?? ["--version"])]
+            .map((value) => `'${value.replaceAll("'", "'\\''")}'`)
+            .join(" "),
+          timeoutMs: 10_000,
+        },
       );
       settled =
         priorSettled && (!result.mayHaveExecuted || result.processesSettled);
@@ -104,18 +109,27 @@ export async function inspectEnvironmentTemplate(
       report.processEvidenceComplete =
         priorComplete &&
         (!result.mayHaveExecuted || result.processEvidenceRef !== null);
-      const version = result.stdout.trim();
-      if (
-        result.state !== "exited" ||
-        result.exitCode !== 0 ||
-        !/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)
-      ) {
+      const output = `${result.stdout}\n${result.stderr}`.trim();
+      const match = output.match(/(?:^|[^0-9])(\d+)\.(\d+)(?:\.(\d+))?/);
+      const version = match
+        ? `${match[1]}.${match[2]}.${match[3] ?? "0"}`
+        : null;
+      if (result.state !== "exited" || result.exitCode !== 0) {
         entry.state = "inaccessible";
         entry.reason =
           "The bounded sandbox version check failed; verify the executable and its required readable tool directories.";
         continue;
       }
-      entry.observedVersion = version.replace(/^v/, "");
+      if (tool.versionRequirement && !version) {
+        entry.state = "unavailable";
+        entry.reason =
+          "The version probe succeeded but returned no supported numeric version; version compatibility is unavailable.";
+        continue;
+      }
+      entry.observedVersion =
+        version ??
+        (output.slice(0, 120) ||
+          "Version probe exited successfully (numeric version unavailable).");
       entry.state =
         !tool.versionRequirement ||
         satisfiesToolVersion(entry.observedVersion, tool.versionRequirement)

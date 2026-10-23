@@ -68,6 +68,13 @@ export interface FoundationOptions {
   admission?: ExecutionAdmissionGate;
   provisioning?: AgentProvisioning;
   environments?: AgentEnvironmentService;
+  environmentTemplates?: {
+    invoke(
+      caller: CallerContext,
+      action: "read" | "reconcile" | "report",
+      input: import("./contracts.mjs").JsonObject,
+    ): Promise<JsonValue>;
+  };
   /** Synchronous trusted voice admission state, checked again under the shared gate. */
   privateInputBlocked?: (binding: RuntimeBinding) => boolean;
   /** Local durable activity only. Must never wait on remote work while reserving. */
@@ -110,6 +117,7 @@ export class AgentFoundation implements AgentLifecycle {
       options.store,
       options.authorization,
       options.references,
+      options.provisioning?.skillsFor?.bind(options.provisioning),
     );
   }
 
@@ -119,6 +127,9 @@ export class AgentFoundation implements AgentLifecycle {
     return Promise.all(
       agents.map(async (agent) => ({
         ...agent,
+        skills: this.options.provisioning?.skillsFor
+          ? await this.options.provisioning.skillsFor(agent.id)
+          : agent.skills,
         access: this.options.provisioning
           ? await this.options.provisioning.accessFor(agent.id)
           : agent.access,
@@ -250,6 +261,43 @@ export class AgentFoundation implements AgentLifecycle {
     });
   }
 
+  /** Direct owner contact is a role selection, never another kind of agent.
+   * Selecting does not start a session, connect audio or rewrite its chat. */
+  async setContact(
+    principal: FoundationPrincipal,
+    agentId: string | null,
+    expectedRevision: number,
+  ) {
+    const current = this.store.snapshot();
+    if (principal.type !== "owner" || principal.userId !== current.ownerUserId)
+      throw new Error("Only the authenticated owner selects a direct contact.");
+    return this.admit(() =>
+      this.store.update((state) => {
+        const previousId =
+          state.projectSettings.contactAgentId ??
+          state.projectSettings.primaryAgentId;
+        const previous = state.agents.find((row) => row.id === previousId);
+        const binding = previous && this.binding(previous);
+        if (binding && this.options.privateInputBlocked?.(binding))
+          throw new Error("Disconnect voice before selecting another agent.");
+        if (state.projectSettings.revision !== expectedRevision)
+          throw new Error(
+            "Contact selection changed; refresh before selecting.",
+          );
+        if (
+          agentId !== null &&
+          !state.agents.some(
+            (agent) => agent.id === agentId && !agent.archivedAt,
+          )
+        )
+          throw new Error("Choose an available agent in this project.");
+        state.projectSettings.contactAgentId = agentId;
+        state.projectSettings.revision++;
+        return state.projectSettings;
+      }),
+    );
+  }
+
   async setPrimary(
     principal: FoundationPrincipal,
     agentId: string | null,
@@ -286,6 +334,45 @@ export class AgentFoundation implements AgentLifecycle {
         return state.projectSettings;
       }),
     );
+  }
+
+  async environmentTemplate(
+    principal: FoundationPrincipal,
+    action: "read" | "reconcile" | "report",
+    input: import("./contracts.mjs").JsonObject,
+  ) {
+    if (principal.type !== "agent")
+      throw new Error("Current authenticated agent session required.");
+    return this.admit(async () => {
+      if (!this.executionAllowed(principal.caller))
+        throw new Error("Current authenticated agent session required.");
+      if (!this.options.environmentTemplates)
+        throw new Error("Environment template lifecycle unavailable.");
+      // Only the authenticated caller's own metadata is exposed. Shared resources
+      // and command execution retain their independent ordinary authorization.
+      return this.options.environmentTemplates.invoke(
+        principal.caller,
+        action,
+        input,
+      );
+    });
+  }
+
+  async privateEnvironment(
+    principal: FoundationPrincipal,
+    input: Omit<
+      Parameters<NonNullable<AgentEnvironmentService["privateContext"]>>[0],
+      "caller"
+    >,
+  ) {
+    if (principal.type !== "agent" || !this.executionAllowed(principal.caller))
+      throw new Error("Current authenticated agent session required.");
+    if (!this.options.environments?.privateContext)
+      throw new Error("Private context execution unavailable.");
+    return this.options.environments.privateContext({
+      ...input,
+      caller: principal.caller,
+    });
   }
 
   async environmentList(principal: FoundationPrincipal, agentId: string) {
@@ -1594,7 +1681,8 @@ export class AgentFoundation implements AgentLifecycle {
     await this.store.update((state) => {
       const current = state.agents.find((row) => row.id === binding.agentId);
       if (
-        state.projectSettings.primaryAgentId !== binding.agentId ||
+        (state.projectSettings.contactAgentId ??
+          state.projectSettings.primaryAgentId) !== binding.agentId ||
         current?.runtime.session.sessionId !== binding.sessionId ||
         current.runtime.threadId !== binding.threadId ||
         !["started", "stopping", "unknown", "error"].includes(
@@ -1602,7 +1690,7 @@ export class AgentFoundation implements AgentLifecycle {
         )
       )
         throw new Error(
-          "Realtime promotion is not from the current primary session.",
+          "Realtime promotion is not from the current selected agent session.",
         );
       if (
         state.receipts.some(
@@ -1657,7 +1745,11 @@ export class AgentFoundation implements AgentLifecycle {
   publicVoiceAllowed(binding: RuntimeBinding): boolean {
     if (!this.executionAllowed(binding)) return false;
     const state = this.store.snapshot();
-    if (state.projectSettings.primaryAgentId !== binding.agentId) return false;
+    if (
+      (state.projectSettings.contactAgentId ??
+        state.projectSettings.primaryAgentId) !== binding.agentId
+    )
+      return false;
     if (
       state.messages.some(
         (row) =>

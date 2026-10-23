@@ -41,7 +41,7 @@ function AgentAccessContent(props: AgentAccessPanelProps) {
   return (
     <AccessSection
       title={`Access for ${props.agent.profile.name}`}
-      description="Choose group memberships and the service identities this agent may use. Assigning a connection alone grants no operations."
+      description="Choose group memberships. Skills, service identities and operations derive from these groups."
       action={
         !draft && (
           <Button
@@ -51,9 +51,6 @@ function AgentAccessContent(props: AgentAccessPanelProps) {
                 agentId: props.agent.id,
                 expectedRevision: props.assignmentRevision,
                 permissionGroupIds: [...props.agent.access.permissionGroupIds],
-                serviceConnectionIds: [
-                  ...props.agent.access.serviceConnectionIds,
-                ],
               })
             }
           >
@@ -133,66 +130,11 @@ function AgentAccessContent(props: AgentAccessPanelProps) {
               </Choice>
             ))}
         </fieldset>
-        <fieldset
-          disabled={!draft || action.busy}
-          className="space-y-4 border-t pt-4"
-        >
-          <legend className="mb-2 text-sm font-medium">
-            Assigned connections
-          </legend>
-          {!props.connections.length && (
-            <p className="text-sm text-muted-foreground">
-              No connections are available.
-            </p>
-          )}
-          {props.connections.map((connection) => (
-            <Choice
-              key={connection.id}
-              checked={access.serviceConnectionIds.includes(connection.id)}
-              onChange={(checked) =>
-                draft &&
-                setDraft({
-                  ...draft,
-                  serviceConnectionIds: checked
-                    ? [...draft.serviceConnectionIds, connection.id]
-                    : draft.serviceConnectionIds.filter(
-                        (value) => value !== connection.id,
-                      ),
-                })
-              }
-            >
-              <ServiceIdentity connection={connection} />
-            </Choice>
-          ))}
-          {access.serviceConnectionIds
-            .filter(
-              (id) =>
-                !props.connections.some((connection) => connection.id === id),
-            )
-            .map((id) => (
-              <Choice
-                key={id}
-                checked
-                onChange={() =>
-                  draft &&
-                  setDraft({
-                    ...draft,
-                    serviceConnectionIds: draft.serviceConnectionIds.filter(
-                      (value) => value !== id,
-                    ),
-                  })
-                }
-                description="Unavailable connection. Remove this assignment or refresh to inspect it."
-              >
-                {id}
-              </Choice>
-            ))}
-        </fieldset>
-        <p className="text-xs leading-5 text-muted-foreground">
-          Unassigning a connection prevents later calls through it, including
-          calls covered by an existing approval. Removing a group leaves any
-          other group permissions and explicit grants intact. Calls already
-          admitted may finish.
+        <p className="text-xs text-muted-foreground">
+          Services and skills follow current group memberships. Revoked service
+          availability prevents later calls, including separately approved
+          calls. Already admitted operations may finish. Explicit Restart
+          refreshes native discovery.
         </p>
         <ErrorMessage>{action.error}</ErrorMessage>
         {draft && (

@@ -23,17 +23,49 @@ To use another account or executor, create another connection and assign it expl
 changing an existing connection's identity would silently retarget existing approvals.
 Name and credentials can be updated; reconnect is a gateway-owned callback.
 
-Assign connections and permission groups to each agent. Both are needed: assignment
-alone permits no operation. A current group capability or an explicit scoped owner
+Assign permission groups to each agent. Group service grants determine connection availability and operations; the former separate connection assignment is compatibility data. See [current group-derived access](GROUP-DERIVED-ACCESS.md).
+Connection availability alone permits no operation. A current group capability or an explicit scoped owner
 grant supplies authority. Editing a shared group affects later calls for every member.
 Skills, help replies and workflow statuses never confer permission.
 
-Crew action scope choices match the action's target. Creating agents, jobs and
-environments, listing jobs, and reading or writing project skills use the entire
-project. Their new grants default to project scope. Agent-targeted actions retain
-the self, selected-agent and project choices. An older unsupported saved scope
-stays visible and unchanged until the owner explicitly changes or removes it;
-saving an unrelated edit does not broaden it.
+Crew capabilities are enabled by presence of `{ action }` in a group's grants.
+Agents gain them through assigned groups; multiple groups are additive. An enabled
+capability covers valid targets in that project, including other agents. Action target
+shapes remain validated, but there is no per-capability self/selected-agent/project
+selector. Group assignment, connection assignment and grant administration remain
+owner-only; a capability never bypasses project identity or credential gates.
+
+### Legacy conversion (#124)
+
+Opening a valid version 1 access journal under the correct project/owner converts it
+atomically to version 2. All previously enabled actions become membership capabilities,
+including old self and selected-agent grants (even an empty selected list). This is
+an explicit owner-approved change: members can now act on other valid agents in the
+same project for those actions. No new group members, service connections or workspace
+policies are assigned. To limit an agent, remove that capability from its groups or
+remove its membership; assigning another group can still independently allow it.
+
+Conversion increments each group's revision and appends a
+`group.converted-to-membership-capabilities` audit receipt. The full original journal
+is retained privately as `access-v1-before-group-capabilities.json`, including old target
+lists and immutable audit/history records. It is recovery evidence, never a parallel
+source of current authority. Conversion refuses malformed/foreign state and never
+resets it. A failed conversion leaves recovery evidence in place and fails closed;
+an intact identical private backup permits retry after an interrupted migration. Conflicting,
+incomplete or unsafe backups require deliberate operator recovery.
+Version 2 writes reject legacy scopes. Once/session/persistent service approvals and
+their scopes are separate and are unchanged.
+
+### Equivalent workspace registrations
+
+Settings and guided setup reuse an existing workspace only when canonical path,
+device/inode, writable/executable settings, tool directories and managed worktree
+root all match. Admission is serialized, so concurrent retries also reuse that record.
+Legacy equivalent IDs remain intact for group grants, attachments and history. Owner
+choices group exact equivalents into one row; checked means any of its IDs is assigned,
+and unchecking removes all those equivalent references from the edited group only.
+Different configurations remain separate with their access, tool directories and
+managed root shown. Identical paths alone never merge authority or destroy records.
 
 Review the caller, acting service identity, operation, arguments and justification
 before approving. The default scope is the exact operation and arguments. Duration is
@@ -221,14 +253,15 @@ OAuth credential paste is deliberately unsupported. A provider's actual supporte
 
 `OwnerAccessSettings` mounts the connection, group, assignment, creation preset, pending request and grant panels. Its parent supplies `{snapshot, isOwner, onCommand, onNotify}` through authenticated owner IPC and refreshes snapshot props on `access_changed`. Keep the component mounted across refresh. Editor drafts retain captured revisions and report conflicts without overwriting typed text or automatically applying a stale draft. Credentials are cleared on submit even when saving fails.
 
-An isolated actual-renderer walkthrough verified all six project-only Crew action
-defaults and scope choices through `saveGroup`, assignment and real authorization.
-Selected-agent reads remained restricted to the selected agent. A description-only
-save preserved an older unsupported selected-agent creation grant exactly and
-left its saved scope visible. This is bounded renderer/API acceptance, separate
-from the composed application's native walkthrough.
+The #124 disposable renderer walkthrough verifies create/edit/save/reload of on/off
+capabilities, no Applies to controls, and equivalent workspace selection on desktop
+and narrow layouts. Real access-service checks cover additive membership, revocation,
+browser discovery and project/owner/session boundaries. Earlier scoped-grant renderer
+acceptance described the superseded version 1 model; it is not the current authority.
+These checks are separate from native model/provider acceptance and never mutate the
+owner's live profile.
 
-Access owns persisted `presets`, `creationDefaults` and assignments. The owner can make an enabled preset the creation default or require explicit selection. A preset contains profile/skill/runtime references and group/connection IDs, never credential values. For first-run setup, the production host supplies `runtimeDefaults: {modelAccessId, configRef}` to `createAccessOwnerApi`; the snapshot exposes those validated non-secret references and the UI can save the first preset with no existing agents and no selected skills. If defaults are absent, first-preset creation stays unavailable with an explicit model-setup message. Existing configured agents remain optional profile/runtime/skill templates, and the owner chooses permissions independently. Current references are checked again when applying the preset. Disabling a preset prevents later creation; editing it does not rewrite existing agents.
+Access owns persisted `presets`, `creationDefaults` and assignments. The owner can make an enabled preset the creation default or require explicit selection. A preset contains profile/runtime references and group IDs, never credential values. Skill/connection fields project current memberships and cannot override them. For first-run setup, the production host supplies `runtimeDefaults: {modelAccessId, configRef}` to `createAccessOwnerApi`; the snapshot exposes those validated non-secret references and the UI can save the first preset with no existing agents and no selected skills. If defaults are absent, first-preset creation stays unavailable with an explicit model-setup message. Existing configured agents remain optional profile/runtime/skill templates, and the owner chooses permissions independently. Current references are checked again when applying the preset. Disabling a preset prevents later creation; editing it does not rewrite existing agents.
 
 `ProjectAuthorizationService` implements the canonical `AgentProvisioning` port. `listPresets` returns enabled presets; `defaultPreset` resolves the current enabled default; `accessFor` produces the authoritative `Agent.access` projection. Foundation creates the pending stopped agent under the shared execution gate, then calls `applyPreset({actor, agentId, presetId, expectedPresetRevision})` and marks the agent usable only after success. Failure must leave the agent unavailable and preserve truthful evidence. The method does not acquire the shared gate recursively. It verifies current creation authority and reporting relationship for manager callers, rejects self/existing-agent changes, and persists only the owner-approved assignment. Foundation owns primary-agent designation and creation lifecycle. `AccessIdentitySource` must read raw foundation records, not an access-projected API that would re-enter the access lock.
 

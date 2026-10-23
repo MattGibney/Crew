@@ -73,9 +73,11 @@ export interface Agent {
     /** Optional per-agent voice override; absent legacy values mean null. */
     voice?: string | null;
   };
+  /** Compatibility/provenance; current views and runtime derive skills from groups. */
   skills: { skillId: Id; enabled: boolean }[];
   access: {
     permissionGroupIds: Id[];
+    /** Compatibility projection of current group service grants. */
     serviceConnectionIds: Id[];
     inheritPersonalServiceCredentials: false; // Desired policy, not isolation evidence
   };
@@ -245,7 +247,9 @@ export type CrewAction =
   | "skills.read"
   | "skills.write"
   | "skills.assign"
+  | "resources.read"
   | "browser.control"
+  | "browser.external"
   | "environments.read"
   | "environments.create"
   | "environments.attach"
@@ -263,8 +267,6 @@ export type CrewAction =
 export type CrewTarget = { type: "agent"; agentId: Id } | { type: "project" };
 export interface CrewPermission {
   action: CrewAction;
-  scope:
-    { type: "self" } | { type: "agents"; agentIds: Id[] } | { type: "project" };
 }
 export interface PermissionGroup {
   id: Id;
@@ -277,6 +279,10 @@ export interface PermissionGroup {
     crew: CrewPermission[];
     services: { connectionId: Id; capabilities: string[] }[];
     environmentPolicyIds: Id[];
+    /** Nonsecret project references; executable resources use canonical policy/connection grants. */
+    /** Effective skills and references are the union of current memberships. */
+    skillIds?: Id[];
+    resourceIds?: Id[];
   };
 }
 /** Trusted control-plane only. Agents receive ServiceConnectionView. */
@@ -702,6 +708,9 @@ export interface AgentRuntimeAdapter {
   observe(binding: RuntimeBinding): AsyncIterable<RuntimeEvent>;
 }
 export interface RuntimeHistoryItem {
+  /** Native item time, or its containing turn start when only turn timing exists. */
+  timestamp?: Timestamp;
+  timestampSource?: "native_item" | "native_turn";
   runtimeRef: string;
   turnId: string | null;
   kind: "message" | "tool" | "approval" | "other";
@@ -777,6 +786,8 @@ export interface ProjectAgentSettings {
   projectId: Id;
   revision: Revision;
   primaryAgentId: Id | null;
+  /** Owner-selected direct contact; absent/null falls back to the primary agent. */
+  contactAgentId?: Id | null;
 }
 /** Access owns this data and its revision-checked administration. No credentials. */
 export interface AgentCreationPreset {
@@ -809,6 +820,7 @@ export interface AgentProvisioning {
     expectedPresetRevision: Revision;
   }): Promise<Agent["access"]>;
   accessFor(agentId: Id): Promise<Agent["access"]>;
+  skillsFor?(agentId: Id): Promise<Agent["skills"]>;
 }
 /** Skill storage/UI are owned by #34/#95; the runtime consumes exact revisions. */
 export interface ProjectSkillSource {
@@ -817,6 +829,12 @@ export interface ProjectSkillSource {
 }
 /** Explicit environment operations. No job/status/lifecycle inference. */
 export interface AgentEnvironmentService {
+  privateContext?(input: {
+    caller: CallerContext;
+    action: "prepare" | "execute" | "start" | "status" | "stop";
+    requestId: Id;
+    arguments: JsonObject;
+  }): Promise<JsonValue>;
   resources?(agentId: Id): Agent["resources"] | Promise<Agent["resources"]>;
   list?(caller: CallerContext, agentId: Id): Promise<JsonValue>;
   invoke(input: {

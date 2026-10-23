@@ -112,3 +112,17 @@ Connection verification uses an independent optional `onVerify(connectionId, exp
 
 
 The owner snapshot consumes a required synchronous `catalogueSnapshot(connection)` host callback and never starts provider discovery. Its `catalogue` rows distinguish `available`, `undiscovered` and `failed`. `OwnerAccessSettings` displays a connection-specific not-yet-discovered or failed-discovery message and offers the separate Verify connection action only when supplied. Empty current catalogues can be available; absent/unverified cache entries cannot.
+
+## Membership capabilities (#124)
+
+Crew permissions are on/off actions in a group. The editor saves `{ action }` only;
+assigning a group enables its capabilities for that agent, and multiple groups add
+capabilities together. Setup and connection reviews show the enabled actions without
+per-action target selectors. One-time and session service approval scopes remain separate.
+
+Workspace choices group only host-provided exact configuration identities. A checked
+choice recognizes every equivalent retained policy ID; an unrelated save preserves
+those references, and clearing the choice removes all its aliases from that group.
+Selecting a new choice adds one canonical policy ID. Different configurations remain
+separate and unavailable saved IDs stay visible until explicitly removed. This rendering
+never rewrites attachments or historical records.

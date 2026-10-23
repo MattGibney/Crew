@@ -183,7 +183,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "agent_profile_save",
       description:
-        "Save a profile using its current revision; active instructions change only on explicit Restart.",
+        "Save an agent profile using its current revision; instructions change only on explicit Restart. Skills inherit from permission groups; this operation cannot change group skill access.",
       inputSchema: object({
         agentId: id,
         expectedRevision: { type: "integer", minimum: 1 },
@@ -260,6 +260,68 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
       description:
         "Read, edit and run commands in an owner-approved project folder through the sandboxed workspace executor. First use environments_read, attach an approved policy, and explicitly prepare an assigned template if tools/configuration are needed. Preparation runs no setup commands. Execute bounded argv or start a managed background command; status/stop use its exact operationId. Read-only policies deny workspace writes. Native file/shell tools cannot access these folders. Preserves agent/chat identity.",
       inputSchema: environmentInput,
+    },
+    {
+      name: "environment_template_read",
+      description:
+        "Read your assigned and desired template definitions, durable change notifications, private context and actual applied workspace revisions. A preparation-required report is metadata, never a task workflow gate. Inspect before first work and after change notices. Templates do not grant shared-folder access or install tools.",
+      inputSchema: object({}),
+    },
+    {
+      name: "environment_context_prepare",
+      description:
+        "Explicitly prepare your own private working directory and template-approved tools/configuration through the sandbox executor. Requires a stable requestId, exact assignment and current environments.execute group capability; shared folders/repositories are unnecessary. Runs bounded version checks, creates/reuses your private HOME/caches, runs no setup/install command and returns a private environmentId. Existing executions and retained contexts remain unchanged.",
+      inputSchema: object({
+        requestId: id,
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+      }),
+    },
+    {
+      name: "environment_context_action",
+      description:
+        "Execute a bounded argv command, start a managed background command, or inspect/stop an exact operation in your explicitly prepared private environment. Use the returned environmentId for execute/start; use operationId for status/stop. The authenticated current agent can target only its own private contexts. Fresh group environments.execute/read capability and template-approved tooling/network remain authoritative; no shared-folder grant or repository is needed. Stable requestId preserves exact receipt replay. No automatic setup or cleanup.",
+      inputSchema: object({
+        action: { enum: ["execute", "start", "status", "stop"] },
+        requestId: id,
+        arguments: {
+          anyOf: [
+            object(
+              {
+                environmentId: id,
+                command: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 256,
+                  items: { type: "string", maxLength: 4096 },
+                },
+                relativeCwd: { type: "string", maxLength: 4096 },
+                timeoutMs: { type: "integer", minimum: 1, maximum: 120000 },
+              },
+              ["environmentId", "command"],
+            ),
+            object({ operationId: id }),
+          ],
+        },
+      }),
+    },
+    {
+      name: "environment_template_reconcile",
+      description:
+        "Explicitly select an inspected template revision for your next preparation. Requires exact assignment revision. Preserves current prepared execution snapshots, files, chat and running work; runs no command and starts no worker. Decide when to prepare/rebuild, then use environment_action prepare and explicit existing commands.",
+      inputSchema: object({
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+        templateRevision: { type: "integer", minimum: 1 },
+      }),
+    },
+    {
+      name: "environment_preparation_report",
+      description:
+        "Retain your own preparation-required, prepared or blocked report and bounded nonsecret summary for the exact assignment. Agent-reported only: does not establish executable readiness, run commands or alter applied snapshots.",
+      inputSchema: object({
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+        state: { enum: ["preparation_required", "prepared", "blocked"] },
+        summary: { type: "string", maxLength: 8192 },
+      }),
     },
     {
       name: "environments_read",
@@ -486,6 +548,40 @@ export function createFoundationAgentTools(
             identifier(args.agentId),
             args.expectedRevision as number,
             args.markdown as string,
+          );
+        case "environment_template_read":
+          return foundation.environmentTemplate(
+            principal,
+            "read",
+            args as JsonObject,
+          );
+        case "environment_context_prepare":
+          return foundation.privateEnvironment(principal, {
+            action: "prepare",
+            requestId: identifier(args.requestId),
+            arguments: {
+              expectedAssignmentRevision:
+                args.expectedAssignmentRevision as number,
+            },
+          });
+        case "environment_context_action":
+          return foundation.privateEnvironment(
+            principal,
+            args as unknown as Parameters<
+              typeof foundation.privateEnvironment
+            >[1],
+          );
+        case "environment_template_reconcile":
+          return foundation.environmentTemplate(
+            principal,
+            "reconcile",
+            args as JsonObject,
+          );
+        case "environment_preparation_report":
+          return foundation.environmentTemplate(
+            principal,
+            "report",
+            args as JsonObject,
           );
         case "environment_action":
           return foundation.environment(principal, {

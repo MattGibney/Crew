@@ -13,6 +13,7 @@ export interface ProjectSkillToolOptions {
   store: ProjectSkillStore;
   /** Supplied by authenticated native transport, never a tool argument. */
   caller: CallerContext;
+  visibleSkillIds?(): Promise<string[]>;
   /** The composition owns current membership, session identity, and execution
    * admission/reservation. This callback must hold admission through operation. */
   runAuthorized<T>(
@@ -49,7 +50,7 @@ const catalogue = [
   {
     name: "skills_list",
     description:
-      "List this project's saved native skills. Skills contain instructions and never grant access.",
+      "List the current project skills inherited from your permission groups. Skills contain instructions and never grant service or filesystem access.",
     inputSchema: object({}),
   },
   {
@@ -101,10 +102,21 @@ export function createProjectSkillAgentTools(options: ProjectSkillToolOptions) {
           switch (name) {
             case "skills_list":
               fields(input, []);
-              return options.store.list();
+              {
+                const visible = await options.visibleSkillIds?.();
+                return (await options.store.list()).filter(
+                  (skill) => !visible || visible.includes(skill.id),
+                );
+              }
             case "skill_read": {
               const args = fields(input, ["skillId"]);
               identifier(args.skillId);
+              const visible = await options.visibleSkillIds?.();
+              if (visible && !visible.includes(args.skillId))
+                throw new ProjectSkillError(
+                  "denied",
+                  "No current group grants this skill.",
+                );
               return options.store.read(args.skillId);
             }
             case "skill_create": {

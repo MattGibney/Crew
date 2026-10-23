@@ -21,6 +21,7 @@ export type PrimaryVoiceEvent = PrimaryVoiceCall &
         text: string;
         done: boolean;
         delta: boolean;
+        observedAt?: string;
       }
   );
 

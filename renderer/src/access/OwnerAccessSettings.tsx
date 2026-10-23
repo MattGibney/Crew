@@ -97,6 +97,7 @@ export function OwnerAccessSettings({
       <PermissionGroupsPanel
         {...common}
         groups={snapshot.groups}
+        skills={snapshot.skills}
         connections={snapshot.connections}
         capabilities={snapshot.capabilities}
         crewCapabilities={snapshot.crewCapabilities}

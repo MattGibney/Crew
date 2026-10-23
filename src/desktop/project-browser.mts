@@ -3,6 +3,10 @@ import { WebContentsView, session, type BrowserWindow } from "electron";
 import { randomUUID } from "node:crypto";
 import { createHash } from "node:crypto";
 import { createBrowserCdp } from "./browser-cdp.mjs";
+import {
+  parsePublicBrowserURL,
+  requirePublicResolution,
+} from "../browser/public-origin.mjs";
 import { record } from "./validation.mjs";
 
 export { parseLocalPreviewURL as experimentURL } from "../browser/local-origin.mjs";
@@ -16,7 +20,7 @@ type PreviewSession = ReturnType<typeof session.fromPartition>;
 type PreviewTarget = {
   origin: string;
   hostOrigin(): string | undefined;
-  verifyHost(): Promise<unknown>;
+  authorizeRequest(url: string, resourceType: string): Promise<void>;
 };
 const sessionTargets = new WeakMap<
   PreviewSession,
@@ -37,19 +41,11 @@ function targetsFor(partition: PreviewSession) {
   // own contents policy; registering another tab must not replace that policy.
   partition.webRequest.onBeforeRequest((details, callback) => {
     const target = current.get(details.webContentsId ?? -1);
-    if (
-      !target ||
-      !isLocalPreviewRequest(
-        details.url,
-        target.origin,
-        target.hostOrigin(),
-        details.resourceType,
-      )
-    ) {
+    if (!target) {
       callback({ cancel: true });
       return;
     }
-    void target.verifyHost().then(
+    void target.authorizeRequest(details.url, details.resourceType).then(
       () => callback({ cancel: false }),
       () => callback({ cancel: true }),
     );
@@ -62,9 +58,14 @@ export function createProjectBrowser(
   initialURL: string,
   hostOrigin: () => string | undefined,
   changed?: () => void,
-  options: { partitionKey?: string } = {},
+  options: {
+    partitionKey?: string;
+    external?: boolean;
+    canBrowseExternal?(): Promise<boolean>;
+  } = {},
 ) {
-  const initial = experimentURL(initialURL, hostOrigin());
+  const parse = options.external ? parsePublicBrowserURL : experimentURL;
+  const initial = parse(initialURL, hostOrigin());
   const partition = session.fromPartition(
     options.partitionKey
       ? `persist:crew-agent-browser-${createHash("sha256").update(options.partitionKey).digest("hex")}`
@@ -80,21 +81,57 @@ export function createProjectBrowser(
   let closing: Promise<void> | undefined;
   const allowed = (value: string) => {
     try {
-      const url = experimentURL(value, hostOrigin());
-      return url.origin === initial.origin;
+      const url = parse(value, hostOrigin());
+      return options.external || url.origin === initial.origin;
     } catch {
       return false;
     }
   };
   // Restrict the whole preview session, including redirects and subresources.
-  const verifyHost = () =>
-    requireLoopbackResolution(initial.hostname, (name) =>
-      partition.resolveHost(name, {
-        source: "system",
-        cacheUsage: "disallowed",
-        secureDnsPolicy: "disable",
-      }),
+  const verifyHost = (hostname = initial.hostname) =>
+    (options.external ? requirePublicResolution : requireLoopbackResolution)(
+      hostname,
+      (name) =>
+        partition.resolveHost(name, {
+          source: "system",
+          cacheUsage: "disallowed",
+          secureDnsPolicy: "disable",
+        }),
     );
+  const authorizeRequest = async (value: string, resourceType: string) => {
+    if (!options.external) {
+      if (
+        !isLocalPreviewRequest(
+          value,
+          initial.origin,
+          hostOrigin(),
+          resourceType,
+        )
+      )
+        throw Error("Request is outside the configured preview origin.");
+      await verifyHost();
+      return;
+    }
+    if (!(await options.canBrowseExternal?.()))
+      throw Error("Public browsing permission is unavailable.");
+    const url = new URL(value);
+    // Inline page-owned assets have no network destination. Top-level navigation
+    // remains HTTP/HTTPS only; file/about/chrome and other schemes stay blocked.
+    if (
+      resourceType !== "mainFrame" &&
+      ["data:", "blob:"].includes(url.protocol)
+    )
+      return;
+    if (resourceType === "webSocket") {
+      if (url.protocol === "wss:") url.protocol = "https:";
+      else if (url.protocol === "ws:") url.protocol = "http:";
+    }
+    const parsed = parsePublicBrowserURL(url.href, hostOrigin());
+    await verifyHost(parsed.hostname);
+    // A grant may be revoked during an asynchronous DNS lookup.
+    if (!(await options.canBrowseExternal?.()))
+      throw Error("Public browsing permission was revoked.");
+  };
   const state = () => {
     const contents = view?.webContents;
     return {
@@ -133,7 +170,8 @@ export function createProjectBrowser(
     // Local previews must never be sent through an inherited remote proxy.
     // Preserve the selected URL/Host; no redirects or hostname rewrites.
     await partition.setProxy({ mode: "direct" });
-    await verifyHost();
+    if (options.external) await authorizeRequest(initial.href, "mainFrame");
+    else await verifyHost();
     const next = new WebContentsView({
       webPreferences: {
         nodeIntegration: false,
@@ -153,17 +191,17 @@ export function createProjectBrowser(
     targets.set(contents.id, {
       origin: initial.origin,
       hostOrigin,
-      verifyHost,
+      authorizeRequest,
     });
     contents.once("destroyed", () => targets.delete(contents.id));
     contents.setBackgroundThrottling(false);
+    contents.setWebRTCIPHandlingPolicy("disable_non_proxied_udp");
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.on("will-navigate", (event, url) => {
       if (!allowed(url)) {
         event.preventDefault();
-        error =
-          "Navigation outside the configured preview origin is unavailable.";
+        error = "Navigation is outside this tab’s permitted address scope.";
         publish();
       }
     });
@@ -286,7 +324,7 @@ export function createProjectBrowser(
             value.url.length > 8192 ||
             !allowed(value.url)
           )
-            throw Error("Use a URL on the configured local preview origin.");
+            throw Error("Use a URL within this tab’s permitted address scope.");
           error = undefined;
           try {
             await contents.loadURL(value.url);

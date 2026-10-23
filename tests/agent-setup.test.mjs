@@ -401,6 +401,8 @@ test("full profile edit recovers a lost commit reply without replay or changing 
       pictureRef: "image:chosen",
       voice: "cedar",
       instructions: "Reviewed instructions",
+      groupMode: "new",
+      groupName: "Reviewed profile skills",
       skills: [{ skillId: "chosen-skill", enabled: true }],
     },
   });
@@ -686,7 +688,11 @@ test("repair retains current memberships and refuses a draft that would restore 
     name: "Team",
     description: "",
     updatedAt: "now",
-    grants: { crew: [], services: [], environmentPolicyIds: [] },
+    grants: {
+      crew: [],
+      services: [{ connectionId: "service", capabilities: [] }],
+      environmentPolicyIds: [],
+    },
   });
   f.access.connections.push({
     id: "service",

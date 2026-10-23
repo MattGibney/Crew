@@ -1,3 +1,14 @@
+import {
+  ProjectResourceCatalogue,
+  projectResources,
+} from "../resources/catalogue.mjs";
+import { createProjectResourceTools } from "../resources/tools.mjs";
+import { combineAgentToolExtensions } from "./tool-extensions.mjs";
+import {
+  connectionIds,
+  skillSelections,
+  migrateLegacyAgentSkills,
+} from "../access/group-access.mjs";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
@@ -111,6 +122,7 @@ export async function startUnifiedApplication(
   let foundation: AgentFoundation | undefined;
   let environments: ProjectEnvironmentService | undefined;
   let environmentTemplates: ProjectEnvironmentTemplateCatalogue | undefined;
+  let resources: ProjectResourceCatalogue | undefined;
   let voice: PrimaryAgentVoice | undefined;
   let voiceArtifacts: VoiceTranscriptArtifacts | undefined;
   let voiceArtifactRevision = 0;
@@ -173,9 +185,16 @@ export async function startUnifiedApplication(
           store.snapshot().jobs.find((job) => job.id === id) ?? null,
       },
       {
+        hasSkill: async (id) =>
+          (await options.skills.list()).some(
+            (skill) => skill.id === id && skill.projectId === options.projectId,
+          ),
         hasOperation: async (connectionId, operation) =>
           gateway?.catalogue.hasOperation(connectionId, operation) ?? false,
       },
+    );
+    await accessStore.transaction((state) =>
+      migrateLegacyAgentSkills(state, store.snapshot().agents),
     );
     const registry = createSupportedGatewayRegistry();
     gateway = await createGateway({
@@ -185,6 +204,8 @@ export async function startUnifiedApplication(
       connections: {
         get: (id) => authorization.getConnection(id),
         listAssigned: (caller) => authorization.listAssignedConnections(caller),
+        allowedOperations: (caller, id) =>
+          authorization.allowedOperations(caller, id),
       },
       resolveConfiguration: registry.resolve,
       validateCaller: async (caller, jobId) =>
@@ -215,12 +236,48 @@ export async function startUnifiedApplication(
       },
     });
     const owner = { type: "user" as const, userId: options.ownerUserId };
+    const agentContextRoot = join(
+      homedir(),
+      ".crew",
+      "workspace-caches",
+      createHash("sha256").update(root).digest("hex").slice(0, 24),
+    );
     environmentTemplates = await ProjectEnvironmentTemplateCatalogue.open({
       directory: join(root, "environment-templates"),
       projectId: options.projectId,
       ownerUserId: options.ownerUserId,
       protectedDirectories: [root],
       listAgents: async () => store.snapshot().agents,
+      contextDirectory: agentContextRoot,
+      notify: async (notice) => {
+        if (!foundation)
+          throw new Error("Foundation notification ingress unavailable.");
+        const queued = await foundation.sendInternal(
+          {
+            id: notice.id,
+            source: "preparation",
+            sourceId: `environment-template:${notice.id}`,
+            recipientAgentId: notice.agentId,
+            content: [
+              {
+                type: "text",
+                text: `Your environment template changed to revision ${notice.templateRevision}. Read environment_template_read to inspect the exact updated definition and your preparation-required state. Decide when/how to reconcile or rebuild with environment_template_reconcile, environment_action prepare, and existing project tools. No setup ran and no active execution was reconfigured. Report readiness or blockers with environment_preparation_report. This notification does not assign a task or prescribe workflow.`,
+              },
+            ],
+          },
+          async () =>
+            store
+              .snapshot()
+              .agents.some(
+                (agent) =>
+                  agent.id === notice.agentId && agent.archivedAt === null,
+              ),
+        );
+        if (!queued)
+          throw new Error(
+            "Template recipient is unavailable; notice remains pending.",
+          );
+      },
       inspect: (template) =>
         inspectEnvironmentTemplate(template, join(root, "environments")),
     });
@@ -235,13 +292,10 @@ export async function startUnifiedApplication(
       startExecution: startMacWorkspaceProcess,
       inspectExecution: inspectMacWorkspaceProcess,
       stopExecution: stopMacWorkspaceProcess,
-      runtimeDirectory: join(
-        homedir(),
-        ".crew",
-        "workspace-caches",
-        createHash("sha256").update(root).digest("hex").slice(0, 24),
-      ),
+      runtimeDirectory: agentContextRoot,
       templateSource: {
+        prepareContext: (agentId, input) =>
+          environmentTemplates!.preparePrivateContext(agentId, input),
         resolvePreparation: (input) =>
           environmentTemplates!.resolvePreparation(input),
         resolvePinned: (id, revision) =>
@@ -263,6 +317,13 @@ export async function startUnifiedApplication(
       },
       noteExecutionAdmitted: (caller) =>
         foundation!.noteExecutionAdmitted(caller),
+      authorizePrivateContext: async (caller, action) => {
+        await foundation!.records.authorize(
+          { type: "agent", caller },
+          action === "read" ? "environments.read" : "environments.execute",
+          { type: "agent", agentId: caller.agentId },
+        );
+      },
       authorize: async (caller, action, agentId, policy) => {
         if (
           !store
@@ -384,6 +445,38 @@ export async function startUnifiedApplication(
       admission: gate,
       admissionUsesFoundationBarrier: true,
       environments,
+      environmentTemplates: {
+        invoke: async (caller, action, input) => {
+          const allowed =
+            action === "read"
+              ? []
+              : action === "reconcile"
+                ? ["expectedAssignmentRevision", "templateRevision"]
+                : ["expectedAssignmentRevision", "state", "summary"];
+          if (Object.keys(input).some((key) => !allowed.includes(key)))
+            throw new Error("Unknown template lifecycle argument.");
+          if (action === "reconcile")
+            await environmentTemplates!.reconcile(
+              caller.agentId,
+              input as unknown as Parameters<
+                ProjectEnvironmentTemplateCatalogue["reconcile"]
+              >[1],
+            );
+          if (action === "report")
+            await environmentTemplates!.reportPreparation(
+              caller.agentId,
+              input as unknown as Parameters<
+                ProjectEnvironmentTemplateCatalogue["reportPreparation"]
+              >[1],
+            );
+          return JSON.parse(
+            JSON.stringify({
+              ...(await environmentTemplates!.agentSnapshot(caller.agentId)),
+              appliedEnvironments: environments!.templateState(caller.agentId),
+            }),
+          );
+        },
+      },
       privateInputBlocked: (binding) =>
         voice?.privateInputBlocked(binding) ?? false,
       executionSettlement: async (caller) => {
@@ -422,13 +515,16 @@ export async function startUnifiedApplication(
         },
       },
       async configuration(agent) {
-        const assigned = await authorization.accessFor(agent.id);
         const access = await authorization.snapshot({
           type: "user",
           userId: options.ownerUserId,
         });
+        const groupIds =
+          access.assignments.find((row) => row.agentId === agent.id)
+            ?.permissionGroupIds ?? [];
+        const serviceIds = connectionIds(access, groupIds);
         const available = await options.skills.list();
-        const skills = agent.skills
+        const skills = skillSelections(access, groupIds)
           .filter((skill) => skill.enabled)
           .map((selection) => {
             const skill = available.find(
@@ -449,12 +545,10 @@ export async function startUnifiedApplication(
             profile: agent.profile,
             skills,
             permissionGroups: access.groups
-              .filter((group) => assigned.permissionGroupIds.includes(group.id))
+              .filter((group) => groupIds.includes(group.id))
               .map(({ id, revision }) => ({ id, revision })),
             serviceConnections: access.connections
-              .filter((connection) =>
-                assigned.serviceConnectionIds.includes(connection.id),
-              )
+              .filter((connection) => serviceIds.includes(connection.id))
               .map(({ id, revision }) => ({ id, revision })),
             runtimeConfig: {
               id: unifiedRuntimeDefaults.configRef,
@@ -479,6 +573,7 @@ export async function startUnifiedApplication(
       },
     });
     await foundation.recover();
+    await environmentTemplates.deliverNotifications().catch(() => {});
     // The foundation writer lock owns this artifact store's entire lifetime.
     // Damage to optional voice display evidence must not hide existing agents.
     try {
@@ -498,7 +593,10 @@ export async function startUnifiedApplication(
       currentPrimaryBinding: () => {
         const state = store.snapshot();
         const agent = state.agents.find(
-          (row) => row.id === state.projectSettings.primaryAgentId,
+          (row) =>
+            row.id ===
+            (state.projectSettings.contactAgentId ??
+              state.projectSettings.primaryAgentId),
         );
         return agent?.runtime.threadId && agent.runtime.session.sessionId
           ? {
@@ -655,7 +753,50 @@ export async function startUnifiedApplication(
       inspectOperation: (operationId: string) =>
         environments!.inspectOperation(owner, operationId),
     };
-    const additionalTools = options.agentTools?.({
+    resources = await ProjectResourceCatalogue.open(
+      join(root, "resources"),
+      options.projectId,
+    );
+    const resourceList = async (caller?: CallerContext) => {
+      const access = await authorization.snapshot(owner);
+      const assigned = caller
+        ? await authorization.accessFor(caller.agentId)
+        : null;
+      return projectResources({
+        references: resources!.list(),
+        workspaces: environments!
+          .ownerSnapshot(owner)
+          .workspaces.filter((row) => !row.privateContext),
+        connections: assigned
+          ? access.connections.filter((connection) =>
+              assigned.serviceConnectionIds.includes(connection.id),
+            )
+          : access.connections,
+        ...(assigned
+          ? {
+              groups: access.groups.filter((group) =>
+                assigned.permissionGroupIds.includes(group.id),
+              ),
+            }
+          : {}),
+      });
+    };
+    const resourceTools = createProjectResourceTools({
+      run: (caller, operation) =>
+        gate.run(async () => {
+          if (closing || !foundation!.executionAllowed(caller))
+            throw Error("This native session cannot inspect resources.");
+          await foundation!.records.authorize(
+            { type: "agent", caller },
+            "resources.read",
+            { type: "project" },
+          );
+          return operation();
+        }),
+      list: (caller) => resourceList(caller),
+      subscribe: (listener) => resources!.subscribe(listener),
+    });
+    const suppliedTools = options.agentTools?.({
       authorization,
       runAuthorized: (caller, action, operation) =>
         gate.run(async () => {
@@ -671,6 +812,10 @@ export async function startUnifiedApplication(
           return operation();
         }),
     });
+    const additionalTools = combineAgentToolExtensions([
+      resourceTools,
+      ...(suppliedTools ? [suppliedTools] : []),
+    ]);
     mcp = await startAgentMcpHost({
       privateDirectory: join(root, "native-transport"),
       foundation,
@@ -769,15 +914,25 @@ export async function startUnifiedApplication(
       snapshot: async () => ({
         ...(await baseOwnerApi.snapshot()),
         setupDefaults: unifiedRuntimeDefaults,
+        projectResources: await resourceList(),
       }),
       command: async (name: string, args: unknown) => {
         if (closing) throw new Error("Crew is closing.");
+        if (name === "resources.list") return resourceList();
+        if (name === "resources.saveReference") {
+          if (!args || typeof args !== "object" || Array.isArray(args))
+            throw Error("Reference fields are required.");
+          return resources!.save(
+            args as Parameters<ProjectResourceCatalogue["save"]>[0],
+          );
+        }
         return baseOwnerApi.command(name, args);
       },
       subscribe(listener: (event: unknown) => void) {
         const stops = [
           baseOwnerApi.subscribe(listener),
           authorization.subscribe(() => listener({ kind: "changed" })),
+          resources!.subscribe(() => listener({ kind: "changed" })),
         ];
         if (options.skills.subscribe)
           stops.push(
@@ -808,6 +963,8 @@ export async function startUnifiedApplication(
       vault,
       connections: draftConnections,
       registry,
+      prepareCredential: (connection, revision) =>
+        draftExecutor.prepareOwnerCredential(connection, revision),
       discoverCapabilities: (connection, options) =>
         draftExecutor.discoverCapabilities(connection, options),
     });
@@ -845,6 +1002,7 @@ export async function startUnifiedApplication(
         },
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
+        listSkills: () => options.skills.list(),
         resolveEnvironmentTemplate: async (pin) => {
           environmentTemplates!.resolvePinned(pin.id, pin.revision);
         },
@@ -946,6 +1104,7 @@ export async function startUnifiedApplication(
             );
             await finishStep("connectionSetup", () => connectionSetup.close());
             await finishStep("accessStore", () => accessStore!.close());
+            await finishStep("projectResources", () => resources!.close());
             closedSteps.add("resources");
           }
           await foundation!.dispose(reservationId);
@@ -957,6 +1116,7 @@ export async function startUnifiedApplication(
     };
   } catch (error) {
     for (const stop of cleanupSubscriptions) stop();
+    await resources?.close().catch(() => {});
     await voice?.dispose().catch(() => {});
     await voiceArtifacts?.dispose().catch(() => {});
     await mcp?.close().catch(() => {});

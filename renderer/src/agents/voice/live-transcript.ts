@@ -5,6 +5,11 @@ export interface LiveTranscriptItem {
   role: "user" | "assistant";
   text: string;
   done: boolean;
+  callId?: string;
+  threadId?: string;
+  observedAt?: string;
+  /** Presentation-only: call ended before retention acknowledged this item. */
+  ended?: boolean;
 }
 const MAX_ITEMS = 32;
 const MAX_ITEM_CHARS = 16_000;
@@ -15,7 +20,9 @@ export function updateLiveTranscript(
   items: LiveTranscriptItem[],
   event: Extract<PrimaryVoiceEvent, { kind: "transcript" }>,
 ): LiveTranscriptItem[] {
-  const prior = items.find((item) => item.itemId === event.itemId);
+  const prior = items.find(
+    (item) => item.itemId === event.itemId && item.callId === event.callId,
+  );
   if (
     prior &&
     (prior.role !== event.role ||
@@ -31,6 +38,10 @@ export function updateLiveTranscript(
     role: event.role,
     text,
     done: event.done,
+    callId: event.callId,
+    threadId: event.binding.threadId,
+    observedAt:
+      prior?.observedAt ?? event.observedAt ?? new Date().toISOString(),
   };
   const result = (
     prior

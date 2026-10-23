@@ -15,6 +15,10 @@ import type {
 export interface GatewayConnections {
   get(connectionId: string): Promise<ServiceConnection | null>;
   listAssigned(caller: CallerContext): Promise<ServiceConnection[]>;
+  allowedOperations?(
+    caller: CallerContext,
+    connectionId: string,
+  ): Promise<string[]>;
 }
 export interface OAuthRefreshConfiguration {
   tokenEndpoint: string; // Owner-verified issuer metadata, never an argument/provider redirect.
@@ -35,6 +39,9 @@ interface CommonConfiguration {
 }
 export interface McpHttpConfiguration extends CommonConfiguration {
   type: "mcp";
+  /** Trusted namespaced tool adapter; Gmail uses fixed first-party REST. */
+  adapter?: "gmail-rest";
+  gmailWrite?: boolean;
   url: string;
   allowLoopbackHttp?: boolean; // Disposable fixtures only; production requires HTTPS.
 }

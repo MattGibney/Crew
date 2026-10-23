@@ -63,7 +63,9 @@ export const crewActions = [
   "skills.read",
   "skills.write",
   "skills.assign",
+  "resources.read",
   "browser.control",
+  "browser.external",
   "environments.read",
   "environments.create",
   "environments.attach",
@@ -162,23 +164,19 @@ const definitions = {
     description: text,
     revision,
     updatedAt: timestamp,
-    grants: object({
-      crew: array(
-        object({
-          action: { enum: crewActions },
-          scope: {
-            anyOf: [
-              object({ type: one("self") }),
-              object({ type: one("agents"), agentIds: ids }),
-              object({ type: one("project") }),
-            ],
-          },
-        }),
-        256,
-      ),
-      services: array(object({ connectionId: id, capabilities: ids }), 256),
-      environmentPolicyIds: ids,
-    }),
+    grants: object(
+      {
+        crew: {
+          ...array(object({ action: { enum: crewActions } }), 256),
+          uniqueItems: true,
+        },
+        services: array(object({ connectionId: id, capabilities: ids }), 256),
+        environmentPolicyIds: ids,
+        skillIds: ids,
+        resourceIds: ids,
+      },
+      ["skillIds", "resourceIds"],
+    ),
   }),
   connection: object({
     id,
@@ -282,26 +280,32 @@ const definitions = {
     presetRevision: revision,
     appliedAt: timestamp,
   }),
-  preset: object({
-    id,
-    projectId: id,
-    revision,
-    name: id,
-    enabled: { type: "boolean" },
-    profile: object({
+  preset: object(
+    {
+      id,
+      projectId: id,
+      revision,
       name: id,
-      pictureRef: nullable(id),
-      personality: { type: "string", maxLength: 200000 },
-      systemPrompt: { type: "string", maxLength: 200000 },
-      voice: nullable(id),
-    }, ["voice"]),
-    skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
-    modelAccessId: id,
-    configRef: id,
-    permissionGroupIds: ids,
-    serviceConnectionIds: ids,
-    environmentTemplate: object({ id, revision }),
-  }, ["environmentTemplate"]),
+      enabled: { type: "boolean" },
+      profile: object(
+        {
+          name: id,
+          pictureRef: nullable(id),
+          personality: { type: "string", maxLength: 200000 },
+          systemPrompt: { type: "string", maxLength: 200000 },
+          voice: nullable(id),
+        },
+        ["voice"],
+      ),
+      skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
+      modelAccessId: id,
+      configRef: id,
+      permissionGroupIds: ids,
+      serviceConnectionIds: ids,
+      environmentTemplate: object({ id, revision }),
+    },
+    ["environmentTemplate"],
+  ),
   audit: object({
     id,
     at: timestamp,
@@ -359,11 +363,13 @@ export function validateRecord(
 ): void {
   check(name, value);
 }
-const stateValidator = ajv.compile<AccessState>({
+const stateSchema = {
   $defs: definitions,
   ...object(
     {
-      version: { const: 1 },
+      version: { const: 2 },
+      groupAccessVersion: { const: 1 },
+      pendingLegacySkillAgentIds: { ...array(id, 10000), uniqueItems: true },
       projectId: id,
       ownerUserId: id,
       groups: array(ref("group")),
@@ -374,40 +380,44 @@ const stateValidator = ajv.compile<AccessState>({
       assignments: array(ref("assignment")),
       presetApplications: array(ref("presetApplication")),
       connectionSetups: array(
-        object({
-          requestId: id,
-          verificationId: nullable(id),
-          connectionId: id,
-          expiresAt: timestamp,
-          state: {
-            enum: ["verifying", "verified", "failed", "cancelled", "saved"],
+        object(
+          {
+            requestId: id,
+            verificationId: nullable(id),
+            connectionId: id,
+            expiresAt: timestamp,
+            state: {
+              enum: ["verifying", "verified", "failed", "cancelled", "saved"],
+            },
+            identity: nullable(serviceIdentity),
+            identityStatus: { enum: ["verified", "unavailable"] },
+            capabilities: array(
+              object({
+                id,
+                connectionId: id,
+                upstreamName: id,
+                description: text,
+                inputSchema: ref("json"),
+                outputSchema: nullable(ref("json")),
+                verification: { enum: ["read_only", "unsupported"] },
+              }),
+              500,
+            ),
+            capabilitiesStatus: { enum: ["verified", "unavailable"] },
+            accountKind: { enum: ["personal", "dedicated"] },
+            name: id,
+            setupChoiceId: id,
+            reason: nullable(text),
+            connection: ref("connection"),
+            existing: { type: "boolean" },
+            expectedRevision: nullable(revision),
+            credentialRevision: revision,
+            inputFingerprint: fingerprint,
+            credentialInputFingerprint: fingerprint,
+            saveFingerprint: nullable(fingerprint),
           },
-          identity: nullable(serviceIdentity),
-          identityStatus: { enum: ["verified", "unavailable"] },
-          capabilities: array(
-            object({
-              id,
-              connectionId: id,
-              upstreamName: id,
-              description: text,
-              inputSchema: ref("json"),
-              outputSchema: nullable(ref("json")),
-              verification: { enum: ["read_only", "unsupported"] },
-            }),
-            500,
-          ),
-          capabilitiesStatus: { enum: ["verified", "unavailable"] },
-          accountKind: { enum: ["personal", "dedicated"] },
-          name: id,
-          setupChoiceId: id,
-          reason: nullable(text),
-          connection: ref("connection"),
-          existing: { type: "boolean" },
-          expectedRevision: nullable(revision),
-          credentialRevision: revision,
-          inputFingerprint: fingerprint,
-          saveFingerprint: nullable(fingerprint),
-        }),
+          ["credentialInputFingerprint"],
+        ),
         256,
       ),
       requests: array(ref("request")),
@@ -416,9 +426,50 @@ const stateValidator = ajv.compile<AccessState>({
       closedSessions: array(ref("caller")),
       audit: array(ref("audit"), 20000),
     },
-    ["presetApplications", "connectionSetups"],
+    [
+      "presetApplications",
+      "connectionSetups",
+      "groupAccessVersion",
+      "pendingLegacySkillAgentIds",
+    ],
   ),
+};
+const stateValidator = ajv.compile<AccessState>(stateSchema);
+const legacyStateValidator = ajv.compile({
+  ...stateSchema,
+  properties: { ...stateSchema.properties, version: { const: 1 } },
+  $defs: {
+    ...definitions,
+    group: {
+      ...definitions.group,
+      properties: {
+        ...definitions.group.properties,
+        grants: object({
+          services: array(object({ connectionId: id, capabilities: ids }), 256),
+          environmentPolicyIds: ids,
+          crew: array(
+            object({
+              action: { enum: crewActions },
+              scope: {
+                anyOf: [
+                  object({ type: one("self") }),
+                  object({ type: one("agents"), agentIds: ids }),
+                  object({ type: one("project") }),
+                ],
+              },
+            }),
+            256,
+          ),
+        }),
+      },
+    },
+  },
 });
+export function validateLegacyState(value: unknown): void {
+  if (!legacyStateValidator(value))
+    throw new Error("Malformed legacy access state; preserve it for recovery.");
+}
+
 export function validateState(value: unknown): asserts value is AccessState {
   if (!stateValidator(value))
     throw new Error("Malformed access state; restore instead of resetting.");

@@ -429,11 +429,15 @@ const validate = new Ajv({
         createdAt: timestamp,
       }),
     ),
-    projectSettings: object({
-      projectId: id,
-      revision,
-      primaryAgentId: nullable(id),
-    }),
+    projectSettings: object(
+      {
+        projectId: id,
+        revision,
+        primaryAgentId: nullable(id),
+        contactAgentId: nullable(id),
+      },
+      ["contactAgentId"],
+    ),
     provisioning: array(
       object({
         agentId: id,
@@ -592,6 +596,7 @@ function validateState(
   );
   assert(value.projectSettings.projectId === projectId);
   checkAgent(value.projectSettings.primaryAgentId);
+  checkAgent(value.projectSettings.contactAgentId ?? null);
   for (const entry of value.provisioning) {
     checkAgent(entry.agentId);
     checkActor(entry.creator);

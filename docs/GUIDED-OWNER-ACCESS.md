@@ -1,6 +1,6 @@
 # Guided owner access — #100 / #101
 
-The owner can connect a Linear or GitHub account explicitly for Crew. Choose either
+The owner can connect a Linear, GitHub or Gmail account explicitly for Crew. Choose either
 the owner's personal service account or a dedicated agent account, then enter a
 credential created for that account. This choice describes the owner's intent;
 provider identity verification establishes which account actually authenticated.
@@ -24,17 +24,19 @@ repositories and permissions at GitHub. Crew checks the authenticated account wi
 GitHub's user endpoint and discovers the actual MCP catalogue. A successful account
 check does not establish access to every repository, organization or operation.
 
+Gmail uses the fixed first-party REST adapter with explicit owner OAuth access-token or credential-bundle input. Read-only and mail/drafts choices keep sending as a separate ungranted capability. See [group-derived access and Gmail setup](GROUP-DERIVED-ACCESS.md) for supported operations, owner-managed Google client requirements, refresh and fixture-only acceptance.
+
 No registered Crew OAuth client, universal MCP compatibility or provider account
 creation is assumed. Advanced connection editing still uses trusted registrations;
 it cannot install an arbitrary endpoint or command. External connections can be
 skipped for local-only setup.
 
-## Embedding and owner API
+## Connection management and owner API
 
 `ServiceConnectionWizard` and `ServiceConnectionWizardProps` are exported from
 `renderer/src/access/index.ts`. Pass the authenticated `AccessOwnerView`, `isOwner`,
 `onCommand(name, args)`, `onNotify`, `onComplete(connectionId)`, `onCancel`, and an
-optional `onSkip`. Settings uses this same component. Mount it without a changing
+optional `onSkip`. Mount this component only in Settings → Connections & access, never in agent creation or editing. Agent management lists saved named connections and offers an empty state with a navigation action to Settings; returning preserves its draft. Several saved connections may represent different accounts for the same service. Group membership remains the authority for agent access. Mount the Settings component without a changing
 snapshot/revision key so typed non-secret choices survive refreshes. Token entry
 is transient and cleared after verification submission, cancellation or unmount.
 
@@ -73,7 +75,7 @@ uses a fresh request ID; silently reusing different private input is rejected.
 An existing connection needs a stable saved external account ID matching the newly
 verified account. A legacy owner-entered label with no stable ID cannot safely be
 rebound: create a new connection. Groups are shared; adding capabilities affects
-current and future members who have that connection. Explicit approval grants
+all current and future members. Connection availability derives from these group grants; no individual connection allowlist is required. Explicit approval grants
 remain independent. Existing native sessions may need an explicit Restart to
 refresh tool discovery; no wizard action starts or restarts them automatically.
 
@@ -90,7 +92,7 @@ folder and mode. Call it after owner review. Repeating the exact choice reuses
 its current policy/revision; conflicting roots, mode or tool allowances fail.
 It never changes another mode's policy, assigns agents or starts work.
 
-The returned grants contain self-scoped `environments.read`, `attach` and `execute`
+The returned grants contain group capabilities `environments.read`, `attach` and `execute`
 plus the exact policy ID. Onboarding applies them through the existing group and
 preset authority. A selected folder or saved policy alone grants no access.
 Permissions combine: choosing none or read-only does not revoke an independent

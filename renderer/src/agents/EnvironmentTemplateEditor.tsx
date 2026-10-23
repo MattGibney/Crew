@@ -18,8 +18,10 @@ type EditorDraft = {
   description: string;
   node: boolean;
   nodeVersion: string;
+  nodeVersionArguments?: string[];
   npm: boolean;
   npmVersion: string;
+  npmVersionArguments?: string[];
   executableDirectories: string;
   readableDirectories: string;
   network: boolean;
@@ -29,6 +31,7 @@ type EditorDraft = {
   docker: boolean;
   socketPath: string;
   dockerAcknowledged: boolean;
+  additionalTools: string;
   advanced: string;
 };
 // Transient, project-command-scoped drafts survive Settings navigation.
@@ -44,6 +47,10 @@ function edit(template?: EnvironmentTemplate): EditorDraft {
     nodeVersion:
       template?.tools.find((tool) => tool.name === "node")
         ?.versionRequirement ?? "",
+    nodeVersionArguments: template?.tools.find((tool) => tool.name === "node")
+      ?.versionArguments,
+    npmVersionArguments: template?.tools.find((tool) => tool.name === "npm")
+      ?.versionArguments,
     npm: template?.tools.some((tool) => tool.name === "npm") ?? false,
     npmVersion:
       template?.tools.find((tool) => tool.name === "npm")?.versionRequirement ??
@@ -57,6 +64,12 @@ function edit(template?: EnvironmentTemplate): EditorDraft {
     docker: Boolean(template?.hostDocker),
     socketPath: template?.hostDocker?.socketPath ?? "",
     dockerAcknowledged: template?.hostDocker?.hostAccessAcknowledged ?? false,
+    additionalTools: JSON.stringify(
+      template?.tools.filter((tool) => !["node", "npm"].includes(tool.name)) ??
+        [],
+      null,
+      2,
+    ),
     advanced: JSON.stringify(
       {
         environment: template?.environment ?? {},
@@ -115,11 +128,15 @@ function definition(value: EditorDraft): EnvironmentTemplateDraft {
     name: value.name.trim(),
     description: value.description,
     tools: [
+      ...JSON.parse(value.additionalTools),
       ...(value.node
         ? [
             {
               name: "node" as const,
               versionRequirement: value.nodeVersion.trim() || null,
+              ...(value.nodeVersionArguments
+                ? { versionArguments: value.nodeVersionArguments }
+                : {}),
             },
           ]
         : []),
@@ -128,6 +145,9 @@ function definition(value: EditorDraft): EnvironmentTemplateDraft {
             {
               name: "npm" as const,
               versionRequirement: value.npmVersion.trim() || null,
+              ...(value.npmVersionArguments
+                ? { versionArguments: value.npmVersionArguments }
+                : {}),
             },
           ]
         : []),
@@ -406,8 +426,9 @@ export function EnvironmentTemplateEditor({
         <h2 className="font-semibold tracking-tight">Environment templates</h2>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">
           Define tools and explicit access for agent environments. Saving does
-          not install tools, run preparation commands or start an agent.
-          Existing assignments retain their saved template revision.
+          not install tools, run preparation commands or start an agent. Agents
+          receive durable update notices and choose when to reconcile; existing
+          prepared execution keeps its saved revision.
         </p>
       </div>
       {templates === null ? (
@@ -482,6 +503,12 @@ export function EnvironmentTemplateEditor({
                 field("npm version requirement (optional)", "npmVersion")}
             </div>
           </div>
+          {field(
+            "Additional executable requirements (JSON)",
+            "additionalTools",
+            true,
+            'For example: [{"name":"git","versionRequirement":">=2"},{"name":"ffmpeg","versionRequirement":null,"versionArguments":["-version"]}]. Existing approved tools only; no installation on save.',
+          )}
           {field(
             "Executable directories",
             "executableDirectories",

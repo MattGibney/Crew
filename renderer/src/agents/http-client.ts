@@ -33,6 +33,8 @@ export function createAgentsHttpClient(base = "/api/agents"): AgentsClient {
     (await request<{ result: T }>(`${base}/command`, { command: name, args }))
       .result;
   return {
+    selectContact: (agentId, expectedRevision) =>
+      command("setContactAgent", { agentId, expectedRevision }),
     readSnapshot: () => request<AgentsSnapshot>(base),
     subscribe(listener) {
       const stream = new EventSource(`${base}/events`);

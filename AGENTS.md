@@ -549,3 +549,53 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Each agent owns a browser workspace with multiple tabs, independent of the workspace displayed by the owner. Agent tools target only that caller’s tabs; UI selection never grants or transfers authority.
 - Tabs share a private persistent browser session within one project/agent identity; never inherit personal browser cookies or another agent’s session. Apply per-WebContents request policy when registering shared-session networking hooks.
 - Keep tab identity in annotation provenance, preserve tabs across native agent Restart, and distinguish persistent cookies/storage from the current in-memory tab registry, which does not survive desktop exit. Hiding the browser hides native views without closing tabs.
+
+## Group capability authority (#124)
+
+- Permission groups contain on/off Crew actions; enabled means present, and assigned group membership is the authority. Do not restore per-capability self/selected-agent/project selectors or hidden target restrictions. Groups combine additively. Keep actual project/owner identity, connection assignment, credentials and separate service approvals enforced. Setup, presets, browser discovery and authorization must use the same model.
+- Legacy scoped grants deliberately convert to membership capabilities on versioned journal open, with the original private snapshot, incremented group revisions and audit receipts retained. Document the widened within-project targets explicitly; never claim this is a cosmetic UI change. Preserve chats, sign-in, attachments and immutable history.
+- Workspace registration must reuse exact canonical identity plus enforcement configuration across Settings and setup, including concurrent retries. Preserve legacy IDs/references; group equivalent choices without mutating attachments/history. Same path with different access/tools/managed root remains distinct and visibly described. Validate with disposable fixtures; leave the live test profile/build and physical microphone alone.
+## Unified conversation timeline (#123)
+
+- Typed native messages and live/retained voice transcript items share one chronological chat presentation, older above newer. Use the same speaker/message styling; do not add a Saved voice calls section or saved/historical labels to normal messages.
+- Keep native chat authoritative and retained voice artifacts separate internally. Join presentation by exact thread/call/native-item identity, never matching words, replaying transcripts into context or launching turns. Retain a live snapshot through delayed artifact refresh after hangup, preserving its row identity.
+- Preserve available native timestamps and voice observation times. Native turn startedAt uses Unix seconds; turn-level timing is coarser than message timing. Disclose missing/coarse times instead of assigning reload time to old messages. Keep deterministic ties, drafts and the reader's scroll position.
+- For this issue, validation is type/build plus focused disposable UI flows. Do not expand into broad test coverage, use the owner's running profile/build or physical microphone, install, merge or release.
+
+## Specialist-agent architecture (#127)
+
+- Projects represent businesses/products with shared resources, not necessarily source repositories. Keep resource metadata separate from canonical filesystem/service execution policy and credentials. Group membership supplies capabilities, skills, service operations and shared-reference visibility; no competing per-agent allowlists.
+- The owner may directly talk by text/voice to any selected persistent specialist agent. `contactAgentId` is independent of the default coordinating `primaryAgentId`; selecting never starts work, shares chats/context or connects a microphone. Require disconnecting an existing voice call before switching its exact binding. This supersedes the earlier blanket prohibition on direct worker chat interfaces, without adding cross-agent shared memory or simultaneous calls.
+- Prioritize functioning architecture and clear editable agent guidance. UI redesign and cross-agent shared context/communication are explicitly deferred. Preserve live test profiles, sign-in/history and Set1 source/tooling; validate in disposable fixtures. No new PR merge, release or running-build replacement without authorization.
+
+
+## Public browser permission boundary (#127)
+
+- Public HTTP/HTTPS browsing requires fresh assigned-group `browser.control` and `browser.external`; neither capability is implied by selecting/opening a browser or by an existing native tool schema. Add no default external grants. Owner opens follow the selected agent’s same group authority without starting a session; agent tools still require the exact current started session.
+- Keep local preview tabs scoped to their explicit loopback HTTP origin. Public pages may load public redirects/assets/WS/WSS, but never Crew, private networks or local previews. Check fresh authority and Chromium DNS on actual requests, and tear down public views on revocation to end existing page activity/transports. Preserve private per-agent storage and per-tab policy routing within shared agent sessions. Do not expose app-wide CDP or import personal credentials.
+- Browser-layer DNS checks are separate from Chromium connections and do not establish hostile-DNS/OS-level network isolation. State that limit alongside real acceptance evidence. Use disposable native fixtures and harmless public GETs; no physical microphone, account actions, installed profile or Set1 source/tooling changes.
+
+## Agent-owned environment templates (#127)
+
+- Projects own reusable definitions; each agent chooses preparation/reconciliation timing and owns a private per-template-revision context. Shared resources and group grants remain independent. Save/assignment/reconcile never execute setup, install tools or change applied executions.
+- Keep desired, selected assignment, actual applied preparation and agent-reported readiness distinct. Template changes persist affected-agent notices and enqueue stable private internal messages; enqueue acceptance is not native delivery/execution. Replay pending outbox IDs safely after restart.
+- General executable requirements use approved roots and bounded explicit version probes. Do not restore a Node/npm-only ceiling, silently install host tools or inherit personal configuration. Retain old contexts and active execution snapshots; private directories are not a VM.
+- Behavioral workflow guidance belongs in editable prompts/skills and discoverable tool descriptions. Do not introduce mandatory hidden native instructions. Private-context execution uses the existing durable executor with fresh exact-self group read/execute authority; template selection never supplies an action grant or shared-folder access. Keep private working files separate from HOME/caches and retain old contexts across updates.
+
+## Business project registration (#127)
+
+- The unified production desktop already accepts a non-Git business folder through authenticated `createProject({name,directory})`. Its registry creates a stable project UUID and separate private state; no repository config or branch is required. Folder selection/registration grants no file/service/browser authority and starts no agent.
+- Git checks in legacy `project-options`/`project-setup` belong to repository discovery, not unified project creation. Do not remove valid repository checks or create a fake Git repository to represent a business. Keep business folders and Crew private storage separate, preserve canonical duplicate checks, and distinguish actual service verification from synthetic metadata acceptance.
+- Use `docs/BUSINESS-PROJECTS.md` and the disposable business-project fixture when assessing this boundary. A non-Git discovery rejection alone is not evidence that the current desktop requires repositories. Folder-free creation and richer setup UI remain separate scope.
+
+## Group-derived specialist access (#127)
+
+- The owner clarified that one agent type serves personal assistant, marketing, developer and manager responsibilities. Current groups additively confer project skill IDs and service connection operations; do not restore a separate per-agent skill or connection allowlist as competing authority. Keep effective projections and legacy provenance distinct. Migration must preserve the old service-capability/individual-connection intersection without silently broadening access.
+- Native Start/Restart gets only group-selected skill revision paths; service discovery/calls and skill read/list check fresh membership. Explicit skill-authoring authority is separate. Native cached instructions/discovery require explicit Restart; never claim consumed model context was revoked.
+- Explicit owner personal/dedicated service identity is supported through the vault/gateway, independently of ChatGPT subscription sign-in. Gmail uses only fixed Google REST/refresh endpoints and owner-created OAuth material; never inherit existing personal connector sessions. Draft/send are separate ungranted capabilities. Keep fixture provider checks distinct from real account/consent/send acceptance.
+
+- Owner OAuth verification must prepare an expired/near-expiry credential before pinning identity/catalogue evidence. A self-induced refresh needs exact old/new revision provenance and durable retry correlation; never adopt arbitrary newer vault bytes as the verifier's own refresh or leave setup pinned to the replaced revision.
+
+## Connection creation boundary (#129)
+
+- Create and verify service connections only in Settings → Connections & access. Agent setup/editing selects already saved named connections through group access; it must not embed provider catalogues, credential entry or a connection-creation wizard. Empty saved catalogues show an honest empty state and a navigation action to Settings, retaining the agent draft. Multiple named accounts of one service and shared group membership remain supported.

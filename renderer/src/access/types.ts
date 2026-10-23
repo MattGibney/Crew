@@ -35,6 +35,8 @@ export type CrewPermissionChoice = {
 /** Owner-approved workspace metadata; never a user-entered policy identity. */
 export type WorkspacePermissionChoice = {
   policy: EnvironmentPolicy;
+  /** Exact canonical directory identity and enforcement configuration. */
+  configurationKey?: string;
   label: string;
   description: string;
 };
@@ -62,7 +64,8 @@ export type AssignmentSave = {
   agentId: Agent["id"];
   expectedRevision: Revision | null;
   permissionGroupIds: Agent["access"]["permissionGroupIds"];
-  serviceConnectionIds: Agent["access"]["serviceConnectionIds"];
+  /** Deprecated compatibility input; memberships alone determine connections. */
+  serviceConnectionIds?: Agent["access"]["serviceConnectionIds"];
 };
 
 export type AccessDecision = Parameters<AuthorizationService["decide"]>[2];

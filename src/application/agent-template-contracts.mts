@@ -8,7 +8,7 @@ export interface AgentTemplateDefinitionView {
   name: string;
   description: string;
   tools: {
-    name: "node" | "npm";
+    name: string;
     versionRequirement: string | null;
   }[];
   capabilities: {
