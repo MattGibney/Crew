@@ -636,4 +636,4 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Keep the Agents settings list header compact: one Agents heading with Create agent alongside it, then the type tabs. Avoid a repeated project label, secondary Your agents heading or duplicated introductory copy. Retain guidance inside the creation/editing flow.
 
-- Agent Settings tables keep per-agent Edit and Archive actions in a labelled vertical ellipsis menu, rather than separate row buttons. Preserve keyboard menu navigation and the existing action behavior.
+- Agent Settings tables keep per-agent Edit and Archive actions in a labelled vertical ellipsis menu, rather than separate row buttons. Archive uses the destructive menu-item variant. Preserve keyboard menu navigation and the existing action behavior.

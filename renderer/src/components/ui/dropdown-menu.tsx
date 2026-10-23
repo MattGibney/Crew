@@ -29,14 +29,20 @@ export function DropdownMenuContent({
   );
 }
 export function DropdownMenuItem({
+  variant = "default",
   className,
   ...props
-}: React.ComponentProps<typeof Primitive.Item>) {
+}: React.ComponentProps<typeof Primitive.Item> & {
+  variant?: "default" | "destructive";
+}) {
   return (
     <Primitive.Item
       data-slot="dropdown-menu-item"
+      data-variant={variant}
       className={cn(
         "flex cursor-default select-none items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
+        variant === "destructive" &&
+          "text-destructive data-highlighted:bg-destructive/10 data-highlighted:text-destructive",
         className,
       )}
       {...props}

@@ -711,6 +711,7 @@ export function AgentSetupWizard(props: Props) {
                                     Edit
                                   </DropdownMenuItem>
                                   <DropdownMenuItem
+                                    variant="destructive"
                                     disabled={
                                       busy ||
                                       saving ||
