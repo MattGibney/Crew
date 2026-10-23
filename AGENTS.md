@@ -701,3 +701,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Sessions bulk actions use one labelled Bulk action dropdown with Start/Stop/Restart selected items, rather than three exposed buttons. Keep selection count and Clear selection visible.
 
 - Connections uses one compact title/description with its add action aligned alongside, not a generic page heading followed by a duplicate service-connections heading.
+
+- Connection rows omit a redundant leading service name from the displayed connection label while preserving saved names and identities. Reuse OnlineStatus for dot/halo styling with connection-specific labels; only verified connected state gets the green indicator.

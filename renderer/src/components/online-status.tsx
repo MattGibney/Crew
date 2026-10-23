@@ -6,11 +6,14 @@ export interface OnlineStatusProps extends Omit<
   "children"
 > {
   online: boolean;
+  /** Optional resource-specific label, such as Connected. */
+  label?: string;
 }
 
 /** Availability display only; callers determine whether the resource is online. */
 export function OnlineStatus({
   online,
+  label,
   className,
   ...props
 }: OnlineStatusProps) {
@@ -36,7 +39,7 @@ export function OnlineStatus({
           )}
         />
       </span>
-      {online ? "Online" : "Offline"}
+      {label ?? (online ? "Online" : "Offline")}
     </span>
   );
 }

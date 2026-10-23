@@ -1,3 +1,4 @@
+import { OnlineStatus } from "@/components/online-status";
 import {
   Dialog,
   DialogContent,
@@ -85,6 +86,21 @@ const connectionStates: Record<ServiceConnection["observedState"], string> = {
   "reauthentication-required": "Sign-in required",
   error: "Connection error",
 };
+
+/** Shorten a redundant service prefix for display only; preserve saved names. */
+function connectionLabel(connection: ServiceConnection): string {
+  const name = connection.name.trim();
+  const service = connection.service.trim();
+  if (
+    service &&
+    name.slice(0, service.length).toLowerCase() === service.toLowerCase()
+  ) {
+    const suffix = name.slice(service.length);
+    const match = suffix.match(/^\s*[·:–—-]\s*(.+)$/);
+    if (match?.[1].trim()) return match[1].trim();
+  }
+  return connection.name;
+}
 
 function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
   const [editing, setEditing] = useState<ServiceConnection | "new" | null>(
@@ -177,13 +193,17 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                     </span>
                   </TableCell>
                   <TableCell className="px-4 py-3 font-medium">
-                    {connection.name}
+                    {connectionLabel(connection)}
                   </TableCell>
                   <TableCell className="px-4 py-3 text-muted-foreground">
                     {connection.identity.displayName || "Identity unverified"}
                   </TableCell>
                   <TableCell className="px-4 py-3 text-muted-foreground">
-                    <span>{connectionStates[connection.observedState]}</span>
+                    <OnlineStatus
+                      online={connection.observedState === "connected"}
+                      label={connectionStates[connection.observedState]}
+                      className="text-foreground"
+                    />
                     <span className="mt-1 block text-xs text-muted-foreground">
                       {connection.lastVerifiedAt
                         ? `Verified ${new Date(connection.lastVerifiedAt).toLocaleString()}`
