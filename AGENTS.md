@@ -665,3 +665,4 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Agent editor sections are unboxed, separated by official shadcn Separator horizontal rules. Do not wrap Identity, Instructions, Access, Environment or Runtime sections in cards or bordered panels.
 - Agent access summaries use readable action names grouped by purpose, with installed shadcn tooltips explaining each capability. Keep summaries derived from group membership; presentation must not imply broader permissions or bypass resource limits and approvals.
+- Keep group-derived project resources in Access. The environment template selector shows its own tools, version requirements and setup capabilities, updating with the draft selection; never present these as verified installed tooling.

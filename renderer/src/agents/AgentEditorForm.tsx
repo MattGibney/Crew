@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InheritedPermissions } from "./InheritedPermissions";
 import { useId, useRef } from "react";
@@ -46,6 +47,7 @@ export function AgentEditorForm({
 }) {
   const id = useId();
   const pictureInput = useRef<HTMLInputElement>(null);
+  const selectedTemplate = environment.templates.find((template) => template.id === environment.templateId);
   const groups =
     access?.groups.filter((group) => draft.groupIds.includes(group.id)) ?? [];
   const skillIds = new Set(
@@ -285,6 +287,17 @@ export function AgentEditorForm({
               </div>
             </div>
           </div>
+          <div className="space-y-1 border-t pt-3">
+            <p className="text-sm font-medium">Project resources</p>
+            <p className="break-all text-xs text-muted-foreground">
+              {directory}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {policies.size
+                ? `${policies.size} folder ${policies.size === 1 ? "policy" : "policies"} granted through selected groups.`
+                : "No folder access granted by selected groups."}
+            </p>
+          </div>
           {onOpenAccess && (
             <Button variant="link" className="px-0" onClick={onOpenAccess}>
               Manage groups and connections
@@ -352,17 +365,31 @@ export function AgentEditorForm({
               launch its environment.
             </p>
           </div>
-          <div className="space-y-1 border-t pt-3">
-            <p className="text-sm font-medium">Project resources</p>
-            <p className="break-all text-xs text-muted-foreground">
-              {directory}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {policies.size
-                ? `${policies.size} folder ${policies.size === 1 ? "policy" : "policies"} granted through selected groups.`
-                : "No folder access granted by selected groups."}
-            </p>
-          </div>
+          {selectedTemplate ? (
+            <div className="space-y-5 border-t pt-4" aria-live="polite">
+              {selectedTemplate.description && <p className="text-sm leading-6 text-muted-foreground">{selectedTemplate.description}</p>}
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium">Tools</h3>
+                {selectedTemplate.tools.length ? <div className="flex flex-wrap gap-2">
+                  {selectedTemplate.tools.map((tool) => <Badge variant="secondary" key={tool.name}>
+                    {({ node: "Node.js", npm: "npm", git: "Git", python3: "Python", magick: "ImageMagick" } as Record<string, string>)[tool.name] ?? tool.name}
+                    {tool.versionRequirement && <span className="font-normal text-muted-foreground">{tool.versionRequirement}</span>}
+                  </Badge>)}
+                </div> : <p className="text-xs text-muted-foreground">No tools specified by this template.</p>}
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium">Environment setup</h3>
+                <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-xs">
+                  <dt className="text-muted-foreground">Network access</dt><dd>{selectedTemplate.capabilities.network ? "Enabled" : "Disabled"}</dd>
+                  <dt className="text-muted-foreground">Package downloads</dt><dd>{selectedTemplate.capabilities.packageDownloads ? "Enabled" : "Disabled"}</dd>
+                  <dt className="text-muted-foreground">Local server ports</dt><dd>{selectedTemplate.capabilities.localhostPorts.join(", ") || "None specified"}</dd>
+                </dl>
+                <p className="text-xs leading-5 text-muted-foreground">Template requirements, not confirmation that tools are installed. The agent prepares its environment separately.</p>
+              </div>
+            </div>
+          ) : !environment.loading && !environment.error && (
+            <p className="text-xs text-muted-foreground">{environment.templateId ? "Details for the saved template are unavailable." : "No template selected. No tools or setup requirements are specified."}</p>
+          )}
         </div>
       </section>
       <Separator />
