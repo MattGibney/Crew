@@ -699,3 +699,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Session rows place Start/Stop/Restart in a vertical-ellipsis shadcn DropdownMenu. Preserve state-dependent disabled actions and per-agent labels; bulk actions stay visible above the table and error rows retain the prominent Recover session action.
 
 - Sessions bulk actions use one labelled Bulk action dropdown with Start/Stop/Restart selected items, rather than three exposed buttons. Keep selection count and Clear selection visible.
+
+- Connections uses one compact title/description with its add action aligned alongside, not a generic page heading followed by a duplicate service-connections heading.

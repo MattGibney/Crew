@@ -95,8 +95,8 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
   return (
     <AccessSection
       fullWidth
-      title="Service connections"
-      description="Connect a service identity for agents to use through approved operations. Credentials stay private to Crew's trusted service execution."
+      title="Connections"
+      description="Manage service accounts shared with your agents through groups."
       action={
         <div className="flex flex-wrap gap-2">
           {props.onConnect && (
@@ -108,7 +108,7 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
             </Button>
           )}
           <Button
-            variant={props.onConnect ? "ghost" : "outline"}
+            variant={props.onConnect ? "ghost" : "default"}
             disabled={
               editing !== null || action.busy || !props.setupChoices.length
             }
