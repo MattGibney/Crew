@@ -510,7 +510,7 @@ export function ProjectBrowser({
         >
           <Input
             aria-label="Page address"
-            placeholder="Enter a URL, e.g. http://127.0.0.1:3000"
+            placeholder="Local preview or permitted public website URL"
             value={location}
             disabled={!owner || !bridge}
             onChange={(event) => {

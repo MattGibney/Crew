@@ -10,6 +10,7 @@ const projectActions = new Set<CrewAction>([
   "skills.write",
   "resources.read",
   "browser.control",
+  "browser.external",
   "environments.create",
 ]);
 export function crewActionRequiresProject(action: CrewAction): boolean {

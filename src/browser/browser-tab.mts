@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { requireLoopbackResolution } from "./local-origin.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, lstat } from "node:fs/promises";
 import { join } from "node:path";
@@ -11,6 +13,7 @@ import {
   createProjectBrowser,
   experimentURL,
 } from "../desktop/project-browser.mjs";
+import { parsePublicBrowserURL } from "./public-origin.mjs";
 import { pinnedBrowserCatalogue } from "./pinned-catalogue.mjs";
 import { createPreviewMcpClient } from "./mcp-client.mjs";
 import type { BrowserState, BrowserSelection } from "./contracts.mjs";
@@ -68,6 +71,7 @@ const selectionScript = `new Promise(resolve => {
 export function createBrowserTab(options: {
   ownerAgentId: string;
   tabId: string;
+  canBrowseExternal?(): Promise<boolean>;
   projectId: string;
   stateDirectory: string;
   getWindow(): BrowserWindow | undefined;
@@ -83,6 +87,7 @@ export function createBrowserTab(options: {
   let client: Awaited<ReturnType<typeof createPreviewMcpClient>> | undefined;
   let catalogue: Awaited<ReturnType<NonNullable<typeof client>["list"]>> = [];
   let initialOrigin = "";
+  let external = false;
   let lastUrl = "";
   let selection: BrowserSelection | null = null;
   let selecting = false;
@@ -130,6 +135,7 @@ export function createBrowserTab(options: {
     });
   const changed = () => {
     const url = browser?.state().url;
+    if (url && browser?.state().open) lastUrl = url;
     if (selection && url && selection.url !== url) selection = null;
     publish();
   };
@@ -170,20 +176,55 @@ export function createBrowserTab(options: {
     publish();
   }
   async function open(url: string) {
-    const parsed = experimentURL(url, options.getHostOrigin());
+    let parsed: URL;
+    let nextExternal = false;
+    try {
+      parsed = experimentURL(url, options.getHostOrigin());
+    } catch {
+      parsed = parsePublicBrowserURL(url, options.getHostOrigin());
+      nextExternal = true;
+    }
+    // Preserve custom loopback hostnames even when public browsing is granted.
+    // Classification grants nothing: Chromium independently verifies every request.
+    if (!nextExternal) {
+      try {
+        await requireLoopbackResolution(parsed.hostname, async (name) => ({
+          endpoints: (await lookup(name, { all: true })).map((row) => ({
+            address: row.address,
+          })),
+        }));
+      } catch {
+        nextExternal = true;
+      }
+    }
+    if (nextExternal && !(await options.canBrowseExternal?.()))
+      throw Error(
+        "Public websites require current browser.control and browser.external group permissions.",
+      );
     const window = options.getWindow();
     if (!window || window.isDestroyed())
       throw Error("Open the Crew window before its browser.");
-    if (browser && parsed.origin !== initialOrigin) await close();
+    if (
+      browser &&
+      (nextExternal !== external ||
+        (!external && parsed.origin !== initialOrigin))
+    )
+      await close();
+    const existing = browser;
     if (!browser) {
       initialOrigin = parsed.origin;
+      external = nextExternal;
       lastUrl = parsed.href;
       browser = createProjectBrowser(
         window,
         parsed.href,
         options.getHostOrigin,
         changed,
-        { partitionKey: `${options.projectId}:${options.ownerAgentId}` },
+        {
+          partitionKey: `${options.projectId}:${options.ownerAgentId}`,
+          external,
+          canBrowseExternal: options.canBrowseExternal,
+        },
       );
       try {
         await browser.request({ action: "open" });
@@ -195,6 +236,8 @@ export function createBrowserTab(options: {
       const toolsHome = join(options.stateDirectory, "browser-tools");
       await mkdir(toolsHome, { recursive: true, mode: 0o700 });
     }
+    if (existing && browser)
+      await browser.request({ action: "navigate", url: parsed.href });
     if (!client?.connected()) {
       if (client) {
         await client.close();
@@ -322,6 +365,14 @@ export function createBrowserTab(options: {
   const service = {
     state,
     close: () => serial(close),
+    async refreshAccess() {
+      if (external && browser && !(await options.canBrowseExternal?.())) {
+        // Terminate the native view immediately, including pending navigation
+        // and established sockets, before waiting for tool-process cleanup.
+        await browser.close();
+        await serial(close);
+      }
+    },
     request(input: unknown): Promise<BrowserState> {
       const value = object(input);
       if (value.projectId !== options.projectId)
@@ -331,6 +382,17 @@ export function createBrowserTab(options: {
       if (value.action === "state") return Promise.resolve(state());
       return serial(async () => {
         error = null;
+        if (
+          external &&
+          browser &&
+          !["bounds", "close"].includes(String(value.action)) &&
+          !(await options.canBrowseExternal?.())
+        ) {
+          await close();
+          throw Error(
+            "Public browsing permission was revoked. Reopen after access is approved.",
+          );
+        }
         if (value.action === "close") await close();
         else if (value.action === "open")
           await open(
@@ -376,8 +438,7 @@ export function createBrowserTab(options: {
           else if (
             value.action === "navigate" &&
             typeof value.url === "string" &&
-            experimentURL(value.url, options.getHostOrigin()).origin !==
-              initialOrigin
+            (!external || new URL(value.url).origin !== initialOrigin)
           )
             await open(value.url);
           else await browser.request(value);
@@ -429,7 +490,8 @@ export function createBrowserTab(options: {
               ...tool,
               name: "browser_" + tool.name,
               description:
-                tool.description ?? "Control your own active preview tab.",
+                (tool.description ?? "Control your own active preview tab.") +
+                " Public websites require current browser.control and browser.external grants; local tabs remain scoped to their loopback origin. Crew/private network destinations are blocked from public tabs.",
             })),
           ];
         },
@@ -443,6 +505,10 @@ export function createBrowserTab(options: {
               throw Error(
                 "Browser ownership or current session changed before dispatch.",
               );
+            if (external && browser && !(await options.canBrowseExternal?.())) {
+              await close();
+              throw Error("Public browsing permission was revoked.");
+            }
             if (name === "browser_status") return state();
             if (name === "browser_annotation_image") {
               const ref = args.screenshotRef;

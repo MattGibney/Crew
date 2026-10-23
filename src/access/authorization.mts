@@ -458,6 +458,33 @@ export class ProjectAuthorizationService
     });
   }
 
+  /** Fresh group authority for page traffic and owner-open operations. This is
+   * deliberately independent of a running native session; it never admits tools. */
+  async canUseExternalBrowser(agentId: string): Promise<boolean> {
+    return this.store.transaction(async (state) => {
+      try {
+        await this.agent(state, agentId);
+        const assignment = state.assignments.find(
+          (row) => row.agentId === agentId,
+        );
+        const actions = new Set(
+          state.groups
+            .filter((group) =>
+              assignment?.permissionGroupIds.includes(group.id),
+            )
+            .flatMap((group) =>
+              group.grants.crew.map((permission) => permission.action),
+            ),
+        );
+        return (
+          actions.has("browser.control") && actions.has("browser.external")
+        );
+      } catch {
+        return false;
+      }
+    });
+  }
+
   async checkCrew(
     caller: CallerContext,
     action: CrewAction,

@@ -65,6 +65,7 @@ export const crewActions = [
   "skills.assign",
   "resources.read",
   "browser.control",
+  "browser.external",
   "environments.read",
   "environments.create",
   "environments.attach",
