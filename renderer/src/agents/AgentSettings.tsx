@@ -685,9 +685,6 @@ export function AgentSettings(props: Props) {
                   change({ pictureRef: result.imageRef });
               });
             }}
-            onRefreshVoices={() => {
-              void reloadOptions();
-            }}
             onOpenAccess={props.onOpenConnections}
           />
         </>

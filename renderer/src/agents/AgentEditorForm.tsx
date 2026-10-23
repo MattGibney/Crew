@@ -27,7 +27,6 @@ export function AgentEditorForm({
   environment,
   onChange,
   onPicture,
-  onRefreshVoices,
   onOpenAccess,
 }: {
   draft: AgentSetupDraft;
@@ -41,7 +40,6 @@ export function AgentEditorForm({
   environment: EditorEnvironment;
   onChange(patch: Partial<AgentSetupDraft>): void;
   onPicture(file: File): void;
-  onRefreshVoices(): void;
   onOpenAccess?(): void;
 }) {
   const id = useId();
@@ -172,13 +170,7 @@ export function AgentEditorForm({
                   ))}
                 </SelectContent>
               </Select>
-              <Button
-                variant="outline"
-                disabled={locked}
-                onClick={onRefreshVoices}
-              >
-                Refresh voices
-              </Button>
+
             </div>
             <p className="text-xs text-muted-foreground">
               Used for this agent’s next voice call.
