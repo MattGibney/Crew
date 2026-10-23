@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Separator } from "@/components/ui/separator";
 import { Choice } from "../access/shared";
 import { AgentPicture, type AgentImageClient } from "./AgentPicture";
@@ -149,29 +148,30 @@ export function AgentEditorForm({
           <div className="space-y-2">
             <Label htmlFor={`${id}-voice`}>Voice</Label>
             <div className="flex flex-wrap gap-2">
-              <NativeSelect
-                id={`${id}-voice`}
+              <Select
                 value={draft.voice ?? ""}
                 disabled={locked}
-                onChange={(event) =>
-                  onChange({ voice: event.target.value || null })
-                }
+                onValueChange={(value) => onChange({ voice: value || null })}
+                items={[
+                  { value: "", label: "Native default" },
+                  ...(options?.voices.values ?? []).map((voice) => ({ value: voice.id, label: voice.name })),
+                  ...(draft.voice && !options?.voices.values.some((voice) => voice.id === draft.voice)
+                    ? [{ value: draft.voice, label: `Saved voice: ${draft.voice}` }] : []),
+                ]}
               >
-                <option value="">Native default</option>
-                {draft.voice &&
-                  !options?.voices.values.some(
-                    (voice) => voice.id === draft.voice,
-                  ) && (
-                    <option value={draft.voice}>
-                      Saved voice: {draft.voice}
-                    </option>
+                <SelectTrigger id={`${id}-voice`} className="min-w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Native default</SelectItem>
+                  {draft.voice && !options?.voices.values.some((voice) => voice.id === draft.voice) && (
+                    <SelectItem value={draft.voice}>Saved voice: {draft.voice}</SelectItem>
                   )}
-                {options?.voices.values.map((voice) => (
-                  <option key={voice.id} value={voice.id}>
-                    {voice.name}
-                  </option>
-                ))}
-              </NativeSelect>
+                  {options?.voices.values.map((voice) => (
+                    <SelectItem key={voice.id} value={voice.id}>{voice.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button
                 variant="outline"
                 disabled={locked}
