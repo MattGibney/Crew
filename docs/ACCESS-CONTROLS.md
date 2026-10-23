@@ -23,8 +23,8 @@ To use another account or executor, create another connection and assign it expl
 changing an existing connection's identity would silently retarget existing approvals.
 Name and credentials can be updated; reconnect is a gateway-owned callback.
 
-Assign connections and permission groups to each agent. Both are needed: assignment
-alone permits no operation. A current group capability or an explicit scoped owner
+Assign permission groups to each agent. Group service grants determine connection availability and operations; the former separate connection assignment is compatibility data. See [current group-derived access](GROUP-DERIVED-ACCESS.md).
+Connection availability alone permits no operation. A current group capability or an explicit scoped owner
 grant supplies authority. Editing a shared group affects later calls for every member.
 Skills, help replies and workflow statuses never confer permission.
 
@@ -261,7 +261,7 @@ acceptance described the superseded version 1 model; it is not the current autho
 These checks are separate from native model/provider acceptance and never mutate the
 owner's live profile.
 
-Access owns persisted `presets`, `creationDefaults` and assignments. The owner can make an enabled preset the creation default or require explicit selection. A preset contains profile/skill/runtime references and group/connection IDs, never credential values. For first-run setup, the production host supplies `runtimeDefaults: {modelAccessId, configRef}` to `createAccessOwnerApi`; the snapshot exposes those validated non-secret references and the UI can save the first preset with no existing agents and no selected skills. If defaults are absent, first-preset creation stays unavailable with an explicit model-setup message. Existing configured agents remain optional profile/runtime/skill templates, and the owner chooses permissions independently. Current references are checked again when applying the preset. Disabling a preset prevents later creation; editing it does not rewrite existing agents.
+Access owns persisted `presets`, `creationDefaults` and assignments. The owner can make an enabled preset the creation default or require explicit selection. A preset contains profile/runtime references and group IDs, never credential values. Skill/connection fields project current memberships and cannot override them. For first-run setup, the production host supplies `runtimeDefaults: {modelAccessId, configRef}` to `createAccessOwnerApi`; the snapshot exposes those validated non-secret references and the UI can save the first preset with no existing agents and no selected skills. If defaults are absent, first-preset creation stays unavailable with an explicit model-setup message. Existing configured agents remain optional profile/runtime/skill templates, and the owner chooses permissions independently. Current references are checked again when applying the preset. Disabling a preset prevents later creation; editing it does not rewrite existing agents.
 
 `ProjectAuthorizationService` implements the canonical `AgentProvisioning` port. `listPresets` returns enabled presets; `defaultPreset` resolves the current enabled default; `accessFor` produces the authoritative `Agent.access` projection. Foundation creates the pending stopped agent under the shared execution gate, then calls `applyPreset({actor, agentId, presetId, expectedPresetRevision})` and marks the agent usable only after success. Failure must leave the agent unavailable and preserve truthful evidence. The method does not acquire the shared gate recursively. It verifies current creation authority and reporting relationship for manager callers, rejects self/existing-agent changes, and persists only the owner-approved assignment. Foundation owns primary-agent designation and creation lifecycle. `AccessIdentitySource` must read raw foundation records, not an access-projected API that would re-enter the access lock.
 

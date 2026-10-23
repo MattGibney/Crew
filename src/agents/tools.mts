@@ -183,7 +183,7 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "agent_profile_save",
       description:
-        "Save a profile using its current revision; active instructions change only on explicit Restart.",
+        "Save an agent profile using its current revision; instructions change only on explicit Restart. Skills inherit from permission groups; this operation cannot change group skill access.",
       inputSchema: object({
         agentId: id,
         expectedRevision: { type: "integer", minimum: 1 },

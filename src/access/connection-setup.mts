@@ -1,3 +1,4 @@
+import { gmailOAuthBundle } from "../gateway/gmail.mjs";
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Agent, ServiceConnection } from "../agents/contracts.mjs";
@@ -230,7 +231,10 @@ export class OwnerConnectionSetupService {
           )
             throw new Error("Connection setup changed or was cancelled.");
           if (material) {
-            if (prior.connection.authentication.method !== "token")
+            if (
+              prior.connection.authentication.method !== "token" &&
+              prior.connection.authentication.method !== "oauth"
+            )
               throw new Error("Connection credential is unavailable.");
             const same = await this.options.vault.withCredential(
               prior.connection.authentication.credentialRef,
@@ -276,7 +280,10 @@ export class OwnerConnectionSetupService {
         let credentialRevision: number;
         let connection: ServiceConnection;
         if (existing) {
-          if (existing.authentication.method !== "token")
+          if (
+            existing.authentication.method !== "token" &&
+            existing.authentication.method !== "oauth"
+          )
             throw new Error("This guided connection requires a token.");
           const metadata = await this.options.vault.metadataForReference(
             existing.authentication.credentialRef,
@@ -288,6 +295,18 @@ export class OwnerConnectionSetupService {
         } else {
           if (!material)
             throw new Error("Enter the credential to verify this account.");
+          let authenticationMethod: "token" | "oauth" = "token";
+          if (
+            choice.service === "gmail" &&
+            material.toString("utf8").trimStart().startsWith("{")
+          ) {
+            gmailOAuthBundle(material.toString("utf8"));
+            if (!choice.authenticationMethods.includes("oauth"))
+              throw new Error(
+                "OAuth credential bundle is not supported by this choice.",
+              );
+            authenticationMethod = "oauth";
+          }
           const saved = await this.options.vault.storeCredential(
             { type: "user", userId: this.options.ownerUserId },
             connectionId,
@@ -308,7 +327,7 @@ export class OwnerConnectionSetupService {
             },
             transport: structuredClone(choice.transport),
             authentication: {
-              method: "token",
+              method: authenticationMethod,
               credentialRef: saved.credentialRef,
             },
             observedState: "unknown",
@@ -495,7 +514,10 @@ export class OwnerConnectionSetupService {
           : Boolean(connection)
       )
         throw new ConnectionSetupReviewRequired();
-      if (setup.connection.authentication.method !== "token")
+      if (
+        setup.connection.authentication.method !== "token" &&
+        setup.connection.authentication.method !== "oauth"
+      )
         throw new Error("Unsupported guided credential.");
       const metadata = await this.options.vault.metadataForReference(
         setup.connection.authentication.credentialRef,
@@ -563,12 +585,7 @@ export class OwnerConnectionSetupService {
               ...selection.permissionGroupIds,
             ]),
           ],
-          serviceConnectionIds: [
-            ...new Set([
-              ...(current?.serviceConnectionIds ?? []),
-              setup.connectionId,
-            ]),
-          ],
+          serviceConnectionIds: [],
           revision: (current?.revision ?? 0) + 1,
         };
         validateRecord("assignment", assignment);
@@ -615,8 +632,8 @@ export class OwnerConnectionSetupService {
       );
       return connection &&
         saved &&
-        connection.authentication.method === "token" &&
-        saved.connection.authentication.method === "token" &&
+        connection.authentication.method !== "none" &&
+        saved.connection.authentication.method !== "none" &&
         connection.authentication.credentialRef ===
           saved.connection.authentication.credentialRef
         ? { connection, capabilities: saved.capabilities }

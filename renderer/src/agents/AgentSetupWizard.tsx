@@ -893,7 +893,13 @@ export function AgentSetupWizard(props: Props) {
                 </p>
               </details>
               <fieldset className="space-y-3 border-t pt-5">
-                <legend className="pr-2 text-sm font-medium">Skills</legend>
+                <legend className="pr-2 text-sm font-medium">
+                  Group skills
+                </legend>
+                <p className="text-xs text-muted-foreground">
+                  New shared groups include these skills. Existing groups
+                  determine skills and service access through their memberships.
+                </p>
                 {snapshot.skills?.length ? (
                   snapshot.skills.map((skill) => (
                     <Choice
@@ -901,7 +907,7 @@ export function AgentSetupWizard(props: Props) {
                       checked={draft.skills.some(
                         (item) => item.skillId === skill.id && item.enabled,
                       )}
-                      disabled={locked}
+                      disabled={locked || draft.groupMode === "existing"}
                       onChange={(enabled) =>
                         change({
                           skills: [

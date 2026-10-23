@@ -32,7 +32,8 @@ export class GatewayCredentials {
       current.service !== connection.service ||
       canonicalJson(current.authentication) !==
         canonicalJson(connection.authentication) ||
-      canonicalJson(current.transport) !== canonicalJson(connection.transport) ||
+      canonicalJson(current.transport) !==
+        canonicalJson(connection.transport) ||
       canonicalJson(current.identity) !== canonicalJson(connection.identity)
     )
       throw new Error("Connection changed during credential preparation.");
@@ -148,7 +149,20 @@ export class GatewayCredentials {
                   "OAuth credential requires an access token and expiry.",
                 );
               if (saved.expires_at > Date.now() + 30_000) return;
-              const oauth = config.oauth;
+              const gmail =
+                config.type === "mcp" && config.adapter === "gmail-rest";
+              const oauth =
+                gmail && typeof saved.client_id === "string"
+                  ? {
+                      tokenEndpoint: "https://oauth2.googleapis.com/token",
+                      clientId: saved.client_id,
+                      resource: "https://gmail.googleapis.com",
+                      clientAuthentication:
+                        typeof saved.client_secret === "string"
+                          ? "client_secret_post"
+                          : "none",
+                    }
+                  : config.oauth;
               if (!oauth || typeof saved.refresh_token !== "string")
                 throw new Error("OAuth owner sign-in is required.");
               const url = assertHttpEndpoint(oauth.tokenEndpoint);
@@ -157,8 +171,8 @@ export class GatewayCredentials {
                 grant_type: "refresh_token",
                 refresh_token: saved.refresh_token,
                 client_id: oauth.clientId,
-                resource: oauth.resource,
               });
+              if (!gmail) form.set("resource", oauth.resource);
               if (oauth.clientAuthentication === "client_secret_post") {
                 if (typeof saved.client_secret !== "string")
                   throw new Error(

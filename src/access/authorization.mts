@@ -1,3 +1,4 @@
+import { connectionIds, skillSelections } from "./group-access.mjs";
 import type {
   AccessRequest,
   AccessSource,
@@ -52,6 +53,7 @@ export interface AccessIdentitySource {
 /** Supplied by #90 from real discovered/schema-validated operations. No ambient
  * catalogue or invented operation names. Input fingerprints are #90's RFC8785. */
 export interface AccessCatalogue {
+  hasSkill?(skillId: string): Promise<boolean>;
   hasOperation(connectionId: string, operation: string): Promise<boolean>;
 }
 export type OwnerAccessSnapshot = Pick<
@@ -71,6 +73,14 @@ type CatalogueEvidence = {
   revision: number;
   operations: string[];
 }[];
+const presetView = (
+  state: AccessState,
+  preset: AgentCreationPreset,
+): AgentCreationPreset => ({
+  ...preset,
+  skills: skillSelections(state, preset.permissionGroupIds),
+  serviceConnectionIds: connectionIds(state, preset.permissionGroupIds),
+});
 const now = () => new Date().toISOString();
 const denied = (reason: string) => ({ state: "denied" as const, reason });
 const administrative = new Set<CrewAction>([
@@ -231,9 +241,13 @@ export class ProjectAuthorizationService
       (row) => row.agentId === input.caller.agentId,
     );
     if (
-      !assignment?.serviceConnectionIds.includes(input.operation.connectionId)
+      !connectionIds(state, assignment?.permissionGroupIds ?? []).includes(
+        input.operation.connectionId,
+      )
     )
-      throw new Error("Connection is not assigned to this agent.");
+      throw new Error(
+        "No current group makes this connection available to this agent.",
+      );
     this.assertCatalogue(state, evidence, input.operation.connectionId, [
       input.operation.operation,
     ]);
@@ -1044,9 +1058,12 @@ export class ProjectAuthorizationService
       } = state;
       return {
         groups,
-        presets,
+        presets: presets.map((preset) => presetView(state, preset)),
         creationDefaults,
-        assignments,
+        assignments: assignments.map((row) => ({
+          ...row,
+          serviceConnectionIds: connectionIds(state, row.permissionGroupIds),
+        })),
         connections,
         environmentPolicies,
         requests,
@@ -1057,16 +1074,18 @@ export class ProjectAuthorizationService
   }
   async listPresets(): Promise<AgentCreationPreset[]> {
     return this.store.transaction((state) =>
-      state.presets.filter((row) => row.enabled),
+      state.presets
+        .filter((row) => row.enabled)
+        .map((preset) => presetView(state, preset)),
     );
   }
   async defaultPreset(): Promise<AgentCreationPreset | null> {
-    return this.store.transaction(
-      (state) =>
-        state.presets.find(
-          (row) => row.id === state.creationDefaults.presetId && row.enabled,
-        ) ?? null,
-    );
+    return this.store.transaction((state) => {
+      const preset = state.presets.find(
+        (row) => row.id === state.creationDefaults.presetId && row.enabled,
+      );
+      return preset ? presetView(state, preset) : null;
+    });
   }
   async savePreset(
     actor: Actor,
@@ -1088,6 +1107,12 @@ export class ProjectAuthorizationService
       preset.revision = revision(
         state.presets.find((row) => row.id === preset.id),
         expectedRevision,
+      );
+      // Retained selection fields are compatibility projections, never authority.
+      preset.skills = skillSelections(state, preset.permissionGroupIds);
+      preset.serviceConnectionIds = connectionIds(
+        state,
+        preset.permissionGroupIds,
       );
       upsert(state.presets, preset);
       audit(state, actor, "preset.saved", preset.id);
@@ -1129,13 +1154,26 @@ export class ProjectAuthorizationService
         "Assignments must refer to current project groups and connections.",
       );
   }
+  async skillsFor(agentId: string): Promise<Agent["skills"]> {
+    return this.store.transaction((state) =>
+      skillSelections(
+        state,
+        state.assignments.find((row) => row.agentId === agentId)
+          ?.permissionGroupIds ?? [],
+      ),
+    );
+  }
   async accessFor(agentId: string): Promise<Agent["access"]> {
-    const assignment = await this.assignment(agentId);
-    return {
-      permissionGroupIds: assignment?.permissionGroupIds ?? [],
-      serviceConnectionIds: assignment?.serviceConnectionIds ?? [],
-      inheritPersonalServiceCredentials: false,
-    };
+    return this.store.transaction((state) => {
+      const ids =
+        state.assignments.find((row) => row.agentId === agentId)
+          ?.permissionGroupIds ?? [];
+      return {
+        permissionGroupIds: ids,
+        serviceConnectionIds: connectionIds(state, ids),
+        inheritPersonalServiceCredentials: false,
+      };
+    });
   }
   /** Called under the foundation's creation/admission gate, never recursively acquires it.
    * Only a new stopped child gets a preset. Managers cannot use this to alter self/existing access.
@@ -1173,7 +1211,10 @@ export class ProjectAuthorizationService
         );
         return {
           permissionGroupIds: current?.permissionGroupIds ?? [],
-          serviceConnectionIds: current?.serviceConnectionIds ?? [],
+          serviceConnectionIds: connectionIds(
+            state,
+            current?.permissionGroupIds ?? [],
+          ),
           inheritPersonalServiceCredentials: false,
         };
       }
@@ -1234,13 +1275,13 @@ export class ProjectAuthorizationService
         throw new Error("Agent runtime differs from its approved preset.");
       const access: Agent["access"] = {
         permissionGroupIds: [...preset.permissionGroupIds],
-        serviceConnectionIds: [...preset.serviceConnectionIds],
+        serviceConnectionIds: connectionIds(state, preset.permissionGroupIds),
         inheritPersonalServiceCredentials: false,
       };
       state.assignments.push({
         agentId: target.id,
         permissionGroupIds: access.permissionGroupIds,
-        serviceConnectionIds: access.serviceConnectionIds,
+        serviceConnectionIds: [],
         revision: 1,
       });
       (state.presetApplications ??= []).push({
@@ -1260,10 +1301,55 @@ export class ProjectAuthorizationService
 
   /** Access is authoritative; foundation and renderer must project these assignments. */
   async assignment(agentId: string): Promise<AccessAssignment | null> {
-    return this.store.transaction(
-      (state) =>
-        state.assignments.find((row) => row.agentId === agentId) ?? null,
+    return this.store.transaction((state) =>
+      (() => {
+        const row = state.assignments.find((row) => row.agentId === agentId);
+        return row
+          ? {
+              ...row,
+              serviceConnectionIds: connectionIds(
+                state,
+                row.permissionGroupIds,
+              ),
+            }
+          : null;
+      })(),
     );
+  }
+  async allowedOperations(
+    caller: CallerContext,
+    connectionId: string,
+  ): Promise<string[]> {
+    return this.store.transaction(async (state) => {
+      await this.live(state, caller);
+      const ids =
+        state.assignments.find((row) => row.agentId === caller.agentId)
+          ?.permissionGroupIds ?? [];
+      if (!connectionIds(state, ids).includes(connectionId)) return [];
+      const operations = state.groups
+        .filter((group) => ids.includes(group.id))
+        .flatMap((group) =>
+          group.grants.services
+            .filter((grant) => grant.connectionId === connectionId)
+            .flatMap((grant) => grant.capabilities),
+        );
+      for (const grant of state.grants) {
+        if (
+          grant.agentId !== caller.agentId ||
+          grant.scope.connectionId !== connectionId ||
+          !["active", "reserved"].includes(grant.state) ||
+          (grant.duration.type === "session" &&
+            grant.duration.sessionId !== caller.sessionId)
+        )
+          continue;
+        operations.push(
+          ...(grant.scope.type === "capability"
+            ? grant.scope.capabilities
+            : [grant.scope.operation]),
+        );
+      }
+      return [...new Set(operations)];
+    });
   }
   async listAssignedConnections(
     caller: CallerContext,
@@ -1274,7 +1360,9 @@ export class ProjectAuthorizationService
         (row) => row.agentId === caller.agentId,
       );
       return state.connections.filter((row) =>
-        assignment?.serviceConnectionIds.includes(row.id),
+        connectionIds(state, assignment?.permissionGroupIds ?? []).includes(
+          row.id,
+        ),
       );
     });
   }
@@ -1295,7 +1383,11 @@ export class ProjectAuthorizationService
         (row) => row.agentId === caller.agentId,
       );
       return state.connections
-        .filter((row) => assignment?.serviceConnectionIds.includes(row.id))
+        .filter((row) =>
+          connectionIds(state, assignment?.permissionGroupIds ?? []).includes(
+            row.id,
+          ),
+        )
         .map(
           ({
             id,
@@ -1326,7 +1418,16 @@ export class ProjectAuthorizationService
     group = structuredClone(group);
     validateGroup(group);
     // Authenticate before allowing any upstream discovery.
-    await this.store.transaction((state) => owner(state, actor));
+    const existingGroup = await this.store.transaction((state) => {
+      owner(state, actor);
+      return state.groups.find((row) => row.id === group.id) ?? null;
+    });
+    for (const skillId of group.grants.skillIds ?? [])
+      if (
+        !(await this.catalogue.hasSkill?.(skillId)) &&
+        !existingGroup?.grants.skillIds?.includes(skillId)
+      )
+        throw new Error("Group skills must exist in this project catalogue.");
     const evidence = await this.discover(
       group.grants.services.map((service) => ({
         connectionId: service.connectionId,
@@ -1427,6 +1528,19 @@ export class ProjectAuthorizationService
       state.connections = state.connections.filter(
         (row) => row.id !== connectionId,
       );
+      for (const group of state.groups) {
+        if (
+          group.grants.services.some(
+            (grant) => grant.connectionId === connectionId,
+          )
+        ) {
+          group.grants.services = group.grants.services.filter(
+            (grant) => grant.connectionId !== connectionId,
+          );
+          group.revision++;
+          group.updatedAt = now();
+        }
+      }
       for (const assignment of state.assignments)
         if (assignment.serviceConnectionIds.includes(connectionId)) {
           assignment.serviceConnectionIds =
@@ -1480,20 +1594,34 @@ export class ProjectAuthorizationService
     actor: Actor,
     agentId: string,
     permissionGroupIds: string[],
-    serviceConnectionIds: string[],
+    serviceConnectionIds: string[] | undefined,
     expectedRevision: number | null,
   ): Promise<AccessAssignment> {
     actor = structuredClone(actor);
     permissionGroupIds = [...permissionGroupIds];
-    serviceConnectionIds = [...serviceConnectionIds];
+    serviceConnectionIds = serviceConnectionIds ? [...serviceConnectionIds] : undefined;
     return this.store.transaction(async (state) => {
       owner(state, actor);
       await this.agent(state, agentId);
       const current = state.assignments.find((row) => row.agentId === agentId);
+      if (
+        current && serviceConnectionIds !== undefined &&
+        isDeepStrictEqual(
+          [...current.permissionGroupIds].sort(),
+          [...permissionGroupIds].sort(),
+        ) &&
+        !isDeepStrictEqual(
+          [...connectionIds(state, permissionGroupIds)].sort(),
+          [...serviceConnectionIds].sort(),
+        )
+      )
+        throw new Error(
+          "Connections derive from group memberships. Change the group service grants or membership; an individual connection list cannot change access.",
+        );
       const assignment = {
         agentId,
         permissionGroupIds,
-        serviceConnectionIds,
+        serviceConnectionIds: [],
         revision: revision(current, expectedRevision),
       };
       validateRecord("assignment", assignment);
@@ -1501,7 +1629,7 @@ export class ProjectAuthorizationService
         permissionGroupIds.some(
           (id) => !state.groups.some((row) => row.id === id),
         ) ||
-        serviceConnectionIds.some(
+        serviceConnectionIds?.some(
           (id) => !state.connections.some((row) => row.id === id),
         )
       )
@@ -1511,7 +1639,13 @@ export class ProjectAuthorizationService
       if (current) Object.assign(current, assignment);
       else state.assignments.push(assignment);
       audit(state, actor, "assignment.saved", agentId);
-      return assignment;
+      return {
+        ...assignment,
+        serviceConnectionIds: connectionIds(
+          state,
+          assignment.permissionGroupIds,
+        ),
+      };
     });
   }
   async saveEnvironmentPolicy(

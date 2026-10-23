@@ -73,9 +73,11 @@ export interface Agent {
     /** Optional per-agent voice override; absent legacy values mean null. */
     voice?: string | null;
   };
+  /** Compatibility/provenance; current views and runtime derive skills from groups. */
   skills: { skillId: Id; enabled: boolean }[];
   access: {
     permissionGroupIds: Id[];
+    /** Compatibility projection of current group service grants. */
     serviceConnectionIds: Id[];
     inheritPersonalServiceCredentials: false; // Desired policy, not isolation evidence
   };
@@ -278,6 +280,8 @@ export interface PermissionGroup {
     services: { connectionId: Id; capabilities: string[] }[];
     environmentPolicyIds: Id[];
     /** Nonsecret project references; executable resources use canonical policy/connection grants. */
+    /** Effective skills and references are the union of current memberships. */
+    skillIds?: Id[];
     resourceIds?: Id[];
   };
 }
@@ -816,6 +820,7 @@ export interface AgentProvisioning {
     expectedPresetRevision: Revision;
   }): Promise<Agent["access"]>;
   accessFor(agentId: Id): Promise<Agent["access"]>;
+  skillsFor?(agentId: Id): Promise<Agent["skills"]>;
 }
 /** Skill storage/UI are owned by #34/#95; the runtime consumes exact revisions. */
 export interface ProjectSkillSource {

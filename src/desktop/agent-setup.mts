@@ -219,7 +219,13 @@ const profileMatches = (agent: Agent, draft: AgentSetupDraft) =>
       voice: agent.profile.voice ?? null,
     },
     selectedProfile(draft),
-  ) && same(agent.skills ?? [], draft.skills);
+  ) &&
+  idsEqual(
+    (agent.skills ?? [])
+      .filter((skill) => skill.enabled)
+      .map((skill) => skill.skillId),
+    draft.skills.filter((skill) => skill.enabled).map((skill) => skill.skillId),
+  );
 
 /** A private intent journal coordinates existing authorities. It never grants
  * access, starts an agent, stores credentials, or replaces native history. */
@@ -500,6 +506,27 @@ export async function openAgentSetup(options: Options) {
     )
       throw new AgentSetupError("Start a new setup to change its target.");
     const snapshot = await snapshots();
+    const groups = snapshot.access.groups.filter((group) =>
+      draft.groupIds.includes(group.id),
+    );
+    const inheritedSkills = groups.flatMap(
+      (group) => group.grants.skillIds ?? [],
+    );
+    const inheritedConnections = groups.flatMap((group) =>
+      group.grants.services.map((grant) => grant.connectionId),
+    );
+    draft.skills = unique([
+      ...inheritedSkills,
+      ...(draft.groupMode === "new"
+        ? draft.skills
+            .filter((skill) => skill.enabled)
+            .map((skill) => skill.skillId)
+        : []),
+    ]).map((skillId) => ({ skillId, enabled: true }));
+    draft.serviceConnectionIds = unique([
+      ...inheritedConnections,
+      ...(draft.groupMode === "new" ? draft.serviceConnectionIds : []),
+    ]);
     const agent = target(snapshot, draft);
     const assignmentRevision = agent
       ? (snapshot.access.assignments.find((row) => row.agentId === agent.id)
@@ -578,6 +605,9 @@ export async function openAgentSetup(options: Options) {
     return {
       crew,
       services: clone(draft.serviceCapabilities),
+      skillIds: draft.skills
+        .filter((skill) => skill.enabled)
+        .map((skill) => skill.skillId),
       environmentPolicyIds: [],
     };
   };
@@ -712,14 +742,13 @@ export async function openAgentSetup(options: Options) {
     ];
     const effectiveServices = new Map<string, string[]>();
     for (const grant of services)
-      if (draft.serviceConnectionIds.includes(grant.connectionId))
-        effectiveServices.set(
-          grant.connectionId,
-          unique([
-            ...(effectiveServices.get(grant.connectionId) ?? []),
-            ...grant.capabilities,
-          ]),
-        );
+      effectiveServices.set(
+        grant.connectionId,
+        unique([
+          ...(effectiveServices.get(grant.connectionId) ?? []),
+          ...grant.capabilities,
+        ]),
+      );
     if (draft.groupMode === "existing" && draft.folderAccess !== "none") {
       if (
         !workspaces.some(
@@ -736,14 +765,6 @@ export async function openAgentSetup(options: Options) {
         );
     }
     const warnings: string[] = [];
-    if (
-      services.some(
-        (grant) => !draft.serviceConnectionIds.includes(grant.connectionId),
-      )
-    )
-      warnings.push(
-        "Some shared-group service capabilities remain inactive because their connections are not assigned.",
-      );
     if (draft.folderAccess === "none")
       warnings.push("This agent will have no approved project folder access.");
     if (planned)

@@ -1,6 +1,6 @@
 # Guided owner access — #100 / #101
 
-The owner can connect a Linear or GitHub account explicitly for Crew. Choose either
+The owner can connect a Linear, GitHub or Gmail account explicitly for Crew. Choose either
 the owner's personal service account or a dedicated agent account, then enter a
 credential created for that account. This choice describes the owner's intent;
 provider identity verification establishes which account actually authenticated.
@@ -23,6 +23,8 @@ defines standard and read-only endpoints. The owner chooses the token's permitte
 repositories and permissions at GitHub. Crew checks the authenticated account with
 GitHub's user endpoint and discovers the actual MCP catalogue. A successful account
 check does not establish access to every repository, organization or operation.
+
+Gmail uses the fixed first-party REST adapter with explicit owner OAuth access-token or credential-bundle input. Read-only and mail/drafts choices keep sending as a separate ungranted capability. See [group-derived access and Gmail setup](GROUP-DERIVED-ACCESS.md) for supported operations, owner-managed Google client requirements, refresh and fixture-only acceptance.
 
 No registered Crew OAuth client, universal MCP compatibility or provider account
 creation is assumed. Advanced connection editing still uses trusted registrations;
@@ -73,7 +75,7 @@ uses a fresh request ID; silently reusing different private input is rejected.
 An existing connection needs a stable saved external account ID matching the newly
 verified account. A legacy owner-entered label with no stable ID cannot safely be
 rebound: create a new connection. Groups are shared; adding capabilities affects
-current and future members who have that connection. Explicit approval grants
+all current and future members. Connection availability derives from these group grants; no individual connection allowlist is required. Explicit approval grants
 remain independent. Existing native sessions may need an explicit Restart to
 refresh tool discovery; no wizard action starts or restarts them automatically.
 

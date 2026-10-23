@@ -5,6 +5,7 @@ import type {
   PermissionGroup,
   ServiceCapability,
   ServiceConnectionView,
+  Skill,
 } from "../../../src/agents/contracts.mjs";
 import { groupWorkspaceChoices } from "./workspace-choices";
 import { Button } from "@/components/ui/button";
@@ -29,6 +30,7 @@ import {
 
 export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   groups: readonly PermissionGroup[];
+  skills?: readonly Skill[];
   connections: readonly ServiceConnectionView[];
   capabilities: readonly ServiceCapability[];
   crewCapabilities: readonly CrewPermissionChoice[];
@@ -50,7 +52,7 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
   return (
     <AccessSection
       title="Permission groups"
-      description="Assign groups to agents to enable their capabilities. Multiple groups add permissions together. Agents also need an assigned connection before using a service."
+      description="Assign groups to agents to enable their capabilities. Multiple groups add permissions together. Groups also select the skills and service identities available to their members."
       action={
         <Button
           disabled={editing !== null}
@@ -280,6 +282,64 @@ function GroupEditor({
             }
           />
         </div>
+        <fieldset className="space-y-3 border-t pt-4">
+          <legend className="text-sm font-medium">Project skills</legend>
+          <p className="text-xs text-muted-foreground">
+            Members inherit these skills. Explicit Restart refreshes native
+            skill discovery; saving never starts work.
+          </p>
+          {(props.skills ?? []).map((skill) => (
+            <Choice
+              key={skill.id}
+              checked={(draft.grants.skillIds ?? []).includes(skill.id)}
+              onChange={(checked) =>
+                setDraft((current) => ({
+                  ...current,
+                  grants: {
+                    ...current.grants,
+                    skillIds: checked
+                      ? [
+                          ...new Set([
+                            ...(current.grants.skillIds ?? []),
+                            skill.id,
+                          ]),
+                        ]
+                      : (current.grants.skillIds ?? []).filter(
+                          (id) => id !== skill.id,
+                        ),
+                  },
+                }))
+              }
+              description={skill.description}
+            >
+              {skill.name}
+            </Choice>
+          ))}
+          {(draft.grants.skillIds ?? [])
+            .filter(
+              (id) => !(props.skills ?? []).some((skill) => skill.id === id),
+            )
+            .map((id) => (
+              <Choice
+                key={id}
+                checked
+                onChange={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    grants: {
+                      ...current.grants,
+                      skillIds: (current.grants.skillIds ?? []).filter(
+                        (value) => value !== id,
+                      ),
+                    },
+                  }))
+                }
+                description="Unavailable project skill; retained until explicitly removed."
+              >
+                {id}
+              </Choice>
+            ))}
+        </fieldset>
         <fieldset className="space-y-3">
           <legend className="mb-2 text-sm font-medium">
             Service capabilities

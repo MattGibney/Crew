@@ -1,3 +1,4 @@
+import { gmailOAuthBundle } from "../gateway/gmail.mjs";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type {
@@ -7,6 +8,7 @@ import type {
   AuthorizationService,
   PermissionGroup,
   ServiceConnection,
+  Skill,
 } from "../agents/contracts.mjs";
 import type { ProjectAuthorizationService } from "./authorization.mjs";
 import type { EncryptedCredentialVault } from "./vault.mjs";
@@ -37,6 +39,7 @@ export interface AccessOwnerApiOptions {
   /** Trusted production runtime references enable setup before any agent exists. */
   runtimeDefaults?: OwnerRuntimeDefaults | null;
   listAgents(): Promise<Agent[]>;
+  listSkills?(): Promise<Skill[]>;
   setupChoices(): Promise<OwnerConnectionSetupChoice[]>;
   /** Synchronous local projection only. Discovery/refresh belongs to explicit verification. */
   catalogueSnapshot(connection: ServiceConnection): OwnerCatalogueSnapshot;
@@ -129,7 +132,7 @@ export function createAccessOwnerApi(
       )
     )
       throw new Error("Connection is not a supported configured adapter.");
-    if (method === "oauth")
+    if (method === "oauth" && draft.service !== "gmail")
       throw new Error(
         "Use a supported OAuth reconnect flow; OAuth material cannot be pasted into settings.",
       );
@@ -158,7 +161,7 @@ export function createAccessOwnerApi(
         method === "none"
           ? { method: "none" }
           : {
-              method: method as "token" | "ssh-key",
+              method: method as "token" | "ssh-key" | "oauth",
               credentialRef: "pending-owner-save",
             },
       observedState: "unknown",
@@ -171,6 +174,8 @@ export function createAccessOwnerApi(
     // Do not retain private owner entry on the command object across asynchronous work.
     change.credential = null;
     try {
+      if (method === "oauth" && material)
+        gmailOAuthBundle(material.toString("utf8"));
       return await authorization.saveConnection(
         actor,
         connection,
@@ -211,7 +216,7 @@ export function createAccessOwnerApi(
             metadata?.revision ?? null,
           );
           return {
-            method: method as "token" | "ssh-key",
+            method: method as "token" | "ssh-key" | "oauth",
             credentialRef: saved.credentialRef,
           };
         },
@@ -265,6 +270,7 @@ export function createAccessOwnerApi(
       return {
         ...state,
         projectId: options.projectId,
+        skills: (await options.listSkills?.()) ?? [],
         runtimeDefaults: runtimeDefaults ? { ...runtimeDefaults } : null,
         agents: agents.map((agent) => ({
           ...agent,
@@ -456,7 +462,7 @@ export function createAccessOwnerApi(
               actor,
               id(input.agentId),
               ids(input.permissionGroupIds),
-              ids(input.serviceConnectionIds),
+              input.serviceConnectionIds === undefined ? undefined : ids(input.serviceConnectionIds),
               expected(input.expectedRevision),
             );
           case "saveConnection":

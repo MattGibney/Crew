@@ -164,14 +164,19 @@ const definitions = {
     description: text,
     revision,
     updatedAt: timestamp,
-    grants: object({
-      crew: {
-        ...array(object({ action: { enum: crewActions } }), 256),
-        uniqueItems: true,
+    grants: object(
+      {
+        crew: {
+          ...array(object({ action: { enum: crewActions } }), 256),
+          uniqueItems: true,
+        },
+        services: array(object({ connectionId: id, capabilities: ids }), 256),
+        environmentPolicyIds: ids,
+        skillIds: ids,
+        resourceIds: ids,
       },
-      services: array(object({ connectionId: id, capabilities: ids }), 256),
-      environmentPolicyIds: ids,
-    }),
+      ["skillIds", "resourceIds"],
+    ),
   }),
   connection: object({
     id,
@@ -363,6 +368,8 @@ const stateSchema = {
   ...object(
     {
       version: { const: 2 },
+      groupAccessVersion: { const: 1 },
+      pendingLegacySkillAgentIds: { ...array(id, 10000), uniqueItems: true },
       projectId: id,
       ownerUserId: id,
       groups: array(ref("group")),
@@ -415,7 +422,12 @@ const stateSchema = {
       closedSessions: array(ref("caller")),
       audit: array(ref("audit"), 20000),
     },
-    ["presetApplications", "connectionSetups"],
+    [
+      "presetApplications",
+      "connectionSetups",
+      "groupAccessVersion",
+      "pendingLegacySkillAgentIds",
+    ],
   ),
 };
 const stateValidator = ajv.compile<AccessState>(stateSchema);

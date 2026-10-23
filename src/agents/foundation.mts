@@ -117,6 +117,7 @@ export class AgentFoundation implements AgentLifecycle {
       options.store,
       options.authorization,
       options.references,
+      options.provisioning?.skillsFor?.bind(options.provisioning),
     );
   }
 
@@ -126,6 +127,9 @@ export class AgentFoundation implements AgentLifecycle {
     return Promise.all(
       agents.map(async (agent) => ({
         ...agent,
+        skills: this.options.provisioning?.skillsFor
+          ? await this.options.provisioning.skillsFor(agent.id)
+          : agent.skills,
         access: this.options.provisioning
           ? await this.options.provisioning.accessFor(agent.id)
           : agent.access,

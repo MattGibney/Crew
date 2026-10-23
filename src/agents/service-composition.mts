@@ -4,6 +4,11 @@ import {
 } from "../resources/catalogue.mjs";
 import { createProjectResourceTools } from "../resources/tools.mjs";
 import { combineAgentToolExtensions } from "./tool-extensions.mjs";
+import {
+  connectionIds,
+  skillSelections,
+  migrateLegacyAgentSkills,
+} from "../access/group-access.mjs";
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { homedir } from "node:os";
@@ -180,9 +185,16 @@ export async function startUnifiedApplication(
           store.snapshot().jobs.find((job) => job.id === id) ?? null,
       },
       {
+        hasSkill: async (id) =>
+          (await options.skills.list()).some(
+            (skill) => skill.id === id && skill.projectId === options.projectId,
+          ),
         hasOperation: async (connectionId, operation) =>
           gateway?.catalogue.hasOperation(connectionId, operation) ?? false,
       },
+    );
+    await accessStore.transaction((state) =>
+      migrateLegacyAgentSkills(state, store.snapshot().agents),
     );
     const registry = createSupportedGatewayRegistry();
     gateway = await createGateway({
@@ -192,6 +204,8 @@ export async function startUnifiedApplication(
       connections: {
         get: (id) => authorization.getConnection(id),
         listAssigned: (caller) => authorization.listAssignedConnections(caller),
+        allowedOperations: (caller, id) =>
+          authorization.allowedOperations(caller, id),
       },
       resolveConfiguration: registry.resolve,
       validateCaller: async (caller, jobId) =>
@@ -501,13 +515,16 @@ export async function startUnifiedApplication(
         },
       },
       async configuration(agent) {
-        const assigned = await authorization.accessFor(agent.id);
         const access = await authorization.snapshot({
           type: "user",
           userId: options.ownerUserId,
         });
+        const groupIds =
+          access.assignments.find((row) => row.agentId === agent.id)
+            ?.permissionGroupIds ?? [];
+        const serviceIds = connectionIds(access, groupIds);
         const available = await options.skills.list();
-        const skills = agent.skills
+        const skills = skillSelections(access, groupIds)
           .filter((skill) => skill.enabled)
           .map((selection) => {
             const skill = available.find(
@@ -528,12 +545,10 @@ export async function startUnifiedApplication(
             profile: agent.profile,
             skills,
             permissionGroups: access.groups
-              .filter((group) => assigned.permissionGroupIds.includes(group.id))
+              .filter((group) => groupIds.includes(group.id))
               .map(({ id, revision }) => ({ id, revision })),
             serviceConnections: access.connections
-              .filter((connection) =>
-                assigned.serviceConnectionIds.includes(connection.id),
-              )
+              .filter((connection) => serviceIds.includes(connection.id))
               .map(({ id, revision }) => ({ id, revision })),
             runtimeConfig: {
               id: unifiedRuntimeDefaults.configRef,
@@ -750,7 +765,11 @@ export async function startUnifiedApplication(
       return projectResources({
         references: resources!.list(),
         workspaces: environments!.ownerSnapshot(owner).workspaces,
-        connections: access.connections,
+        connections: assigned
+          ? access.connections.filter((connection) =>
+              assigned.serviceConnectionIds.includes(connection.id),
+            )
+          : access.connections,
         ...(assigned
           ? {
               groups: access.groups.filter((group) =>
@@ -979,6 +998,7 @@ export async function startUnifiedApplication(
         },
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
+        listSkills: () => options.skills.list(),
         resolveEnvironmentTemplate: async (pin) => {
           environmentTemplates!.resolvePinned(pin.id, pin.revision);
         },

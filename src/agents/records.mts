@@ -206,6 +206,9 @@ export class FoundationRecords {
     readonly store: FoundationStore,
     private readonly authorization: AuthorizationService,
     private readonly references?: FoundationReferences,
+    private readonly groupSkills?: (
+      agentId: string,
+    ) => Promise<Agent["skills"]>,
   ) {}
 
   private actor(state: FoundationState, principal: FoundationPrincipal): Actor {
@@ -299,6 +302,23 @@ export class FoundationRecords {
         throw new Error("Invalid skill selection.");
       await this.reference("skill", selection.skillId);
     }
+  }
+
+  private async assertGroupSkills(
+    agentId: string,
+    selections: Agent["skills"],
+  ): Promise<void> {
+    const current = (await this.groupSkills!(agentId))
+      .map((item) => item.skillId)
+      .sort();
+    const desired = selections
+      .filter((item) => item.enabled)
+      .map((item) => item.skillId)
+      .sort();
+    if (JSON.stringify(current) !== JSON.stringify(desired))
+      throw new Error(
+        "Skills are inherited from permission groups. Edit the group skills or agent memberships, then explicitly Restart to refresh native discovery.",
+      );
   }
 
   async createAgent(
@@ -406,6 +426,7 @@ export class FoundationRecords {
         agentId,
       });
       await this.selections(patch.skills);
+      if (this.groupSkills) await this.assertGroupSkills(agentId, patch.skills);
     }
     return this.store.update((state) => {
       this.actor(state, principal);
@@ -446,6 +467,7 @@ export class FoundationRecords {
       agentId,
     });
     await this.selections(selections);
+    if (this.groupSkills) await this.assertGroupSkills(agentId, selections);
     return this.store.update((state) => {
       this.actor(state, principal);
       const agent = getAgent(state, agentId);

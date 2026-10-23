@@ -9,6 +9,7 @@ import type {
   PermissionGroup,
   ServiceCapability,
   ServiceConnection,
+  Skill,
 } from "../agents/contracts.mjs";
 
 /** Owner UI DTOs only. Never imports the vault or server implementation. */
@@ -69,6 +70,7 @@ export interface AccessOwnerView {
   /** Trusted host configuration, not a model credential or an agent-supplied reference. */
   runtimeDefaults: OwnerRuntimeDefaults | null;
   groups: PermissionGroup[];
+  skills?: Skill[];
   presets: AgentCreationPreset[];
   creationDefaults: { revision: number; presetId: string | null };
   assignments: {

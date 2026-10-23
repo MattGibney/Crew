@@ -1,0 +1,50 @@
+# Agent groups, skills and service identities (#127)
+
+Crew has one persistent agent model. A personal assistant, marketing specialist and developer differ through their saved profile, group memberships and environment; manager is a selected responsibility. The project owns the skill catalogue and service connections. Several agents can use the same explicitly approved service identity without copying credentials into their environments.
+
+## Current authority
+
+Groups combine additively. `PermissionGroup.grants.skillIds` selects centrally stored project skills. `grants.services` selects an exact connection and its discovered operation IDs. Current membership determines effective skills, connection availability and service tool discovery. For example, a marketing group can grant a campaign-writing skill and Gmail search/drafts, while a developer group grants a coding skill and GitHub operations. An agent in both inherits both. Empty service capability lists make the connection available for separately approved operations; they do not grant any operation by themselves.
+
+`Agent.skills`, `Agent.access.serviceConnectionIds` and the same fields on presets are compatibility/provenance fields. Owner agent views and preset views project the current union from groups. Runtime preparation reads the same group authority. Foundation profile saves cannot change effective skills; edit the group or its membership instead. An individual connection list cannot grant access. A legacy assignment save that changes only this list fails with guidance to edit groups. The connection editor still owns verified identity and credentials; groups never contain credential material.
+
+Use Project settings → Skills to author a skill, Access → Permission groups to select it and service operations, and the agent's access editor to select memberships. Guided setup includes selected skills in its new shared group; selecting existing groups derives inherited skills and connections. Presets reuse approved memberships; copying a profile never silently creates skill/service authority. Saving configuration does not start a native turn, commands or microphone.
+
+`skills_list` and `skill_read` check the current group's skill IDs, including supporting resources returned by `skill_read`. Unassigned skills and their native paths are absent. Separate `skills.write` authoring permission can create/update any project skill; authoring is administrative access and does not assign it. Each native Start/Restart resolves only the current selected immutable revision paths. Native processes can cache discovery and have already consumed instructions: explicit Restart applies discovery changes, and nothing can erase text already consumed by a model. Fresh service discovery, authorization and final permit redemption use current membership, so removal prevents later dispatch even with a previously issued permit or separate approval. Already admitted external operations may finish.
+
+## Retained-state conversion
+
+Old access journals had two independent gates: group service operations and each agent's connection list. Removing the second gate without migration would grant services to previously unassigned members. On open, `groupAccessVersion: 1` records a deliberate conversion within access format version 2:
+
+1. Preserve the exact prior private access JSON as `access-before-group-derived-access.json` (or the existing v1 conversion snapshot when both conversions happen together).
+2. For each old assignment/preset, create a visible compatibility group containing exactly its previous connection availability and the intersection of its old groups' service capabilities. Clear service grants on the original shared groups. Preserve Crew actions, folder policies, memberships and immutable history.
+3. Before native/gateway startup, move enabled legacy agent skills into visible compatibility groups. Preset skills convert with their preset. Commit the pending migration marker removal atomically; retry does not create duplicate groups.
+
+This preserves effective authority, including a legacy assigned connection used only with separate approvals. Original private snapshots and migration audit receipts remain available for deliberate recovery. No live profile was migrated during development validation. Review compatibility groups before sharing them with additional agents: they are ordinary additive groups after conversion.
+
+## Explicit personal or dedicated service accounts
+
+Connect services through the existing owner flow. Choose personal or dedicated account intent, enter a credential created for that account, verify provider identity/capabilities, then select exact group operations and memberships. Intent is owner-declared; the authenticated identity is provider-observed. Verification creates an unassigned vaulted draft and grants nothing. The same connection may be selected in several groups. Model subscription sign-in remains independent; Crew does not copy personal Codex configuration, browser sessions or existing connector sessions.
+
+| Registered provider | Explicit authentication | Runtime adapter |
+| --- | --- | --- |
+| Linear, standard/read only | Owner-entered API key | Official hosted MCP |
+| GitHub, standard/read only | Owner-entered PAT with chosen repositories/permissions | Official hosted MCP |
+| Gmail, read only | Owner-entered OAuth access token or explicit OAuth bundle | Fixed Google REST profile/search/read operations |
+| Gmail, mail and drafts | Same, with required Google OAuth scopes | Above plus separately selectable draft-create, new-message-send and draft-send operations |
+
+Provider credentials and their permission restrictions remain an independent boundary. Google or a Workspace administrator may block consent. Verified identity/catalogue does not prove every team/repository/mail operation is authorized. Unknown or unavailable provider evidence stays explicit.
+
+## Gmail setup and bounded support
+
+The owner authorizes the intended mailbox using [Google's OAuth Playground](https://developers.google.com/oauthplayground/) with Google OAuth endpoints. Select `https://www.googleapis.com/auth/gmail.readonly`; for draft/send operations also authorize `https://www.googleapis.com/auth/gmail.compose` and `https://www.googleapis.com/auth/gmail.send`. Exchange the authorization code and enter the access token in Crew. A plain token is short lived. For persistent refresh, use the owner's own Google Cloud OAuth client with offline access, and enter a JSON bundle with `access_token`, `expires_at` in Unix milliseconds, `refresh_token`, `client_id` and optional `client_secret`. All fields stay in Crew's encrypted vault; none enters model arguments/configuration. Google client/consent setup is owner-managed. Crew does not register an OAuth application or automate the browser callback. Playground-issued refresh tokens can expire; its own documentation explains the 24-hour limit when using the Playground client.
+
+Refresh uses only `https://oauth2.googleapis.com/token`, the canonical vault revision and the existing per-connection refresh lock and durable uncertain-refresh marker. No model or owner field chooses an endpoint. Uncertain refresh requires deliberate credential replacement; it is never blindly retried. Replacing credentials in the connection editor preserves connection identity; a token authenticating a different mailbox fails. Create a new connection for another mailbox. Read-only registrations cannot discover or execute Gmail write tools even if the supplied token has broader Google scopes.
+
+The adapter uses `/gmail/v1/users/me/` on `https://gmail.googleapis.com`. Search returns message IDs and a page token; read returns full Gmail MIME data, including base64url text parts. Draft/create-send accept one recipient, a subject up to 120 characters and plain text. Draft-send accepts a draft ID. Mailbox identity is checked before using a saved connection. No attachments, draft editing, CC/BCC/reply/thread composition, labels/mailbox administration or automated account creation are implemented. Each write is a separate capability and is ungranted by default. Agent instructions still govern whether the owner has authorized a particular external communication. Uncertain sends retain broker evidence and are never blindly retried.
+
+Primary API references: [profile](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users/getProfile), [search](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list), [read](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/get), [create draft](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.drafts/create), [send message](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/send), and [Google offline OAuth refresh](https://developers.google.com/identity/protocols/oauth2/web-server#offline).
+
+## Evidence and limits
+
+The two disposable checks in `tests/group-derived-access.test.mjs` use real AccessStore, authorization, owner connection setup/verifier, canonical vault API, gateway discovery/executor/broker and skill tools. They exercise retained migration/reopen, exact old service intersections, legacy skills, group-only availability, additive operations, owner personal/dedicated intent, denied send, a fixture draft/send, explicit bundle refresh, denied permit after revocation, cross-group skill denial and changed-mailbox rejection. The provider HTTP responses and OS encryption backend are synthetic; no real email was sent or real account accessed. Focused setup/preset/skill checks, typecheck and production build are separate validation. Native model discovery, real Google consent/refresh/send and human app acceptance remain unverified in this slice.

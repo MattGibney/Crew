@@ -211,6 +211,10 @@ async function openProject(project: DesktopProject) {
                 return createProjectSkillAgentTools({
                   store: skills,
                   caller,
+                  visibleSkillIds: async () =>
+                    (await context.authorization.skillsFor(caller.agentId)).map(
+                      (skill) => skill.skillId,
+                    ),
                   runAuthorized: context.runAuthorized,
                 }).list();
               },
@@ -218,6 +222,10 @@ async function openProject(project: DesktopProject) {
                 return createProjectSkillAgentTools({
                   store: skills,
                   caller,
+                  visibleSkillIds: async () =>
+                    (await context.authorization.skillsFor(caller.agentId)).map(
+                      (skill) => skill.skillId,
+                    ),
                   runAuthorized: context.runAuthorized,
                 }).call(name, args);
               },

@@ -199,6 +199,7 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                   </div>
                 </div>
                 {connection.authentication.method === "oauth" &&
+                  connection.service !== "gmail" &&
                   !props.onReconnect && (
                     <p className="text-xs text-muted-foreground">
                       OAuth reconnect is unavailable until the gateway
@@ -307,7 +308,8 @@ function ConnectionEditor({
   ];
   const needsCredential =
     draft.authenticationMethod === "token" ||
-    draft.authenticationMethod === "ssh-key";
+    draft.authenticationMethod === "ssh-key" ||
+    (draft.authenticationMethod === "oauth" && draft.service === "gmail");
   const changedAuthentication =
     !connection ||
     draft.authenticationMethod !== connection.authentication.method;
@@ -484,7 +486,9 @@ function ConnectionEditor({
             {methods.map((method) => (
               <option key={method} value={method}>
                 {method === "oauth"
-                  ? "OAuth sign-in"
+                  ? draft.service === "gmail"
+                    ? "Google OAuth credential bundle"
+                    : "OAuth sign-in"
                   : method === "token"
                     ? "Service token"
                     : method === "ssh-key"
@@ -547,8 +551,9 @@ function ConnectionEditor({
         )}
         {draft.authenticationMethod === "oauth" && (
           <p className="text-sm text-muted-foreground">
-            Save the connection, then use Reconnect when its gateway
-            authentication adapter is available. Do not paste OAuth tokens here.
+            {draft.service === "gmail"
+              ? "Enter the explicit Google OAuth credential bundle from your own approved OAuth client. All fields are vaulted; the fixed Google refresh endpoint is used. Reverify after replacing credentials."
+              : "Save the connection, then use Reconnect when its gateway authentication adapter is available. Do not paste OAuth tokens here."}
           </p>
         )}
       </fieldset>

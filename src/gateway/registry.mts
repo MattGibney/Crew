@@ -20,7 +20,8 @@ export interface GatewaySetupChoice {
     steps: string[];
   };
 }
-export type GatewayOwnerIdentityProvider = "linear-api-key" | "github-pat";
+export type GatewayOwnerIdentityProvider =
+  "linear-api-key" | "github-pat" | "gmail-oauth-token";
 export interface TrustedGatewayRegistration {
   choice: GatewaySetupChoice;
   configuration: ExecutorConfiguration;
@@ -84,7 +85,9 @@ export class TrustedGatewayRegistry {
       references.add(reference);
       if (
         registration.ownerIdentity !== undefined &&
-        !["linear-api-key", "github-pat"].includes(registration.ownerIdentity)
+        !["linear-api-key", "github-pat", "gmail-oauth-token"].includes(
+          registration.ownerIdentity,
+        )
       )
         throw new Error("Unsupported owner identity verification.");
       this.entries.set(
@@ -197,6 +200,44 @@ export function createSupportedGatewayRegistry(): TrustedGatewayRegistry {
     ],
   };
   return new TrustedGatewayRegistry([
+    ...([false, true] as const).map((write): TrustedGatewayRegistration => ({
+      choice: {
+        id: write ? "gmail" : "gmail-readonly",
+        label: write ? "Gmail (mail and drafts)" : "Gmail (read only)",
+        service: "gmail",
+        transport: {
+          type: "mcp",
+          serverConfigRef: write ? "crew.gmail.v1" : "crew.gmail.readonly.v1",
+        },
+        authenticationMethods: ["token", "oauth"],
+        guide: {
+          credentialLabel: "Google OAuth access token or credential JSON",
+          credentialUrl: "https://developers.google.com/oauthplayground/",
+          documentationUrl:
+            "https://developers.google.com/workspace/gmail/api/auth/scopes",
+          accountOwnership: {
+            personal: "Explicitly authorize your own Google mailbox.",
+            dedicated:
+              "Choose the separate Google mailbox your organization approved for this agent.",
+          },
+          steps: [
+            "Open Google's OAuth Playground. Use Google OAuth endpoints, choose https://www.googleapis.com/auth/gmail.readonly and authorize the intended account. For drafts/sending also authorize gmail.compose and gmail.send scopes.",
+            "Exchange the authorization code for tokens. Copy only the access token into Crew. Never copy browser, Codex or another application's credentials.",
+            "Verify the mailbox, choose group operations and memberships, then save. Google or your Workspace administrator may restrict consent; configure your own Google Cloud OAuth client if required.",
+            "A plain token expires. For refresh, supply JSON containing access_token, expires_at (Unix milliseconds), refresh_token, client_id and optional client_secret for your own Google Cloud OAuth client. All fields stay vaulted. No personal connector sessions are reused.",
+            "Choose read-only operations or separately grant draft/send operations through groups. Attachments, mailbox administration and replies/thread composition are not supported.",
+          ],
+        },
+      },
+      ownerIdentity: "gmail-oauth-token",
+      configuration: {
+        type: "mcp",
+        adapter: "gmail-rest",
+        gmailWrite: write,
+        url: "https://gmail.googleapis.com",
+        timeoutMs: 30_000,
+      },
+    })),
     {
       choice: {
         id: "linear-readonly",

@@ -53,8 +53,16 @@ export class DurableOperationBroker implements OperationBroker {
       if (connection.projectId !== caller.projectId) continue;
       // Discovery is authenticated but never an execution grant. An unavailable connection
       // fails listing truthfully instead of showing a fabricated/stale catalogue.
+      const discovered =
+        await this.options.executor.listCapabilities(connection);
+      const allowed = await this.options.connections.allowedOperations?.(
+        caller,
+        connection.id,
+      );
       result.push(
-        ...(await this.options.executor.listCapabilities(connection)),
+        ...discovered.filter(
+          (capability) => !allowed || allowed.includes(capability.id),
+        ),
       );
     }
     return result;
@@ -211,12 +219,11 @@ export class DurableOperationBroker implements OperationBroker {
       return denied("Caller is no longer available.");
 
     if (record.receipt.reservationId === null) {
-      const decision =
-        await this.options.authorization.authorizeAndReserve({
-          caller: invocation.caller,
-          jobId: invocation.jobId,
-          operation: invocation.operation,
-        });
+      const decision = await this.options.authorization.authorizeAndReserve({
+        caller: invocation.caller,
+        jobId: invocation.jobId,
+        operation: invocation.operation,
+      });
       if (decision.state !== "allowed") {
         record.result =
           decision.state === "approval_required"

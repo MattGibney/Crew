@@ -7,7 +7,7 @@ is included. The implementation PR targets `codex/unified-agent-platform`.
 
 ## What an agent sees
 
-Assigned service connections advertise their actual tools with stable, connection-specific names,
+Group-derived service connections advertise their permitted tools with stable, connection-specific names,
 upstream descriptions and input/output schemas. Listing a tool confers no execution permission.
 Calls use current #89 authorization. A missing grant returns a correlated approval request; after
 owner review, `crew_resume_operation` resumes the exact saved operation. The agent can also use
@@ -100,11 +100,11 @@ the actual operation schema immediately before admission. Catalogue presence nev
    read auth files, or put service secrets into runtime environment/configuration.
 2. Select a registered adapter from `registry.setupChoices()` and validate the saved connection with
    `registry.assertConnection`. `createSupportedGatewayRegistry()` supplies Linear and GitHub read-only
-   and standard hosted MCP choices, using owner-entered token authentication. Custom CLI registrations
+   and standard hosted MCP choices, using owner-entered token authentication. Gmail supplies fixed REST-backed read-only or mail/drafts tools with explicit owner OAuth tokens/bundles; see [Gmail setup](GROUP-DERIVED-ACCESS.md). Custom CLI registrations
    belong to trusted host code via `TrustedGatewayRegistry`; no runtime/owner JSON endpoint accepts
    arbitrary commands, config paths or endpoints. Changing endpoint, service or acting identity uses
    a new connection ID so previous grants cannot silently retarget.
-3. Assign the connection and appropriate group capability, or let the owner review exact access
+3. Assign a group with the connection and appropriate operations, or let the owner review exact access
    requests. Capability names come from `broker.listCapabilities`; never hand-invent permissions.
 4. Connect the authenticated runtime transport and preserve request identity. A session refresh may
    be required for changed tool catalogues; it does not grant access or start a model turn here.

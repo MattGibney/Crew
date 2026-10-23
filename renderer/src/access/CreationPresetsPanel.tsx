@@ -283,8 +283,8 @@ function PresetEditor({
               ))}
             </NativeSelect>
             <p className="mt-1 text-xs text-muted-foreground">
-              Copies the profile, selected skills and supported runtime. Choose
-              access separately below.
+              Copies the profile and supported runtime. Skills and services
+              derive from groups. Choose access separately below.
             </p>
           </div>
         )}
@@ -347,20 +347,6 @@ function PresetEditor({
               description={group.description}
             >
               {group.name}
-            </Choice>
-          ))}
-        </div>
-        <div>
-          <p className="font-medium text-sm">Service identities</p>
-          {props.connections.map((connection) => (
-            <Choice
-              key={connection.id}
-              checked={draft.serviceConnectionIds.includes(connection.id)}
-              onChange={(checked) =>
-                toggle("serviceConnectionIds", connection.id, checked)
-              }
-            >
-              {connection.name} · {connection.identity.displayName}
             </Choice>
           ))}
         </div>

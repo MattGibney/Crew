@@ -64,7 +64,8 @@ export type AssignmentSave = {
   agentId: Agent["id"];
   expectedRevision: Revision | null;
   permissionGroupIds: Agent["access"]["permissionGroupIds"];
-  serviceConnectionIds: Agent["access"]["serviceConnectionIds"];
+  /** Deprecated compatibility input; memberships alone determine connections. */
+  serviceConnectionIds?: Agent["access"]["serviceConnectionIds"];
 };
 
 export type AccessDecision = Parameters<AuthorizationService["decide"]>[2];

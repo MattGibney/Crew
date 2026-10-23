@@ -16,6 +16,7 @@ import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { validateState, validateLegacyState } from "./validation.mjs";
+import { migrateGroupDerivedAccess } from "./group-access.mjs";
 import type { OwnerConnectionVerification } from "./owner-contracts.mjs";
 
 /** Owner setup workflow only; none of these records grants runtime authority. */
@@ -62,6 +63,9 @@ export interface AccessAudit {
 }
 export interface AccessState {
   version: 2;
+  /** Group-derived access migration, independent of legacy Crew scope conversion. */
+  groupAccessVersion?: 1;
+  pendingLegacySkillAgentIds?: string[];
   projectId: string;
   ownerUserId: string;
   groups: PermissionGroup[];
@@ -104,6 +108,7 @@ export class AccessStore {
       throw new Error("Access state needs an absolute private directory.");
     const state: AccessState = {
       version: 2,
+      groupAccessVersion: 1,
       projectId,
       ownerUserId,
       groups: [],
@@ -192,16 +197,23 @@ export class AccessStore {
           });
         }
       }
+      const groupAccessMigration =
+        (value as AccessState).groupAccessVersion !== 1;
+      // Validate the retained format before interpreting any grants.
+      validateState(value);
+      migrateGroupDerivedAccess(value);
       validateState(value);
       if (value.projectId !== projectId || value.ownerUserId !== ownerUserId)
         throw new Error(
           "Access state belongs to a different project or owner.",
         );
-      if (legacy) {
+      if (legacy || groupAccessMigration) {
         // Exclusive immutable recovery snapshot, retained separately from current authority.
         const backupPath = path.join(
           directory,
-          "access-v1-before-group-capabilities.json",
+          legacy
+            ? "access-v1-before-group-capabilities.json"
+            : "access-before-group-derived-access.json",
         );
         const snapshot = JSON.stringify(original);
         let backup;
