@@ -1,3 +1,4 @@
+import { OnlineStatus } from "@/components/online-status";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Collapsible,
@@ -691,23 +692,13 @@ export function AgentSetupWizard(props: Props) {
                                   )?.profile.name ?? "Unavailable agent")}
                             </TableCell>
                             <TableCell className="px-4 py-3 text-muted-foreground">
-                              <span
-                                className="inline-flex items-center gap-2 whitespace-nowrap"
+                              <OnlineStatus
+                                online={
+                                  agent.runtime.session.observedState ===
+                                  "started"
+                                }
                                 title={`Session: ${agent.runtime.session.observedState}`}
-                              >
-                                <span
-                                  aria-hidden="true"
-                                  className={`flex size-4 shrink-0 items-center justify-center rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500/10" : "bg-gray-400/10"}`}
-                                >
-                                  <span
-                                    className={`size-2.5 rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500" : "bg-gray-400"}`}
-                                  />
-                                </span>
-                                {agent.runtime.session.observedState ===
-                                "started"
-                                  ? "Online"
-                                  : "Offline"}
-                              </span>
+                              />
                             </TableCell>
                             <TableCell className="px-4 py-3 text-muted-foreground">
                               {agent.profile.voice ?? "Native default"}

@@ -31,3 +31,7 @@ The official files were installed with `npx shadcn add ... --yes --overwrite`, u
 ## Verification
 
 Typecheck and production build, plus disposable preview checks for team/worker lists, keyboard tabs, archive cancellation, editing and saved setup, radios/checkboxes, expandable work evidence, project switching and empty onboarding, text draft retention across voice/text tabs, and browser tab selection. Permanent-delete cancellation and confirmation were checked against fictional preview records only. These checks do not establish physical microphone, provider or installed desktop acceptance.
+
+## Shared product components
+
+`OnlineStatus` in `renderer/src/components/online-status.tsx` displays an Online/Offline label with the shared dot and 16px halo. Pass an `online` boolean; standard span props such as `title` and `className` are supported. Callers own runtime-specific availability mapping. This is a product indicator, not a recreated shadcn registry component.
