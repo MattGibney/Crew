@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Archive,
   GitBranch,
   Globe,
   Keyboard,
@@ -36,6 +37,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
+import { ArchivedAgentsSettings } from "./ArchivedAgentsSettings";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
 import { useVoiceArtifacts } from "./useVoiceArtifacts";
@@ -286,12 +288,25 @@ export function AgentsApp({
     return completed;
   };
   const primary =
-    snapshot?.agents.find((agent) => agent.id === primaryAgentId(snapshot)) ??
-    null;
+    snapshot?.agents.find(
+      (agent) => !agent.archivedAt && agent.id === primaryAgentId(snapshot),
+    ) ?? null;
   useEffect(() => {
     setSelectedId(null);
     setView((current) => (current === "agents" ? "conversation" : current));
   }, [primary?.id]);
+  useEffect(() => {
+    if (
+      selectedId &&
+      snapshot &&
+      !snapshot.agents.some(
+        (agent) => agent.id === selectedId && !agent.archivedAt,
+      )
+    ) {
+      setSelectedId(null);
+      setView((current) => (current === "agents" ? "conversation" : current));
+    }
+  }, [selectedId, snapshot]);
   const showWorker = (id: string) => {
     setVisitedIds((current) => new Set([...current, id]));
     setSelectedId(id);
@@ -342,7 +357,34 @@ export function AgentsApp({
               </p>
             ),
         },
-        ...settingsPanels,
+        ...settingsPanels.map((panel) => ({
+          ...panel,
+          render: (context: Parameters<AgentSettingsPanel["render"]>[0]) =>
+            panel.render({
+              ...context,
+              snapshot: {
+                ...context.snapshot,
+                agents: context.snapshot.agents.filter(
+                  (agent) => !agent.archivedAt,
+                ),
+              },
+            }),
+        })),
+        {
+          id: "crew-archived-agents",
+          label: "Archived agents",
+          description:
+            "Restore an agent or permanently delete its local agent records.",
+          icon: Archive,
+          render: () => (
+            <ArchivedAgentsSettings
+              agents={snapshot.agents}
+              client={client}
+              pending={pending}
+              act={act}
+            />
+          ),
+        },
         {
           id: "crew-attention",
           label: "Questions and approvals",
@@ -709,7 +751,10 @@ export function AgentsApp({
           })}
           {snapshot.agents
             .filter(
-              (agent) => visitedIds.has(agent.id) && agent.id !== primary?.id,
+              (agent) =>
+                !agent.archivedAt &&
+                visitedIds.has(agent.id) &&
+                agent.id !== primary?.id,
             )
             .map((agent) => (
               <div
@@ -821,12 +866,11 @@ function AgentWorkerList({
   onSelect(id: string): void;
   compact: boolean;
 }) {
-  const [showArchived, setShowArchived] = useState(false);
   const workers = snapshot.agents.filter(
     (agent) =>
       agent.reportsTo.type === "agent" &&
       agent.reportsTo.agentId === primaryAgentId(snapshot) &&
-      (showArchived || !agent.archivedAt),
+      !agent.archivedAt,
   );
   return (
     <section aria-label="Workers and worktrees" className="min-w-0 space-y-3">
@@ -842,21 +886,6 @@ function AgentWorkerList({
         </div>
         <Layers className="size-4 text-muted-foreground" aria-hidden="true" />
       </div>
-      {snapshot.agents.some(
-        (agent) =>
-          agent.archivedAt &&
-          agent.reportsTo.type === "agent" &&
-          agent.reportsTo.agentId === primaryAgentId(snapshot),
-      ) && (
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(event) => setShowArchived(event.target.checked)}
-          />
-          Show archived
-        </label>
-      )}
       {!workers.length && (
         <div className="rounded-xl border border-dashed px-5 py-9 text-center">
           <FolderGit2 className="mx-auto mb-3 size-6 text-muted-foreground" />
@@ -1230,7 +1259,7 @@ function AgentDetail({
                   onArchived();
               }}
             >
-              Archive worker
+              Archive agent
             </Button>
           )}
         </div>

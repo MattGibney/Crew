@@ -64,6 +64,8 @@ export interface Agent {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   archivedAt: Timestamp | null;
+  /** Actual session/message activity; absent legacy values are unknown. */
+  lastUsedAt?: Timestamp | null;
   profile: {
     revision: Revision;
     name: string;

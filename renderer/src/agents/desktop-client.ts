@@ -68,6 +68,8 @@ export function createDesktopClient(bridge: DesktopBridge, projectId: string) {
     assignJob: (jobId, agentId, instruction) =>
       command("assignJob", { jobId, agentId, instruction }),
     archiveAgent: (agentId) => command("archiveAgent", { agentId }),
+    restoreAgent: (agentId) => command("restoreAgent", { agentId }),
+    deleteAgent: (agentId) => command("deleteAgent", { agentId }),
     prepare: (reason) => command("prepare", { reason }),
     saveImage: (picture) => command("images.save", { picture }),
     readImage: (imageRef) => command("images.read", { imageRef }),

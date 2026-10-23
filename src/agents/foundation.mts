@@ -599,6 +599,22 @@ export class AgentFoundation implements AgentLifecycle {
     });
   }
 
+  async restore(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<Agent> {
+    return this.serial(agentId, () => this.records.restore(principal, agentId));
+  }
+
+  async permanentlyDelete(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<{ agentId: string; deletedAt: string }> {
+    return this.serial(agentId, () =>
+      this.records.permanentlyDelete(principal, agentId),
+    );
+  }
+
   private async startLocked(
     agentId: string,
     intent: "start" | "restart" = "start",
@@ -814,6 +830,7 @@ export class AgentFoundation implements AgentLifecycle {
     await this.store.update((state) => {
       const current = state.agents.find((entry) => entry.id === agentId)!;
       if (final.state === "acknowledged") {
+        current.lastUsedAt = final.value.observedAt;
         current.runtime.threadId = final.value.binding.threadId;
         Object.assign(current.runtime.session, {
           observedState: "started",
@@ -1151,7 +1168,11 @@ export class AgentFoundation implements AgentLifecycle {
         throw new Error(
           "Calling session closed before the intent could be saved.",
         );
-      if (!state.agents.some((entry) => entry.id === input.recipientAgentId))
+      if (
+        !state.agents.some(
+          (entry) => entry.id === input.recipientAgentId && !entry.archivedAt,
+        )
+      )
         throw new Error("Recipient does not exist in this project.");
       if (input.jobId && !state.jobs.some((entry) => entry.id === input.jobId))
         throw new Error("Unknown job.");
@@ -1237,7 +1258,10 @@ export class AgentFoundation implements AgentLifecycle {
   async pump(agentId: string): Promise<void> {
     return this.serial(agentId, async () => {
       for (;;) {
-        const agent = this.agent(agentId);
+        const agent = this.store
+          .snapshot()
+          .agents.find((row) => row.id === agentId);
+        if (!agent || agent.archivedAt) return;
         const binding = this.binding(agent);
         if (!binding || !this.executionAllowed(binding)) return;
         const pending = this.store
@@ -1367,9 +1391,12 @@ export class AgentFoundation implements AgentLifecycle {
         state.messages = state.messages.filter(
           (entry) => entry.id !== messageId,
         );
-        const session = state.agents.find(
+        const recipient = state.agents.find(
           (entry) => entry.id === message.recipientAgentId,
-        )!.runtime.session;
+        );
+        if (!recipient) return;
+        recipient.lastUsedAt = result.acknowledgedAt;
+        const session = recipient.runtime.session;
         if (
           session.sessionId === attempt.sessionId &&
           !this.terminalTurns.has(`${attempt.sessionId}:${result.turnId}`)
@@ -1552,6 +1579,7 @@ export class AgentFoundation implements AgentLifecycle {
           return;
         const session = agent.runtime.session;
         session.lastObservedAt = event.observedAt;
+        if (event.kind === "turn") agent.lastUsedAt = event.observedAt;
         if (event.kind === "configuration") {
           session.observedState = "unknown";
           session.lastError = event.error;

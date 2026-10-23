@@ -55,3 +55,7 @@ No group voice call, automatic cross-agent shared memory, new credential inherit
 - Two real subscription-backed native sessions started idle in a disposable signed-in profile. Each selected chat retained its own thread; one specialist handled a typed scratchpad request, and the other created a worker from its allowed domain preset, received completion and retired it through real Crew tools. The child's retained native chat and notes remained readable after confirmed Stop and archive. Its attempt to read creation presets returned a sanitized tool error; backend checks independently established the authority rejection. Both specialist sessions stopped and the test app quit normally.
 
 The physical microphone, acoustic voice behavior and live third-party accounts were not exercised. The owner’s running test profile, current chats, sign-in, installed app and project source were untouched by this acceptance. This delivery does not publish or install a build.
+
+## Independent filesystem identity
+
+Each agent has its own peer folder and core JSON record, indexed at project level. Reporting relationships do not nest folders, and reparenting does not move an environment or native chat. See [agent filesystem storage](AGENT-FILESYSTEM-STORAGE.md).

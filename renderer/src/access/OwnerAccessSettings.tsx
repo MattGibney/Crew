@@ -15,7 +15,7 @@ import type { WorkspacePermissionChoice } from "./types";
 /** #95 mounts this with the authenticated owner's live snapshot. It owns no store
  * or authority; refresh props in place so in-progress panel drafts remain intact. */
 export function OwnerAccessSettings({
-  snapshot,
+  snapshot: retainedSnapshot,
   isOwner,
   onCommand,
   onNotify,
@@ -33,6 +33,10 @@ export function OwnerAccessSettings({
   const [selectedId, setSelectedId] = useState("");
   const [connecting, setConnecting] = useState(false);
   if (!isOwner) return <OwnerRequired />;
+  const snapshot = {
+    ...retainedSnapshot,
+    agents: retainedSnapshot.agents.filter((agent) => !agent.archivedAt),
+  };
   const common = { isOwner, onNotify };
   const agent =
     snapshot.agents.find((row) => row.id === selectedId) ?? snapshot.agents[0];

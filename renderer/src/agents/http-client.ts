@@ -70,6 +70,8 @@ export function createAgentsHttpClient(base = "/api/agents"): AgentsClient {
     assignJob: (jobId, agentId, instruction) =>
       command("assignJob", { jobId, agentId, instruction }),
     archiveAgent: (agentId) => command("archiveAgent", { agentId }),
+    restoreAgent: (agentId) => command("restoreAgent", { agentId }),
+    deleteAgent: (agentId) => command("deleteAgent", { agentId }),
     prepare: (reason) => command("prepare", { reason }),
     // Artifact serving is explicitly owned by the host. Unconfigured references stay unavailable.
   };

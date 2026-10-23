@@ -7,7 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowLeft, ArrowRight, Check, Plus, Users } from "lucide-react";
+import {
+  Archive,
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Plus,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -593,6 +600,32 @@ export function AgentSetupWizard(props: Props) {
                           onClick={() => begin("repair", agent.id)}
                         >
                           Edit {agent.profile.name}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={
+                            busy || saving || record?.phase === "applying"
+                          }
+                          title="Stop its session and archive the agent. Its records are retained."
+                          onClick={() =>
+                            void run(async () => {
+                              await command("archiveAgent", {
+                                agentId: agent.id,
+                              });
+                              setNotice(
+                                `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
+                              );
+                              await refresh().catch(() =>
+                                setError(
+                                  "Agent archived. Refresh the project to see the updated list.",
+                                ),
+                              );
+                            })
+                          }
+                        >
+                          <Archive aria-hidden="true" />
+                          Archive {agent.profile.name}
                         </Button>
                       </td>
                     </tr>
