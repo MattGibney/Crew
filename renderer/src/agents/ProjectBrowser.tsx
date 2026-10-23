@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -42,6 +43,8 @@ export interface ProjectBrowserProps {
   selectedAgent: Agent | null;
   client: AgentsClient;
   visible: boolean;
+  /** Optional presentation for hosts without a native embedded page surface. */
+  renderPage?: (state: BrowserState) => ReactNode;
 }
 
 /** Native content belongs to an agent and tab. Hiding this surface never closes it. */
@@ -50,6 +53,7 @@ export function ProjectBrowser({
   selectedAgent,
   client,
   visible,
+  renderPage,
 }: ProjectBrowserProps) {
   const bridge = window.crewDesktop;
   const projectId = snapshot.projectId;
@@ -528,6 +532,7 @@ export function ProjectBrowser({
         </form>
       </div>
       <div className="project-browser-viewport" ref={viewport}>
+        {state.open && renderPage?.(state)}
         {!state.open && (
           <div className="project-browser-empty">
             {!bridge

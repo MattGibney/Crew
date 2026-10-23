@@ -24,7 +24,8 @@
     "renderer:build": "vite build",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.renderer.json",
-    "source:manifest": "node scripts/update-source-manifest.mjs"
+    "source:manifest": "node scripts/update-source-manifest.mjs",
+    "ui:preview": "node scripts/ui-preview/start.mjs"
   },
   "devDependencies": {
     "@base-ui/react": "^1.9.0",

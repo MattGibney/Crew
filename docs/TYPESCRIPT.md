@@ -32,7 +32,7 @@ Both projects use strict checking, no emission on backend errors, explicit ESM s
 
 No blanket `any`, TypeScript suppression or unchecked JSON cast is needed. `as const` declares literal protocols; schema-backed narrowing establishes wire/persisted shapes. Native manager requests remain distinct from client RPC replies even when numeric IDs overlap. MCP command context may contain legacy partial descriptions; it is not proof of an execution-ready project or permission to execute commands.
 
-The intentionally untyped scope is development/build/release tooling and tests. The only renderer source exception is `renderer/src/preview/main.jsx`, the developer-only annotation harness loaded by `scripts/ui-preview/start.mjs`; it is excluded from production typechecking and shipping. Its scenario harness imports the real typed renderer and stubs effects. This is not a claim that every repository executable is TypeScript.
+The intentionally untyped scope is development/build/release tooling and tests. The developer-only browser annotation preview uses strict TypeScript/TSX under `renderer/src/preview` and is included in renderer typechecking, but is injected only by `scripts/ui-preview/start.mjs` and excluded from production entry bundles. This is not a claim that every repository executable is TypeScript.
 
 ## Integration and distribution
 

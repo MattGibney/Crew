@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { AgentsApp } from "./AgentsApp";
-import { ProjectBrowser } from "./ProjectBrowser";
+import { ProjectBrowser, type ProjectBrowserProps } from "./ProjectBrowser";
 import {
   createDesktopClient,
   type DesktopBridge,
@@ -38,8 +38,10 @@ export interface ProjectPresentation {
 export function DesktopApplication({
   bridge,
   presentation,
+  renderBrowserPage,
 }: {
   bridge: DesktopBridge;
+  renderBrowserPage?: ProjectBrowserProps["renderPage"];
   presentation?: (
     projectId: string,
     command: <T>(name: string, args: unknown) => Promise<T>,
@@ -289,7 +291,9 @@ export function DesktopApplication({
         <AgentsApp
           key={projectId}
           client={transport.client}
-          renderBrowser={(context) => <ProjectBrowser {...context} />}
+          renderBrowser={(context) => (
+            <ProjectBrowser {...context} renderPage={renderBrowserPage} />
+          )}
           nativeWindow={bridge.integratedTitlebar}
           headerActions={header}
           headerUpdates={headerUpdates}
