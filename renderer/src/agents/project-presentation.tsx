@@ -15,6 +15,12 @@ import type {
   EnvironmentPolicy,
   RuntimeBinding,
 } from "../../../src/agents/contracts.mjs";
+import {
+  equivalentWorkspaceChoices,
+  workspaceConfigurationDescription,
+  workspaceConfigurationKey,
+} from "../../../src/agents/workspace-identity.mjs";
+import type { ApprovedWorkspace } from "../../../src/agents/environments.mjs";
 import { OwnerAccessSettings } from "../access/OwnerAccessSettings";
 import { ServiceConnectionWizard } from "../access";
 import { ProjectSkillsPanel } from "../skills/ProjectSkillsPanel";
@@ -424,9 +430,8 @@ function AccessSettings({
           workspaces={workspaces.map((workspace) => ({
             policy: workspace.policy,
             label: workspace.workspace.path,
-            description: workspace.writable
-              ? "Read and write files"
-              : "Read files only",
+            configurationKey: workspaceConfigurationKey(workspace),
+            description: workspaceConfigurationDescription(workspace),
           }))}
           isOwner
           showAgentAssignments={false}
@@ -461,13 +466,8 @@ function AccessSettings({
 }
 
 // Browser-only projection of the native environment owner's workspace records.
-interface WorkspaceView {
-  policy: EnvironmentPolicy;
-  workspace: { path: string };
-  writable: boolean;
-  executableDirectories: { path: string }[];
-  managedWorktreeRoot: { path: string } | null;
-}
+type WorkspaceView = ApprovedWorkspace;
+
 function WorkspaceSettings({
   projectId,
   command,
@@ -625,41 +625,52 @@ function WorkspaceSettings({
                 </Button>
               )}
           </div>
-          {saved.workspaces.map((row) => (
-            <div
-              key={row.policy.id}
-              className="flex flex-wrap items-start justify-between gap-3 border-b pb-5"
-            >
-              <div className="min-w-0">
-                <p className="break-all text-sm">{row.workspace.path}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {row.writable
-                    ? "Local reads and writes approved"
-                    : "Read-only access approved"}
-                </p>
-                <details className="mt-2 text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Policy details</summary>
-                  <p className="mt-2 break-all">{row.policy.id}</p>
-                </details>
+          {equivalentWorkspaceChoices(saved.workspaces).map(
+            ({ workspace: row, policyIds }) => (
+              <div
+                key={row.policy.id}
+                className="flex flex-wrap items-start justify-between gap-3 border-b pb-5"
+              >
+                <div className="min-w-0">
+                  <p className="break-all text-sm">{row.workspace.path}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {workspaceConfigurationDescription(row)}
+                  </p>
+                  <details className="mt-2 text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">Policy details</summary>
+                    {policyIds.map((id) => (
+                      <p key={id} className="mt-2 break-all">
+                        {id}
+                      </p>
+                    ))}
+                    {policyIds.length > 1 && (
+                      <p className="mt-2">
+                        Equivalent legacy approvals retained for existing
+                        assignments and environments. Update edits the first
+                        listed policy.
+                      </p>
+                    )}
+                  </details>
+                </div>
+                {!draft && simple(row) && (
+                  <Button
+                    variant="link"
+                    className="h-auto p-0 text-sm font-semibold"
+                    onClick={() =>
+                      setDraft({
+                        policyId: row.policy.id,
+                        revision: row.policy.revision,
+                        folder: row.workspace.path,
+                        writable: row.writable,
+                      })
+                    }
+                  >
+                    Update
+                  </Button>
+                )}
               </div>
-              {!draft && simple(row) && (
-                <Button
-                  variant="link"
-                  className="h-auto p-0 text-sm font-semibold"
-                  onClick={() =>
-                    setDraft({
-                      policyId: row.policy.id,
-                      revision: row.policy.revision,
-                      folder: row.workspace.path,
-                      writable: row.writable,
-                    })
-                  }
-                >
-                  Update
-                </Button>
-              )}
-            </div>
-          ))}
+            ),
+          )}
           {draft && (
             <div className="space-y-4">
               <label className="flex items-center gap-2 text-sm">

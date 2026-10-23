@@ -564,9 +564,8 @@ export async function openAgentSetup(options: Options) {
   const newGrants = (draft: AgentSetupDraft): PermissionGroup["grants"] => {
     const crew: CrewPermission[] = draft.crewActions.map((action) => ({
       action,
-      scope: { type: "project" },
     }));
-    // These self-scoped prerequisites are shown in final review and come from
+    // These group capabilities are shown in final review and come from
     // the explicit folder choice. Completion verifies the helper agrees.
     if (draft.folderAccess !== "none")
       for (const action of [
@@ -574,7 +573,8 @@ export async function openAgentSetup(options: Options) {
         "environments.attach",
         "environments.execute",
       ] as const)
-        crew.push({ action, scope: { type: "self" } });
+        if (!crew.some((grant) => grant.action === action))
+          crew.push({ action });
     return {
       crew,
       services: clone(draft.serviceCapabilities),
@@ -729,16 +729,7 @@ export async function openAgentSetup(options: Options) {
           "environments.read",
           "environments.attach",
           "environments.execute",
-        ].every((action) =>
-          crewGrants.some(
-            (grant) =>
-              grant.action === action &&
-              (grant.scope.type === "project" ||
-                grant.scope.type === "self" ||
-                (draft.agentId !== null &&
-                  grant.scope.agentIds.includes(draft.agentId))),
-          ),
-        )
+        ].every((action) => crewGrants.some((grant) => grant.action === action))
       )
         throw new AgentSetupError(
           "Selected groups do not provide the requested folder access. Choose New shared group to add it, or change the folder choice.",

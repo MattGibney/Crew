@@ -449,9 +449,7 @@ export class ProjectAuthorizationService
           (group) =>
             assignment?.permissionGroupIds.includes(group.id) &&
             group.grants.crew.some(
-              (permission) =>
-                permission.action === "browser.control" &&
-                permission.scope.type === "project",
+              (permission) => permission.action === "browser.control",
             ),
         );
       } catch {
@@ -484,18 +482,12 @@ export class ProjectAuthorizationService
           (group) =>
             assignment?.permissionGroupIds.includes(group.id) &&
             group.grants.crew.some(
-              (permission) =>
-                permission.action === action &&
-                (permission.scope.type === "project" ||
-                  (target.type === "agent" &&
-                    (permission.scope.type === "self"
-                      ? target.agentId === caller.agentId
-                      : permission.scope.agentIds.includes(target.agentId)))),
+              (permission) => permission.action === action,
             ),
         );
         return allowed
           ? { state: "allowed" as const }
-          : denied("No current group grants this action and target.");
+          : denied("No current group grants this capability.");
       } catch {
         return denied("Caller, session or target could not be verified.");
       }
@@ -1188,9 +1180,7 @@ export class ProjectAuthorizationService
             (group) =>
               assigned?.permissionGroupIds.includes(group.id) &&
               group.grants.crew.some(
-                (grant) =>
-                  grant.action === "agents.create" &&
-                  grant.scope.type === "project",
+                (grant) => grant.action === "agents.create",
               ),
           )
         )
@@ -1320,10 +1310,6 @@ export class ProjectAuthorizationService
       owner(state, actor);
       if (group.projectId !== state.projectId)
         throw new Error("Foreign permission group.");
-      for (const permission of group.grants.crew)
-        if (permission.scope.type === "agents")
-          for (const id of permission.scope.agentIds)
-            await this.agent(state, id);
       for (const service of group.grants.services) {
         if (!state.connections.some((row) => row.id === service.connectionId))
           throw new Error("Unknown group connection.");

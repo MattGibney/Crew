@@ -46,7 +46,7 @@ try {
       revision: 1,
       updatedAt: new Date().toISOString(),
       grants: {
-        crew: [{ action: "browser.control", scope: { type: "project" } }],
+        crew: [{ action: "browser.control" }],
         services: [],
         environmentPolicyIds: [],
       },

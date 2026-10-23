@@ -6,14 +6,10 @@ import type {
   ServiceCapability,
   ServiceConnectionView,
 } from "../../../src/agents/contracts.mjs";
-import {
-  crewPermissionScopes,
-  defaultCrewPermissionScope,
-} from "../../../src/access/crew-scopes.mjs";
+import { groupWorkspaceChoices } from "./workspace-choices";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   CrewPermissionChoice,
@@ -30,12 +26,6 @@ import {
   OwnerRequired,
   useAccessAction,
 } from "./shared";
-
-const scopeLabels = {
-  self: "This agent only",
-  agents: "Selected agents",
-  project: "Entire project",
-} as const;
 
 export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   groups: readonly PermissionGroup[];
@@ -60,7 +50,7 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
   return (
     <AccessSection
       title="Permission groups"
-      description="Groups add permissions together. Agents also need an assigned connection before using a service."
+      description="Assign groups to agents to enable their capabilities. Multiple groups add permissions together. Agents also need an assigned connection before using a service."
       action={
         <Button
           disabled={editing !== null}
@@ -104,7 +94,19 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
                       0,
                     )}{" "}
                     service capabilities ·{" "}
-                    {group.grants.environmentPolicyIds.length} workspaces
+                    {groupWorkspaceChoices(props.workspaces ?? []).filter(
+                      (workspace) =>
+                        workspace.policyIds.some((id) =>
+                          group.grants.environmentPolicyIds.includes(id),
+                        ),
+                    ).length +
+                      group.grants.environmentPolicyIds.filter(
+                        (id) =>
+                          !(props.workspaces ?? []).some(
+                            (workspace) => workspace.policy.id === id,
+                          ),
+                      ).length}{" "}
+                    workspaces
                   </p>
                 </div>
                 <Button
@@ -203,15 +205,21 @@ function GroupEditor({
         capability,
       })),
   );
-  const workspaces = props.workspaces ?? [];
-  const setWorkspace = (policyId: string, selected: boolean) =>
+  const workspaces = groupWorkspaceChoices(props.workspaces ?? []);
+  const setWorkspace = (policyIds: readonly string[], selected: boolean) =>
     setDraft((current) => ({
       ...current,
       grants: {
         ...current.grants,
         environmentPolicyIds: selected
-          ? [...new Set([...current.grants.environmentPolicyIds, policyId])]
-          : current.grants.environmentPolicyIds.filter((id) => id !== policyId),
+          ? policyIds.some((id) =>
+              current.grants.environmentPolicyIds.includes(id),
+            )
+            ? current.grants.environmentPolicyIds
+            : [...current.grants.environmentPolicyIds, policyIds[0]]
+          : current.grants.environmentPolicyIds.filter(
+              (id) => !policyIds.includes(id),
+            ),
       },
     }));
   return (
@@ -355,9 +363,6 @@ function GroupEditor({
               const permission = draft.grants.crew.find(
                 (item) => item.action === choice.action,
               );
-              const scopes = crewPermissionScopes(choice.action);
-              const unsupportedScope =
-                permission && !scopes.includes(permission.scope.type);
               return (
                 <div key={choice.action}>
                   <Choice
@@ -365,86 +370,13 @@ function GroupEditor({
                     onChange={(checked) =>
                       setCrew(
                         choice.action,
-                        checked
-                          ? {
-                              action: choice.action,
-                              scope: defaultCrewPermissionScope(choice.action),
-                            }
-                          : null,
+                        checked ? { action: choice.action } : null,
                       )
                     }
                     description={choice.description}
                   >
                     {choice.label}
                   </Choice>
-                  {permission && (
-                    <div className="ml-7 space-y-2">
-                      <Label htmlFor={`${id}-${choice.action}`}>
-                        Applies to
-                      </Label>
-                      <NativeSelect
-                        id={`${id}-${choice.action}`}
-                        value={permission.scope.type}
-                        onChange={(event) => {
-                          const type = event.target.value;
-                          if (!scopes.some((scope) => scope === type)) return;
-                          setCrew(choice.action, {
-                            action: choice.action,
-                            scope:
-                              type === "agents"
-                                ? { type, agentIds: [] }
-                                : type === "project"
-                                  ? { type }
-                                  : { type: "self" },
-                          });
-                        }}
-                      >
-                        {unsupportedScope && (
-                          <option value={permission.scope.type} disabled>
-                            {scopeLabels[permission.scope.type]} (saved scope)
-                          </option>
-                        )}
-                        {scopes.map((scope) => (
-                          <option key={scope} value={scope}>
-                            {scopeLabels[scope]}
-                          </option>
-                        ))}
-                      </NativeSelect>
-                      {unsupportedScope && (
-                        <p className="text-sm text-muted-foreground">
-                          This action requires the entire project. The saved
-                          scope is retained until you change or remove it.
-                        </p>
-                      )}
-                      {!unsupportedScope &&
-                        permission.scope.type === "agents" &&
-                        props.agents.map((agent) => (
-                          <Choice
-                            key={agent.id}
-                            checked={
-                              permission.scope.type === "agents" &&
-                              permission.scope.agentIds.includes(agent.id)
-                            }
-                            onChange={(checked) => {
-                              if (permission.scope.type !== "agents") return;
-                              setCrew(choice.action, {
-                                ...permission,
-                                scope: {
-                                  type: "agents",
-                                  agentIds: checked
-                                    ? [...permission.scope.agentIds, agent.id]
-                                    : permission.scope.agentIds.filter(
-                                        (value) => value !== agent.id,
-                                      ),
-                                },
-                              });
-                            }}
-                          >
-                            {agent.profile.name}
-                          </Choice>
-                        ))}
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -479,10 +411,10 @@ function GroupEditor({
           {workspaces.map((workspace) => (
             <Choice
               key={workspace.policy.id}
-              checked={draft.grants.environmentPolicyIds.includes(
-                workspace.policy.id,
+              checked={workspace.policyIds.some((id) =>
+                draft.grants.environmentPolicyIds.includes(id),
               )}
-              onChange={(checked) => setWorkspace(workspace.policy.id, checked)}
+              onChange={(checked) => setWorkspace(workspace.policyIds, checked)}
               description={workspace.description}
             >
               {workspace.label}
@@ -491,7 +423,9 @@ function GroupEditor({
           {draft.grants.environmentPolicyIds
             .filter(
               (id) =>
-                !workspaces.some((workspace) => workspace.policy.id === id),
+                !workspaces.some((workspace) =>
+                  workspace.policyIds.includes(id),
+                ),
             )
             .map((id) => (
               <div
@@ -505,7 +439,7 @@ function GroupEditor({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => setWorkspace(id, false)}
+                  onClick={() => setWorkspace([id], false)}
                 >
                   Remove
                 </Button>
@@ -516,14 +450,7 @@ function GroupEditor({
       <ErrorMessage>{action.error}</ErrorMessage>
       <FormActions
         busy={action.busy}
-        disabled={
-          !draft.name.trim() ||
-          draft.grants.crew.some(
-            (permission) =>
-              permission.scope.type === "agents" &&
-              permission.scope.agentIds.length === 0,
-          )
-        }
+        disabled={!draft.name.trim()}
         onCancel={onClose}
       />
     </form>

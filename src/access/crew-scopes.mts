@@ -1,9 +1,7 @@
-import type { CrewAction, CrewPermission } from "../agents/contracts.mjs";
-
-type CrewScopeType = CrewPermission["scope"]["type"];
+import type { CrewAction } from "../agents/contracts.mjs";
 
 // Creation and catalogue operations address the project rather than an existing
-// agent. Keep the editor's choices and authorization target check in one place.
+// agent. This target shape does not restrict group capability authority.
 const projectActions = new Set<CrewAction>([
   "agents.create",
   "jobs.read",
@@ -13,21 +11,6 @@ const projectActions = new Set<CrewAction>([
   "browser.control",
   "environments.create",
 ]);
-const projectScopes: readonly CrewScopeType[] = ["project"];
-const agentScopes: readonly CrewScopeType[] = ["self", "agents", "project"];
-
 export function crewActionRequiresProject(action: CrewAction): boolean {
   return projectActions.has(action);
-}
-
-export function crewPermissionScopes(
-  action: CrewAction,
-): readonly CrewScopeType[] {
-  return crewActionRequiresProject(action) ? projectScopes : agentScopes;
-}
-
-export function defaultCrewPermissionScope(
-  action: CrewAction,
-): CrewPermission["scope"] {
-  return { type: crewActionRequiresProject(action) ? "project" : "self" };
 }

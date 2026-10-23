@@ -163,19 +163,10 @@ const definitions = {
     revision,
     updatedAt: timestamp,
     grants: object({
-      crew: array(
-        object({
-          action: { enum: crewActions },
-          scope: {
-            anyOf: [
-              object({ type: one("self") }),
-              object({ type: one("agents"), agentIds: ids }),
-              object({ type: one("project") }),
-            ],
-          },
-        }),
-        256,
-      ),
+      crew: {
+        ...array(object({ action: { enum: crewActions } }), 256),
+        uniqueItems: true,
+      },
       services: array(object({ connectionId: id, capabilities: ids }), 256),
       environmentPolicyIds: ids,
     }),
@@ -282,26 +273,32 @@ const definitions = {
     presetRevision: revision,
     appliedAt: timestamp,
   }),
-  preset: object({
-    id,
-    projectId: id,
-    revision,
-    name: id,
-    enabled: { type: "boolean" },
-    profile: object({
+  preset: object(
+    {
+      id,
+      projectId: id,
+      revision,
       name: id,
-      pictureRef: nullable(id),
-      personality: { type: "string", maxLength: 200000 },
-      systemPrompt: { type: "string", maxLength: 200000 },
-      voice: nullable(id),
-    }, ["voice"]),
-    skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
-    modelAccessId: id,
-    configRef: id,
-    permissionGroupIds: ids,
-    serviceConnectionIds: ids,
-    environmentTemplate: object({ id, revision }),
-  }, ["environmentTemplate"]),
+      enabled: { type: "boolean" },
+      profile: object(
+        {
+          name: id,
+          pictureRef: nullable(id),
+          personality: { type: "string", maxLength: 200000 },
+          systemPrompt: { type: "string", maxLength: 200000 },
+          voice: nullable(id),
+        },
+        ["voice"],
+      ),
+      skills: array(object({ skillId: id, enabled: { type: "boolean" } }), 256),
+      modelAccessId: id,
+      configRef: id,
+      permissionGroupIds: ids,
+      serviceConnectionIds: ids,
+      environmentTemplate: object({ id, revision }),
+    },
+    ["environmentTemplate"],
+  ),
   audit: object({
     id,
     at: timestamp,
@@ -359,11 +356,11 @@ export function validateRecord(
 ): void {
   check(name, value);
 }
-const stateValidator = ajv.compile<AccessState>({
+const stateSchema = {
   $defs: definitions,
   ...object(
     {
-      version: { const: 1 },
+      version: { const: 2 },
       projectId: id,
       ownerUserId: id,
       groups: array(ref("group")),
@@ -418,7 +415,43 @@ const stateValidator = ajv.compile<AccessState>({
     },
     ["presetApplications", "connectionSetups"],
   ),
+};
+const stateValidator = ajv.compile<AccessState>(stateSchema);
+const legacyStateValidator = ajv.compile({
+  ...stateSchema,
+  properties: { ...stateSchema.properties, version: { const: 1 } },
+  $defs: {
+    ...definitions,
+    group: {
+      ...definitions.group,
+      properties: {
+        ...definitions.group.properties,
+        grants: object({
+          services: array(object({ connectionId: id, capabilities: ids }), 256),
+          environmentPolicyIds: ids,
+          crew: array(
+            object({
+              action: { enum: crewActions },
+              scope: {
+                anyOf: [
+                  object({ type: one("self") }),
+                  object({ type: one("agents"), agentIds: ids }),
+                  object({ type: one("project") }),
+                ],
+              },
+            }),
+            256,
+          ),
+        }),
+      },
+    },
+  },
 });
+export function validateLegacyState(value: unknown): void {
+  if (!legacyStateValidator(value))
+    throw new Error("Malformed legacy access state; preserve it for recovery.");
+}
+
 export function validateState(value: unknown): asserts value is AccessState {
   if (!stateValidator(value))
     throw new Error("Malformed access state; restore instead of resetting.");

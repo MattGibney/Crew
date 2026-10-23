@@ -40,6 +40,7 @@ import type {
   EnvironmentTemplateInspection,
 } from "./environment-templates.mjs";
 import { canonicalJson } from "../gateway/json.mjs";
+import { workspaceConfigurationKey } from "./workspace-identity.mjs";
 
 type Action =
   | "create"
@@ -1251,9 +1252,9 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         : null,
     );
     requiredGrants.crew = [
-      { action: "environments.read", scope: { type: "self" } },
-      { action: "environments.attach", scope: { type: "self" } },
-      { action: "environments.execute", scope: { type: "self" } },
+      { action: "environments.read" },
+      { action: "environments.attach" },
+      { action: "environments.execute" },
     ];
     requiredGrants.environmentPolicyIds = [approved.policy.id];
     return {
@@ -1356,6 +1357,17 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
           return previous;
         if ((previous?.policy.revision ?? null) !== expectedRevision)
           throw new Error("Workspace approval revision conflict.");
+        // Settings used random IDs while guided setup used a deterministic ID.
+        // Fresh equivalent registrations reuse the existing authority; retained
+        // duplicate IDs stay valid for groups, attachments and immutable history.
+        if (!previous && expectedRevision === null) {
+          const equivalent = draft.workspaces.find(
+            (row) =>
+              workspaceConfigurationKey(row) ===
+              workspaceConfigurationKey(record),
+          );
+          if (equivalent) return equivalent;
+        }
         if (
           previous &&
           draft.environments.some(

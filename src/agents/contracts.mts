@@ -263,8 +263,6 @@ export type CrewAction =
 export type CrewTarget = { type: "agent"; agentId: Id } | { type: "project" };
 export interface CrewPermission {
   action: CrewAction;
-  scope:
-    { type: "self" } | { type: "agents"; agentIds: Id[] } | { type: "project" };
 }
 export interface PermissionGroup {
   id: Id;

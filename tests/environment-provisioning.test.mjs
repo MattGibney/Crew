@@ -201,7 +201,6 @@ async function fixture(t) {
         grants: {
           crew: actions.map((action) => ({
             action,
-            scope: { type: "project" },
           })),
           services: [],
           environmentPolicyIds: [],

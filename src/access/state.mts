@@ -15,7 +15,7 @@ import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { validateState } from "./validation.mjs";
+import { validateState, validateLegacyState } from "./validation.mjs";
 import type { OwnerConnectionVerification } from "./owner-contracts.mjs";
 
 /** Owner setup workflow only; none of these records grants runtime authority. */
@@ -61,7 +61,7 @@ export interface AccessAudit {
   subjectId: string;
 }
 export interface AccessState {
-  version: 1;
+  version: 2;
   projectId: string;
   ownerUserId: string;
   groups: PermissionGroup[];
@@ -103,7 +103,7 @@ export class AccessStore {
     if (!path.isAbsolute(directory))
       throw new Error("Access state needs an absolute private directory.");
     const state: AccessState = {
-      version: 1,
+      version: 2,
       projectId,
       ownerUserId,
       groups: [],
@@ -171,11 +171,75 @@ export class AccessStore {
       } finally {
         await file.close();
       }
+      const legacy = (value as { version?: unknown })?.version === 1;
+      const original = structuredClone(value);
+      if (legacy) {
+        validateLegacyState(value);
+        const converted = value as AccessState;
+        converted.version = 2;
+        for (const group of converted.groups) {
+          group.grants.crew = [
+            ...new Set(group.grants.crew.map((grant) => grant.action)),
+          ].map((action) => ({ action }));
+          group.revision += 1;
+          group.updatedAt = new Date().toISOString();
+          converted.audit.push({
+            id: randomUUID(),
+            at: group.updatedAt,
+            actor: null,
+            action: "group.converted-to-membership-capabilities",
+            subjectId: group.id,
+          });
+        }
+      }
       validateState(value);
       if (value.projectId !== projectId || value.ownerUserId !== ownerUserId)
         throw new Error(
           "Access state belongs to a different project or owner.",
         );
+      if (legacy) {
+        // Exclusive immutable recovery snapshot, retained separately from current authority.
+        const backupPath = path.join(
+          directory,
+          "access-v1-before-group-capabilities.json",
+        );
+        const snapshot = JSON.stringify(original);
+        let backup;
+        try {
+          backup = await open(backupPath, "wx", 0o600);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+          const retained = await open(
+            backupPath,
+            constants.O_RDONLY | constants.O_NOFOLLOW,
+          );
+          try {
+            const info = await retained.stat();
+            if (
+              !info.isFile() ||
+              info.nlink !== 1 ||
+              info.size > LIMIT ||
+              info.mode & 0o077 ||
+              info.uid !== process.getuid?.() ||
+              (await retained.readFile("utf8")) !== snapshot
+            )
+              throw new Error(
+                "Conflicting migration snapshot; preserve it for recovery.",
+              );
+          } finally {
+            await retained.close();
+          }
+        }
+        if (backup) {
+          try {
+            await backup.writeFile(snapshot);
+            await backup.sync();
+          } finally {
+            await backup.close();
+          }
+        }
+        await store.persist(value);
+      }
       store.state = value;
       return store;
     } catch {

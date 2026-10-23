@@ -20,10 +20,7 @@ import { AgentEnvironmentTemplate } from "./AgentEnvironmentTemplate";
 import { readProfilePicture } from "../manager/profile";
 import type { AgentConfigurationOptions } from "../../../src/application/agent-configuration-contracts.mjs";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
-import type {
-  CrewAction,
-  CrewPermission,
-} from "../../../src/agents/contracts.mjs";
+import type { CrewAction } from "../../../src/agents/contracts.mjs";
 import type {
   AgentSetupDraft,
   AgentSetupRecord,
@@ -1345,22 +1342,6 @@ function StepTitle({
     </div>
   );
 }
-function scopeLabel(
-  permission: CrewPermission,
-  snapshot: AccessOwnerView | null,
-) {
-  return permission.scope.type === "self"
-    ? "This agent"
-    : permission.scope.type === "project"
-      ? "Project"
-      : permission.scope.agentIds
-          .map(
-            (id) =>
-              snapshot?.agents.find((agent) => agent.id === id)?.profile.name ??
-              "Unavailable agent",
-          )
-          .join(", ");
-}
 function Review({
   draft,
   review,
@@ -1437,8 +1418,7 @@ function Review({
                 access?.crewCapabilities.find(
                   (entry) => entry.action === grant.action,
                 )?.label ??
-                grant.action}{" "}
-              · {scopeLabel(grant, access)}
+                grant.action}
             </li>
           ))}
         </ul>

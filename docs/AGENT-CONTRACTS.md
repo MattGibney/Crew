@@ -140,8 +140,9 @@ Job/scratchpad reads do not trigger a model turn or interrupt another agent.
 All calls bind authenticated caller/project/session, validate current session and same-project
 references, and default deny. `CrewAction` is the first capability catalogue for Crew's own tools;
 service capability IDs come from actual provider discovery, not invented commands/scopes.
-Target scopes are exact agents, self or project. Creation/project administration needs project
-scope. Membership changes, connection assignment and grant administration are themselves protected;
+Crew group capabilities contain only an action and are enabled by presence. Assigned group
+membership authorizes valid targets within the project; capabilities from multiple groups combine.
+There are no per-capability target scopes. Operation target shapes still require validation. Membership changes, connection assignment and grant administration are themselves protected;
 initial credential/access administration is human-owner only. A generic `grants.approve` bit alone
 must not enable delegated authority; future agent approval requires a bounded, explicit delegation
 model and is denied in this cut.

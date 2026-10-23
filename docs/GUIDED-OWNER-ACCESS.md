@@ -90,7 +90,7 @@ folder and mode. Call it after owner review. Repeating the exact choice reuses
 its current policy/revision; conflicting roots, mode or tool allowances fail.
 It never changes another mode's policy, assigns agents or starts work.
 
-The returned grants contain self-scoped `environments.read`, `attach` and `execute`
+The returned grants contain group capabilities `environments.read`, `attach` and `execute`
 plus the exact policy ID. Onboarding applies them through the existing group and
 preset authority. A selected folder or saved policy alone grants no access.
 Permissions combine: choosing none or read-only does not revoke an independent

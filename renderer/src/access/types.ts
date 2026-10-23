@@ -35,6 +35,8 @@ export type CrewPermissionChoice = {
 /** Owner-approved workspace metadata; never a user-entered policy identity. */
 export type WorkspacePermissionChoice = {
   policy: EnvironmentPolicy;
+  /** Exact canonical directory identity and enforcement configuration. */
+  configurationKey?: string;
   label: string;
   description: string;
 };
