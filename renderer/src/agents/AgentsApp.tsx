@@ -2031,7 +2031,7 @@ function Conversation({
                     </span>
                   </div>
                 )}
-                <TabsContent value="voice" keepMounted>
+                <TabsContent value="voice" keepMounted className="px-3 pb-3 pt-2">
                   <div ref={voicePanelTarget} />
                 </TabsContent>
                 <TabsContent value="text" keepMounted className="p-2">
