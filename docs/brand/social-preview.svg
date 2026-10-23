@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1280" height="640" viewBox="0 0 1280 640">
+  <title>Crew — one conversation, a whole crew behind it</title>
+  <desc>The approved four-shape Crew mark beside a description of its local Codex workspace, on a warm white background.</desc>
+  <rect width="1280" height="640" fill="#fffdf6"/>
+  <path d="M0 1H1280M0 639H1280" stroke="#e7e4db"/>
+  <rect x="72" y="75" width="8" height="27" rx="4" fill="#0755ff"/>
+  <text x="96" y="96" fill="#5a605d" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600" letter-spacing="3">YOUR LOCAL CODEX WORKSPACE</text>
+  <text x="72" y="235" fill="#172019" font-family="Arial, Helvetica, sans-serif" font-size="114" font-weight="700" letter-spacing="-7">Crew</text>
+  <text x="76" y="316" fill="#172019" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="600" letter-spacing="-1">One conversation.</text>
+  <text x="76" y="367" fill="#172019" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="600" letter-spacing="-1">A whole crew behind it.</text>
+  <text x="77" y="432" fill="#60665f" font-family="Arial, Helvetica, sans-serif" font-size="23">Talk, delegate, and follow your agents’ work.</text>
+  <image x="754" y="116" width="434" height="434" xlink:href="../../build/crew-mark.png"/>
+  <line x1="76" y1="500" x2="656" y2="500" stroke="#dedfd6"/>
+  <text x="77" y="548" fill="#5a605d" font-family="Arial, Helvetica, sans-serif" font-size="19">macOS</text>
+  <circle cx="166" cy="541" r="3" fill="#0755ff"/>
+  <text x="184" y="548" fill="#5a605d" font-family="Arial, Helvetica, sans-serif" font-size="19">Voice + text</text>
+  <circle cx="311" cy="541" r="3" fill="#0755ff"/>
+  <text x="329" y="548" fill="#5a605d" font-family="Arial, Helvetica, sans-serif" font-size="19">Your Codex subscription</text>
+</svg>

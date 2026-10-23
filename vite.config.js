@@ -6,5 +6,5 @@ const local = name => fileURLToPath(new URL(name, import.meta.url));
 export default defineConfig({
   root: local('./renderer'), base: './', plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': local('./renderer/src') } },
-  build: { outDir: local('./renderer-dist'), emptyOutDir: true, rollupOptions: { input: { manager: local('./renderer/index.html'), setup: local('./renderer/setup.html') } } },
+  build: { outDir: local('./renderer-dist'), emptyOutDir: true, rollupOptions: { input: { manager: local('./renderer/index.html'), setup: local('./renderer/setup.html'), agents: local('./renderer/agents.html') } } },
 });

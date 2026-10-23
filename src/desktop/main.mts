@@ -1,673 +1,883 @@
-import { createWorkspaceRequests } from "./workspace-requests.mjs";
+// #95: packaged and development entry points use this single composition.
 import {
-  createApplicationUpdates,
-  type DesktopUpdater,
-} from "./application-updates.mjs";
-import { createWorkspaceTray } from "./workspace-tray.mjs";
-// Issue #2: one native identity, one selected surface, isolated project controllers.
-import { app, Menu, dialog, ipcMain, clipboard } from "electron";
-import { mkdir, readFile, writeFile, access, realpath } from "node:fs/promises";
-import { join, dirname } from "node:path";
+  app,
+  Menu,
+  Tray,
+  nativeImage,
+  dialog,
+  ipcMain,
+  clipboard,
+  safeStorage,
+} from "electron";
+import { access, lstat, mkdir, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { basename, join, isAbsolute } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { prepareCrewStorage } from "./storage.mjs";
-import { instanceKey, childEnvironment } from "./lifecycle.mjs";
-import { createProjectHost } from "./project-host.mjs";
-import type { createWorkspaceUpdateReservation } from "./workspace-update.mjs";
-import { assertWorkspaceIsolation } from "./workspace-isolation.mjs";
-import { openWorkspaceRegistry } from "./workspace-registry.mjs";
-import { configureGlobalCapacity } from "../orchestration/capacity.mjs";
-import { loadAppConfig } from "../config/index.mjs";
-import type { createWorkspacePauseUpdate } from "./workspace-pause-update.mjs";
 import {
-  createNativeUpdateGate,
-  createInstallLease,
-  createRestartHandoff,
-} from "./updater.mjs";
-import { errorCode, errorMessage, record } from "./validation.mjs";
-import { parseConfig } from "../config/shape.mjs";
-import type { WorkspaceProject } from "./workspace-registry.mjs";
-import type {
-  IsolationCandidate,
-  IsolationProject,
-} from "./workspace-isolation.mjs";
+  startUnifiedApplication,
+  type UnifiedApplication,
+} from "../agents/service-composition.mjs";
+import { createElectronCredentialEncryption } from "../access/index.mjs";
+import {
+  ProjectSkillStore,
+  createProjectSkillAgentTools,
+  ProjectSkillError,
+} from "../skills/index.mjs";
+import {
+  createAgentSchedules,
+  createScheduleOwnerCommands,
+} from "../application/agent-schedules.mjs";
+import { createVoiceOwnerCommands } from "../application/agent-voice.mjs";
+import {
+  createAgentImages,
+  createImageOwnerCommands,
+} from "../application/agent-images.mjs";
+import {
+  openUnifiedRegistry,
+  type DesktopProject,
+} from "./unified-registry.mjs";
+import { startDesktopRenderer } from "./unified-renderer.mjs";
+import { createUnifiedWindow } from "./unified-window.mjs";
+import {
+  createUnifiedQuit,
+  type DesktopLifecycleProject,
+} from "./unified-quit.mjs";
+import { createUnifiedUpdates } from "./unified-updates.mjs";
+import { openWebLink } from "./external-links.mjs";
+import { AgentSetupError, openAgentSetup } from "./agent-setup.mjs";
+import {
+  recoverInterruptedProject,
+  verifyUnavailableProjectIdle,
+  ProjectRecoveryError,
+} from "./project-recovery.mjs";
+import { randomUUID } from "node:crypto";
+import { createUnifiedProjectBrowser } from "../browser/unified-browser.mjs";
+import { combineAgentToolExtensions } from "../agents/tool-extensions.mjs";
+import { createAgentConfiguration } from "../application/agent-configuration.mjs";
+import { createSubscriptionUsageOwnerAdapter } from "../application/subscription-usage.mjs";
 
-type ProjectHost = ReturnType<typeof createProjectHost>;
-type Registry = Awaited<ReturnType<typeof openWorkspaceRegistry>>;
 const root = fileURLToPath(new URL("../", import.meta.url));
-const args = process.argv.slice(app.isPackaged ? 1 : 2),
-  flag = args.indexOf("--config");
-if (flag >= 0 && (!args[flag + 1] || args[flag + 1].startsWith("--")))
-  throw Error("--config requires a config path.");
-// Isolated acceptance/portable profiles opt in explicitly; no user files are copied.
-const appData = process.env.CREW_APP_DATA || app.getPath("appData");
-const crewRoot = join(appData, "Crew"),
-  updatesDirectory = join(crewRoot, "updates");
-const restartHandoff = createRestartHandoff({ directory: updatesDirectory });
-const explicit =
-  args[flag + 1] && flag >= 0
-    ? args[flag + 1]
-    : process.env.AI_MANAGER_CONFIG || null;
-const restarted = await restartHandoff.consume(app.getVersion(), explicit);
-const storage = await prepareCrewStorage({
-  appData,
-  configOverride: explicit || restarted,
-});
-// The common private root also lets Chromium's network sandbox access each
-// explicitly retained project partition beneath desktop/<identity>.
-const nativeData = crewRoot;
-await mkdir(nativeData, { recursive: true, mode: 0o700 });
-app.setPath("userData", nativeData);
-app.setPath("sessionData", nativeData);
+const desktopDirectory = join(
+  process.env.CREW_APP_DATA || app.getPath("appData"),
+  "Crew",
+  "unified",
+);
 app.setName("Crew");
-const locked = app.requestSingleInstanceLock({
-  configPath: explicit || restarted ? storage.configPath : null,
-});
-let registry: Registry,
-  tray: ReturnType<typeof createWorkspaceTray> | undefined,
-  updater: DesktopUpdater,
-  quitPreparation: Awaited<
-    ReturnType<typeof createApplicationUpdates>
-  >["quitPreparation"],
-  workspacePause: ReturnType<typeof createWorkspacePauseUpdate>,
-  quitting = false,
-  transition = false,
-  changedTimer: NodeJS.Timeout | undefined;
+app.setPath("userData", desktopDirectory);
+app.setPath("sessionData", desktopDirectory);
+const locked = app.requestSingleInstanceLock();
+let registry: Awaited<ReturnType<typeof openUnifiedRegistry>>;
+let renderer: Awaited<ReturnType<typeof startDesktopRenderer>>;
+let surface: ReturnType<typeof createUnifiedWindow>;
+let quit: ReturnType<typeof createUnifiedQuit>;
+let updates: Awaited<ReturnType<typeof createUnifiedUpdates>>;
+let tray: Tray | undefined;
+let quitting = false,
+  switching = false;
+type ProjectHost = {
+  project: DesktopProject;
+  application: UnifiedApplication;
+  skills: ProjectSkillStore;
+  schedules: ReturnType<typeof createAgentSchedules>;
+  scheduleCommand: ReturnType<typeof createScheduleOwnerCommands>;
+  voice: UnifiedApplication["voice"];
+  voiceCommand: ReturnType<typeof createVoiceOwnerCommands>;
+  imageCommand: ReturnType<typeof createImageOwnerCommands>;
+  setup: Awaited<ReturnType<typeof openAgentSetup>>;
+  browser: ReturnType<typeof createUnifiedProjectBrowser>;
+  configuration: ReturnType<typeof createAgentConfiguration>;
+  usage: ReturnType<typeof createSubscriptionUsageOwnerAdapter>;
+  unsubscribe: () => void;
+};
 const hosts = new Map<string, ProjectHost>(),
-  capacityDirectory = join(crewRoot, "capacity");
-const safe = (error: unknown) =>
-  errorMessage(error)
-    .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
-    .replace(/sk-[\w-]+/g, "[redacted]")
-    .slice(0, 1400);
-const requiredHost = (id: string): ProjectHost => {
-  const host = hosts.get(id);
-  if (!host) throw new Error("Project controller is unavailable.");
-  return host;
+  failures = new Map<string, string>();
+const openings = new Map<string, Promise<void>>();
+const object = (value: unknown): Record<string, unknown> => {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Expected action fields.");
+  return value as Record<string, unknown>;
 };
-const selected = (): ProjectHost =>
-  requiredHost(registry.snapshot().selectedId || "");
-const nativeGate = createNativeUpdateGate({
-  busy: () =>
-    Boolean(
-      transition || quitting || [...hosts.values()].some((h) => h.busy()),
-    ),
-});
-const gate = {
-  ...nativeGate,
-  assertSetupAllowed() {
-    nativeGate.assertSetupAllowed();
-    if (workspacePause?.isHolding())
-      throw Error(
-        "Crew is coordinating an update across all projects. Resume paused work or Return to work before changing project setup.",
-      );
-  },
-};
-const lease = createInstallLease({ directory: updatesDirectory });
-let updateReservation: ReturnType<typeof createWorkspaceUpdateReservation>,
-  updateRecoveryError: string | undefined;
-const reservationPath = join(updatesDirectory, "workspace-reservation.json");
-async function reservationPending() {
-  try {
-    await access(reservationPath);
-    return true;
-  } catch (error) {
-    return errorCode(error) !== "ENOENT";
-  }
-}
-async function assertRegistrationAllowed() {
+const text = (value: unknown): string => {
   if (
-    workspacePause?.isHolding() ||
-    updateRecoveryError ||
-    (await reservationPending())
+    typeof value !== "string" ||
+    !value ||
+    value.length > 4096 ||
+    /[\u0000-\u001f]/.test(value)
   )
-    throw Error(
-      "Resolve the interrupted update before adding another project. Existing project setup remains available.",
-    );
-}
-async function recordReservationFailure(error: unknown) {
-  if (await reservationPending()) {
-    updateRecoveryError = safe(error);
-    changed();
-  }
-}
-async function configuredProjects() {
-  const projects: IsolationProject[] = [];
-  for (const p of registry.snapshot().projects) {
-    try {
-      await access(p.configPath);
-      projects.push(p);
-    } catch (error) {
-      if (errorCode(error) !== "ENOENT") throw error;
-    }
-  }
-  return projects;
-}
-async function validateWorkspaces(candidate?: IsolationCandidate) {
-  const projects = await configuredProjects();
-  if (candidate && !projects.some((p) => p.id === candidate.id))
-    projects.push({ id: candidate.id, configPath: candidate.configPath });
-  return projects.length
-    ? assertWorkspaceIsolation({ projects, candidate })
-    : [];
-}
-const projectHosts = () =>
-  registry.snapshot().projects.map((p) => ({ ...p, host: requiredHost(p.id) }));
+    throw new Error("Invalid action field.");
+  return value;
+};
 function snapshot() {
-  const value = registry.snapshot();
+  const state = registry.snapshot();
   return {
-    ...value,
-    projects: value.projects.map((project) => {
-      const state = hosts.get(project.id)?.snapshot();
-      return {
-        id: project.id,
-        name: project.name,
-        pending: state?.pending ?? null,
-        active: state?.active ?? null,
-        ready: Boolean(state?.ready),
-        error: state?.error || null,
-      };
-    }),
+    selectedId: state.selectedId,
+    projects: state.projects.map((project) => ({
+      ...project,
+      error: failures.get(project.id) ?? null,
+    })),
+    quit: quit.snapshot(),
+    updates: updates?.snapshot() ?? null,
   };
 }
 function changed() {
-  if (!registry) return;
-  // Polls from multiple controllers coalesce into one native/UI notification.
-  if (changedTimer) return;
-  changedTimer = setTimeout(() => {
-    changedTimer = undefined;
-    updateTray();
-    for (const host of hosts.values()) host.notify(snapshot());
-  }, 30);
+  if (!registry || !quit) return;
+  quit.observe();
+  updates?.observe();
+  surface?.notify({ type: "application", snapshot: snapshot() });
+  refreshTray();
 }
-const attempt = (fn: () => unknown) =>
-  void Promise.resolve()
-    .then(fn)
-    .catch((error) =>
-      dialog.showMessageBox({
-        type: "warning",
-        message: "Crew needs attention",
-        detail: safe(error),
-      }),
-    );
-function updateTray() {
-  tray?.refresh();
-}
-function register(project: WorkspaceProject) {
-  const runtime = createProjectHost({
-    root,
-    storage: {
-      ...storage,
-      ...project,
-      issue: project.configPath === storage.configPath ? storage.issue : null,
-    },
-    host: {
-      capacityDirectory,
-      gate,
-      assertControllerStartAllowed: () => {
-        nativeGate.assertSetupAllowed();
-        if (quitting)
-          throw Error(
-            "Crew is shutting down or installing an update. Wait before restarting a project controller.",
-          );
-      },
-      configured: async (id, previousName, name) => {
-        const project = registry.snapshot().projects.find((p) => p.id === id);
-        if (
-          project &&
-          (project.name === previousName || project.name === "Your project") &&
-          project.name !== name
-        ) {
-          await registry.rename(id, name);
-          changed();
-        }
-      },
-      validateAll: () => configureCapacity(),
-      validateCandidate: (id, configPath, config) =>
-        validateWorkspaces({ id, configPath, config }),
-      relaunch: async (launchArgs) => {
-        quitting = true;
-        for (const h of hosts.values()) await h.quit();
-        app.relaunch({ args: launchArgs });
-        app.exit(0);
-      },
-      get updater() {
-        return updater;
-      },
-      changed,
-      isSelected: (id) => registry.snapshot().selectedId === id,
-    },
-  });
-  hosts.set(project.id, runtime);
-  return runtime;
-}
-async function configureCapacity(limit = registry.snapshot().workerLimit) {
-  await validateWorkspaces();
-  const stateDirs = [];
-  const identities = new Map<string | number, string>(),
-    ports = new Map<string | number, string>();
-  for (const project of registry.snapshot().projects) {
-    try {
-      const env = childEnvironment(project.configPath);
-      delete env.AI_MANAGER_PORT;
-      delete env.VOICE_PORT;
-      const config = await loadAppConfig({
-        root,
-        configPath: project.configPath,
-        env,
-        checkRuntime: false,
-      });
-      for (const [map, key, label] of [
-        [identities, config.projectStateDir, "state folder"],
-        [ports, config.port, "port"],
-      ] as const) {
-        if (map.has(key))
-          throw Error(
-            `Projects ${map.get(key)} and ${project.name} share a ${label}. Correct configuration before starting Crew.`,
-          );
-        map.set(key, project.name);
-      }
-      stateDirs.push(config.projectStateDir);
-    } catch (error) {
-      if (!String(errorMessage(error)).startsWith("Configuration:"))
-        throw error;
-    }
-  }
-  return configureGlobalCapacity({ dir: capacityDirectory, limit, stateDirs });
-}
-async function selectProject(id: string) {
-  nativeGate.assertSetupAllowed();
-  if (transition) throw Error("Another project change is still running.");
-  const next = hosts.get(id);
-  if (!next) throw Error("Unknown project.");
-  if (id === registry.snapshot().selectedId) return next.openWindow();
-  transition = true;
-  try {
-    await selected()?.hide();
-    await registry.select(id);
-    await next.bootstrap();
-    changed();
-  } finally {
-    transition = false;
-  }
-}
-async function initializeConfig(configPath: string) {
-  await new Promise<void>((done, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        join(root, "cli.mjs"),
-        "init",
-        "--template",
-        "set1",
-        "--config",
-        configPath,
-      ],
-      { cwd: root, env: childEnvironment(configPath), stdio: "ignore" },
-    );
-    child.once("error", reject);
-    child.once("exit", (code) =>
-      code === 0
-        ? done()
-        : reject(
-            Error(
-              "Could not create the new project configuration. No existing file was overwritten.",
-            ),
-          ),
-    );
-  });
-}
-async function addProject() {
-  gate.assertSetupAllowed();
-  await assertRegistrationAllowed();
-  if (transition) throw Error("Another project change is still running.");
-  transition = true;
-  try {
-    const id = `p-${randomUUID()}`,
-      configPath = join(crewRoot, "instances", id, "project.json"),
-      key = instanceKey(configPath);
-    await initializeConfig(configPath);
-    const raw = parseConfig(await readFile(configPath, "utf8"));
-    const used = new Set();
-    for (const p of registry.snapshot().projects) {
-      try {
-        used.add(
-          parseConfig(await readFile(p.configPath, "utf8")).runtime.port,
-        );
-      } catch {}
-    }
-    let port = 4320;
-    while (used.has(port) && port < 65535) port++;
-    if (port === 65535) throw Error("No project port is available.");
-    raw.runtime.port = port;
-    raw.project.id = id;
-    raw.project.name = "New project";
-    await writeFile(configPath, JSON.stringify(raw, null, 2) + "\n", {
-      mode: 0o600,
-    });
-    await selected()?.hide();
-    await registry.add({
-      configPath,
-      key,
-      desktopData: join(crewRoot, "desktop", key),
-      name: "New project",
-    });
-    registerProjectPath(configPath);
-    await configureCapacity();
-    await selected().openSetup();
-    changed();
-    return snapshot();
-  } finally {
-    transition = false;
-  }
-}
-async function quitCrew() {
-  if (quitting) return;
-  if (!quitPreparation)
-    throw Error(
-      "Crew is still initializing its shared preparation coordinator. Wait, then retry Quit.",
-    );
-  const existing = workspacePause.status();
-  if (existing?.purpose === "quit" && existing.phase !== "complete")
-    return quitPreparation.begin();
-  if (gate.isReserved())
-    throw Error("An update is preparing. Wait for it to finish.");
-  const result = await dialog.showMessageBox({
-    type: "question",
-    message: "Prepare all projects and quit Crew?",
-    detail:
-      "Crew asks each active manager and worker to reach a sensible checkpoint, save continuation notes and confirm readiness. The control window stays available for progress and approvals. Controllers close only after every project is ready. Closing a window alone keeps Crew running.",
-    buttons: ["Keep running", "Prepare and quit"],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-  });
-  if (result.response !== 1) return;
-  await quitPreparation.begin();
-}
-async function resolveUpdateRecovery() {
-  const result = await dialog.showMessageBox({
-    type: "warning",
-    message: "Cancel the interrupted idle-update reservation?",
-    detail: `${updateRecoveryError}\n\nCrew will confirm cancellation with every project before releasing worker admissions. Paused workers and retained worktrees stay in place.`,
-    buttons: ["Keep paused", "Return to work"],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
-  });
-  if (result.response !== 1) return;
-  await updateReservation.cancel();
-  gate.cancel();
-  updateRecoveryError = undefined;
-  changed();
-}
-async function initializeUpdates() {
-  const controls = await createApplicationUpdates({
-    capacityDirectory,
-    updatesDirectory,
-    reservationPath,
-    projectHosts,
-    selected,
-    gate,
-    lease,
-    restartHandoff,
-    changed,
-    finishQuit() {
-      tray?.destroy();
-      app.quit();
-    },
-    attempt,
-    reservationPending,
-    recordReservationFailure,
-    hosts: () => [...hosts.values()],
-    get transition() {
-      return transition;
-    },
-    get quitting() {
-      return quitting;
-    },
-    set quitting(value) {
-      quitting = value;
-    },
-    get updateRecoveryError() {
-      return updateRecoveryError;
-    },
-    set updateRecoveryError(value) {
-      updateRecoveryError = value;
-    },
-  });
-  updater = controls.updater;
-  workspacePause = controls.workspacePause;
-  updateReservation = controls.updateReservation;
-  quitPreparation = controls.quitPreparation;
-}
-const requests = createWorkspaceRequests({
-  selected,
-  snapshot,
-  assertSetupAllowed: () => gate.assertSetupAllowed(),
-  select: selectProject,
-  add: addProject,
-  rename: (id, name) => registry.rename(id, name),
-  configureCapacity,
-  setWorkerLimit: (limit) => registry.setWorkerLimit(limit),
-  changed,
-  writeClipboard: (text) => clipboard.writeText(text),
-});
-ipcMain.handle("crew:setup", requests.setup);
-ipcMain.handle("crew:clipboard-write", requests.clipboard);
-ipcMain.handle("crew:workspaces", requests.workspaces);
-if (!locked) app.quit();
-else {
-  app.on("second-instance", (_event, _argv, _cwd, data) =>
-    attempt(async () => {
-      const incoming = record(data || {});
-      if (!incoming.configPath) return selected().openWindow();
-      if (typeof incoming.configPath !== "string")
-        throw new Error("Invalid project configuration path.");
-      const incomingIdentity = await realpath(incoming.configPath);
-      for (const project of registry.snapshot().projects) {
-        if (
-          (await realpath(project.configPath).catch(() => null)) ===
-          incomingIdentity
-        )
-          return selectProject(project.id);
-      }
-      gate.assertSetupAllowed();
-      await assertRegistrationAllowed();
-      if (transition) throw Error("Another project change is still running.");
-      transition = true;
-      try {
-        const additional = await prepareCrewStorage({
-          appData,
-          configOverride: incoming.configPath,
-        });
-        if (additional.issue) throw Error(additional.issue);
-        const candidate = {
-          id: "incoming",
-          configPath: additional.configPath,
-          config: parseConfig(await readFile(additional.configPath, "utf8")),
-        };
-        await assertWorkspaceIsolation({
-          projects: [
-            ...registry.snapshot().projects,
-            { id: candidate.id, configPath: candidate.configPath },
-          ],
-          candidate,
-        });
-        await selected().hide();
-        await registry.add({
-          configPath: additional.configPath,
-          key: additional.key,
-          desktopData: additional.desktopData,
-        });
-        registerProjectPath(additional.configPath);
-        await configureCapacity();
-        await selected().bootstrap();
-        changed();
-      } finally {
-        transition = false;
-      }
+function attempt(operation: () => Promise<unknown>) {
+  void operation().catch(() =>
+    dialog.showMessageBox({
+      type: "warning",
+      message: "Crew needs attention",
+      detail:
+        "This action could not be completed. Open Crew to review the current project and its retained work.",
     }),
   );
-  app.on("activate", () => attempt(() => selected()?.openWindow()));
-  app.on("window-all-closed", () => {});
-  app.on("will-quit", () => {
-    for (const host of hosts.values()) void host.disposeAttention();
-  });
-  app.on("before-quit", (event) => {
-    if (!quitting) {
-      event.preventDefault();
-      attempt(quitCrew);
+}
+function requiredProject(projectId: string) {
+  if (projectId !== registry.snapshot().selectedId)
+    throw new Error("The selected project changed.");
+  const host = hosts.get(projectId);
+  if (!host) throw new Error("This project needs attention.");
+  return host;
+}
+async function nativeExecutable() {
+  // Trusted installation paths only; never inspect personal authentication.
+  for (const candidate of [
+    "/Applications/Codex.app/Contents/Resources/codex",
+    "/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
+    "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    join(homedir(), "Applications/Codex.app/Contents/Resources/codex"),
+    join(
+      homedir(),
+      "Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+    ),
+  ]) {
+    try {
+      const path = await realpath(candidate);
+      if (!(await lstat(path)).isFile()) continue;
+      await access(path, constants.X_OK);
+      return path;
+    } catch {
+      /* Try the next supported installation. */
     }
-  });
-  void app
-    .whenReady()
-    .then(async () => {
-      const release = await lease.acquire();
-      await release();
-      if (!storage.issue) {
-        try {
-          await access(storage.configPath);
-        } catch (error) {
-          if (errorCode(error) !== "ENOENT") throw error;
-          if (!explicit) await initializeConfig(storage.configPath);
-        }
-      }
-      registry = await openWorkspaceRegistry({
-        crewRoot,
-        initial: {
-          configPath: storage.configPath,
-          key: storage.key,
-          desktopData: storage.desktopData,
-        },
-        explicitConfig: Boolean(explicit || restarted),
+  }
+  throw new Error("The native Codex runtime is unavailable.");
+}
+async function openProject(project: DesktopProject) {
+  if (hosts.has(project.id)) return;
+  if (openings.has(project.id)) return openings.get(project.id);
+  const opening = (async () => {
+    let application: UnifiedApplication | undefined;
+    let browser: ReturnType<typeof createUnifiedProjectBrowser> | undefined;
+    try {
+      const stateDirectory = registry.stateDirectory(project.id);
+      const skills = await ProjectSkillStore.open({
+        directory: join(stateDirectory, "skills"),
+        projectId: project.id,
+        forbiddenRoots: [
+          project.directory,
+          join(homedir(), ".codex"),
+          ...(process.env.CODEX_HOME ? [process.env.CODEX_HOME] : []),
+        ],
       });
-      for (const project of registry.snapshot().projects) register(project);
-      // A retained idle journal owns a hold even if its capacity ledger was lost.
-      if (await reservationPending())
-        await configureGlobalCapacity({
-          dir: capacityDirectory,
-          admissionPaused: true,
+      const projectBrowser = createUnifiedProjectBrowser({
+        projectId: project.id,
+        stateDirectory,
+        getWindow: () => surface?.native(),
+        getHostOrigin: () => renderer.origin,
+        getAgent: (id) =>
+          application?.foundation.store
+            .snapshot()
+            .agents.find((agent) => agent.id === id) ?? null,
+        publish: (event) => surface?.notify(event),
+      });
+      browser = projectBrowser;
+      application = await startUnifiedApplication({
+        stateDirectory,
+        projectId: project.id,
+        projectName: project.name,
+        ownerUserId: `local-owner:${project.id}`,
+        nativeExecutable: await nativeExecutable(),
+        vaultEncryption: createElectronCredentialEncryption(safeStorage),
+        skills,
+        agentTools: (context) =>
+          combineAgentToolExtensions([
+            {
+              async list(caller) {
+                return createProjectSkillAgentTools({
+                  store: skills,
+                  caller,
+                  runAuthorized: context.runAuthorized,
+                }).list();
+              },
+              async call(caller, name, args) {
+                return createProjectSkillAgentTools({
+                  store: skills,
+                  caller,
+                  runAuthorized: context.runAuthorized,
+                }).call(name, args);
+              },
+            },
+            projectBrowser.tools(context),
+          ]),
+      });
+      const composed = application;
+      const voice = composed.voice;
+      const configuration = createAgentConfiguration(composed);
+      await configuration.migrateLegacyVoice(
+        registry.snapshot().projects.find((row) => row.id === project.id)
+          ?.voice,
+        () => registry.retireLegacyVoice(project.id),
+      );
+      const images = createAgentImages({
+        projectId: project.id,
+        directory: join(stateDirectory, "images"),
+      });
+      const schedules = createAgentSchedules({
+        directory: join(stateDirectory, "schedules"),
+        projectId: project.id,
+        getAgent: (id) =>
+          composed.foundation.store
+            .snapshot()
+            .agents.find((agent) => agent.id === id) ?? null,
+        canRun: (id) => {
+          const state = composed.foundation.store.snapshot(),
+            agent = state.agents.find((row) => row.id === id);
+          return Boolean(
+            voice.settlement().settled &&
+            agent?.runtime.threadId &&
+            agent.runtime.session.sessionId &&
+            !state.nativeApprovals.some(
+              (approval) => approval.agentId === id,
+            ) &&
+            composed.foundation.executionAllowed({
+              projectId: project.id,
+              agentId: id,
+              sessionId: agent.runtime.session.sessionId,
+            }),
+          );
+        },
+        privateSend: async (input, isCurrent) => {
+          const message = await composed.foundation.sendInternal(
+            {
+              id: input.id,
+              source: "schedule",
+              sourceId: input.origin.scheduleId,
+              recipientAgentId: input.agentId,
+              content: [{ type: "text", text: input.instruction }],
+            },
+            isCurrent,
+          );
+          return { accepted: message !== null };
+        },
+        changed: () =>
+          surface?.notify({
+            type: "owner",
+            projectId: project.id,
+            event: { kind: "changed" },
+          }),
+      });
+      await schedules.register(
+        composed.foundation.store
+          .snapshot()
+          .agents.filter((agent) => !agent.archivedAt)
+          .map((agent) => agent.id),
+      );
+      await schedules.start();
+      // A damaged setup draft must not prevent access to retained agents.
+      let setupOpening: ReturnType<typeof openAgentSetup> | undefined;
+      const setup = {
+        async command(name: string, value: unknown) {
+          setupOpening ??= openAgentSetup({
+            directory: join(stateDirectory, "setup"),
+            project,
+            application: composed,
+            changed: () =>
+              surface?.notify({
+                type: "owner",
+                projectId: project.id,
+                event: { kind: "changed" },
+              }),
+            created: () =>
+              schedules.register(
+                composed.foundation.store
+                  .snapshot()
+                  .agents.filter((agent) => !agent.archivedAt)
+                  .map((agent) => agent.id),
+              ),
+          }).catch((error) => {
+            setupOpening = undefined;
+            throw error;
+          });
+          return (await setupOpening).command(name, value);
+        },
+      };
+      const unsubscribe = composed.ownerApi.subscribe((event) => {
+        surface?.notify({ type: "owner", projectId: project.id, event });
+        changed();
+      });
+      const unsubscribeVoice = voice.subscribe((event) =>
+        surface?.notify({ type: "voice", projectId: project.id, event }),
+      );
+      const usage = createSubscriptionUsageOwnerAdapter(composed.subscription);
+      const unsubscribeUsage = usage.subscribe((state) =>
+        surface?.notify({
+          type: "subscription-usage",
+          projectId: project.id,
+          state,
+        }),
+      );
+      const unsubscribeTranscript = voice.subscribeRealtime((event) => {
+        // Only native role-bearing transcript items reach the owner display.
+        // These are live call text, never evidence of a coding-turn association.
+        if (event.kind !== "transcript" || !event.itemId) return;
+        surface?.notify({
+          type: "voice",
+          projectId: project.id,
+          event: {
+            kind: "transcript",
+            binding: event.binding,
+            callId: event.callId,
+            itemId: event.itemId,
+            role: event.role,
+            text: event.text,
+            done: event.done,
+            delta: event.delta,
+          },
         });
-      let restoreIssue;
-      try {
-        await configureCapacity();
-      } catch (error) {
-        restoreIssue = safe(error);
-      }
-      await initializeUpdates();
-      Menu.setApplicationMenu(
-        Menu.buildFromTemplate([
-          {
-            label: "Crew",
-            submenu: [
-              { label: "About Crew", role: "about" },
-              {
-                label: "Project setup…",
-                click: () => attempt(() => selected().openSetup()),
-              },
-              { label: "Add project…", click: () => attempt(addProject) },
-              { type: "separator" },
-              {
-                label: "Open window",
-                click: () => attempt(() => selected().openWindow()),
-              },
-              {
-                label: "Quit Crew…",
-                accelerator: "Command+Q",
-                click: () => attempt(quitCrew),
-              },
-            ],
-          },
-          {
-            label: "Edit",
-            submenu: [
-              { role: "undo" },
-              { role: "redo" },
-              { type: "separator" },
-              { role: "cut" },
-              { role: "copy" },
-              { role: "paste" },
-              { role: "selectAll" },
-            ],
-          },
-          {
-            label: "Window",
-            submenu: [{ role: "minimize" }, { role: "close" }],
-          },
-        ]),
-      );
-      tray = createWorkspaceTray({
-        snapshot,
-        selected,
-        attempt,
-        selectProject,
-        addProject,
-        resolveUpdateRecovery,
-        quitCrew,
-        get updateStatus() {
-          return updater?.getStatus();
-        },
-        get updateRecoveryError() {
-          return updateRecoveryError;
-        },
-        get pausePlan() {
-          return workspacePause?.status() || null;
-        },
-        get updateHolding() {
-          return workspacePause?.isHolding() || false;
-        },
-        requestUpdate: (action) => updater.request(action),
       });
-      updateTray();
-      // Register capacity evidence for every project before recovering any controller.
-      if (restoreIssue) {
-        selected().setError(restoreIssue);
-        await selected().openSetup();
-      } else {
-        for (const host of hosts.values())
-          if (host !== selected()) await host.bootstrap();
-        await selected().bootstrap();
-      }
-      let recovery: { recovered?: boolean; blocked?: boolean; error?: string };
-      const retained = workspacePause.status();
-      if (
-        retained &&
-        ["installing", "resuming"].includes(retained.phase) &&
-        retained.targetVersion === app.getVersion()
-      ) {
-        try {
-          await updateReservation.cancel();
-          recovery = { recovered: true };
-        } catch (error) {
-          recovery = { blocked: true, error: safe(error) };
-        }
-      } else recovery = await updateReservation.recover();
-      updateRecoveryError = recovery.blocked ? recovery.error : undefined;
-      if (!updateRecoveryError) await workspacePause.recover();
+      hosts.set(project.id, {
+        project,
+        application: composed,
+        skills,
+        schedules,
+        scheduleCommand: createScheduleOwnerCommands(schedules),
+        voice,
+        voiceCommand: createVoiceOwnerCommands(
+          voice,
+          configuration.selectedVoice,
+        ),
+        imageCommand: createImageOwnerCommands(images),
+        setup,
+        browser: projectBrowser,
+        usage,
+        configuration,
+        unsubscribe: () => {
+          unsubscribe();
+          unsubscribeVoice();
+          unsubscribeUsage();
+          usage.dispose();
+          unsubscribeTranscript();
+        },
+      });
+      failures.delete(project.id);
+    } catch {
+      await browser?.close().catch(() => {});
+      await application?.close().catch(() => {});
+      failures.set(
+        project.id,
+        "Crew could not open this project's isolated runtime. If Crew was interrupted, recover the project to check for abandoned ownership records. Saved agents, sign-in and chats will be retained.",
+      );
+    } finally {
       changed();
-      const updatePoll = setInterval(
-        () => void updater.refresh().catch(() => {}),
-        1500,
-      );
-      updatePoll.unref();
-    })
-    .catch(async (error) => {
-      quitting = true;
-      await dialog.showMessageBox({
-        type: "error",
-        message: "Crew could not restore its projects",
-        detail: safe(error),
+    }
+  })();
+  openings.set(project.id, opening);
+  try {
+    await opening;
+  } finally {
+    openings.delete(project.id);
+  }
+}
+async function disconnectVoice() {
+  const results = await Promise.allSettled(
+    [...hosts.values()].map((host) => host.voice.disconnect()),
+  );
+  if (results.some((result) => result.status === "rejected"))
+    throw new Error("A native voice call did not confirm closure.");
+  const previews = await Promise.allSettled(
+    [...hosts.values()].map((host) => host.browser.close()),
+  );
+  if (previews.some((result) => result.status === "rejected"))
+    throw new Error("A project browser did not confirm closure.");
+}
+async function selectProject(projectId: string) {
+  if (switching || quit.holding() || updates?.holding())
+    throw new Error("Finish the current project transition first.");
+  switching = true;
+  try {
+    const project = registry
+      .snapshot()
+      .projects.find((row) => row.id === projectId);
+    if (!project) throw new Error("Unknown project.");
+    await disconnectVoice();
+    await registry.select(projectId);
+    await updates.withStartupLease(() => openProject(project));
+    changed();
+  } finally {
+    switching = false;
+  }
+}
+function refreshTray() {
+  if (!tray || tray.isDestroyed() || !registry) return;
+  const pending = [...hosts.values()].reduce((sum, host) => {
+    const state = host.application.foundation.store.snapshot();
+    return (
+      sum +
+      state.helpRequests.filter((request) => request.state === "open").length +
+      state.nativeApprovals.length
+    );
+  }, 0);
+  tray.setTitle(pending ? `✋ ${pending}` : "");
+  tray.setToolTip(pending ? `Crew — ${pending} need attention` : "Crew");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "Open Crew", click: () => attempt(() => surface.open()) },
+      { type: "separator" },
+      ...registry.snapshot().projects.map((project) => ({
+        label: project.name,
+        type: "radio" as const,
+        checked: project.id === registry.snapshot().selectedId,
+        click: () =>
+          attempt(async () => {
+            await selectProject(project.id);
+            await surface.open();
+          }),
+      })),
+      { type: "separator" },
+      {
+        label: "Check for updates…",
+        click: () =>
+          attempt(async () => {
+            await surface.open();
+            surface.notify({ type: "navigate", view: "updates" });
+            await updates.check();
+          }),
+      },
+      { label: "Quit Crew…", click: () => attempt(prepareQuit) },
+    ]),
+  );
+}
+function destroyTray() {
+  const current = tray;
+  tray = undefined;
+  if (current && !current.isDestroyed()) current.destroy();
+}
+async function prepareQuit() {
+  if (registry.snapshot().projects.length === 0) {
+    await quit.prepare();
+    await quit.quit();
+    return;
+  }
+  await surface.open();
+  surface.notify({ type: "navigate", view: "prepare" });
+  if (switching || openings.size || updates.holding())
+    throw new Error(
+      "Finish the project or update transition before preparing Quit.",
+    );
+  await quit.prepare();
+}
+async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
+  if (quit.holding() || updates.holding())
+    throw new Error("Crew is completing its execution reservation.");
+  if (command.startsWith("setup.")) return host.setup.command(command, args);
+  if (command === "environments.snapshot")
+    return host.application.environmentOwnerApi.snapshot();
+  if (command === "environments.templates.snapshot")
+    return host.application.environmentOwnerApi.templates.snapshot();
+  if (command === "environments.templates.save")
+    return host.application.environmentOwnerApi.templates.save(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["save"]>[0],
+    );
+  if (command === "environments.templates.assign")
+    return host.application.environmentOwnerApi.templates.assign(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["assign"]>[0],
+    );
+  if (command === "environments.templates.inspect")
+    return host.application.environmentOwnerApi.templates.inspect(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["inspect"]>[0],
+    );
+  if (command === "environments.projectFolder")
+    return { directory: host.project.directory };
+  if (command === "environments.prepareFolderAccess") {
+    const input = object(args);
+    if (
+      input.access !== "none" &&
+      input.access !== "read_only" &&
+      input.access !== "read_write"
+    )
+      throw new Error("Choose folder access.");
+    const result =
+      await host.application.environmentOwnerApi.prepareFolderAccess({
+        workspaceDirectory: text(input.workspaceDirectory),
+        access: input.access,
       });
-      app.exit(1);
+    surface.notify({
+      type: "owner",
+      projectId: host.project.id,
+      event: { kind: "changed" },
     });
+    return result;
+  }
+  if (command === "environments.approveWorkspace") {
+    const input = object(args);
+    const result = await host.application.environmentOwnerApi.approveWorkspace(
+      input.input as Parameters<
+        UnifiedApplication["environmentOwnerApi"]["approveWorkspace"]
+      >[0],
+      input.expectedRevision as number | null,
+    );
+    surface.notify({
+      type: "owner",
+      projectId: host.project.id,
+      event: { kind: "changed" },
+    });
+    return result;
+  }
+  if (command === "access.snapshot")
+    return host.application.accessOwnerApi.snapshot();
+  if (command.startsWith("access."))
+    return host.application.accessOwnerApi.command(command.slice(7), args);
+  if (command === "skills.list") return host.skills.list();
+  if (command === "skills.read")
+    return host.skills.read(text(object(args).skillId));
+  if (command === "skills.create")
+    return host.skills.create(
+      args as Parameters<ProjectSkillStore["create"]>[0],
+    );
+  if (command === "skills.update")
+    return host.skills.update(
+      args as Parameters<ProjectSkillStore["update"]>[0],
+    );
+  if (command.startsWith("schedules."))
+    return host.scheduleCommand(command, args);
+  if (command.startsWith("images.")) return host.imageCommand(command, args);
+  if (command === "agents.options") return host.configuration.options();
+  if (command.startsWith("voice.")) return host.voiceCommand(command, args);
+  if (command === "subscription.status")
+    return host.application.subscription.status();
+  if (command === "subscription.usage") return host.usage.read();
+  if (command === "subscription.beginSignIn")
+    return host.application.subscription.beginSignIn();
+  if (command === "subscription.cancelSignIn")
+    return host.application.subscription.cancelSignIn();
+  const result = await host.application.ownerApi.command(command, args);
+  if (command === "createAgent")
+    await host.schedules.register(
+      host.application.foundation.store
+        .snapshot()
+        .agents.filter((agent) => !agent.archivedAt)
+        .map((agent) => agent.id),
+    );
+  return result;
 }
-
-function registerProjectPath(configPath: string): ProjectHost {
-  const project = registry
-    .snapshot()
-    .projects.find((project) => project.configPath === configPath);
-  if (!project) throw new Error("Registered project is unavailable.");
-  return register(project);
+async function request(method: string, value: unknown) {
+  if (method === "snapshot") return snapshot();
+  if (method === "updates") {
+    const action = text(object(value).action);
+    if (action === "status") return updates.status();
+    if (action === "check") return updates.check();
+    if (action === "download") return updates.download();
+    if (action === "prepare") return updates.prepare();
+    if (action === "cancel") return updates.cancel();
+    if (action === "install") return updates.install();
+    throw new Error("Unsupported update action.");
+  }
+  if (method === "copyText") {
+    if (typeof value !== "string" || value.length > 1_000_000)
+      throw new Error("Clipboard text is too large.");
+    clipboard.writeText(value);
+    return;
+  }
+  if (method === "openWebLink") {
+    await openWebLink(text(value));
+    return;
+  }
+  if (method === "chooseProjectDirectory") {
+    const result = await dialog.showOpenDialog(surface.native()!, {
+      properties: ["openDirectory"],
+      title: "Choose your project folder",
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const directory = await realpath(result.filePaths[0]);
+    return { directory, suggestedName: basename(directory) };
+  }
+  if (method === "prepareQuit") return prepareQuit();
+  if (method === "cancelQuit") return quit.cancel();
+  if (method === "quit") return quit.quit();
+  const input = object(value);
+  if (method === "createProject") {
+    if (switching || quit.holding() || updates.holding())
+      throw new Error("Finish the current project transition first.");
+    switching = true;
+    try {
+      await disconnectVoice();
+      const project = await registry.create({
+        name: text(input.name),
+        directory: text(input.directory),
+      });
+      await updates.withStartupLease(() => openProject(project));
+      changed();
+      return project;
+    } finally {
+      switching = false;
+    }
+  }
+  if (method === "selectProject") return selectProject(text(input.projectId));
+  if (method === "recoverProject") {
+    const projectId = text(input.projectId);
+    if (
+      switching ||
+      openings.size ||
+      hosts.has(projectId) ||
+      quit.holding() ||
+      updates?.holding()
+    )
+      throw new ProjectRecoveryError(
+        "Finish the current project transition before recovery.",
+      );
+    const project = registry
+      .snapshot()
+      .projects.find((row) => row.id === projectId);
+    if (!project || !failures.has(projectId))
+      throw new ProjectRecoveryError(
+        "Only an unavailable project can be recovered.",
+      );
+    switching = true;
+    try {
+      await recoverInterruptedProject(registry.stateDirectory(projectId));
+      await updates.withStartupLease(() => openProject(project));
+      changed();
+    } finally {
+      switching = false;
+    }
+    return;
+  }
+  const host = requiredProject(text(input.projectId));
+  if (method === "browser") {
+    if (
+      (quit.holding() || updates.holding()) &&
+      !["state", "bounds", "close"].includes(String(input.action))
+    )
+      throw new Error("Crew is completing its execution reservation.");
+    return host.browser.request(input);
+  }
+  if (method === "ownerSnapshot") return host.application.ownerApi.snapshot();
+  if (method === "ownerCommand")
+    return ownerCommand(host, text(input.command), input.args);
+  if (method === "renameProject") {
+    await registry.rename(host.project.id, text(input.name));
+    changed();
+    return;
+  }
+  throw new Error("Unsupported Crew action.");
 }
+async function start() {
+  if (!isAbsolute(desktopDirectory))
+    throw new Error("Crew storage must be absolute.");
+  await mkdir(desktopDirectory, { recursive: true, mode: 0o700 });
+  registry = await openUnifiedRegistry(desktopDirectory);
+  const lifecycleProjects = (
+    includeUnavailable = false,
+  ): DesktopLifecycleProject[] => {
+    if ((!includeUnavailable && failures.size) || openings.size || switching)
+      throw new Error(
+        "Every project must be available for the shutdown check.",
+      );
+    const available: DesktopLifecycleProject[] = [...hosts.values()].map(
+      (host) => ({
+        id: host.project.id,
+        name: host.project.name,
+        lifecycle: host.application.foundation,
+        observePreparation: () =>
+          host.application.foundation.store.snapshot().preparation,
+        async close(reservation) {
+          await host.schedules.close();
+          await host.browser.close();
+          await host.application.close(reservation.id);
+          host.unsubscribe();
+        },
+      }),
+    );
+    if (includeUnavailable) {
+      for (const project of registry
+        .snapshot()
+        .projects.filter((row) => failures.has(row.id))) {
+        const verify = () =>
+          verifyUnavailableProjectIdle(registry.stateDirectory(project.id));
+        const unavailable = async (): Promise<never> => {
+          throw new ProjectRecoveryError(
+            "Recover this project before starting an agent.",
+          );
+        };
+        available.push({
+          id: project.id,
+          name: project.name,
+          lifecycle: {
+            start: unavailable,
+            stop: unavailable,
+            restart: unavailable,
+            async prepare() {
+              await verify();
+              return [];
+            },
+            async reserveExecution(projectId, reason) {
+              if (projectId !== project.id || reason !== "quit")
+                throw new Error("Invalid unavailable-project shutdown.");
+              await verify();
+              return {
+                state: "reserved",
+                reservation: {
+                  id: randomUUID(),
+                  projectId,
+                  reason,
+                  acquiredAt: new Date().toISOString(),
+                },
+              };
+            },
+            async releaseExecution() {},
+          },
+          async close() {
+            await verify();
+          },
+        });
+      }
+    }
+    return available;
+  };
+  quit = createUnifiedQuit({
+    projects: () => lifecycleProjects(true),
+    changed,
+    async finish() {
+      await disconnectVoice();
+      surface.destroy();
+      destroyTray();
+      await renderer.close();
+      quitting = true;
+      app.quit();
+    },
+  });
+  updates = await createUnifiedUpdates({
+    updatesDirectory: join(desktopDirectory, "updates"),
+    projects: lifecycleProjects,
+    busy: () =>
+      switching ||
+      openings.size > 0 ||
+      quitting ||
+      quit.holding() ||
+      quit.snapshot().state === "preparing",
+    changed,
+    async beforeInstall() {
+      await disconnectVoice();
+      surface.destroy();
+      destroyTray();
+      await renderer.close();
+      quitting = true;
+    },
+  });
+  renderer = await startDesktopRenderer(
+    join(root, "renderer-dist"),
+    registry.snapshot().rendererPort ?? 0,
+  );
+  if (registry.snapshot().rendererPort === null)
+    await registry.saveRendererPort(renderer.port);
+  surface = createUnifiedWindow({
+    root,
+    desktopDirectory,
+    origin: renderer.origin,
+    isQuitting: () => quitting,
+    disconnectVoice,
+    closed: changed,
+  });
+  ipcMain.handle(
+    "crew:unified",
+    async (event, method: unknown, value: unknown) => {
+      if (!surface.accepts(event) || typeof method !== "string")
+        return {
+          ok: false,
+          error: {
+            code: "denied",
+            message: "Crew accepts actions only from its current window.",
+          },
+        };
+      try {
+        if (JSON.stringify(value ?? null).length > 2_000_000)
+          throw new Error("Oversized request.");
+        return { ok: true, value: await request(method, value) };
+      } catch (error) {
+        const detail =
+          error instanceof ProjectSkillError ||
+          error instanceof AgentSetupError ||
+          error instanceof ProjectRecoveryError
+            ? { code: error.code, message: error.message }
+            : {
+                code: "failed",
+                message:
+                  "Crew could not complete this action. Refresh the current settings and retry; your saved state is retained.",
+              };
+        return { ok: false, error: detail };
+      }
+    },
+  );
+  tray = new Tray(
+    nativeImage
+      .createFromPath(join(root, "build/crew-mark.png"))
+      .resize({ width: 20, height: 20 }),
+  );
+  Menu.setApplicationMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "Crew",
+        submenu: [
+          { role: "about" },
+          { type: "separator" },
+          {
+            label: "Quit Crew…",
+            accelerator: "CommandOrControl+Q",
+            click: () => attempt(prepareQuit),
+          },
+        ],
+      },
+      { role: "editMenu" },
+      { role: "windowMenu" },
+    ]),
+  );
+  await updates.withStartupLease(async () => {
+    for (const project of registry.snapshot().projects)
+      await openProject(project);
+  });
+  refreshTray();
+  await surface.open();
+}
+app.on("window-all-closed", () => {
+  /* The menu-bar host and agents continue. */
+});
+app.on("activate", () => {
+  if (surface) attempt(() => surface.open());
+});
+app.on("second-instance", () => {
+  if (surface) attempt(() => surface.open());
+});
+app.on("before-quit", (event) => {
+  if (!quitting && surface) {
+    event.preventDefault();
+    attempt(prepareQuit);
+  }
+});
+if (!locked) app.quit();
+else
+  app
+    .whenReady()
+    .then(start)
+    .catch(() => {
+      dialog.showErrorBox(
+        "Crew could not start",
+        "The isolated Crew application could not open safely. Retained projects and existing installations have not been reset.",
+      );
+      quitting = true;
+      app.quit();
+    });
