@@ -40,10 +40,7 @@ import type {
 import type { PrimaryVoiceClient, PrimaryVoiceEvent } from "./voice/client";
 import type { ProjectPresentation } from "./DesktopApplication";
 import type { AgentsSnapshot } from "./client";
-import {
-  AgentSetupWizard,
-  type ConnectionWizardContext,
-} from "./AgentSetupWizard";
+import { AgentSetupWizard } from "./AgentSetupWizard";
 
 type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
@@ -152,9 +149,6 @@ export function createProjectPresentation(
       onStatus={onStatus}
     />
   );
-  const connectionWizard = (context: ConnectionWizardContext) => (
-    <ServiceConnectionWizard {...context} isOwner />
-  );
   return {
     settingsPanels: [
       {
@@ -163,7 +157,7 @@ export function createProjectPresentation(
         icon: ShieldCheck,
         description:
           "Configure your agents and choose which one acts as your manager.",
-        render: ({ snapshot, refresh, visible }) => (
+        render: ({ snapshot, refresh, visible, openSettings }) => (
           <AgentSetupWizard
             snapshot={snapshot}
             refresh={refresh}
@@ -171,7 +165,7 @@ export function createProjectPresentation(
             subscribe={onOwnerChange}
             visible={visible}
             renderSignIn={signIn}
-            renderConnectionWizard={connectionWizard}
+            onOpenConnections={() => openSettings("access")}
           />
         ),
       },
@@ -267,7 +261,7 @@ export function createProjectPresentation(
           visible={context.visible}
           firstUse
           renderSignIn={signIn}
-          renderConnectionWizard={connectionWizard}
+          onOpenConnections={() => context.openSettings("access")}
         />
       );
     },
