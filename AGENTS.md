@@ -681,3 +681,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Keep Connections and Groups & permissions as separate Settings pages. Connections owns service accounts and authentication; Groups & permissions owns group grants, creation presets, access requests and approvals. Agent editor links should name and open the specific destination.
 
 - Permission groups use the same full-width shadcn table treatment as agents and connections, with group descriptions, access counts and a vertical-ellipsis Edit menu. Create/Edit opens a centred Dialog with internally scrolling content and explicit actions.
+
+- Group permission choices show readable operation names, not raw upstream snake_case names or internal connection/capability IDs. Keep IDs unchanged in stored grants and callbacks; avoid repeating descriptions that only restate the label.

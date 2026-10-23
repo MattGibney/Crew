@@ -61,6 +61,16 @@ import {
   useAccessAction,
 } from "./shared";
 
+/** Presentation only: saved grants continue to use the exact capability IDs. */
+function permissionLabel(name: string): string {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : "Unnamed permission";
+}
+
 export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   groups: readonly PermissionGroup[];
   skills?: readonly Skill[];
@@ -463,15 +473,17 @@ function GroupEditor({
                             setCapability(connection.id, capability.id, checked)
                           }
                           description={
-                            <>
-                              {capability.description}
-                              <span className="block font-mono">
-                                {capability.id}
-                              </span>
-                            </>
+                            permissionLabel(
+                              capability.description,
+                            ).toLowerCase() ===
+                            permissionLabel(
+                              capability.upstreamName,
+                            ).toLowerCase()
+                              ? undefined
+                              : capability.description
                           }
                         >
-                          {capability.upstreamName}
+                          {permissionLabel(capability.upstreamName)}
                         </Choice>
                       ))}
                     </div>
@@ -483,8 +495,11 @@ function GroupEditor({
                     className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
                   >
                     <span className="break-all">
-                      {capability} · unavailable in the current catalogue;
-                      retained
+                      Unavailable permission ·{" "}
+                      {props.connections.find(
+                        (connection) => connection.id === connectionId,
+                      )?.name ?? "Unavailable connection"}
+                      . Existing access retained until removed.
                     </span>
                     <Button
                       type="button"
