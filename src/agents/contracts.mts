@@ -702,6 +702,9 @@ export interface AgentRuntimeAdapter {
   observe(binding: RuntimeBinding): AsyncIterable<RuntimeEvent>;
 }
 export interface RuntimeHistoryItem {
+  /** Native item time, or its containing turn start when only turn timing exists. */
+  timestamp?: Timestamp;
+  timestampSource?: "native_item" | "native_turn";
   runtimeRef: string;
   turnId: string | null;
   kind: "message" | "tool" | "approval" | "other";

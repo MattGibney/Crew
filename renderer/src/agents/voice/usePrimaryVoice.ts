@@ -358,7 +358,7 @@ export function usePrimaryVoice(
     transcript:
       binding && call.current && sameVoiceBinding(binding, call.current.binding)
         ? transcript
-        : [],
+        : EMPTY_TRANSCRIPT,
     audioRef,
     connect,
     disconnect,
@@ -366,3 +366,5 @@ export function usePrimaryVoice(
     resumePlayback,
   };
 }
+
+const EMPTY_TRANSCRIPT: LiveTranscriptItem[] = [];

@@ -549,3 +549,10 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Each agent owns a browser workspace with multiple tabs, independent of the workspace displayed by the owner. Agent tools target only that caller’s tabs; UI selection never grants or transfers authority.
 - Tabs share a private persistent browser session within one project/agent identity; never inherit personal browser cookies or another agent’s session. Apply per-WebContents request policy when registering shared-session networking hooks.
 - Keep tab identity in annotation provenance, preserve tabs across native agent Restart, and distinguish persistent cookies/storage from the current in-memory tab registry, which does not survive desktop exit. Hiding the browser hides native views without closing tabs.
+
+## Unified conversation timeline (#123)
+
+- Typed native messages and live/retained voice transcript items share one chronological chat presentation, older above newer. Use the same speaker/message styling; do not add a Saved voice calls section or saved/historical labels to normal messages.
+- Keep native chat authoritative and retained voice artifacts separate internally. Join presentation by exact thread/call/native-item identity, never matching words, replaying transcripts into context or launching turns. Retain a live snapshot through delayed artifact refresh after hangup, preserving its row identity.
+- Preserve available native timestamps and voice observation times. Native turn startedAt uses Unix seconds; turn-level timing is coarser than message timing. Disclose missing/coarse times instead of assigning reload time to old messages. Keep deterministic ties, drafts and the reader's scroll position.
+- For this issue, validation is type/build plus focused disposable UI flows. Do not expand into broad test coverage, use the owner's running profile/build or physical microphone, install, merge or release.

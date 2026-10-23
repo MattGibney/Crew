@@ -270,7 +270,7 @@ export function createProjectPresentation(
       visible,
       mode,
       controlsTarget,
-      transcriptTarget,
+      onTranscript,
     }) => (
       <PrimaryAgentVoice
         client={voice}
@@ -278,7 +278,7 @@ export function createProjectPresentation(
         visible={visible}
         mode={mode}
         controlsTarget={controlsTarget}
-        transcriptTarget={transcriptTarget}
+        onTranscript={onTranscript}
         embedded
       />
     ),

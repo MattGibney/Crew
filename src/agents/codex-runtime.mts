@@ -1891,6 +1891,7 @@ export class CodexAgentRuntime
             liveSession?.deliveries.get(clientId)?.sender ??
             this.options.lookupSender?.(b, clientId) ??
             null,
+          turn.startedAt,
         );
         if (item) items.push(item);
       }

@@ -3,8 +3,7 @@
 Codex remains authoritative for native chat and model context. The installed
 `0.163.0-alpha.11` and verified `0.163.0-alpha.11.2` builds do not implement the
 advertised native timeline/item retrieval route needed to restore voice text.
-Crew therefore owns a separate, explicitly labelled **voice-call artifact** for
-owner display. It is not another agent conversation and is never used as input,
+Crew therefore owns a separate **voice-call artifact** for owner display. It is not another agent conversation and is never used as input,
 initial context, an injected native item or a replacement thread.
 
 Only validated role-bearing native transcript items qualify. The runtime first
@@ -35,10 +34,37 @@ the native item/call identity or using the artifact as model context.
 The owner API exposes `readVoiceArtifacts(agentId, cursor?)` after authorizing
 history access and deriving the native thread from the durable agent record.
 `voiceArtifactsRevision` refreshes the selected conversation when artifacts
-change. Saved calls appear in their own section after closure, with source and
-partial/interrupted state. The live projection clears on call end, avoiding a
-second rendering of the same active items. Older loaded calls remain reachable
-during refresh and reconnect. Private/unknown coding turns remain hidden by the
+change. Since [#123](https://github.com/MattGibney/Crew/issues/123), typed native
+messages and live/retained voice items appear in one chronological conversation,
+with the same message styling and speaker attribution. There is no separate
+saved-calls section or saved/historical message label. Provenance stays in the
+native records and artifacts. The display joins exact native thread, Crew call
+and transcript-item IDs, never text or guessed coding-turn links. A live snapshot
+stays visible through delayed retention after hangup; its stable row identity
+survives the transition. Completed retained snapshots win over late live partials.
+Active artifacts also restore visible text after a window reload. Older loaded
+calls remain reachable during refresh and reconnect, with loading/errors and
+incomplete/interrupted text disclosed without claiming missing words exist.
+
+Ordering uses available native timing and voice observation times. Codex's native
+turn start is Unix seconds and is explicitly disclosed as coarse timing, not an
+exact item timestamp. Missing native times keep original native order beside a
+known native neighbor; if none exists they precede dated voice, with an explicit
+notice that cross-source order cannot be verified. No read/reload time is assigned
+to old messages. New artifact writes retain each item's first observed time
+across deltas and completion; older artifacts retain their existing observation
+times. Equal times preserve native order and deterministic call/item order.
+The display does not change model context, dispatch, call or microphone behavior.
+
+Run `npm run typecheck`, `npm run build`, then
+`node scripts/unified-chat-timeline-browser-acceptance.mjs` (set
+`CREW_PLAYWRIGHT_MODULE` if Playwright is provided outside the checkout).
+The focused flow uses real AgentsApp components with disposable synthetic ports,
+headless Chrome, no model or media and screenshots in the system temporary
+folder. It covers interleaving, live-to-retained reconciliation, delayed/stale
+reads, reload, ties, unavailable times, drafts, earlier pages, scroll and narrow
+layout. It does not establish human acoustic acceptance or a packaged native
+voice-call run. Private/unknown coding turns remain hidden by the
 existing native-history filter; only an actual native promotion can link them.
 
 Acceptance includes production host/API/component checks with synthetic peers,
