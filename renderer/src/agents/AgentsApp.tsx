@@ -81,7 +81,12 @@ export interface AgentSettingsPanel {
   }): ReactNode;
 }
 export interface AgentsAppProps {
-  renderBrowser?: (context: { snapshot: AgentsSnapshot; selectedAgent: Agent | null; client: AgentsClient; visible: boolean }) => ReactNode;
+  renderBrowser?: (context: {
+    snapshot: AgentsSnapshot;
+    selectedAgent: Agent | null;
+    client: AgentsClient;
+    visible: boolean;
+  }) => ReactNode;
   client: AgentsClient;
   /** #89 supplies access, connections and approval panels; foundation owns navigation. */
   settingsPanels?: AgentSettingsPanel[];
@@ -363,7 +368,10 @@ export function AgentsApp({
   const detailVisible = view === "agents" && selectedId !== null;
   const normalView =
     !setupVisible &&
-    (view === "conversation" || view === "agents" || view === "scratchpad" || view === "browser") &&
+    (view === "conversation" ||
+      view === "agents" ||
+      view === "scratchpad" ||
+      view === "browser") &&
     !detailVisible;
   return (
     <div className="agents-app flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -405,7 +413,17 @@ export function AgentsApp({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {renderBrowser && <Button variant={view === "browser" ? "secondary" : "ghost"} aria-pressed={view === "browser"} onClick={() => setView("browser")}><Globe /><span className="hidden sm:inline">Browser</span><span className="sr-only sm:hidden">Browser</span></Button>}
+          {renderBrowser && (
+            <Button
+              variant={view === "browser" ? "secondary" : "ghost"}
+              aria-pressed={view === "browser"}
+              onClick={() => setView("browser")}
+            >
+              <Globe />
+              <span className="hidden sm:inline">Browser</span>
+              <span className="sr-only sm:hidden">Browser</span>
+            </Button>
+          )}
           <Button
             variant={view === "settings" ? "secondary" : "ghost"}
             aria-pressed={view === "settings"}
@@ -641,7 +659,14 @@ export function AgentsApp({
               />
             </aside>
           </main>
-          {renderBrowser?.({ snapshot, selectedAgent: snapshot.agents.find(agent => agent.id === selectedId) ?? primary, client, visible: !setupVisible && view === "browser" })}
+          {renderBrowser?.({
+            snapshot,
+            selectedAgent:
+              snapshot.agents.find((agent) => agent.id === selectedId) ??
+              primary,
+            client,
+            visible: !setupVisible && view === "browser",
+          })}
           {snapshot.agents
             .filter(
               (agent) => visitedIds.has(agent.id) && agent.id !== primary?.id,
@@ -900,6 +925,20 @@ function AgentSessionPanel({
             : session.observedState}
         </Badge>
         <div className="flex flex-wrap gap-2">
+          {["unknown", "error"].includes(session.observedState) &&
+            client.recoverSession && (
+              <Button
+                variant="outline"
+                disabled={busy || Boolean(agent.archivedAt)}
+                onClick={() =>
+                  void act(`lifecycle-${agent.id}`, () =>
+                    client.recoverSession!(agent.id),
+                  )
+                }
+              >
+                Recover session
+              </Button>
+            )}
           {(["start", "stop", "restart"] as const).map((action) => (
             <Button
               key={action}
@@ -932,6 +971,13 @@ function AgentSessionPanel({
         Stop preserves the chat, notes and resources. Start never connects voice
         or creates an assignment.
       </p>
+      {["unknown", "error"].includes(session.observedState) && (
+        <p className="text-xs leading-5 text-muted-foreground">
+          Recovery checks that the previous native process exited and its work
+          settled. It preserves your sign-in and chat and never stops a live
+          process.
+        </p>
+      )}
       {pendingProfile &&
         session.instructionPreparation?.state !== "compacting" && (
           <p role="status" className="text-sm text-muted-foreground">
@@ -1389,22 +1435,31 @@ function Conversation({
                   />
                 </MessageScrollerItem>
               ))}
-              {hasVoice && !readOnly && snapshot.voiceArtifactsRevision == null && (
-                <MessageScrollerItem messageId="voice-history-limit">
-                  <p className="text-xs text-muted-foreground">
-                    Live voice transcripts are currently available only during
-                    the call. They are not restored from chat history.
-                  </p>
-                </MessageScrollerItem>
-              )}
+              {hasVoice &&
+                !readOnly &&
+                snapshot.voiceArtifactsRevision == null && (
+                  <MessageScrollerItem messageId="voice-history-limit">
+                    <p className="text-xs text-muted-foreground">
+                      Live voice transcripts are currently available only during
+                      the call. They are not restored from chat history.
+                    </p>
+                  </MessageScrollerItem>
+                )}
               {!readOnly && (
                 <div ref={transcriptTarget} className="empty:hidden" />
               )}
-              {snapshot.voiceArtifactsRevision != null && client.readVoiceArtifacts && (
-                <MessageScrollerItem messageId="saved-voice-artifacts">
-                  <SavedVoiceArtifacts key={`${agent.id}:${agent.runtime.threadId}`} agent={agent} client={client} revision={snapshot.voiceArtifactsRevision} visible={visible} />
-                </MessageScrollerItem>
-              )}
+              {snapshot.voiceArtifactsRevision != null &&
+                client.readVoiceArtifacts && (
+                  <MessageScrollerItem messageId="saved-voice-artifacts">
+                    <SavedVoiceArtifacts
+                      key={`${agent.id}:${agent.runtime.threadId}`}
+                      agent={agent}
+                      client={client}
+                      revision={snapshot.voiceArtifactsRevision}
+                      visible={visible}
+                    />
+                  </MessageScrollerItem>
+                )}
               {(intents.length > 0 || receipts.length > 0) && (
                 <MessageScrollerItem messageId="delivery-activity">
                   <details className="rounded-lg border px-4 py-3 text-sm">

@@ -538,3 +538,8 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Owner clarification: this first pass does not require hostile-worker isolation or a new VM platform. An explicitly acknowledged host-Docker template may grant broad trusted daemon authority beyond workspace filesystem restrictions. Keep it optional/off by default, label that authority honestly, use an explicit socket and clean private Docker configuration, and preserve existing services/volumes. Do not read/copy personal Docker credentials or present this capability as filesystem confinement.
 
 - #56 native tool discovery may be cached at session startup: expose the pinned upstream browser schemas to the exact current starting/started session with a current project-scoped browser.control group grant, before owner page binding. This read-only catalogue check never admits execution. Calls still require a started session, exact owner binding and fresh ordinary execution authorization; tool-list notifications alone do not prove native-model discovery.
+
+## Retained native-session recovery (#119)
+
+- Project writer-lease recovery and agent session recovery are separate. Explicit owner Start/Stop/Restart must be able to settle a lost in-memory peer using the existing exact native-exit and outstanding-work checks. Give an existing live peer its normal lifecycle action first; never use a generic disconnected error as proof of exit.
+- Expose owner session recovery in Sessions for unknown/error states. Preserve native thread identity, sign-in, notes and history; recovery neither signals a live process nor launches a turn. Keep unavailable/live process proof and unsettled operations explicit.
