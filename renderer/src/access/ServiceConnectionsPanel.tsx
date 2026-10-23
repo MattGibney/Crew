@@ -1,7 +1,8 @@
 import { Fragment } from "react";
-import { MoreVertical } from "lucide-react";
+import { MoreVertical, Pencil, Trash2 } from "lucide-react";
 import {
   Table,
+  TableCaption,
   TableHeader,
   TableBody,
   TableHead,
@@ -136,23 +137,31 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
             onClose={() => setEditing(null)}
           />
         )}
-      <div className="overflow-hidden rounded-xl border">
-        <Table>
-          <TableHeader>
+      <div className="overflow-x-auto rounded-lg border">
+        <Table className="w-full text-left text-sm">
+          <TableCaption className="sr-only">
+            Service connections and their accounts
+          </TableCaption>
+          <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground">
             <TableRow>
-              <TableHead>Service</TableHead>
-              <TableHead>Connection</TableHead>
-              <TableHead>Account</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>
+              <TableHead className="px-4 py-3 font-medium">Service</TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                Connection
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">Account</TableHead>
+              <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+              <TableHead className="px-4 py-3 font-medium">
                 <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
+          <TableBody className="divide-y">
             {!props.connections.length && (
               <TableRow>
-                <TableCell colSpan={5} className="py-6 text-muted-foreground">
+                <TableCell
+                  colSpan={5}
+                  className="px-4 py-8 text-muted-foreground"
+                >
                   No service connections yet.
                 </TableCell>
               </TableRow>
@@ -160,18 +169,18 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
             {props.connections.map((connection) => (
               <Fragment key={connection.id}>
                 <TableRow>
-                  <TableCell className="capitalize">
+                  <TableCell className="px-4 py-3 capitalize text-muted-foreground">
                     {connection.service.toLowerCase() === "github"
                       ? "GitHub"
                       : connection.service}
                   </TableCell>
-                  <TableCell className="font-medium">
+                  <TableCell className="px-4 py-3 font-medium">
                     {connection.name}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground">
                     {connection.identity.displayName || "Identity unverified"}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="px-4 py-3 text-muted-foreground">
                     <span>{connectionStates[connection.observedState]}</span>
                     <span className="mt-1 block text-xs text-muted-foreground">
                       {connection.lastVerifiedAt
@@ -179,7 +188,7 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                         : "No verification recorded"}
                     </span>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="px-4 py-3 text-right">
                     <DropdownMenu>
                       <DropdownMenuTrigger
                         render={
@@ -191,7 +200,7 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                           />
                         }
                       >
-                        <MoreVertical />
+                        <MoreVertical aria-hidden="true" className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
                         {props.onVerify && (
@@ -238,6 +247,7 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                             setEditing(connection);
                           }}
                         >
+                          <Pencil aria-hidden="true" className="size-4" />
                           Update
                         </DropdownMenuItem>
                         <DropdownMenuItem
@@ -246,6 +256,7 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
                           aria-label={`Remove ${connection.name}`}
                           onClick={() => setRemoving(connection)}
                         >
+                          <Trash2 aria-hidden="true" className="size-4" />
                           Remove
                         </DropdownMenuItem>
                       </DropdownMenuContent>

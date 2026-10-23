@@ -672,3 +672,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Profile pictures throughout Crew use rounded squares, including image, fallback and border layers. Compose the official Avatar with proportional corner radii; do not use circular profile crops or change unrelated circular status indicators.
 
 - All settings pages follow the agent editor visual language: a single compact page heading, aligned actions, 70% sticky background with medium backdrop blur, generous section spacing and unboxed content separated by horizontal rules. Use two-column section introductions for forms and full-width layouts for tables and long editors. Service connections use the official shadcn Table and row action menus.
+
+- Settings tables match the Agents table composition: rounded-lg border, muted header, px-4 py-3 cells, medium primary labels, muted supporting values and ghost icon row menus. Using the same Table primitive alone is not enough for visual consistency.
