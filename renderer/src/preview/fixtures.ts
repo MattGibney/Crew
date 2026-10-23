@@ -1,3 +1,4 @@
+import { sampleProfilePictures } from "./profile-pictures";
 import type { AgentsSnapshot } from "../agents/client";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
 import type {
@@ -260,7 +261,8 @@ export function createPreviewProject(kind: "empty" | "full"): PreviewProject {
           profile: {
             revision: index === 0 ? 4 : 1,
             name,
-            pictureRef: null,
+            pictureRef:
+              parent === null ? `preview:profile-${groupIndex}` : null,
             personality:
               parent === null
                 ? [
@@ -843,6 +845,7 @@ export function createPreviewProject(kind: "empty" | "full"): PreviewProject {
     histories,
     access,
     extras: {
+      ...(populated ? sampleProfilePictures() : {}),
       voiceArtifacts,
       schedules,
       templates: {
