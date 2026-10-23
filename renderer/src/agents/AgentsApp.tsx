@@ -1,3 +1,4 @@
+import { Table, TableCaption, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { Toaster } from "@/components/ui/sonner";
 import { SettingsToast } from "../manager/settings/SettingsToast";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -393,22 +394,29 @@ export function AgentsApp({
         {
           id: "crew-sessions",
           label: "Sessions",
-          description: "Manage the selected agent session for this project.",
+          description: "Manage sessions for your team members and worker agents.",
           icon: Radio,
-          render: () =>
-            primary ? (
-              <AgentSessionPanel
-                agent={primary}
-                skills={snapshot.skills}
-                pending={pending}
-                act={act}
-                client={client}
-              />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Choose an agent in Agents settings.
-              </p>
-            ),
+          render: () => (
+            <div className="space-y-5">
+              <div className="overflow-x-auto rounded-lg border">
+                <Table className="w-full text-left text-sm">
+                  <TableCaption className="sr-only">All active agents and their sessions</TableCaption>
+                  <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground"><TableRow>
+                    <TableHead className="px-4 py-3 font-medium">Agent</TableHead>
+                    <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+                    <TableHead className="px-4 py-3 font-medium"><span className="sr-only">Session controls</span></TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody className="divide-y">
+                    {snapshot.agents.filter((agent) => !agent.archivedAt).map((agent) => (
+                      <AgentSessionPanel key={agent.id} agent={agent} skills={snapshot.skills} pending={pending} act={act} client={client} />
+                    ))}
+                    {!snapshot.agents.some((agent) => !agent.archivedAt) && <TableRow><TableCell colSpan={3} className="px-4 py-8 text-muted-foreground">No active agents. Create or restore an agent in Settings.</TableCell></TableRow>}
+                  </TableBody>
+                </Table>
+              </div>
+              <p className="text-xs leading-5 text-muted-foreground">Stop preserves the chat, notes and resources. Start never connects voice or creates an assignment.</p>
+            </div>
+          ),
         },
         ...settingsPanels.map((panel) => ({
           ...panel,
@@ -1038,17 +1046,14 @@ function AgentSessionPanel({
     session.appliedConfiguration.profileRevision !== agent.profile.revision ||
     !sameSkills(agent, skills);
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-3">
-        <AgentPicture
-          imageRef={agent.profile.pictureRef}
-          client={client}
-          className="size-10"
-        />
-        <h2 className="text-base font-semibold">{agent.profile.name}</h2>
-      </div>
-      <Separator />
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <TableRow>
+      <TableCell className="px-4 py-3 align-top">
+        <div className="flex items-center gap-3">
+          <AgentPicture imageRef={agent.profile.pictureRef} client={client} className="size-10 shrink-0" />
+          <div><p className="font-medium">{agent.profile.name}</p><p className="mt-1 text-xs text-muted-foreground">{agent.reportsTo.type === "user" ? "Team member" : "Worker agent"}</p></div>
+        </div>
+      </TableCell>
+      <TableCell className="px-4 py-3 align-top whitespace-normal"><div className="max-w-md space-y-2">
         {session.instructionPreparation?.state === "compacting" ? (
           <Badge variant="secondary">Applying instructions</Badge>
         ) : ["started", "stopped"].includes(session.observedState) ? (
@@ -1061,53 +1066,6 @@ function AgentSessionPanel({
             {session.observedState}
           </Badge>
         )}
-        <div className="flex flex-wrap gap-2">
-          {["unknown", "error"].includes(session.observedState) &&
-            client.recoverSession && (
-              <Button
-                variant="outline"
-                disabled={busy || Boolean(agent.archivedAt)}
-                onClick={() =>
-                  void act(`lifecycle-${agent.id}`, () =>
-                    client.recoverSession!(agent.id),
-                  )
-                }
-              >
-                Recover session
-              </Button>
-            )}
-          {(["start", "stop", "restart"] as const).map((action) => (
-            <Button
-              key={action}
-              variant="outline"
-              disabled={
-                busy ||
-                Boolean(agent.archivedAt) ||
-                (action === "start" && session.observedState === "started") ||
-                (action === "stop" && session.observedState === "stopped")
-              }
-              onClick={() =>
-                void act(`lifecycle-${agent.id}`, () =>
-                  client.lifecycle(agent.id, action),
-                )
-              }
-            >
-              {action === "start" ? (
-                <Play />
-              ) : action === "stop" ? (
-                <Square />
-              ) : (
-                <RotateCw />
-              )}
-              {action[0].toUpperCase() + action.slice(1)}
-            </Button>
-          ))}
-        </div>
-      </div>
-      <p className="text-xs leading-5 text-muted-foreground">
-        Stop preserves the chat, notes and resources. Start never connects voice
-        or creates an assignment.
-      </p>
       {["unknown", "error"].includes(session.observedState) && (
         <p className="text-xs leading-5 text-muted-foreground">
           Recovery checks that the previous native process exited and its work
@@ -1143,7 +1101,56 @@ function AgentSessionPanel({
           {session.lastError.message}
         </p>
       )}
-    </div>
+      </div></TableCell>
+      <TableCell className="px-4 py-3 align-top">
+        <div role="group" aria-label={`Session controls for ${agent.profile.name}`}>
+        <div className="flex flex-wrap gap-2">
+          {["unknown", "error"].includes(session.observedState) &&
+            client.recoverSession && (
+              <Button
+                variant="outline"
+                aria-label={`Recover session for ${agent.profile.name}`}
+                disabled={busy || Boolean(agent.archivedAt)}
+                onClick={() =>
+                  void act(`lifecycle-${agent.id}`, () =>
+                    client.recoverSession!(agent.id),
+                  )
+                }
+              >
+                Recover session
+              </Button>
+            )}
+          {(["start", "stop", "restart"] as const).map((action) => (
+            <Button
+              key={action}
+              aria-label={`${action[0].toUpperCase() + action.slice(1)} session for ${agent.profile.name}`}
+              variant="outline"
+              disabled={
+                busy ||
+                Boolean(agent.archivedAt) ||
+                (action === "start" && session.observedState === "started") ||
+                (action === "stop" && session.observedState === "stopped")
+              }
+              onClick={() =>
+                void act(`lifecycle-${agent.id}`, () =>
+                  client.lifecycle(agent.id, action),
+                )
+              }
+            >
+              {action === "start" ? (
+                <Play />
+              ) : action === "stop" ? (
+                <Square />
+              ) : (
+                <RotateCw />
+              )}
+              {action[0].toUpperCase() + action.slice(1)}
+            </Button>
+          ))}
+        </div>
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 

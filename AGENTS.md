@@ -689,3 +689,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Agent templates has one heading. The header ellipsis offers Change default in a dialog with explicit save/cancel. Row menus include destructive Remove confirmation; removal preserves existing agents and atomically clears a removed default, using owner authorization and revision checks.
 
 - The agent editor is the visual reference for template editors. Reuse AgentPromptFields for Personality and Instructions so tooltip wording, textareas, writing guidance and disclosure styles stay aligned. Template save guidance must describe future agents, not restarting an existing chat.
+
+- Sessions lists all non-archived project agents, including team members and workers, rather than only the current contact. Keep each status, pending configuration notice, recovery path and lifecycle action scoped to the stable agent ID; opening Sessions starts no work.
