@@ -23,6 +23,9 @@ export interface BrowserState {
   canGoBack: boolean;
   canGoForward: boolean;
   recipientAgentId?: string | null;
+  ownerAgentId?: string | null;
+  activeTabId?: string | null;
+  tabs?: { id: string; title: string; url: string; loading: boolean }[];
   selecting?: boolean;
   error?: string | null;
   automation?: unknown;
@@ -32,6 +35,10 @@ export interface BrowserState {
 export interface BrowserRequest {
   projectId: string;
   action:
+    | "select_agent"
+    | "new_tab"
+    | "select_tab"
+    | "close_tab"
     | "state"
     | "open"
     | "close"
@@ -42,6 +49,8 @@ export interface BrowserRequest {
     | "bounds"
     | "selectElement"
     | "annotation";
+  agentId?: string;
+  tabId?: string;
   url?: string;
   bounds?: BrowserBounds;
   visible?: boolean;

@@ -1,20 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile, lstat } from "node:fs/promises";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 import type { BrowserWindow } from "electron";
 import type { Agent, CallerContext, JsonObject } from "../agents/contracts.mjs";
 import type { AgentToolExtension } from "../agents/session-host.mjs";
 import type { ProjectAuthorizationService } from "../access/authorization.mjs";
-import {
-  createProjectBrowser,
-  experimentURL,
-} from "../desktop/project-browser.mjs";
-import { pinnedBrowserCatalogue } from "./pinned-catalogue.mjs";
-import { createPreviewMcpClient } from "./mcp-client.mjs";
-import type { BrowserState, BrowserSelection } from "./contracts.mjs";
-
+import type { BrowserState } from "./contracts.mjs";
+import { createBrowserTab } from "./browser-tab.mjs";
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw Error("Invalid browser request.");
@@ -23,7 +13,7 @@ const object = (value: unknown): Record<string, unknown> => {
 const empty: BrowserState = {
   open: false,
   url: "",
-  title: "Project browser",
+  title: "New tab",
   loading: false,
   canGoBack: false,
   canGoForward: false,
@@ -37,34 +27,10 @@ const shape = (
   required,
   additionalProperties: false,
 });
-const selectionScript = `new Promise(resolve => {
-  globalThis.__crewBrowserCancel?.();
-  const overlay = document.createElement('div');
-  overlay.setAttribute('data-crew-preview-picker','');
-  overlay.style.cssText='position:fixed;inset:0;z-index:2147483647;cursor:crosshair;background:rgba(25,90,240,.035)';
-  document.documentElement.appendChild(overlay);
-  const cancel=()=>{overlay.remove();resolve(null);delete globalThis.__crewBrowserCancel;};
-  globalThis.__crewBrowserCancel=cancel;
-  overlay.addEventListener('click',event=>{
-    event.preventDefault();event.stopImmediatePropagation();overlay.remove();
-    const el=document.elementFromPoint(event.clientX,event.clientY);
-    if(!el){cancel();return;}
-    let cursor=el,parts=[];
-    for(let i=0;cursor&&i<6;i++,cursor=cursor.parentElement){
-      if(cursor.id){parts.unshift('#'+CSS.escape(cursor.id));break;}
-      const siblings=cursor.parentElement?Array.from(cursor.parentElement.children).filter(x=>x.tagName===cursor.tagName):[cursor];
-      parts.unshift(cursor.tagName.toLowerCase()+':nth-of-type('+(siblings.indexOf(cursor)+1)+')');
-    }
-    const r=el.getBoundingClientRect();
-    delete globalThis.__crewBrowserCancel;
-    resolve({url:location.href,title:document.title.slice(0,500),selector:parts.join(' > ').slice(0,2000),text:(el.innerText||el.textContent||'').slice(0,2000),rect:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)}});
-  },{once:true});
-  setTimeout(cancel,30000);
-})`;
-
-/** Desktop-owned browser boundary. No native credentials, prompts or agent launching.
- * Main authenticates owner IPC; agent tools additionally require current access and
- * the exact owner-selected logical session on every discovery and dispatch. */
+/** Stable agent ownership is independent of native session IDs and owner UI focus.
+ * Each tab retains its own restricted CDP facade. Tabs share a private persistent session
+ * only within their stable agent; no personal browser or other agent cookies.
+ */
 export function createUnifiedProjectBrowser(options: {
   projectId: string;
   stateDirectory: string;
@@ -77,270 +43,175 @@ export function createUnifiedProjectBrowser(options: {
     state: BrowserState;
   }): void;
 }) {
-  let browser: ReturnType<typeof createProjectBrowser> | undefined;
-  let client: Awaited<ReturnType<typeof createPreviewMcpClient>> | undefined;
-  let catalogue: Awaited<ReturnType<NonNullable<typeof client>["list"]>> = [];
-  let binding: CallerContext | null = null;
-  let initialOrigin = "";
-  let lastUrl = "";
-  let selection: BrowserSelection | null = null;
-  let selecting = false;
-  let captureGeneration = 0;
-  let error: string | null = null;
-  let changing = false;
-  let work = Promise.resolve();
+  type Tab = { id: string; service: ReturnType<typeof createBrowserTab> };
+  type Workspace = { tabs: Map<string, Tab>; active: string | null };
+  const workspaces = new Map<string, Workspace>();
+  let selected: string | null = null;
+  let queue = Promise.resolve();
   const subscribers = new Set<() => void>();
-  const notifyTools = () => {
-    for (const listener of subscribers) listener();
-  };
-  const validBinding = (caller: CallerContext) => {
-    if (
-      changing ||
-      !binding ||
-      caller.projectId !== options.projectId ||
-      caller.agentId !== binding.agentId ||
-      caller.sessionId !== binding.sessionId
-    )
-      return false;
-    const agent = options.getAgent(caller.agentId);
-    return (
-      !!agent &&
-      !agent.archivedAt &&
-      agent.runtime.session.sessionId === caller.sessionId &&
-      agent.runtime.session.desiredState === "started" &&
-      agent.runtime.session.observedState === "started"
+  let bounds: Record<string, unknown> | null = null;
+  const serial = <T,>(operation: () => Promise<T>) => {
+    const result = queue.then(operation, operation);
+    queue = result.then(
+      () => {},
+      () => {},
     );
+    return result;
   };
-  const state = (): BrowserState => ({
-    ...(browser?.state() ?? { ...empty, url: lastUrl }),
-    recipientAgentId: binding && validBinding(binding) ? binding.agentId : null,
-    selection,
-    selecting,
-    error: error ?? browser?.state().error ?? null,
-    automation: client?.connected()
-      ? "Scoped browser tools connected; browser.control permission required"
-      : "Browser tools disconnected",
-  });
+  function workspace(id: string) {
+    const agent = options.getAgent(id);
+    if (!agent || agent.archivedAt) throw Error("Choose an available agent.");
+    let value = workspaces.get(id);
+    if (!value) {
+      value = { tabs: new Map(), active: null };
+      workspaces.set(id, value);
+    }
+    return value;
+  }
+  function stateFor(id: string | null): BrowserState {
+    const ws = id ? workspaces.get(id) : undefined;
+    const tab = ws?.active ? ws.tabs.get(ws.active) : undefined;
+    return {
+      ...(tab?.service.state() ?? empty),
+      ownerAgentId: id,
+      recipientAgentId: id,
+      activeTabId: tab?.id ?? null,
+      tabs: [...(ws?.tabs.values() ?? [])].map((t) => {
+        const value = t.service.state();
+        return {
+          id: t.id,
+          title: value.url ? value.title : "New tab",
+          url: value.url,
+          loading: value.loading,
+        };
+      }),
+    };
+  }
+  const state = () => stateFor(selected);
   const publish = () =>
     options.publish({
       type: "browser",
       projectId: options.projectId,
       state: state(),
     });
-  const changed = () => {
-    const url = browser?.state().url;
-    if (selection && url && selection.url !== url) selection = null;
-    publish();
+  const notify = () => {
+    for (const listener of subscribers) listener();
   };
-  const serial = <T,>(operation: () => Promise<T>) => {
-    const result = work.then(operation, operation);
-    work = result.then(
-      () => {},
-      () => {},
-    );
-    return result;
-  };
-  async function cancelSelection() {
-    captureGeneration++;
-    selecting = false;
-    await browser
-      ?.contents()
-      ?.executeJavaScriptInIsolatedWorld(999, [
-        { code: "globalThis.__crewBrowserCancel?.()" },
-      ])
-      .catch(() => {});
-  }
-  async function close() {
-    changing = true;
-    binding = null;
-    notifyTools();
-    await cancelSelection();
-    // Never drop a client reference when its owned tool process has unknown exit.
-    if (client) {
-      await client.close();
-      client = undefined;
-    }
-    catalogue = [];
-    if (browser) {
-      await browser.close();
-      browser = undefined;
-    }
-    selection = null;
-    changing = false;
-    publish();
-  }
-  function bind(agentId: unknown) {
-    binding = null;
-    if (typeof agentId === "string") {
-      const agent = options.getAgent(agentId);
-      if (!agent || agent.archivedAt) throw Error("Choose an available agent.");
-      const session = agent.runtime.session;
-      if (
-        session.sessionId &&
-        session.desiredState === "started" &&
-        session.observedState === "started"
-      )
-        binding = {
+  async function hide(tab: Tab | undefined) {
+    if (tab)
+      await tab.service
+        .request({
           projectId: options.projectId,
-          agentId,
-          sessionId: session.sessionId,
-        };
-      else
-        error =
-          "Preview opened for you. Start the selected agent, then explicitly give it browser control.";
-    }
-    notifyTools();
+          action: "bounds",
+          visible: false,
+        })
+        .catch(() => {});
   }
-  async function open(url: string, agentId: unknown) {
-    const parsed = experimentURL(url, options.getHostOrigin());
-    const window = options.getWindow();
-    if (!window || window.isDestroyed())
-      throw Error("Open the Crew window before its browser.");
-    if (browser && parsed.origin !== initialOrigin) await close();
-    if (!browser) {
-      initialOrigin = parsed.origin;
-      lastUrl = parsed.href;
-      browser = createProjectBrowser(
-        window,
-        parsed.href,
-        options.getHostOrigin,
-        changed,
-      );
-      try {
-        await browser.request({ action: "open" });
-      } catch (cause) {
-        await browser.close();
-        browser = undefined;
-        throw cause;
-      }
-      const toolsHome = join(options.stateDirectory, "browser-tools");
-      await mkdir(toolsHome, { recursive: true, mode: 0o700 });
+  async function selectAgent(id: string) {
+    workspace(id);
+    if (selected !== id) {
+      const prior = selected ? workspaces.get(selected) : undefined;
+      await hide(prior?.active ? prior.tabs.get(prior.active) : undefined);
+      selected = id;
+      const ws = workspace(id),
+        tab = ws.active ? ws.tabs.get(ws.active) : undefined;
+      if (tab?.service.state().open && bounds)
+        await tab.service.request({
+          ...bounds,
+          projectId: options.projectId,
+          action: "bounds",
+        });
     }
-    if (!client?.connected()) {
-      if (client) {
-        await client.close();
-        client = undefined;
-      }
-      const toolsHome = join(options.stateDirectory, "browser-tools");
-      await mkdir(toolsHome, { recursive: true, mode: 0o700 });
-      client = await createPreviewMcpClient({
-        onDisconnect: () => {
-          publish();
-          notifyTools();
-        },
-        endpoint: browser.endpoint()!,
-        command: process.execPath,
-        args: [
-          fileURLToPath(
-            new URL(
-              "./bin/chrome-devtools-mcp.js",
-              import.meta.resolve("chrome-devtools-mcp"),
-            ),
-          ),
-        ],
-        cwd: toolsHome,
-        env: {
-          HOME: toolsHome,
-          PATH: "/usr/bin:/bin",
-          TMPDIR: tmpdir(),
-          ELECTRON_RUN_AS_NODE: "1",
-          CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS: "1",
-        },
+  }
+  async function selectTab(id: string, tabId: string) {
+    const ws = workspace(id),
+      tab = ws.tabs.get(tabId);
+    if (!tab) throw Error("This tab does not belong to this agent.");
+    await hide(ws.active ? ws.tabs.get(ws.active) : undefined);
+    ws.active = tab.id;
+    if (selected === id && bounds && tab.service.state().open)
+      await tab.service.request({
+        ...bounds,
+        projectId: options.projectId,
+        action: "bounds",
       });
-      catalogue = await client.list();
+  }
+  async function newTab(id: string, url?: string) {
+    const ws = workspace(id),
+      tabId = randomUUID();
+    const tab: Tab = {
+      id: tabId,
+      service: createBrowserTab({
+        ...options,
+        ownerAgentId: id,
+        tabId,
+        publish: () => publish(),
+      }),
+    };
+    ws.tabs.set(tabId, tab);
+    try {
+      if (url)
+        await tab.service.request({
+          projectId: options.projectId,
+          action: "open",
+          url,
+          recipientAgentId: id,
+        });
+      await selectTab(id, tabId);
+    } catch (cause) {
+      ws.tabs.delete(tabId);
+      await tab.service.close();
+      throw cause;
     }
-    window.once("closed", () => {
-      void serial(close).catch(() => {});
-    });
-    bind(agentId);
-    publish();
+    notify();
+    return tab;
   }
-  async function annotation(input: Record<string, unknown>) {
-    const contents = browser?.contents();
-    if (!contents || contents.isDestroyed() || contents.isLoading())
-      throw Error("Wait for the preview page to finish loading.");
-    if (
-      typeof input.recipientAgentId !== "string" ||
-      !options.getAgent(input.recipientAgentId) ||
-      options.getAgent(input.recipientAgentId)?.archivedAt
-    )
-      throw Error("The annotation recipient is unavailable.");
-    if (
-      typeof input.comment !== "string" ||
-      !input.comment.trim() ||
-      input.comment.length > 8000
-    )
-      throw Error("Enter feedback of at most 8,000 characters.");
-    if (input.annotationScope !== "page" && input.annotationScope !== "element")
-      throw Error("Choose page or element feedback.");
-    const picked = input.annotationScope === "element" ? selection : null;
-    if (
-      input.annotationScope === "element" &&
-      (!picked || picked.url !== contents.getURL() || selecting)
-    )
-      throw Error("Select an element on the current page again.");
-    const capturedAt = new Date().toISOString();
-    const capturedUrl = contents.getURL();
-    let image = await contents.capturePage();
-    const viewport = image.getSize();
-    if (viewport.width > 1280) image = image.resize({ width: 1280 });
-    const png = image.toPNG();
-    if (
-      !viewport.width ||
-      !viewport.height ||
-      !png.length ||
-      png.length > 5 * 1024 * 1024
-    )
-      throw Error(
-        "The preview capture is empty or too large. Keep the browser visible and retry.",
-      );
-    if (contents.isLoading() || contents.getURL() !== capturedUrl)
-      throw Error(
-        "The page changed during capture. Review it and send the annotation again.",
-      );
-    const id = randomUUID(),
-      directory = join(options.stateDirectory, "browser-artifacts");
-    await mkdir(directory, { recursive: true, mode: 0o700 });
-    const meta = {
-      projectId: options.projectId,
-      recipientAgentId: input.recipientAgentId,
-      url: contents.getURL(),
-      title: contents.getTitle(),
-      capturedAt,
-      selection: picked,
-      viewport,
-      imageSize: image.getSize(),
-    };
-    await writeFile(join(directory, id + ".png"), png, {
-      flag: "wx",
-      mode: 0o600,
-    });
-    await writeFile(join(directory, id + ".json"), JSON.stringify(meta), {
-      flag: "wx",
-      mode: 0o600,
-    });
-    const screenshotRef = "crew-browser-shot:" + id;
-    return {
-      ...state(),
-      annotation: {
-        content: [
-          {
-            type: "text" as const,
-            text: `Browser feedback from the owner:\n${input.comment.trim()}\nPage: ${meta.title}\nURL: ${meta.url}\nCaptured: ${capturedAt}\n${picked ? `Element: ${picked.selector}\nText: ${picked.text}\nBounds: ${JSON.stringify(picked.rect)}` : "Scope: current page"}\nScreenshot reference: ${screenshotRef}. If browser tools are authorized, use browser_annotation_image with this reference to inspect this exact captured image.`,
-          },
-          {
-            type: "data" as const,
-            value: JSON.parse(
-              JSON.stringify({ browserAnnotation: { ...meta, screenshotRef } }),
-            ) as JsonObject,
-          },
-        ],
-      },
-    };
+  async function closeTab(id: string, tabId: string) {
+    const ws = workspaces.get(id),
+      tab = ws?.tabs.get(tabId);
+    if (!ws || !tab) throw Error("This tab does not belong to this agent.");
+    await tab.service.close();
+    ws.tabs.delete(tabId);
+    if (ws.active === tabId) {
+      ws.active = null;
+      const next = ws.tabs.keys().next().value;
+      if (next) {
+        ws.active = next;
+        const tab = ws.tabs.get(next)!;
+        if (selected === id && bounds && tab.service.state().open)
+          await tab.service.request({
+            ...bounds,
+            projectId: options.projectId,
+            action: "bounds",
+          });
+      }
+    }
+    notify();
   }
-  const service = {
+  async function closeAgent(id: string) {
+    const ws = workspaces.get(id);
+    if (!ws) return;
+    for (const tab of [...ws.tabs.values()]) await closeTab(id, tab.id);
+  }
+  function currentCaller(caller: CallerContext) {
+    const agent = options.getAgent(caller.agentId);
+    if (
+      caller.projectId !== options.projectId ||
+      !agent ||
+      agent.archivedAt ||
+      agent.runtime.session.sessionId !== caller.sessionId ||
+      agent.runtime.session.desiredState !== "started" ||
+      agent.runtime.session.observedState !== "started"
+    )
+      throw Error("Browser control requires the exact current agent session.");
+  }
+  return {
     state,
-    close: () => serial(close),
+    close: () =>
+      serial(async () => {
+        for (const id of workspaces.keys()) await closeAgent(id);
+        publish();
+      }),
     request(input: unknown): Promise<BrowserState> {
       const value = object(input);
       if (value.projectId !== options.projectId)
@@ -349,66 +220,72 @@ export function createUnifiedProjectBrowser(options: {
         );
       if (value.action === "state") return Promise.resolve(state());
       return serial(async () => {
-        error = null;
-        if (value.action === "close") await close();
-        else if (value.action === "open")
-          await open(
-            typeof value.url === "string" && value.url
-              ? value.url
-              : lastUrl || "http://127.0.0.1:3000",
-            value.recipientAgentId,
-          );
-        else if (value.action === "annotation") return annotation(value);
-        else if (value.action === "selectElement") {
-          const contents = browser?.contents();
-          if (!contents || contents.isDestroyed())
-            throw Error("Open the preview page first.");
-          await cancelSelection();
-          selection = null;
-          selecting = true;
-          const generation = captureGeneration;
-          void contents
-            .executeJavaScriptInIsolatedWorld(999, [{ code: selectionScript }])
-            .then((result: unknown) => {
-              if (generation !== captureGeneration) return;
-              selecting = false;
-              if (result)
-                selection = {
-                  ...object(result),
-                  capturedAt: new Date().toISOString(),
-                } as unknown as BrowserSelection;
+        const id =
+          typeof value.agentId === "string"
+            ? value.agentId
+            : value.action === "open" &&
+                typeof value.recipientAgentId === "string"
+              ? value.recipientAgentId
+              : selected;
+        if (
+          value.action === "bounds" &&
+          (!id ||
+            id !== selected ||
+            (value.tabId && value.tabId !== workspaces.get(id)?.active))
+        )
+          return state();
+        if (!id) throw Error("Choose the agent whose browser to open.");
+        if (value.action === "select_agent") await selectAgent(id);
+        else {
+          if (selected !== id) await selectAgent(id);
+          const ws = workspace(id);
+          if (value.action === "close") await closeAgent(id);
+          else if (value.action === "new_tab")
+            await newTab(
+              id,
+              typeof value.url === "string" && value.url
+                ? value.url
+                : undefined,
+            );
+          else if (value.action === "select_tab")
+            await selectTab(id, String(value.tabId));
+          else if (value.action === "close_tab")
+            await closeTab(id, String(value.tabId ?? ws.active));
+          else {
+            let tab = ws.active ? ws.tabs.get(ws.active) : undefined;
+            if (value.tabId && value.tabId !== ws.active)
+              throw Error("Select this agent's tab before controlling it.");
+            if (value.action === "bounds") bounds = value;
+            if (!tab && value.action === "open") tab = await newTab(id);
+            if (!tab) {
+              if (value.action === "bounds") return state();
+              throw Error("Open an agent browser tab first.");
+            }
+            if (value.action === "bounds" && !tab.service.state().open)
+              return state();
+            if (value.action === "open" && !value.url) {
               publish();
-            })
-            .catch(() => {
-              if (generation === captureGeneration) {
-                selecting = false;
-                error = "Selection ended. Select an element again.";
-                publish();
-              }
+              return state();
+            }
+            const action =
+              value.action === "navigate" && !tab.service.state().open
+                ? "open"
+                : value.action;
+            const result = await tab.service.request({
+              ...value,
+              action,
+              recipientAgentId:
+                value.action === "annotation" ? value.recipientAgentId : id,
             });
-        } else {
-          if (!browser) throw Error("Open the project browser first.");
-          if (value.action === "bounds" && value.visible === false)
-            await browser.request({
-              action: "bounds",
-              bounds: { x: 0, y: 0, width: 0, height: 0 },
-            });
-          else if (
-            value.action === "navigate" &&
-            typeof value.url === "string" &&
-            experimentURL(value.url, options.getHostOrigin()).origin !==
-              initialOrigin
-          )
-            await open(value.url, binding?.agentId);
-          else await browser.request(value);
+            publish();
+            return {
+              ...state(),
+              ...(result.annotation ? { annotation: result.annotation } : {}),
+            };
+          }
         }
         publish();
         return state();
-      }).catch((cause) => {
-        error =
-          cause instanceof Error ? cause.message : "Browser action failed.";
-        publish();
-        throw Error(error);
       });
     },
     tools(context: {
@@ -419,6 +296,13 @@ export function createUnifiedProjectBrowser(options: {
         operation: () => Promise<T>,
       ): Promise<T>;
     }): AgentToolExtension {
+      // Schema discovery is independent of whether a page has been opened.
+      const schema = createBrowserTab({
+        ...options,
+        ownerAgentId: "",
+        tabId: "",
+        publish: () => {},
+      }).tools(context);
       return {
         subscribe(listener) {
           subscribers.add(listener);
@@ -428,91 +312,81 @@ export function createUnifiedProjectBrowser(options: {
           if (!(await context.authorization.canDiscoverBrowser(caller)))
             return [];
           return [
+            ...(await schema.list(caller)),
             {
-              name: "browser_status",
+              name: "browser_tabs",
               description:
-                "Read the current owner-shared project browser target. Preview tools only control this visible page.",
+                "List only your own browser tabs and active tab. Browser list_pages describes only the active tab's scoped CDP target.",
               inputSchema: shape({}),
             },
             {
-              name: "browser_annotation_image",
+              name: "browser_new_tab",
               description:
-                "Inspect the exact historical screenshot reference supplied in owner browser feedback for this agent.",
-              inputSchema: shape({
-                screenshotRef: {
-                  type: "string",
-                  pattern: "^crew-browser-shot:[0-9a-f-]{36}$",
-                },
-              }),
+                "Create and select your own tab; URL must be an explicit local preview URL. Omit URL for a blank tab.",
+              inputSchema: shape({ url: { type: "string" } }, []),
             },
-            ...pinnedBrowserCatalogue.map((tool) => ({
-              ...tool,
-              name: "browser_" + tool.name,
+            {
+              name: "browser_select_tab",
               description:
-                tool.description ?? "Control the owner-shared preview.",
-            })),
+                "Select one of your own tabs using its stable tab ID.",
+              inputSchema: shape({ tabId: { type: "string" } }),
+            },
+            {
+              name: "browser_close_tab",
+              description:
+                "Close one of your own tabs using its stable tab ID.",
+              inputSchema: shape({ tabId: { type: "string" } }),
+            },
           ];
         },
-        async call(caller, name, args) {
-          if (!validBinding(caller))
-            throw Error(
-              "This browser is not shared with your current agent session. Ask the owner to bind it.",
-            );
-          return context.runAuthorized(caller, "browser.control", async () => {
-            if (!validBinding(caller))
-              throw Error("Browser binding changed before dispatch.");
-            if (name === "browser_status") return state();
-            if (name === "browser_annotation_image") {
-              const ref = args.screenshotRef;
-              if (
-                typeof ref !== "string" ||
-                !/^crew-browser-shot:[0-9a-f-]{36}$/.test(ref)
-              )
-                throw Error("Invalid screenshot reference.");
-              const id = ref.slice("crew-browser-shot:".length),
-                directory = join(options.stateDirectory, "browser-artifacts");
-              const meta = object(
-                JSON.parse(
-                  await readFile(join(directory, id + ".json"), "utf8"),
-                ),
-              );
-              if (
-                meta.projectId !== caller.projectId ||
-                meta.recipientAgentId !== caller.agentId
-              )
-                throw Error("This screenshot belongs to another recipient.");
-              const file = join(directory, id + ".png"),
-                stat = await lstat(file);
-              if (
-                !stat.isFile() ||
-                stat.isSymbolicLink() ||
-                stat.size > 5 * 1024 * 1024
-              )
-                throw Error("Screenshot unavailable.");
-              return {
-                crewMcpResult: {
-                  content: [
-                    {
-                      type: "image",
-                      mimeType: "image/png",
-                      data: (await readFile(file)).toString("base64"),
-                    },
-                    { type: "text", text: JSON.stringify(meta) },
-                  ],
-                },
-              };
-            }
-            if (
-              !name.startsWith("browser_") ||
-              !client ||
-              !catalogue.some((t) => "browser_" + t.name === name)
-            )
-              throw Error("Unknown browser tool.");
-            return { crewMcpResult: await client.call(name.slice(8), args) };
-          });
+        call(caller, name, args) {
+          return serial(() =>
+            context.runAuthorized(caller, "browser.control", async () => {
+              currentCaller(caller);
+              const ws = workspace(caller.agentId);
+              if (name === "browser_tabs" || name === "browser_status")
+                return stateFor(caller.agentId);
+              if (name === "browser_new_tab") {
+                if (args.url !== undefined && typeof args.url !== "string")
+                  throw Error("Invalid tab URL.");
+                await newTab(caller.agentId, args.url as string | undefined);
+              } else if (name === "browser_select_tab")
+                await selectTab(caller.agentId, String(args.tabId));
+              else if (name === "browser_close_tab")
+                await closeTab(caller.agentId, String(args.tabId));
+              else {
+                const tab = ws.active ? ws.tabs.get(ws.active) : undefined;
+                if (!tab)
+                  throw Error(
+                    "Create your own browser tab first with browser_new_tab.",
+                  );
+                if (
+                  name === "browser_navigate_page" &&
+                  typeof args.url === "string"
+                ) {
+                  await tab.service.request({
+                    projectId: options.projectId,
+                    action: tab.service.state().open ? "navigate" : "open",
+                    url: args.url,
+                    recipientAgentId: caller.agentId,
+                  });
+                  publish();
+                  return stateFor(caller.agentId);
+                }
+                return tab.service
+                  .tools({
+                    ...context,
+                    runAuthorized: async (_caller, _action, operation) =>
+                      operation(),
+                  })
+                  .call(caller, name, args);
+              }
+              publish();
+              return stateFor(caller.agentId);
+            }),
+          );
         },
       };
     },
   };
-  return service;
 }

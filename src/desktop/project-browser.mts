@@ -1,6 +1,7 @@
 // Self-contained GH-56 prototype. No manager, worker or Codex imports/configuration.
 import { WebContentsView, session, type BrowserWindow } from "electron";
 import { randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createBrowserCdp } from "./browser-cdp.mjs";
 import { record } from "./validation.mjs";
 
@@ -11,16 +12,65 @@ import {
   isLocalPreviewRequest,
 } from "../browser/local-origin.mjs";
 
+type PreviewSession = ReturnType<typeof session.fromPartition>;
+type PreviewTarget = {
+  origin: string;
+  hostOrigin(): string | undefined;
+  verifyHost(): Promise<unknown>;
+};
+const sessionTargets = new WeakMap<
+  PreviewSession,
+  Map<number, PreviewTarget>
+>();
+function targetsFor(partition: PreviewSession) {
+  let targets = sessionTargets.get(partition);
+  if (targets) return targets;
+  targets = new Map<number, PreviewTarget>();
+  sessionTargets.set(partition, targets);
+  partition.setPermissionRequestHandler((_contents, _permission, callback) =>
+    callback(false),
+  );
+  partition.setPermissionCheckHandler(() => false);
+  partition.on("will-download", (event) => event.preventDefault());
+  const current = targets;
+  // A session is shared by one agent's tabs. Route each request through its
+  // own contents policy; registering another tab must not replace that policy.
+  partition.webRequest.onBeforeRequest((details, callback) => {
+    const target = current.get(details.webContentsId ?? -1);
+    if (
+      !target ||
+      !isLocalPreviewRequest(
+        details.url,
+        target.origin,
+        target.hostOrigin(),
+        details.resourceType,
+      )
+    ) {
+      callback({ cancel: true });
+      return;
+    }
+    void target.verifyHost().then(
+      () => callback({ cancel: false }),
+      () => callback({ cancel: true }),
+    );
+  });
+  return targets;
+}
+
 export function createProjectBrowser(
   window: BrowserWindow,
   initialURL: string,
   hostOrigin: () => string | undefined,
   changed?: () => void,
+  options: { partitionKey?: string } = {},
 ) {
   const initial = experimentURL(initialURL, hostOrigin());
   const partition = session.fromPartition(
-    `crew-browser-experiment-${randomUUID()}`,
+    options.partitionKey
+      ? `persist:crew-agent-browser-${createHash("sha256").update(options.partitionKey).digest("hex")}`
+      : `crew-browser-experiment-${randomUUID()}`,
   );
+  const targets = targetsFor(partition);
   let view: WebContentsView | undefined;
   let cdp: Awaited<ReturnType<typeof createBrowserCdp>> | undefined;
   let connected = false,
@@ -36,11 +86,6 @@ export function createProjectBrowser(
       return false;
     }
   };
-  partition.setPermissionRequestHandler((_contents, _permission, callback) =>
-    callback(false),
-  );
-  partition.setPermissionCheckHandler(() => false);
-  partition.on("will-download", (event) => event.preventDefault());
   // Restrict the whole preview session, including redirects and subresources.
   const verifyHost = () =>
     requireLoopbackResolution(initial.hostname, (name) =>
@@ -50,23 +95,6 @@ export function createProjectBrowser(
         secureDnsPolicy: "disable",
       }),
     );
-  partition.webRequest.onBeforeRequest((details, callback) => {
-    if (
-      !isLocalPreviewRequest(
-        details.url,
-        initial.origin,
-        hostOrigin(),
-        details.resourceType,
-      )
-    ) {
-      callback({ cancel: true });
-      return;
-    }
-    void verifyHost().then(
-      () => callback({ cancel: false }),
-      () => callback({ cancel: true }),
-    );
-  });
   const state = () => {
     const contents = view?.webContents;
     return {
@@ -94,7 +122,7 @@ export function createProjectBrowser(
     };
   };
   const publish = () => {
-    if (!window.isDestroyed())
+    if (!options.partitionKey && !window.isDestroyed())
       window.webContents.send("crew:browser:state", state());
     changed?.();
   };
@@ -118,9 +146,17 @@ export function createProjectBrowser(
       },
     });
     view = next;
-    next.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    next.setBounds({ x: 0, y: 0, width: 1280, height: 800 });
+    next.setVisible(false);
     window.contentView.addChildView(next);
     const contents = next.webContents;
+    targets.set(contents.id, {
+      origin: initial.origin,
+      hostOrigin,
+      verifyHost,
+    });
+    contents.once("destroyed", () => targets.delete(contents.id));
+    contents.setBackgroundThrottling(false);
     contents.setWindowOpenHandler(() => ({ action: "deny" }));
     contents.on("will-attach-webview", (event) => event.preventDefault());
     contents.on("will-navigate", (event, url) => {
@@ -181,6 +217,7 @@ export function createProjectBrowser(
       if (view) {
         const prior = view;
         view = undefined;
+        targets.delete(prior.webContents.id);
         if (!window.isDestroyed()) window.contentView.removeChildView(prior);
         if (!prior.webContents.isDestroyed()) prior.webContents.close();
       }
@@ -230,6 +267,10 @@ export function createProjectBrowser(
           )
             throw Error("Invalid browser bounds.");
           const [width, height] = window.getContentSize();
+          if (value.visible === false || b.width === 0 || b.height === 0) {
+            view?.setVisible(false);
+            return state();
+          }
           const x = Math.min(b.x as number, width),
             y = Math.min(b.y as number, height);
           view?.setBounds({
@@ -238,6 +279,7 @@ export function createProjectBrowser(
             width: Math.min(b.width as number, width - x),
             height: Math.min(b.height as number, height - y),
           });
+          view?.setVisible(true);
         } else if (value.action === "navigate") {
           if (
             typeof value.url !== "string" ||
