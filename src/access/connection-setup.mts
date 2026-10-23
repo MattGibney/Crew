@@ -73,6 +73,7 @@ const view = (record: ConnectionSetupRecord): OwnerConnectionVerification => {
     expectedRevision: _revision,
     credentialRevision: _credential,
     inputFingerprint: _input,
+    credentialInputFingerprint: _credentialInput,
     saveFingerprint: _save,
     ...safe
   } = record;
@@ -236,17 +237,19 @@ export class OwnerConnectionSetupService {
               prior.connection.authentication.method !== "oauth"
             )
               throw new Error("Connection credential is unavailable.");
-            const same = await this.options.vault.withCredential(
-              prior.connection.authentication.credentialRef,
-              (handle) =>
-                handle.use(async (bytes) =>
-                  Buffer.from(
-                    bytes.buffer,
-                    bytes.byteOffset,
-                    bytes.byteLength,
-                  ).equals(material),
-                ),
-            );
+            const same = prior.credentialInputFingerprint
+              ? prior.credentialInputFingerprint === hash(material)
+              : await this.options.vault.withCredential(
+                  prior.connection.authentication.credentialRef,
+                  (handle) =>
+                    handle.use(async (bytes) =>
+                      Buffer.from(
+                        bytes.buffer,
+                        bytes.byteOffset,
+                        bytes.byteLength,
+                      ).equals(material),
+                    ),
+                );
             if (!same)
               throw new Error(
                 "Discard the previous draft before verifying a different credential.",
@@ -353,6 +356,7 @@ export class OwnerConnectionSetupService {
           expectedRevision,
           credentialRevision,
           inputFingerprint,
+          ...(material ? { credentialInputFingerprint: hash(material) } : {}),
           saveFingerprint: null,
         };
         records.push(record);
@@ -373,13 +377,32 @@ export class OwnerConnectionSetupService {
     } catch {
       /* Provider detail and credentials never reach owner errors. */
     }
-    return this.options.store.transaction((state) => {
+    return this.options.store.transaction(async (state) => {
       const current = this.row(state, requestId);
       if (
         current.state !== "verifying" ||
         current.verificationId !== prepared.verificationId
       )
         return view(current);
+      if (result) {
+        if (
+          current.connection.authentication.method === "none" ||
+          result.credential.credentialRef !==
+            current.connection.authentication.credentialRef
+        )
+          result = null;
+        else {
+          const metadata = await this.options.vault.metadataForReference(
+            result.credential.credentialRef,
+          );
+          if (
+            metadata.deleted ||
+            metadata.revision !== result.credential.revision
+          )
+            result = null;
+          else current.credentialRevision = result.credential.revision;
+        }
+      }
       current.state =
         signal.aborted || result?.state === "cancelled"
           ? "cancelled"

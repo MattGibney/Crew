@@ -26,6 +26,8 @@ export interface ConnectionSetupRecord extends OwnerConnectionVerification {
   expectedRevision: number | null;
   credentialRevision: number;
   inputFingerprint: string;
+  /** Hash of original owner input, so a legitimate refresh does not break retry identity. */
+  credentialInputFingerprint?: string;
   saveFingerprint: string | null;
 }
 

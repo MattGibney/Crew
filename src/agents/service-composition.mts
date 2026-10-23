@@ -963,6 +963,8 @@ export async function startUnifiedApplication(
       vault,
       connections: draftConnections,
       registry,
+      prepareCredential: (connection, revision) =>
+        draftExecutor.prepareOwnerCredential(connection, revision),
       discoverCapabilities: (connection, options) =>
         draftExecutor.discoverCapabilities(connection, options),
     });

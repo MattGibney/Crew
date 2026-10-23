@@ -85,6 +85,17 @@ export class TrustedServiceExecutor implements ServiceExecutor {
       throw new Error("Unsupported executor configuration.");
     return config;
   }
+  /** Trusted owner setup only; does not discover tools or grant access. */
+  async prepareOwnerCredential(
+    connection: ServiceConnection,
+    expectedRevision: number,
+  ): Promise<number> {
+    return this.credentials.prepareOwnerCredential(
+      connection,
+      await this.configuration(connection),
+      expectedRevision,
+    );
+  }
   async listCapabilities(
     connection: ServiceConnection,
   ): Promise<ServiceCapability[]> {

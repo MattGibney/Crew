@@ -41,6 +41,10 @@ export class GatewayOwnerConnectionVerifier {
       vault: GatewayCredentialVault;
       connections: GatewayConnections;
       registry: TrustedGatewayRegistry;
+      prepareCredential?(
+        connection: ServiceConnection,
+        expectedRevision: number,
+      ): Promise<number>;
       discoverCapabilities(
         connection: ServiceConnection,
         options: { signal: AbortSignal },
@@ -83,6 +87,17 @@ export class GatewayOwnerConnectionVerifier {
         return unavailable(
           "Identity verification is unavailable for this connection.",
         );
+      if (
+        connection.authentication.method === "oauth" &&
+        this.options.prepareCredential
+      )
+        expectedCredential = {
+          ...expectedCredential,
+          revision: await this.options.prepareCredential(
+            connection,
+            expectedCredential.revision,
+          ),
+        };
       await this.assertCurrent(connection, expectedCredential);
       return await this.options.vault.withCredential(
         expectedCredential.credentialRef,

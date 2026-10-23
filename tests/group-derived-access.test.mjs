@@ -273,9 +273,12 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
     vault,
     connections: drafts,
     registry,
+    prepareCredential: (record, revision) =>
+      executor.prepareOwnerCredential(record, revision),
     discoverCapabilities: (record, options) =>
       executor.discoverCapabilities(record, options),
   });
+  let loseVerificationResult = false;
   setup = new OwnerConnectionSetupService({
     store,
     vault,
@@ -283,12 +286,18 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
     ownerUserId: "owner",
     setupChoices: async () => registry.setupChoices(),
     listAgents: async () => agents,
-    verify: (record, revision, signal) =>
-      verifier.verify(
+    verify: async (record, revision, signal) => {
+      const result = await verifier.verify(
         record,
         { credentialRef: record.authentication.credentialRef, revision },
         { signal },
-      ),
+      );
+      if (loseVerificationResult)
+        throw new Error(
+          "Synthetic lost owner-verification result after refresh.",
+        );
+      return result;
+    },
   });
   t.after(async () => {
     await setup.close();
@@ -296,12 +305,12 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
   });
   const bundle = JSON.stringify({
     access_token: "fixture-access",
-    expires_at: Date.now() + 3600000,
+    expires_at: 1,
     refresh_token: "fixture-refresh",
     client_id: "fixture-client",
     client_secret: "fixture-secret",
   });
-  const verified = await setup.verify({
+  const verificationInput = {
     requestId: "owner-request",
     setupChoiceId: "gmail",
     name: "PA mailbox",
@@ -309,7 +318,26 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
     credential: bundle,
     connectionId: null,
     expectedRevision: null,
-  });
+  };
+  loseVerificationResult = true;
+  assert.equal((await setup.verify(verificationInput)).state, "failed");
+  assert.equal(refreshCount, 1);
+  // The refresh committed, but setup still has revision 1 after the lost result.
+  assert.equal(
+    await store.transaction(
+      (state) => state.connectionSetups[0].credentialRevision,
+    ),
+    1,
+  );
+  loseVerificationResult = false;
+  const verified = await setup.verify(verificationInput);
+  assert.equal(refreshCount, 1); // Exact completed refresh receipt; no second refresh.
+  assert.equal(
+    await store.transaction(
+      (state) => state.connectionSetups[0].credentialRevision,
+    ),
+    2,
+  );
   assert.equal(verified.state, "verified");
   assert.equal(verified.identity.emailAddress, "fixture@example.com");
   assert.equal(verified.capabilities.length, 6);
@@ -454,7 +482,7 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
     ).state,
     "succeeded",
   );
-  assert.equal(refreshCount, 1);
+  assert.equal(refreshCount, 2);
   const normalized = normalizeArguments(
     gmailTools.find((tool) => tool.name === "gmail_message_send").inputSchema,
     { to: "recipient@example.com", subject: "Fixture", body: "Fixture only" },
@@ -542,7 +570,13 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
     setupChoiceId: "gmail-readonly",
     name: "Owner mailbox",
     accountKind: "personal",
-    credential: "fixture-readonly",
+    credential: JSON.stringify({
+      access_token: "fixture-near-expiry",
+      expires_at: Date.now() + 5000,
+      refresh_token: "fixture-refresh",
+      client_id: "fixture-client",
+      client_secret: "fixture-secret",
+    }),
     connectionId: null,
     expectedRevision: null,
   });
@@ -552,4 +586,49 @@ test("owner Gmail connection, vaulted refresh, group tools, broker draft/send an
     ["gmail_profile", "gmail_messages_list", "gmail_message_read"],
   );
   assert.equal(readOnlyVerification.accountKind, "personal");
+  assert.equal(refreshCount, 3); // Near-expiry setup refreshes before pinning too.
+  // An external vault edit after a lost result is never adopted as this refresh.
+  const conflictInput = {
+    ...verificationInput,
+    requestId: "external-edit",
+    name: "Conflict fixture",
+  };
+  loseVerificationResult = true;
+  assert.equal((await setup.verify(conflictInput)).state, "failed");
+  assert.equal(refreshCount, 4);
+  const conflicting = await store.transaction((state) =>
+    state.connectionSetups.find(
+      (row) => row.requestId === conflictInput.requestId,
+    ),
+  );
+  const conflictMetadata = await vault.metadataForReference(
+    conflicting.connection.authentication.credentialRef,
+  );
+  await vault.withReplacement(
+    conflicting.connection.id,
+    Buffer.from(
+      JSON.stringify({
+        access_token: "fixture-external-edit",
+        expires_at: Date.now() + 3600000,
+      }),
+    ),
+    (handle) =>
+      vault.replace(
+        conflicting.connection.id,
+        conflictMetadata.revision,
+        handle,
+      ),
+  );
+  loseVerificationResult = false;
+  assert.equal((await setup.verify(conflictInput)).state, "failed");
+  assert.equal(refreshCount, 4);
+  assert.equal(
+    await store.transaction(
+      (state) =>
+        state.connectionSetups.find(
+          (row) => row.requestId === conflictInput.requestId,
+        ).credentialRevision,
+    ),
+    1,
+  );
 });

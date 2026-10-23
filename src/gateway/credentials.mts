@@ -91,10 +91,32 @@ export class GatewayCredentials {
     );
   }
 
+  /** Owner verification prepares OAuth before pinning identity/catalogue evidence.
+   * Only an exact completed refresh receipt may advance the expected revision on
+   * a retry; reading arbitrary newest vault metadata never establishes causality. */
+  async prepareOwnerCredential(
+    connection: ServiceConnection,
+    config: ExecutorConfiguration,
+    expectedRevision: number,
+  ): Promise<number> {
+    const current = await this.currentConnection(connection);
+    if (current.authentication.method === "oauth")
+      return this.refresh(connection, config, expectedRevision);
+    if (current.authentication.method === "none")
+      throw new Error("Credential required.");
+    const metadata = await this.vault.metadataForReference(
+      current.authentication.credentialRef,
+    );
+    if (metadata.deleted || metadata.revision !== expectedRevision)
+      throw new Error("Credential changed before owner verification.");
+    return metadata.revision;
+  }
+
   private async refresh(
     connection: ServiceConnection,
     config: ExecutorConfiguration,
-  ): Promise<void> {
+    expectedRevision?: number,
+  ): Promise<number> {
     const key = sha256(connection.id);
     return withStateLock(
       this.privateDirectory,
@@ -126,6 +148,18 @@ export class GatewayCredentials {
           ))
             throw error;
         }
+        if (
+          expectedRevision !== undefined &&
+          metadata.revision !== expectedRevision &&
+          !(
+            marker?.state === "saved" &&
+            marker.previousRevision === expectedRevision &&
+            marker.revision === metadata.revision
+          )
+        )
+          throw new Error(
+            "Credential changed outside this exact completed refresh.",
+          );
         // Refresh tokens may rotate even if the response was lost. Never blindly refresh again.
         if (
           marker?.revision === metadata.revision &&
@@ -148,7 +182,8 @@ export class GatewayCredentials {
                 throw new Error(
                   "OAuth credential requires an access token and expiry.",
                 );
-              if (saved.expires_at > Date.now() + 30_000) return;
+              if (saved.expires_at > Date.now() + 30_000)
+                return metadata.revision;
               const gmail =
                 config.type === "mcp" && config.adapter === "gmail-rest";
               const oauth =
@@ -230,8 +265,12 @@ export class GatewayCredentials {
                   (handle) =>
                     this.vault.replace(current.id, metadata.revision, handle),
                 );
-                await atomicJson(markerFile, { revision, state: "saved" });
-                return;
+                await atomicJson(markerFile, {
+                  previousRevision: metadata.revision,
+                  revision,
+                  state: "saved",
+                });
+                return revision;
               } finally {
                 replacement.fill(0);
               }
