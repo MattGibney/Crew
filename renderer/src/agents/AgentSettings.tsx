@@ -398,7 +398,7 @@ export function AgentSettings(props: Props) {
         {active && (
           <div className="flex gap-2">
             <Button
-              variant="outline"
+              variant="ghost"
               disabled={busy || saving || record.phase === "applying"}
               onClick={cancel}
             >
