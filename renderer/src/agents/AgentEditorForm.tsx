@@ -1,4 +1,5 @@
-import { Info } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Info, ChevronDown } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -200,36 +201,56 @@ export function AgentEditorForm({
         </div>
       </section>
       <Separator />
-      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
-        <div className="space-y-2">
-          <h2 className="text-base font-semibold tracking-tight">Instructions</h2>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Define responsibilities, technical requirements and the workflow this agent should follow.
-          </p>
+      <section className="space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold tracking-tight">Instructions</h2>
+            <p className="text-sm text-muted-foreground">Set this agent’s responsibilities, standards and workflow.</p>
+          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger render={<Button type="button" variant="ghost" size="sm" className="text-muted-foreground" />}>
+                <Info className="size-3.5" /> Writing guidance
+              </TooltipTrigger>
+              <TooltipContent className="max-w-80 leading-5">
+                Include the agent’s role, expected outcomes, technical standards,
+                workflow steps and when to ask for help. For example: “Review the
+                relevant code, implement the change, run focused checks, and report
+                the result. Ask before deploying.”
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`${id}-instructions`}>System prompt</Label>
-          <p id={`${id}-instructions-help`} className="text-xs leading-5 text-muted-foreground">
-            Describe what the agent does, how it carries out tasks, and when it should
-            ask for help. Include technical standards, tools and workflow requirements.
-            Crew automatically combines this with the Personality above, so you don’t
-            need to repeat its tone or communication style here.
-          </p>
+          <Label htmlFor={`${id}-instructions`} className="sr-only">System prompt</Label>
           <Textarea
             id={`${id}-instructions`}
             aria-describedby={`${id}-instructions-help ${id}-instructions-save`}
-            rows={8}
-            className="min-h-56 leading-6"
+            rows={9}
+            className="min-h-64 resize-y p-4 text-sm leading-7"
             maxLength={200000}
             value={draft.instructions}
             disabled={locked}
+            placeholder="Describe the agent’s role, responsibilities, technical standards and workflow…"
             onChange={(event) => onChange({ instructions: event.target.value })}
           />
-          <div id={`${id}-instructions-save`} className="space-y-2 text-xs leading-5 text-muted-foreground">
-            <p><span className="font-medium text-foreground">Save changes</span> stores your edits without starting the agent or interrupting its current work.</p>
-            <p><span className="font-medium text-foreground">Apply to an existing chat:</span> restart the agent after saving changes to its instructions or personality. Crew keeps the same chat and readable history. Codex summarizes its active context to apply the changes, which uses some of your subscription allowance.</p>
-          </div>
+          <p id={`${id}-instructions-help`} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
+            <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+            Personality is added automatically. Focus here on how the agent does its work.
+          </p>
         </div>
+        <Collapsible className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+            <p id={`${id}-instructions-save`} className="text-xs text-muted-foreground">Save your edits, then restart the agent to apply them to an existing chat.</p>
+            <CollapsibleTrigger render={<Button type="button" variant="ghost" size="sm" className="group px-0 text-xs text-muted-foreground" />}>
+              How changes take effect <ChevronDown className="size-3.5 transition-transform group-data-panel-open:rotate-180" />
+            </CollapsibleTrigger>
+          </div>
+          <CollapsibleContent className="space-y-2 text-xs leading-5 text-muted-foreground">
+            <p>Saving stores your instructions and personality without starting the agent or interrupting its current work.</p>
+            <p>Restart applies those changes while keeping the same chat and readable history. Codex summarizes the active context during this process, which uses some of your subscription allowance.</p>
+          </CollapsibleContent>
+        </Collapsible>
       </section>
       <Separator />
       <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
