@@ -33,7 +33,6 @@ import {
   createAgentImages,
   createImageOwnerCommands,
 } from "../application/agent-images.mjs";
-import type { RuntimeBinding } from "../agents/contracts.mjs";
 import {
   openUnifiedRegistry,
   type DesktopProject,
@@ -47,6 +46,16 @@ import {
 import { createUnifiedUpdates } from "./unified-updates.mjs";
 import { openWebLink } from "./external-links.mjs";
 import { AgentSetupError, openAgentSetup } from "./agent-setup.mjs";
+import {
+  recoverInterruptedProject,
+  verifyUnavailableProjectIdle,
+  ProjectRecoveryError,
+} from "./project-recovery.mjs";
+import { randomUUID } from "node:crypto";
+import { createUnifiedProjectBrowser } from "../browser/unified-browser.mjs";
+import { combineAgentToolExtensions } from "../agents/tool-extensions.mjs";
+import { createAgentConfiguration } from "../application/agent-configuration.mjs";
+import { createSubscriptionUsageOwnerAdapter } from "../application/subscription-usage.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const desktopDirectory = join(
@@ -76,6 +85,9 @@ type ProjectHost = {
   voiceCommand: ReturnType<typeof createVoiceOwnerCommands>;
   imageCommand: ReturnType<typeof createImageOwnerCommands>;
   setup: Awaited<ReturnType<typeof openAgentSetup>>;
+  browser: ReturnType<typeof createUnifiedProjectBrowser>;
+  configuration: ReturnType<typeof createAgentConfiguration>;
+  usage: ReturnType<typeof createSubscriptionUsageOwnerAdapter>;
   unsubscribe: () => void;
 };
 const hosts = new Map<string, ProjectHost>(),
@@ -160,6 +172,7 @@ async function openProject(project: DesktopProject) {
   if (openings.has(project.id)) return openings.get(project.id);
   const opening = (async () => {
     let application: UnifiedApplication | undefined;
+    let browser: ReturnType<typeof createUnifiedProjectBrowser> | undefined;
     try {
       const stateDirectory = registry.stateDirectory(project.id);
       const skills = await ProjectSkillStore.open({
@@ -171,6 +184,18 @@ async function openProject(project: DesktopProject) {
           ...(process.env.CODEX_HOME ? [process.env.CODEX_HOME] : []),
         ],
       });
+      const projectBrowser = createUnifiedProjectBrowser({
+        projectId: project.id,
+        stateDirectory,
+        getWindow: () => surface?.native(),
+        getHostOrigin: () => renderer.origin,
+        getAgent: (id) =>
+          application?.foundation.store
+            .snapshot()
+            .agents.find((agent) => agent.id === id) ?? null,
+        publish: (event) => surface?.notify(event),
+      });
+      browser = projectBrowser;
       application = await startUnifiedApplication({
         stateDirectory,
         projectId: project.id,
@@ -179,28 +204,35 @@ async function openProject(project: DesktopProject) {
         nativeExecutable: await nativeExecutable(),
         vaultEncryption: createElectronCredentialEncryption(safeStorage),
         skills,
-        agentTools: ({ runAuthorized }) => ({
-          async list(caller) {
-            return createProjectSkillAgentTools({
-              store: skills,
-              caller,
-              runAuthorized,
-            }).list();
-          },
-          async call(caller, name, args) {
-            return createProjectSkillAgentTools({
-              store: skills,
-              caller,
-              runAuthorized,
-            }).call(name, args);
-          },
-        }),
+        agentTools: (context) =>
+          combineAgentToolExtensions([
+            {
+              async list(caller) {
+                return createProjectSkillAgentTools({
+                  store: skills,
+                  caller,
+                  runAuthorized: context.runAuthorized,
+                }).list();
+              },
+              async call(caller, name, args) {
+                return createProjectSkillAgentTools({
+                  store: skills,
+                  caller,
+                  runAuthorized: context.runAuthorized,
+                }).call(name, args);
+              },
+            },
+            projectBrowser.tools(context),
+          ]),
       });
       const composed = application;
       const voice = composed.voice;
-      const selectedVoice = () =>
+      const configuration = createAgentConfiguration(composed);
+      await configuration.migrateLegacyVoice(
         registry.snapshot().projects.find((row) => row.id === project.id)
-          ?.voice ?? null;
+          ?.voice,
+        () => registry.retireLegacyVoice(project.id),
+      );
       const images = createAgentImages({
         projectId: project.id,
         directory: join(stateDirectory, "images"),
@@ -291,6 +323,14 @@ async function openProject(project: DesktopProject) {
       const unsubscribeVoice = voice.subscribe((event) =>
         surface?.notify({ type: "voice", projectId: project.id, event }),
       );
+      const usage = createSubscriptionUsageOwnerAdapter(composed.subscription);
+      const unsubscribeUsage = usage.subscribe((state) =>
+        surface?.notify({
+          type: "subscription-usage",
+          projectId: project.id,
+          state,
+        }),
+      );
       const unsubscribeTranscript = voice.subscribeRealtime((event) => {
         // Only native role-bearing transcript items reach the owner display.
         // These are live call text, never evidence of a coding-turn association.
@@ -317,21 +357,30 @@ async function openProject(project: DesktopProject) {
         schedules,
         scheduleCommand: createScheduleOwnerCommands(schedules),
         voice,
-        voiceCommand: createVoiceOwnerCommands(voice, selectedVoice),
+        voiceCommand: createVoiceOwnerCommands(
+          voice,
+          configuration.selectedVoice,
+        ),
         imageCommand: createImageOwnerCommands(images),
         setup,
+        browser: projectBrowser,
+        usage,
+        configuration,
         unsubscribe: () => {
           unsubscribe();
           unsubscribeVoice();
+          unsubscribeUsage();
+          usage.dispose();
           unsubscribeTranscript();
         },
       });
       failures.delete(project.id);
     } catch {
+      await browser?.close().catch(() => {});
       await application?.close().catch(() => {});
       failures.set(
         project.id,
-        "Crew could not open this project's isolated runtime. Check the installed Codex app and retained project state, then retry.",
+        "Crew could not open this project's isolated runtime. If Crew was interrupted, recover the project to check for abandoned ownership records. Saved agents, sign-in and chats will be retained.",
       );
     } finally {
       changed();
@@ -350,6 +399,11 @@ async function disconnectVoice() {
   );
   if (results.some((result) => result.status === "rejected"))
     throw new Error("A native voice call did not confirm closure.");
+  const previews = await Promise.allSettled(
+    [...hosts.values()].map((host) => host.browser.close()),
+  );
+  if (previews.some((result) => result.status === "rejected"))
+    throw new Error("A project browser did not confirm closure.");
 }
 async function selectProject(projectId: string) {
   if (switching || quit.holding() || updates?.holding())
@@ -369,7 +423,7 @@ async function selectProject(projectId: string) {
   }
 }
 function refreshTray() {
-  if (!tray || !registry) return;
+  if (!tray || tray.isDestroyed() || !registry) return;
   const pending = [...hosts.values()].reduce((sum, host) => {
     const state = host.application.foundation.store.snapshot();
     return (
@@ -408,6 +462,11 @@ function refreshTray() {
     ]),
   );
 }
+function destroyTray() {
+  const current = tray;
+  tray = undefined;
+  if (current && !current.isDestroyed()) current.destroy();
+}
 async function prepareQuit() {
   if (registry.snapshot().projects.length === 0) {
     await quit.prepare();
@@ -428,6 +487,20 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (command.startsWith("setup.")) return host.setup.command(command, args);
   if (command === "environments.snapshot")
     return host.application.environmentOwnerApi.snapshot();
+  if (command === "environments.templates.snapshot")
+    return host.application.environmentOwnerApi.templates.snapshot();
+  if (command === "environments.templates.save")
+    return host.application.environmentOwnerApi.templates.save(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["save"]>[0],
+    );
+  if (command === "environments.templates.assign")
+    return host.application.environmentOwnerApi.templates.assign(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["assign"]>[0],
+    );
+  if (command === "environments.templates.inspect")
+    return host.application.environmentOwnerApi.templates.inspect(
+      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["inspect"]>[0],
+    );
   if (command === "environments.projectFolder")
     return { directory: host.project.directory };
   if (command === "environments.prepareFolderAccess") {
@@ -483,25 +556,11 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (command.startsWith("schedules."))
     return host.scheduleCommand(command, args);
   if (command.startsWith("images.")) return host.imageCommand(command, args);
-  if (command === "voice.select") {
-    const input = object(args),
-      voice = text(input.voice);
-    const catalog = await host.voice.listVoices(
-      input.binding as RuntimeBinding,
-    );
-    if (!catalog.voices.some((item) => item.id === voice))
-      throw new Error("Select an available native voice.");
-    await registry.selectVoice(host.project.id, voice);
-    surface.notify({
-      type: "owner",
-      projectId: host.project.id,
-      event: { kind: "changed" },
-    });
-    return;
-  }
+  if (command === "agents.options") return host.configuration.options();
   if (command.startsWith("voice.")) return host.voiceCommand(command, args);
   if (command === "subscription.status")
     return host.application.subscription.status();
+  if (command === "subscription.usage") return host.usage.read();
   if (command === "subscription.beginSignIn")
     return host.application.subscription.beginSignIn();
   if (command === "subscription.cancelSignIn")
@@ -569,7 +628,44 @@ async function request(method: string, value: unknown) {
     }
   }
   if (method === "selectProject") return selectProject(text(input.projectId));
+  if (method === "recoverProject") {
+    const projectId = text(input.projectId);
+    if (
+      switching ||
+      openings.size ||
+      hosts.has(projectId) ||
+      quit.holding() ||
+      updates?.holding()
+    )
+      throw new ProjectRecoveryError(
+        "Finish the current project transition before recovery.",
+      );
+    const project = registry
+      .snapshot()
+      .projects.find((row) => row.id === projectId);
+    if (!project || !failures.has(projectId))
+      throw new ProjectRecoveryError(
+        "Only an unavailable project can be recovered.",
+      );
+    switching = true;
+    try {
+      await recoverInterruptedProject(registry.stateDirectory(projectId));
+      await updates.withStartupLease(() => openProject(project));
+      changed();
+    } finally {
+      switching = false;
+    }
+    return;
+  }
   const host = requiredProject(text(input.projectId));
+  if (method === "browser") {
+    if (
+      (quit.holding() || updates.holding()) &&
+      !["state", "bounds", "close"].includes(String(input.action))
+    )
+      throw new Error("Crew is completing its execution reservation.");
+    return host.browser.request(input);
+  }
   if (method === "ownerSnapshot") return host.application.ownerApi.snapshot();
   if (method === "ownerCommand")
     return ownerCommand(host, text(input.command), input.args);
@@ -585,33 +681,83 @@ async function start() {
     throw new Error("Crew storage must be absolute.");
   await mkdir(desktopDirectory, { recursive: true, mode: 0o700 });
   registry = await openUnifiedRegistry(desktopDirectory);
-  const lifecycleProjects = (): DesktopLifecycleProject[] => {
-    if (failures.size || openings.size || switching)
+  const lifecycleProjects = (
+    includeUnavailable = false,
+  ): DesktopLifecycleProject[] => {
+    if ((!includeUnavailable && failures.size) || openings.size || switching)
       throw new Error(
         "Every project must be available for the shutdown check.",
       );
-    return [...hosts.values()].map((host) => ({
-      id: host.project.id,
-      name: host.project.name,
-      lifecycle: host.application.foundation,
-      observePreparation: () =>
-        host.application.foundation.store.snapshot().preparation,
-      async close(reservation) {
-        await host.schedules.close();
-        await host.application.close(reservation.id);
-        host.unsubscribe();
-      },
-    }));
+    const available: DesktopLifecycleProject[] = [...hosts.values()].map(
+      (host) => ({
+        id: host.project.id,
+        name: host.project.name,
+        lifecycle: host.application.foundation,
+        observePreparation: () =>
+          host.application.foundation.store.snapshot().preparation,
+        async close(reservation) {
+          await host.schedules.close();
+          await host.browser.close();
+          await host.application.close(reservation.id);
+          host.unsubscribe();
+        },
+      }),
+    );
+    if (includeUnavailable) {
+      for (const project of registry
+        .snapshot()
+        .projects.filter((row) => failures.has(row.id))) {
+        const verify = () =>
+          verifyUnavailableProjectIdle(registry.stateDirectory(project.id));
+        const unavailable = async (): Promise<never> => {
+          throw new ProjectRecoveryError(
+            "Recover this project before starting an agent.",
+          );
+        };
+        available.push({
+          id: project.id,
+          name: project.name,
+          lifecycle: {
+            start: unavailable,
+            stop: unavailable,
+            restart: unavailable,
+            async prepare() {
+              await verify();
+              return [];
+            },
+            async reserveExecution(projectId, reason) {
+              if (projectId !== project.id || reason !== "quit")
+                throw new Error("Invalid unavailable-project shutdown.");
+              await verify();
+              return {
+                state: "reserved",
+                reservation: {
+                  id: randomUUID(),
+                  projectId,
+                  reason,
+                  acquiredAt: new Date().toISOString(),
+                },
+              };
+            },
+            async releaseExecution() {},
+          },
+          async close() {
+            await verify();
+          },
+        });
+      }
+    }
+    return available;
   };
   quit = createUnifiedQuit({
-    projects: lifecycleProjects,
+    projects: () => lifecycleProjects(true),
     changed,
     async finish() {
-      quitting = true;
       await disconnectVoice();
       surface.destroy();
-      tray?.destroy();
+      destroyTray();
       await renderer.close();
+      quitting = true;
       app.quit();
     },
   });
@@ -627,10 +773,10 @@ async function start() {
     changed,
     async beforeInstall() {
       await disconnectVoice();
-      quitting = true;
       surface.destroy();
-      tray?.destroy();
+      destroyTray();
       await renderer.close();
+      quitting = true;
     },
   });
   renderer = await startDesktopRenderer(
@@ -664,7 +810,9 @@ async function start() {
         return { ok: true, value: await request(method, value) };
       } catch (error) {
         const detail =
-          error instanceof ProjectSkillError || error instanceof AgentSetupError
+          error instanceof ProjectSkillError ||
+          error instanceof AgentSetupError ||
+          error instanceof ProjectRecoveryError
             ? { code: error.code, message: error.message }
             : {
                 code: "failed",

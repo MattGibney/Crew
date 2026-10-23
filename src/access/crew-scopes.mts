@@ -10,6 +10,7 @@ const projectActions = new Set<CrewAction>([
   "jobs.create",
   "skills.read",
   "skills.write",
+  "browser.control",
   "environments.create",
 ]);
 const projectScopes: readonly CrewScopeType[] = ["project"];

@@ -423,6 +423,43 @@ export class ProjectAuthorizationService
     return request;
   }
 
+  /** Catalogue visibility only: never admits execution or changes session state. */
+  async canDiscoverBrowser(caller: CallerContext): Promise<boolean> {
+    caller = structuredClone(caller);
+    return this.store.transaction(async (state) => {
+      try {
+        validateRecord("caller", caller);
+        if (
+          caller.projectId !== state.projectId ||
+          state.closedSessions.some((closed) => sameCaller(closed, caller))
+        )
+          return false;
+        const agent = await this.agent(state, caller.agentId);
+        const session = agent.runtime.session;
+        if (
+          session.sessionId !== caller.sessionId ||
+          session.desiredState !== "started" ||
+          !["starting", "started"].includes(session.observedState)
+        )
+          return false;
+        const assignment = state.assignments.find(
+          (row) => row.agentId === caller.agentId,
+        );
+        return state.groups.some(
+          (group) =>
+            assignment?.permissionGroupIds.includes(group.id) &&
+            group.grants.crew.some(
+              (permission) =>
+                permission.action === "browser.control" &&
+                permission.scope.type === "project",
+            ),
+        );
+      } catch {
+        return false;
+      }
+    });
+  }
+
   async checkCrew(
     caller: CallerContext,
     action: CrewAction,

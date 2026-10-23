@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { AgentsApp } from "./AgentsApp";
+import { ProjectBrowser } from "./ProjectBrowser";
 import {
   createDesktopClient,
   type DesktopBridge,
@@ -271,12 +272,24 @@ export function DesktopApplication({
           <Button onClick={() => void act("selectProject", { projectId })}>
             Retry project
           </Button>
+          <Button
+            variant="outline"
+            disabled={pending}
+            onClick={() => void act("recoverProject", { projectId })}
+          >
+            Recover interrupted project
+          </Button>
+          <p className="text-sm text-muted-foreground">
+            Recovery checks that this project is no longer in use, then retries
+            opening it. Your sign-in, agents and chat history are kept.
+          </p>
           {preparation}
         </div>
       ) : (
         <AgentsApp
           key={projectId}
           client={transport.client}
+          renderBrowser={(context) => <ProjectBrowser {...context} />}
           nativeWindow={bridge.integratedTitlebar}
           headerActions={header}
           headerUpdates={headerUpdates}

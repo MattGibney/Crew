@@ -49,6 +49,8 @@ export function createDesktopClient(bridge: DesktopBridge, projectId: string) {
     },
     readHistory: (agentId, cursor) =>
       command("readHistory", { agentId, cursor }),
+    readVoiceArtifacts: (agentId, cursor) =>
+      command("readVoiceArtifacts", { agentId, cursor }),
     createAgent: (input) => command("createAgent", { input }),
     saveProfile: (agentId, input) => command("saveProfile", { agentId, input }),
     lifecycle: (agentId, action) => command("lifecycle", { agentId, action }),

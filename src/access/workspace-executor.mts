@@ -1,9 +1,19 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
+import { lstatSync, realpathSync } from "node:fs";
+import { lstat, mkdtemp, mkdir, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { homedir } from "node:os";
 import { nativeSeatbeltPolicy } from "./native-boundary.mjs";
 import { WorkspaceProcessRecorder } from "./workspace-process-evidence.mjs";
+import type { WorkspaceBackgroundStatus } from "./workspace-process-evidence.mjs";
+export {
+  inspectMacWorkspaceProcess,
+  stopMacWorkspaceProcess,
+} from "./workspace-process-evidence.mjs";
+export type {
+  WorkspaceBackgroundStatus,
+  WorkspaceStopResult,
+} from "./workspace-process-evidence.mjs";
 export { reconcileMacWorkspaceCommand } from "./workspace-process-evidence.mjs";
 export type { WorkspaceProcessSettlement } from "./workspace-process-evidence.mjs";
 
@@ -18,6 +28,26 @@ export interface WorkspaceExecutionPolicy {
   readableRoots: string[];
   writableRoots: string[];
   executableDirectories: string[];
+  /** Explicit nonsecret values from the pinned, owner-approved template. */
+  environment?: Record<string, string>;
+  /** Runtime-owned prepared home; never the host user's HOME or copied auth. */
+  runtimeHome?: { path: string; device: number; inode: number };
+  /** Explicit BROAD host-daemon authority. The daemon can bypass workspace file
+   * restrictions; this does not provide hostile-worker or VM isolation. */
+  hostDocker?: {
+    socketPath: string;
+    device: number;
+    inode: number;
+    hostAccessAcknowledged: true;
+  };
+  /** TCP outbound plus DNS when approved. Nonempty localhostPorts currently fail
+   * closed: this macOS backend cannot enforce loopback-only server binding.
+   * inboundPorts explicitly approves incoming TCP on those ports on ALL interfaces. */
+  network?: {
+    outbound: boolean;
+    localhostPorts: number[];
+    inboundPorts?: number[];
+  };
 }
 export interface WorkspaceCommandResult {
   state: "exited" | "timed_out" | "not_started";
@@ -38,19 +68,10 @@ const inside = (root: string, candidate: string) => {
   return value === "" || (!value.startsWith("..") && !isAbsolute(value));
 };
 
-/** Real project inspection/edit/test execution, separated from the native model
- * process and vault. Native subscription/config directories are never mounted.
- * Networking is denied in this first executor; provider work uses gateway tools.
- * The host owns invocation identity, permission checks, admission and receipts. */
-export async function runMacWorkspaceCommand(
+async function prepareExecution(
   policy: WorkspaceExecutionPolicy,
-  input: {
-    command: string;
-    relativeCwd?: string;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  },
-): Promise<WorkspaceCommandResult> {
+  input: { command: string; relativeCwd?: string },
+) {
   if (process.platform !== "darwin")
     throw new Error("The current workspace executor requires macOS.");
   if (
@@ -59,10 +80,50 @@ export async function runMacWorkspaceCommand(
     input.command.includes("\0")
   )
     throw new Error("Invalid workspace command.");
-  const timeout = input.timeoutMs ?? 30_000;
-  if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 120_000)
+  const suppliedEnvironment = policy.environment ?? {};
+  if (
+    Object.keys(suppliedEnvironment).length > 64 ||
+    Object.entries(suppliedEnvironment).some(
+      ([key, value]) =>
+        !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key) ||
+        typeof value !== "string" ||
+        value.includes("\0") ||
+        Buffer.byteLength(value) > 8192 ||
+        /^(?:PATH|HOME|CFFIXED_USER_HOME|TMPDIR|ENV|BASH_ENV|NODE_OPTIONS|NODE_PATH|DOCKER_.*|SHELL|CDPATH|GIT_CONFIG.*|GIT_ASKPASS|SSH_.*|.*PROXY|DYLD_.*|LD_.*|NPM_CONFIG_USERCONFIG|NPM_CONFIG_GLOBALCONFIG)$/i.test(
+          key,
+        ) ||
+        /(?:TOKEN|SECRET|PASSWORD|CREDENTIAL|API_KEY|AUTHORIZATION|AUTH_TOKEN)/i.test(
+          key,
+        ),
+    )
+  )
     throw new Error(
-      "Command timeout must be between 100 and 120000 milliseconds.",
+      "Only bounded, explicit nonsecret environment values are allowed.",
+    );
+  if (
+    policy.network &&
+    (typeof policy.network.outbound !== "boolean" ||
+      !Array.isArray(policy.network.localhostPorts) ||
+      policy.network.localhostPorts.length > 32 ||
+      policy.network.localhostPorts.some(
+        (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
+      ))
+  )
+    throw new Error("Invalid approved workspace network capability.");
+  if (
+    policy.network?.inboundPorts !== undefined &&
+    (!Array.isArray(policy.network.inboundPorts) ||
+      policy.network.inboundPorts.length > 16 ||
+      policy.network.inboundPorts.some(
+        (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
+      ))
+  )
+    throw new Error(
+      "Incoming TCP requires at most 16 explicitly approved high ports.",
+    );
+  if (policy.network?.localhostPorts.length)
+    throw new Error(
+      "Localhost servers are unavailable: this macOS executor cannot enforce loopback-only access. Use a supported isolated server transport.",
     );
   const roots = [
     policy.workspaceDirectory,
@@ -74,6 +135,9 @@ export async function runMacWorkspaceCommand(
   if (roots.some((root) => !isAbsolute(root)))
     throw new Error("Trusted absolute workspace roots required.");
   const canonical = await Promise.all(roots.map((root) => realpath(root)));
+  const stats = await Promise.all(roots.map((root) => lstat(root)));
+  if (stats.some((stat) => !stat.isDirectory() || stat.isSymbolicLink()))
+    throw new Error("Trusted directory roots required.");
   if (
     canonical.some(
       (root, index) =>
@@ -81,9 +145,12 @@ export async function runMacWorkspaceCommand(
         root === "/" ||
         root === homedir() ||
         root === dirname(homedir()) ||
-        root === join(homedir(), ".codex") ||
-        root === join(homedir(), ".ssh") ||
-        root === join(homedir(), "Library"),
+        inside(join(homedir(), ".codex"), root) ||
+        inside(join(homedir(), ".ssh"), root) ||
+        root === join(homedir(), "Library") ||
+        // The trusted controller uses Library in packaged Crew. Only its fresh
+        // execution scratch is mounted; command/tool roots remain forbidden.
+        (index !== 1 && inside(join(homedir(), "Library"), root)),
     )
   )
     throw new Error("Broad or noncanonical workspace roots are not allowed.");
@@ -109,17 +176,106 @@ export async function runMacWorkspaceCommand(
     throw new Error(
       "Command working directory escapes its assigned workspace.",
     );
-  if (input.signal?.aborted)
-    return {
-      state: "not_started",
-      exitCode: null,
-      stdout: "",
-      stderr: "Command cancelled before launch.",
-      truncated: false,
-      mayHaveExecuted: false,
-      processesSettled: true,
-      processEvidenceRef: null,
-    };
+  const runtimeHome = policy.runtimeHome;
+  const hostDocker = policy.hostDocker;
+  const assertDirectoryIdentity = (
+    path: string,
+    device: number,
+    inode: number,
+  ) => {
+    const stat = lstatSync(path);
+    if (
+      !isAbsolute(path) ||
+      realpathSync(path) !== path ||
+      !stat.isDirectory() ||
+      stat.isSymbolicLink() ||
+      stat.uid !== process.getuid?.() ||
+      (stat.mode & 0o077) !== 0 ||
+      stat.dev !== device ||
+      stat.ino !== inode
+    )
+      throw new Error("Prepared runtime home identity is unavailable.");
+  };
+  if (runtimeHome) {
+    assertDirectoryIdentity(
+      runtimeHome.path,
+      runtimeHome.device,
+      runtimeHome.inode,
+    );
+    if (
+      [
+        policy.workspaceDirectory,
+        policy.privateDirectory,
+        ...policy.readableRoots,
+        ...policy.executableDirectories,
+      ].some(
+        (path) =>
+          inside(path, runtimeHome.path) || inside(runtimeHome.path, path),
+      ) ||
+      runtimeHome.path === "/" ||
+      runtimeHome.path === homedir() ||
+      inside(runtimeHome.path, homedir()) ||
+      [
+        join(homedir(), "Library"),
+        join(homedir(), ".codex"),
+        join(homedir(), ".ssh"),
+      ].some((path) => inside(path, runtimeHome.path))
+    )
+      throw new Error(
+        "Prepared runtime home must be separate from host and controller storage.",
+      );
+  }
+  const assertDockerIdentity = () => {
+    if (!hostDocker) return;
+    if (
+      hostDocker.hostAccessAcknowledged !== true ||
+      !runtimeHome ||
+      !isAbsolute(hostDocker.socketPath) ||
+      realpathSync(hostDocker.socketPath) !== hostDocker.socketPath
+    )
+      throw new Error(
+        "Host Docker requires explicit broad-access acknowledgement and an isolated prepared home.",
+      );
+    const stat = lstatSync(hostDocker.socketPath);
+    if (
+      !stat.isSocket() ||
+      stat.isSymbolicLink() ||
+      stat.uid !== process.getuid?.() ||
+      stat.dev !== hostDocker.device ||
+      stat.ino !== hostDocker.inode
+    )
+      throw new Error(
+        "Approved host Docker socket identity changed or is unavailable.",
+      );
+  };
+  assertDockerIdentity();
+  let dockerConfig: { path: string; device: number; inode: number } | undefined;
+  if (hostDocker && runtimeHome) {
+    const path = join(runtimeHome.path, ".docker");
+    try {
+      await mkdir(path, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    const stat = await lstat(path);
+    dockerConfig = { path, device: stat.dev, inode: stat.ino };
+    assertDirectoryIdentity(path, stat.dev, stat.ino);
+  }
+  const assertPreparedIdentity = () => {
+    if (runtimeHome)
+      assertDirectoryIdentity(
+        runtimeHome.path,
+        runtimeHome.device,
+        runtimeHome.inode,
+      );
+    if (dockerConfig)
+      assertDirectoryIdentity(
+        dockerConfig.path,
+        dockerConfig.device,
+        dockerConfig.inode,
+      );
+    assertDockerIdentity();
+  };
   const scratch = await mkdtemp(join(policy.privateDirectory, "execution-"));
   await mkdir(join(scratch, "home"), { mode: 0o700 });
   await mkdir(join(scratch, "tmp"), { mode: 0o700 });
@@ -130,27 +286,72 @@ export async function runMacWorkspaceCommand(
       root: scratch,
       executable: "/bin/sh",
       ports: [],
+      workspaceFileDescriptors: true,
       readRoots: [
         policy.workspaceDirectory,
         ...policy.readableRoots,
         ...policy.executableDirectories,
       ],
-      writeRoots: policy.writable
-        ? [policy.workspaceDirectory, ...policy.writableRoots]
-        : [],
+      writeRoots: [
+        ...(policy.writable ? [policy.workspaceDirectory] : []),
+        ...policy.writableRoots,
+        ...(runtimeHome ? [runtimeHome.path] : []),
+      ],
+      workspaceHostDockerSocket: hostDocker?.socketPath,
+      workspaceNetwork: policy.network,
     }),
     { mode: 0o600 },
   );
   const environment = {
+    ...suppliedEnvironment,
     PATH: [...policy.executableDirectories, "/usr/bin", "/bin"].join(":"),
-    HOME: join(scratch, "home"),
-    CFFIXED_USER_HOME: join(scratch, "home"),
+    HOME: runtimeHome?.path ?? join(scratch, "home"),
+    CFFIXED_USER_HOME: runtimeHome?.path ?? join(scratch, "home"),
+    ...(hostDocker && dockerConfig
+      ? {
+          DOCKER_HOST: `unix://${hostDocker.socketPath}`,
+          DOCKER_CONFIG: dockerConfig.path,
+        }
+      : {}),
     TMPDIR: join(scratch, "tmp"),
     LANG: "en_US.UTF-8",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
   };
+  return { cwd, profile, environment, assertPreparedIdentity };
+}
+
+const cancelledResult = (): WorkspaceCommandResult => ({
+  state: "not_started",
+  exitCode: null,
+  stdout: "",
+  stderr: "Command cancelled before launch.",
+  truncated: false,
+  mayHaveExecuted: false,
+  processesSettled: true,
+  processEvidenceRef: null,
+});
+
+/** Real project execution with template-owned capabilities; no ambient environment.
+ * The host owns invocation identity, fresh authority, admission and receipts. */
+export async function runMacWorkspaceCommand(
+  policy: WorkspaceExecutionPolicy,
+  input: {
+    command: string;
+    relativeCwd?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  },
+): Promise<WorkspaceCommandResult> {
+  const timeout = input.timeoutMs ?? 30_000;
+  if (!Number.isSafeInteger(timeout) || timeout < 100 || timeout > 120_000)
+    throw new Error(
+      "Command timeout must be between 100 and 120000 milliseconds.",
+    );
+  if (input.signal?.aborted) return cancelledResult();
+  const { cwd, profile, environment, assertPreparedIdentity } =
+    await prepareExecution(policy, input);
   const processRecorder = await WorkspaceProcessRecorder.prepare(
     policy.privateDirectory,
   );
@@ -167,6 +368,7 @@ export async function runMacWorkspaceCommand(
       processesSettled: true,
       processEvidenceRef: null,
     };
+  assertPreparedIdentity();
   return new Promise((resolve) => {
     const child = spawn(
       "/usr/bin/sandbox-exec",
@@ -249,4 +451,111 @@ export async function runMacWorkspaceCommand(
       );
     });
   });
+}
+
+export interface WorkspaceBackgroundResult extends Omit<
+  WorkspaceBackgroundStatus,
+  "state"
+> {
+  state: WorkspaceBackgroundStatus["state"] | "not_started";
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  mayHaveExecuted: boolean;
+}
+
+/** Launches a managed background command. Running means observed process identity,
+ * not application readiness. The controller must retain and freshly authorize its
+ * opaque receipt for status/stop; it must not accept a model-supplied host PID. */
+export async function startMacWorkspaceProcess(
+  policy: WorkspaceExecutionPolicy,
+  input: { command: string; relativeCwd?: string; signal?: AbortSignal },
+): Promise<WorkspaceBackgroundResult> {
+  const notStarted = (): WorkspaceBackgroundResult => ({
+    state: "not_started",
+    stdout: "",
+    stderr: "Command did not start.",
+    truncated: false,
+    mayHaveExecuted: false,
+    processesSettled: true,
+    processEvidenceRef: null,
+    checkedAt: null,
+    processes: [],
+    listeningPorts: [],
+    portsObserved: true,
+  });
+  if (input.signal?.aborted) return notStarted();
+  const { cwd, profile, environment, assertPreparedIdentity } =
+    await prepareExecution(policy, input);
+  const recorder = await WorkspaceProcessRecorder.prepare(
+    policy.privateDirectory,
+  );
+  if (input.signal?.aborted) return notStarted();
+  assertPreparedIdentity();
+  const child = spawn(
+    "/usr/bin/sandbox-exec",
+    ["-f", profile, "/bin/sh", "-c", input.command],
+    {
+      cwd,
+      env: environment,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    },
+  );
+  let launchError = false;
+  let stdout = Buffer.alloc(0),
+    stderr = Buffer.alloc(0),
+    truncated = false;
+  const append = (stream: "stdout" | "stderr", chunk: Buffer) => {
+    const previous = stream === "stdout" ? stdout : stderr;
+    const room = 32 * 1024 - previous.length;
+    if (chunk.length > room) truncated = true;
+    const next = Buffer.concat([
+      previous,
+      chunk.subarray(0, Math.max(room, 0)),
+    ]);
+    if (stream === "stdout") stdout = next;
+    else stderr = next;
+  };
+  child.stdout.on("data", (chunk) => append("stdout", Buffer.from(chunk)));
+  child.stderr.on("data", (chunk) => append("stderr", Buffer.from(chunk)));
+  const abort = () => {
+    // Only this fresh live ChildProcess group, never a receipt adopted after restart.
+    if (child.pid && child.exitCode === null && child.signalCode === null) {
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch {
+        /* Receipt remains authoritative. */
+      }
+    }
+  };
+  const release = () => {
+    input.signal?.removeEventListener("abort", abort);
+    child.stdout.destroy();
+    child.stderr.destroy();
+  };
+  child.once("error", () => {
+    launchError = true;
+    release();
+  });
+  child.once("exit", (code, signal) => {
+    recorder.rootExited(code, signal);
+    release();
+    void recorder.finish(policy.privateDirectory).catch(() => {
+      /* Retained receipt remains unsettled. */
+    });
+  });
+  if (child.pid) recorder.launched(child.pid);
+  input.signal?.addEventListener("abort", abort, { once: true });
+  if (input.signal?.aborted) abort();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  if (launchError || !child.pid) return notStarted();
+  const status = await recorder.checkpoint(policy.privateDirectory);
+  return {
+    ...status,
+    stdout: stdout.toString("utf8"),
+    stderr: stderr.toString("utf8"),
+    truncated,
+    mayHaveExecuted: true,
+  };
 }

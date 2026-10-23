@@ -94,7 +94,18 @@ const jobInput = object(
 );
 const environmentInput = object({
   agentId: environmentAgentId,
-  action: { enum: ["create", "attach", "execute", "dispose"] },
+  action: {
+    enum: [
+      "create",
+      "attach",
+      "execute",
+      "dispose",
+      "prepare",
+      "start",
+      "status",
+      "stop",
+    ],
+  },
   requestId: {
     ...id,
     description:
@@ -102,7 +113,7 @@ const environmentInput = object({
   },
   arguments: {
     description:
-      "create: policyId and optional ref; attach: policyId; execute: environmentId and command, with optional relativeCwd/timeoutMs; dispose: environmentId. Read environments_read for existing IDs and approved policy IDs.",
+      "create: policyId and optional ref; attach: policyId; prepare: environmentId and expectedAssignmentRevision; execute/start: environmentId and command, optional relativeCwd/timeoutMs; status/stop: operationId of an exact start; dispose: environmentId. Read environments_read for IDs, assigned template and preparation instructions. Assignment and preparation never run setup commands; explicitly execute them when needed.",
     anyOf: [
       object({ policyId: id, ref: id }, ["policyId"]),
       object(
@@ -126,6 +137,11 @@ const environmentInput = object({
         ["environmentId", "command"],
       ),
       object({ environmentId: id }),
+      object({
+        environmentId: id,
+        expectedAssignmentRevision: { type: "integer", minimum: 1 },
+      }),
+      object({ operationId: id }),
     ],
   },
 });
@@ -242,13 +258,13 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "environment_action",
       description:
-        "Read, edit and run commands in an owner-approved project folder through the sandboxed workspace executor. Native file/shell tools cannot access these project folders. First use environments_read; attach its approved policy if needed, then execute an argv command with the returned environmentId. Read-only policies deny writes. Does not change agent or chat identity.",
+        "Read, edit and run commands in an owner-approved project folder through the sandboxed workspace executor. First use environments_read, attach an approved policy, and explicitly prepare an assigned template if tools/configuration are needed. Preparation runs no setup commands. Execute bounded argv or start a managed background command; status/stop use its exact operationId. Read-only policies deny workspace writes. Native file/shell tools cannot access these folders. Preserves agent/chat identity.",
       inputSchema: environmentInput,
     },
     {
       name: "environments_read",
       description:
-        "Discover this agent's permitted project folders, read-only/read-write policies and attached environment IDs. For project file reading, editing or commands, use environment_action: attach the returned policyId if no environment is attached, then execute with its environmentId. This discovery runs no project commands.",
+        "Discover this agent's permitted project folders, read-only/read-write policies, attached environments and assigned optional template. Use environment_action to attach, explicitly prepare the exact assignment revision, then execute or start documented commands. Discovery, assignment and preparation never automatically run project setup or install tools.",
       inputSchema: object({ agentId: environmentAgentId }),
     },
     {

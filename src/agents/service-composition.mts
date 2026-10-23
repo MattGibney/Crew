@@ -1,5 +1,7 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import type {
   ModelAccess,
   ProjectSkillSource,
@@ -22,11 +24,15 @@ import {
   type FolderAccessPreparation,
   type WorkspaceApproval,
 } from "./environments.mjs";
+import { ProjectEnvironmentTemplateCatalogue } from "./environment-templates.mjs";
+import { inspectEnvironmentTemplate } from "./environment-tool-inspector.mjs";
+import { withEnvironmentTemplateProvisioning } from "./environment-provisioning.mjs";
 import {
   createPrimaryAgentVoice,
   type PrimaryAgentVoice,
 } from "./voice-composition.mjs";
 import { createOwnerApi } from "./owner-api.mjs";
+import { VoiceTranscriptArtifacts } from "./voice-artifacts.mjs";
 import { OwnerConnectionSetupService } from "../access/connection-setup.mjs";
 import {
   AccessStore,
@@ -36,6 +42,9 @@ import {
   createAccessOwnerApi,
   runMacWorkspaceCommand,
   reconcileMacWorkspaceCommand,
+  startMacWorkspaceProcess,
+  inspectMacWorkspaceProcess,
+  stopMacWorkspaceProcess,
   type CredentialEncryptionBackend,
 } from "../access/index.mjs";
 import {
@@ -63,7 +72,7 @@ export interface UnifiedApplicationOptions {
     authorization: ProjectAuthorizationService;
     runAuthorized<T>(
       caller: CallerContext,
-      action: "skills.read" | "skills.write",
+      action: "skills.read" | "skills.write" | "browser.control",
       operation: () => Promise<T>,
     ): Promise<T>;
   }): AgentToolExtension;
@@ -101,7 +110,26 @@ export async function startUnifiedApplication(
   let mcp: AgentMcpHost | undefined;
   let foundation: AgentFoundation | undefined;
   let environments: ProjectEnvironmentService | undefined;
+  let environmentTemplates: ProjectEnvironmentTemplateCatalogue | undefined;
   let voice: PrimaryAgentVoice | undefined;
+  let voiceArtifacts: VoiceTranscriptArtifacts | undefined;
+  let voiceArtifactRevision = 0;
+  const voiceArtifactListeners = new Set<() => void>();
+  const voiceArtifactWarnings = new Map<string, string>();
+  const failedVoiceArtifactCalls = new Set<string>();
+  const voiceArtifactKey = (
+    binding: Pick<RuntimeBinding, "agentId" | "threadId">,
+  ) => JSON.stringify([binding.agentId, binding.threadId]);
+  const voiceArtifactsChanged = () => {
+    voiceArtifactRevision++;
+    for (const listener of voiceArtifactListeners) {
+      try {
+        listener();
+      } catch {
+        /* Owner projection only. */
+      }
+    }
+  };
   let closing = false;
   let closeReservationId: string | undefined;
   let closeStarted = false;
@@ -187,6 +215,15 @@ export async function startUnifiedApplication(
       },
     });
     const owner = { type: "user" as const, userId: options.ownerUserId };
+    environmentTemplates = await ProjectEnvironmentTemplateCatalogue.open({
+      directory: join(root, "environment-templates"),
+      projectId: options.projectId,
+      ownerUserId: options.ownerUserId,
+      protectedDirectories: [root],
+      listAgents: async () => store.snapshot().agents,
+      inspect: (template) =>
+        inspectEnvironmentTemplate(template, join(root, "environments")),
+    });
     environments = await ProjectEnvironmentService.open({
       directory: join(root, "environments"),
       protectedDirectories: [root],
@@ -195,9 +232,34 @@ export async function startUnifiedApplication(
       admission: gate,
       execute: runMacWorkspaceCommand,
       observeExecution: reconcileMacWorkspaceCommand,
+      startExecution: startMacWorkspaceProcess,
+      inspectExecution: inspectMacWorkspaceProcess,
+      stopExecution: stopMacWorkspaceProcess,
+      runtimeDirectory: join(
+        homedir(),
+        ".crew",
+        "workspace-caches",
+        createHash("sha256").update(root).digest("hex").slice(0, 24),
+      ),
+      templateSource: {
+        resolvePreparation: (input) =>
+          environmentTemplates!.resolvePreparation(input),
+        resolvePinned: (id, revision) =>
+          environmentTemplates!.resolvePinned(id, revision),
+        assignment: (agentId) => environmentTemplates!.assignment(agentId),
+        inspect: (template) =>
+          environmentTemplates!.inspect(owner, {
+            templateId: template.id,
+            templateRevision: template.revision,
+          }),
+      },
       verifyExecution: async (caller) => {
         if (closing || !foundation?.executionAllowed(caller))
           throw new Error("This native session cannot admit workspace work.");
+      },
+      verifyOwnerExecution: async () => {
+        if (closing || store.snapshot().reservation)
+          throw new Error("Execution is reserved.");
       },
       noteExecutionAdmitted: (caller) =>
         foundation!.noteExecutionAdmitted(caller),
@@ -217,7 +279,11 @@ export async function startUnifiedApplication(
           );
         await foundation!.records.authorize(
           { type: "agent", caller },
-          `environments.${action}`,
+          action === "prepare" || action === "start" || action === "stop"
+            ? "environments.execute"
+            : action === "status"
+              ? "environments.read"
+              : `environments.${action}`,
           action === "create"
             ? { type: "project" }
             : { type: "agent", agentId },
@@ -310,7 +376,11 @@ export async function startUnifiedApplication(
       access: nativeAccess,
       authorization,
       broker: gateway.broker,
-      provisioning: authorization,
+      provisioning: withEnvironmentTemplateProvisioning(
+        authorization,
+        environmentTemplates,
+        owner,
+      ),
       admission: gate,
       admissionUsesFoundationBarrier: true,
       environments,
@@ -409,6 +479,17 @@ export async function startUnifiedApplication(
       },
     });
     await foundation.recover();
+    // The foundation writer lock owns this artifact store's entire lifetime.
+    // Damage to optional voice display evidence must not hide existing agents.
+    try {
+      voiceArtifacts = await VoiceTranscriptArtifacts.open({
+        directory: join(root, "voice-artifacts"),
+        projectId: options.projectId,
+        ownerUserId: options.ownerUserId,
+      });
+    } catch {
+      /* Owner reads surface unavailable recovery explicitly. */
+    }
     voice = createPrimaryAgentVoice({
       ownerUserId: options.ownerUserId,
       authenticatedUserId: options.ownerUserId,
@@ -437,6 +518,52 @@ export async function startUnifiedApplication(
       recordPublicVoiceTurn: (binding, input) =>
         foundation!.recordPublicVoiceTurn(binding, input),
       flush: () => foundation!.flush(),
+      recordVoiceTranscript: async (record) => {
+        const callKey = JSON.stringify([
+          record.binding.agentId,
+          record.binding.threadId,
+          record.callId,
+        ]);
+        if (failedVoiceArtifactCalls.has(callKey)) return;
+        try {
+          if (!voiceArtifacts)
+            throw new Error("Unavailable voice artifact storage.");
+          await voiceArtifacts.record(record);
+        } catch {
+          failedVoiceArtifactCalls.add(callKey);
+          voiceArtifactWarnings.set(
+            voiceArtifactKey(record.binding),
+            "Some voice transcript text could not be saved. The saved call may be incomplete.",
+          );
+          // Retain an honest terminal marker where storage still permits it;
+          // later calls remain independent and audio cleanup stays available.
+          await voiceArtifacts
+            ?.closeCall(record.binding, record.callId, true)
+            .catch(() => {});
+        } finally {
+          voiceArtifactsChanged();
+        }
+      },
+      closeVoiceTranscript: async (binding, callId) => {
+        try {
+          if (!voiceArtifacts)
+            throw new Error("Unavailable voice artifact storage.");
+          await voiceArtifacts.closeCall(
+            binding,
+            callId,
+            failedVoiceArtifactCalls.has(
+              JSON.stringify([binding.agentId, binding.threadId, callId]),
+            ),
+          );
+        } catch {
+          voiceArtifactWarnings.set(
+            voiceArtifactKey(binding),
+            "Voice transcript closure could not be saved. Its completion state is unavailable.",
+          );
+        } finally {
+          voiceArtifactsChanged();
+        }
+      },
     });
     const publishPolicy = async (policyId: string) => {
       const workspace = environments!
@@ -467,6 +594,29 @@ export async function startUnifiedApplication(
     };
     const environmentOwnerApi = {
       snapshot: () => environments!.ownerSnapshot(owner),
+      templates: {
+        snapshot: () => environmentTemplates!.ownerSnapshot(owner),
+        save: (
+          input: Parameters<
+            ProjectEnvironmentTemplateCatalogue["saveTemplate"]
+          >[1],
+        ) => {
+          if (closing) throw new Error("Crew is closing.");
+          return environmentTemplates!.saveTemplate(owner, input);
+        },
+        assign: (
+          input: Parameters<ProjectEnvironmentTemplateCatalogue["assign"]>[1],
+        ) => {
+          if (closing) throw new Error("Crew is closing.");
+          return environmentTemplates!.assign(owner, input);
+        },
+        inspect: async (
+          input: Parameters<ProjectEnvironmentTemplateCatalogue["inspect"]>[1],
+        ) => {
+          if (closing) throw new Error("Crew is closing.");
+          return environments!.inspectTemplate(owner, input);
+        },
+      },
       async prepareFolderAccess(input: FolderAccessPreparation) {
         if (closing) throw new Error("Crew is closing.");
         const prepared = await environments!.prepareFolderAccess(owner, input);
@@ -501,28 +651,38 @@ export async function startUnifiedApplication(
       publishPolicy,
       reconcileOperation: (operationId: string) =>
         environments!.reconcileOperation(owner, operationId),
+      // Read-only evidence stays available for failed-project Quit/recovery.
+      inspectOperation: (operationId: string) =>
+        environments!.inspectOperation(owner, operationId),
     };
+    const additionalTools = options.agentTools?.({
+      authorization,
+      runAuthorized: (caller, action, operation) =>
+        gate.run(async () => {
+          if (closing || !foundation!.executionAllowed(caller))
+            throw new Error("This native session cannot admit tool work.");
+          await foundation!.records.authorize(
+            { type: "agent", caller },
+            action,
+            { type: "project" },
+          );
+          if (action === "skills.write" || action === "browser.control")
+            await foundation!.noteExecutionAdmitted(caller);
+          return operation();
+        }),
+    });
     mcp = await startAgentMcpHost({
       privateDirectory: join(root, "native-transport"),
       foundation,
       broker: gateway.broker,
-      additionalTools: options.agentTools?.({
-        authorization,
-        runAuthorized: (caller, action, operation) =>
-          gate.run(async () => {
-            if (closing || !foundation!.executionAllowed(caller))
-              throw new Error("This native session cannot admit skill work.");
-            await foundation!.records.authorize(
-              { type: "agent", caller },
-              action,
-              { type: "project" },
-            );
-            if (action === "skills.write")
-              await foundation!.noteExecutionAdmitted(caller);
-            return operation();
-          }),
-      }),
+      additionalTools,
     });
+    if (additionalTools?.subscribe)
+      cleanupSubscriptions.push(
+        additionalTools.subscribe(() => {
+          void mcp?.refreshTools();
+        }),
+      );
     cleanupSubscriptions.push(
       authorization.subscribe(() => {
         void mcp?.refreshTools();
@@ -540,6 +700,41 @@ export async function startUnifiedApplication(
         projectName: options.projectName,
         defaultModelAccessId: modelAccess.id,
         defaultRuntimeConfigRef: unifiedRuntimeDefaults.configRef,
+        voiceArtifacts: {
+          revision: () => voiceArtifactRevision,
+          subscribe: (listener) => {
+            voiceArtifactListeners.add(listener);
+            return () => {
+              voiceArtifactListeners.delete(listener);
+            };
+          },
+          read: async (agentId, threadId, cursor) => {
+            try {
+              if (!voiceArtifacts)
+                throw new Error("Unavailable voice artifact storage.");
+              const page = await voiceArtifacts.list(agentId, threadId, cursor);
+              return {
+                state: "acknowledged",
+                value: {
+                  ...page,
+                  warning:
+                    voiceArtifactWarnings.get(
+                      voiceArtifactKey({ agentId, threadId }),
+                    ) ?? null,
+                },
+              };
+            } catch {
+              return {
+                state: "failed",
+                error: {
+                  code: "runtime_error",
+                  message:
+                    "Saved voice transcripts could not be read. Existing native chat history has been retained.",
+                },
+              };
+            }
+          },
+        },
         catalog: async () => ({
           skills: await options.skills.list(),
           serviceConnections: (
@@ -590,6 +785,7 @@ export async function startUnifiedApplication(
           );
         stops.push(
           environments!.subscribe(() => listener({ kind: "changed" })),
+          environmentTemplates!.subscribe(() => listener({ kind: "changed" })),
         );
         return () => stops.forEach((stop) => stop());
       },
@@ -649,6 +845,9 @@ export async function startUnifiedApplication(
         },
         runtimeDefaults: unifiedRuntimeDefaults,
         listAgents: () => foundation!.agentViews(),
+        resolveEnvironmentTemplate: async (pin) => {
+          environmentTemplates!.resolvePinned(pin.id, pin.revision);
+        },
         setupChoices: async () => registry.setupChoices(),
         catalogueSnapshot: (connection) =>
           gateway.catalogue.projection(connection),
@@ -736,9 +935,15 @@ export async function startUnifiedApplication(
               for (const stop of cleanupSubscriptions) stop();
             });
             await finishStep("voice", () => voice!.dispose());
+            await finishStep("voiceArtifacts", async () => {
+              await voiceArtifacts?.dispose();
+            });
             await finishStep("mcp", () => mcp!.close());
             await finishStep("nativeAccess", () => nativeAccess!.close());
             await finishStep("environments", () => environments!.close());
+            await finishStep("environmentTemplates", () =>
+              environmentTemplates!.close(),
+            );
             await finishStep("connectionSetup", () => connectionSetup.close());
             await finishStep("accessStore", () => accessStore!.close());
             closedSteps.add("resources");
@@ -753,9 +958,11 @@ export async function startUnifiedApplication(
   } catch (error) {
     for (const stop of cleanupSubscriptions) stop();
     await voice?.dispose().catch(() => {});
+    await voiceArtifacts?.dispose().catch(() => {});
     await mcp?.close().catch(() => {});
     await nativeAccess?.close().catch(() => {});
     await environments?.close().catch(() => {});
+    await environmentTemplates?.close().catch(() => {});
     if (foundation) await foundation.dispose().catch(() => {});
     else await store.close().catch(() => {});
     await accessStore?.close().catch(() => {});

@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -13,6 +14,11 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Choice } from "../access/shared";
+import { AgentPicture, type AgentImageClient } from "./AgentPicture";
+import { AgentManagerSelection } from "./AgentManagerSelection";
+import { AgentEnvironmentTemplate } from "./AgentEnvironmentTemplate";
+import { readProfilePicture } from "../manager/profile";
+import type { AgentConfigurationOptions } from "../../../src/application/agent-configuration-contracts.mjs";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
 import type {
   CrewAction,
@@ -156,7 +162,39 @@ export function AgentSetupWizard(props: Props) {
   const [conflict, setConflict] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [connecting, setConnecting] = useState(false);
-  const [repairId, setRepairId] = useState("");
+  const connectionFlow = useRef<{ recordId: string } | null>(null);
+  const [options, setOptions] = useState<AgentConfigurationOptions | null>(
+    null,
+  );
+  const [optionsError, setOptionsError] = useState("");
+  const imageClient = useMemo<AgentImageClient>(
+    () => ({
+      readImage: (imageRef) => command("images.read", { imageRef }),
+      saveImage: (picture) => command("images.save", { picture }),
+    }),
+    [command],
+  );
+  const optionsSequence = useRef(0);
+  const reloadOptions = useCallback(async () => {
+    const request = ++optionsSequence.current;
+    try {
+      const next = await command<AgentConfigurationOptions>(
+        "agents.options",
+        {},
+      );
+      if (!next?.runtime || !next.voices || !Array.isArray(next.voices.values))
+        throw new Error();
+      if (alive.current && request === optionsSequence.current) {
+        setOptions(next);
+        setOptionsError("");
+      }
+    } catch {
+      if (alive.current && request === optionsSequence.current)
+        setOptionsError(
+          "Voice choices could not be refreshed. Saved choices are retained.",
+        );
+    }
+  }, [command]);
   const current = useRef<AgentSetupRecord | null>(null);
   const local = useRef<AgentSetupDraft | null>(null);
   const alive = useRef(true),
@@ -166,6 +204,14 @@ export function AgentSetupWizard(props: Props) {
   const pendingSave = useRef<Promise<AgentSetupRecord> | null>(null);
   const accept = useCallback(
     (next: AgentSetupRecord | null, replaceDraft = true) => {
+      if (
+        connectionFlow.current &&
+        (connectionFlow.current.recordId !== next?.id ||
+          next.phase === "complete")
+      ) {
+        connectionFlow.current = null;
+        if (alive.current) setConnecting(false);
+      }
       current.current = next;
       if (alive.current) {
         setRecord(next);
@@ -211,10 +257,14 @@ export function AgentSetupWizard(props: Props) {
     alive.current = true;
     return () => {
       alive.current = false;
+      connectionFlow.current = null;
       readSequence.current++;
       accessSequence.current++;
     };
   }, []);
+  useEffect(() => {
+    if (visible) void reloadOptions();
+  }, [visible, reloadOptions]);
   useEffect(() => {
     if (visible && !action.current)
       void reload().catch(() =>
@@ -313,13 +363,28 @@ export function AgentSetupWizard(props: Props) {
       if (alive.current) setBusy(false);
     }
   }
-  function begin(mode: "create" | "repair", agentId?: string) {
+  function begin(mode: "create" | "repair", agentId?: string, discard = false) {
     void run(async () => {
-      const next = await command<AgentSetupRecord>("setup.new", {
-        expectedRevision: current.current?.revision ?? null,
-        mode,
-        ...(agentId ? { agentId } : {}),
-      });
+      if (discard && pendingSave.current)
+        await pendingSave.current.catch(() => {});
+      if (
+        !discard &&
+        local.current &&
+        current.current &&
+        !same(local.current, current.current.draft)
+      )
+        await save();
+      const latest = discard
+        ? await command<AgentSetupRecord | null>("setup.read", {})
+        : current.current;
+      const next = await command<AgentSetupRecord>(
+        discard ? "setup.new" : "setup.open",
+        {
+          expectedRevision: latest?.revision ?? null,
+          mode,
+          ...(agentId ? { agentId } : {}),
+        },
+      );
       accept(next);
       setPaused(false);
       setConflict(false);
@@ -349,7 +414,7 @@ export function AgentSetupWizard(props: Props) {
       if (result.phase === "complete") {
         setNotice(
           result.result?.mode === "repair"
-            ? "Access updated. Your next tool call will use the saved access; your conversation is retained."
+            ? "Agent saved. Access applies to the next tool call; restart its session to apply changed instructions. Your conversation is retained."
             : "Agent created and ready to start when you choose.",
         );
         await refresh().catch(() =>
@@ -365,6 +430,19 @@ export function AgentSetupWizard(props: Props) {
   const locked = busy || conflict || record?.phase === "applying";
   const dirty = !same(draft, record?.draft);
   const review = !dirty ? record?.review : null;
+  const renderedConnectionFlow = connectionFlow.current;
+  const ownsConnectionFlow = () =>
+    Boolean(
+      alive.current &&
+      renderedConnectionFlow &&
+      connectionFlow.current === renderedConnectionFlow &&
+      current.current?.id === renderedConnectionFlow.recordId,
+    );
+  const closeConnectionFlow = () => {
+    if (!ownsConnectionFlow()) return;
+    connectionFlow.current = null;
+    setConnecting(false);
+  };
   return (
     <div
       className={`${firstUse ? "mx-auto max-w-3xl px-5 py-8 sm:px-8" : "py-6"} min-w-0 space-y-6`}
@@ -376,13 +454,13 @@ export function AgentSetupWizard(props: Props) {
               ? "Set up your manager"
               : active
                 ? draft.mode === "repair"
-                  ? "Update agent access"
+                  ? "Edit agent"
                   : "Create an agent"
-                : "Build your team"}
+                : "Your agents"}
           </h1>
           <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
             {active && draft.mode === "repair"
-              ? `Review and update access for ${draft.name}.`
+              ? `Configure ${draft.name}, its skills and the access it can use.`
               : "Choose how your agent can help, the files it can use and any services it needs."}
           </p>
         </div>
@@ -390,7 +468,9 @@ export function AgentSetupWizard(props: Props) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={busy || saving || record.phase === "applying"}
+            disabled={
+              busy || saving || connecting || record.phase === "applying"
+            }
             onClick={() =>
               void run(async () => {
                 await save();
@@ -459,9 +539,9 @@ export function AgentSetupWizard(props: Props) {
                 variant="outline"
                 size="sm"
                 disabled={busy}
-                onClick={() => begin("repair", draft.agentId!)}
+                onClick={() => begin("repair", draft.agentId!, true)}
               >
-                Reload this agent’s current access
+                Discard this draft and reload agent
               </Button>
             )}
         </div>
@@ -481,44 +561,89 @@ export function AgentSetupWizard(props: Props) {
               </p>
               <Button onClick={() => setPaused(false)}>Resume setup</Button>
             </div>
-          ) : (
-            <Button disabled={busy} onClick={() => begin("create")}>
+          ) : null}
+          {(!firstUse || !record || record.phase === "complete") && (
+            <Button
+              disabled={busy || record?.phase === "applying"}
+              onClick={() => begin("create")}
+            >
               <Plus />
               {firstUse ? "Get started" : "Create agent"}
             </Button>
           )}
-          {agents.length > 0 && (!record || record.phase === "complete") && (
-            <section className="space-y-3 border-t pt-5">
-              <h2 className="font-medium">Update an existing agent’s access</h2>
-              <p className="text-sm text-muted-foreground">
-                Keep its conversation and profile while changing the folders,
-                groups and connections it can use.
-              </p>
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-0 flex-1 space-y-2">
-                  <Label htmlFor={`${id}-repair`}>Agent</Label>
-                  <NativeSelect
-                    id={`${id}-repair`}
-                    value={repairId}
-                    onChange={(event) => setRepairId(event.target.value)}
-                  >
-                    <option value="">Choose an agent</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.profile.name}
-                      </option>
-                    ))}
-                  </NativeSelect>
-                </div>
-                <Button
-                  variant="outline"
-                  disabled={busy || !repairId}
-                  onClick={() => begin("repair", repairId)}
-                >
-                  Update access
-                </Button>
-              </div>
-            </section>
+          {!firstUse && (
+            <AgentManagerSelection
+              snapshot={snapshot}
+              command={command}
+              refresh={refresh}
+              onNotify={setNotice}
+            />
+          )}
+          {!firstUse && (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-left text-sm">
+                <caption className="sr-only">
+                  Project agents and their saved configuration
+                </caption>
+                <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Agent</th>
+                    <th className="px-4 py-3 font-medium">Role</th>
+                    <th className="px-4 py-3 font-medium">Session</th>
+                    <th className="px-4 py-3 font-medium">Voice</th>
+                    <th className="px-4 py-3 font-medium">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {agents.map((agent) => (
+                    <tr key={agent.id}>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <AgentPicture
+                            client={imageClient}
+                            imageRef={agent.profile.pictureRef}
+                            className="size-9"
+                          />
+                          <span className="font-medium">
+                            {agent.profile.name}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {agent.id ===
+                        (snapshot.projectSettings?.primaryAgentId ??
+                          snapshot.primaryAgentId)
+                          ? "Manager"
+                          : "Agent"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {agent.runtime.session.observedState}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {agent.profile.voice ?? "Native default"}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={busy || record?.phase === "applying"}
+                          onClick={() => begin("repair", agent.id)}
+                        >
+                          Edit {agent.profile.name}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!agents.length && (
+                <p className="px-4 py-8 text-sm text-muted-foreground">
+                  Create your first agent to choose a manager.
+                </p>
+              )}
+            </div>
           )}
         </div>
       ) : (
@@ -601,9 +726,8 @@ export function AgentSetupWizard(props: Props) {
               <StepTitle
                 title={draft.mode === "repair" ? draft.name : "Meet your agent"}
               >
-                {draft.mode === "repair"
-                  ? "This setup changes access. Edit the agent’s profile separately when you want to change its instructions."
-                  : "Give your agent a name and tell it how you want to work together."}
+                Give your agent a name, choose its voice and tell it how you
+                want to work together.
               </StepTitle>
               <div className="space-y-2">
                 <Label htmlFor={`${id}-name`}>Name</Label>
@@ -611,31 +735,213 @@ export function AgentSetupWizard(props: Props) {
                   id={`${id}-name`}
                   value={draft.name}
                   maxLength={200}
-                  disabled={locked || draft.mode === "repair"}
+                  disabled={locked}
                   onChange={(event) => change({ name: event.target.value })}
                 />
               </div>
               <div className="space-y-2">
+                <Label htmlFor={`${id}-picture`}>Picture</Label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <AgentPicture
+                    client={imageClient}
+                    imageRef={draft.pictureRef}
+                    className="size-12"
+                  />
+                  <Input
+                    id={`${id}-picture`}
+                    className="max-w-xs text-xs"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={locked}
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = "";
+                      if (!file) return;
+                      const targetId = current.current?.id;
+                      void run(async () => {
+                        const picture = await readProfilePicture(file);
+                        const result = await command<{ imageRef: string }>(
+                          "images.save",
+                          { picture },
+                        );
+                        if (current.current?.id === targetId)
+                          change({ pictureRef: result.imageRef });
+                      });
+                    }}
+                  />
+                  {draft.pictureRef && (
+                    <Button
+                      variant="link"
+                      size="sm"
+                      disabled={locked}
+                      onClick={() => change({ pictureRef: null })}
+                    >
+                      Remove picture
+                    </Button>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  PNG, JPEG or WebP, up to 512 KB and 2048 × 2048 pixels. Stored
+                  privately in this project.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-personality`}>Personality</Label>
+                <Textarea
+                  id={`${id}-personality`}
+                  value={draft.personality}
+                  rows={3}
+                  maxLength={200000}
+                  disabled={locked}
+                  onChange={(event) =>
+                    change({ personality: event.target.value })
+                  }
+                  placeholder="How should this colleague communicate and approach work?"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-voice`}>Voice</Label>
+                <div className="flex flex-wrap gap-2">
+                  <NativeSelect
+                    id={`${id}-voice`}
+                    value={draft.voice ?? ""}
+                    disabled={locked}
+                    onChange={(event) =>
+                      change({ voice: event.target.value || null })
+                    }
+                  >
+                    <option value="">Native default</option>
+                    {draft.voice &&
+                      !options?.voices.values.some(
+                        (voice) => voice.id === draft.voice,
+                      ) && (
+                        <option value={draft.voice} disabled>
+                          Saved voice: {draft.voice}
+                        </option>
+                      )}
+                    {options?.voices.values.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.name}
+                      </option>
+                    ))}
+                  </NativeSelect>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={locked}
+                    onClick={() => void reloadOptions()}
+                  >
+                    Refresh voices
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Saved for this agent’s next call. Choosing a manager keeps
+                  each agent’s own voice.
+                </p>
+                {options?.voices.state !== "available" && (
+                  <p className="text-xs text-muted-foreground">
+                    A started native session supplies the voice catalogue. You
+                    can keep the native default or a saved voice until one is
+                    available.
+                  </p>
+                )}
+                {optionsError && (
+                  <p role="alert" className="text-xs text-destructive">
+                    {optionsError}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label>Model access</Label>
+                <p className="rounded-md border px-3 py-2 text-sm">
+                  {options?.runtime.label ??
+                    "ChatGPT subscription · Crew isolated Codex profile"}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  This is the supported runtime for this project. Subscription
+                  sign-in is shared by its agents and remains separate from
+                  service credentials.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <AgentEnvironmentTemplate
+                  agentId={draft.agentId}
+                  command={command}
+                  subscribe={subscribe}
+                  visible={visible}
+                />
                 <Label htmlFor={`${id}-instructions`}>Instructions</Label>
                 <Textarea
                   id={`${id}-instructions`}
                   rows={6}
-                  maxLength={100000}
+                  maxLength={200000}
                   value={draft.instructions}
-                  disabled={locked || draft.mode === "repair"}
+                  disabled={locked}
                   onChange={(event) =>
                     change({ instructions: event.target.value })
                   }
                 />
               </div>
-              <Choice
-                checked={draft.makePrimary}
-                disabled={locked}
-                onChange={(value) => change({ makePrimary: value })}
-                description="The manager is the agent you talk to in the main conversation."
-              >
-                Use as my manager
-              </Choice>
+              <details className="rounded-lg border px-4 py-3 text-sm">
+                <summary className="font-medium">
+                  Writing useful instructions
+                </summary>
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                  Describe responsibilities, project context and how decisions
+                  should reach you. Permissions are reviewed separately. Saving
+                  keeps the chat and does not start work. For an existing chat,
+                  explicit Restart applies changed instructions by summarizing
+                  active context while retaining readable history; this uses
+                  model allowance.
+                </p>
+              </details>
+              <fieldset className="space-y-3 border-t pt-5">
+                <legend className="pr-2 text-sm font-medium">Skills</legend>
+                {snapshot.skills?.length ? (
+                  snapshot.skills.map((skill) => (
+                    <Choice
+                      key={skill.id}
+                      checked={draft.skills.some(
+                        (item) => item.skillId === skill.id && item.enabled,
+                      )}
+                      disabled={locked}
+                      onChange={(enabled) =>
+                        change({
+                          skills: [
+                            ...draft.skills.filter(
+                              (item) => item.skillId !== skill.id,
+                            ),
+                            { skillId: skill.id, enabled },
+                          ],
+                        })
+                      }
+                      description={skill.description}
+                    >
+                      {skill.name}
+                    </Choice>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    No project skills yet. Add reusable instructions in Skills,
+                    then select them here.
+                  </p>
+                )}
+              </fieldset>
+              {draft.mode === "create" ? (
+                <Choice
+                  checked={draft.makePrimary}
+                  disabled={locked}
+                  onChange={(value) => change({ makePrimary: value })}
+                  description="The manager is the agent you talk to in the main conversation."
+                >
+                  Use as my manager
+                </Choice>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Manager selection is managed in the Agents table. Saving this
+                  agent keeps that selection unchanged.
+                </p>
+              )}
             </section>
           )}
           {draft.step === 3 && access && (
@@ -775,13 +1081,18 @@ export function AgentSetupWizard(props: Props) {
                 Connect the services your agent needs, or continue with local
                 work in Crew.
               </StepTitle>
-              {connecting && props.renderConnectionWizard ? (
+              {connecting &&
+              renderedConnectionFlow &&
+              props.renderConnectionWizard ? (
                 props.renderConnectionWizard({
                   snapshot: access,
                   onCommand: (name, args) => command(`access.${name}`, args),
-                  onNotify: setNotice,
+                  onNotify: (message) => {
+                    if (ownsConnectionFlow()) setNotice(message);
+                  },
                   onComplete: (connectionId) => {
-                    setConnecting(false);
+                    if (!ownsConnectionFlow()) return;
+                    closeConnectionFlow();
                     change({
                       serviceConnectionIds: toggle(
                         local.current?.serviceConnectionIds ?? [],
@@ -795,8 +1106,8 @@ export function AgentSetupWizard(props: Props) {
                       ),
                     );
                   },
-                  onCancel: () => setConnecting(false),
-                  onSkip: () => setConnecting(false),
+                  onCancel: closeConnectionFlow,
+                  onSkip: closeConnectionFlow,
                 })
               ) : (
                 <>
@@ -901,7 +1212,10 @@ export function AgentSetupWizard(props: Props) {
                     <Button
                       variant="outline"
                       disabled={locked}
-                      onClick={() => setConnecting(true)}
+                      onClick={() => {
+                        connectionFlow.current = { recordId: record.id };
+                        setConnecting(true);
+                      }}
                     >
                       <Plus />
                       Add connection
@@ -920,7 +1234,7 @@ export function AgentSetupWizard(props: Props) {
             <section className="space-y-5">
               <StepTitle title="Review your choices">
                 {draft.mode === "repair"
-                  ? "Apply this access to the existing agent."
+                  ? "Save this agent’s profile, voice, skills and reviewed access."
                   : "Create your agent with the access shown below. It will be ready for you to start."}
               </StepTitle>
               {review ? (
@@ -928,7 +1242,8 @@ export function AgentSetupWizard(props: Props) {
               ) : (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    Review the current access before continuing.
+                    Review the current configuration and access before
+                    continuing.
                   </p>
                   <Button
                     variant="outline"
@@ -1001,7 +1316,7 @@ export function AgentSetupWizard(props: Props) {
                       : record.phase === "applying"
                         ? "Continue setup"
                         : draft.mode === "repair"
-                          ? "Save access"
+                          ? "Save agent"
                           : draft.makePrimary
                             ? "Create manager"
                             : "Create agent"}
@@ -1060,11 +1375,24 @@ function Review({
       <div className="py-4">
         <p className="text-sm font-medium">
           {draft.name}
-          {draft.makePrimary ? " · Your manager" : ""}
+          {draft.mode === "create" && draft.makePrimary
+            ? " · Your manager"
+            : ""}
         </p>
-        {draft.mode === "create" && (
-          <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
-            {draft.instructions || "No additional instructions."}
+        <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+          {draft.personality || "No personality guidance."}
+        </p>
+        <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+          {draft.instructions || "No additional instructions."}
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Voice: {draft.voice ?? "Native default"} ·{" "}
+          {draft.skills.filter((item) => item.enabled).length} skills selected
+        </p>
+        {draft.mode === "repair" && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Changed instructions apply after explicit Restart. Your chat is
+            retained.
           </p>
         )}
       </div>

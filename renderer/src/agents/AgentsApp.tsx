@@ -1,16 +1,16 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import type { ChangeEvent, CSSProperties, ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   GitBranch,
+  Globe,
   Keyboard,
   Mic,
   Layers,
   NotebookPen,
   Settings2,
   Radio,
-  UserRound,
   FolderGit2,
   LayoutDashboard,
   Link2,
@@ -36,9 +36,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
-import { readProfilePicture } from "../manager/profile";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
+import { SavedVoiceArtifacts } from "./SavedVoiceArtifacts";
 import { WorkerReference } from "../manager/worker/WorkerReference";
 import { WebLink } from "../manager/WebLink";
 import { Input } from "@/components/ui/input";
@@ -65,12 +65,7 @@ import type {
   RuntimeHistoryItem,
   Skill,
 } from "../../../src/agents/contracts.mjs";
-import type {
-  AgentsClient,
-  AgentsSnapshot,
-  CreateJobInput,
-  ProfileInput,
-} from "./client";
+import type { AgentsClient, AgentsSnapshot, CreateJobInput } from "./client";
 import crewMark from "../../../build/crew-mark.png";
 import "./agents.css";
 
@@ -86,6 +81,7 @@ export interface AgentSettingsPanel {
   }): ReactNode;
 }
 export interface AgentsAppProps {
+  renderBrowser?: (context: { snapshot: AgentsSnapshot; selectedAgent: Agent | null; client: AgentsClient; visible: boolean }) => ReactNode;
   client: AgentsClient;
   /** #89 supplies access, connections and approval panels; foundation owns navigation. */
   settingsPanels?: AgentSettingsPanel[];
@@ -122,6 +118,7 @@ type Action = (
   success?: string,
 ) => Promise<boolean>;
 type View =
+  | "browser"
   | "conversation"
   | "agents"
   | "scratchpad"
@@ -139,6 +136,7 @@ const statusLabels: Record<JobStatus, string> = {
 };
 
 export function AgentsApp({
+  renderBrowser,
   client,
   settingsPanels = [],
   banner,
@@ -328,40 +326,6 @@ export function AgentsApp({
               </p>
             ),
         },
-        {
-          id: "crew-manager",
-          label: "Manager profile",
-          description:
-            "Customize your manager’s identity, personality, instructions and project skills.",
-          icon: UserRound,
-          render: () =>
-            primary ? (
-              <ProfileEditor
-                key={primary.id}
-                agent={primary}
-                client={client}
-                skills={snapshot.skills}
-                pending={pending.has(`profile-${primary.id}`)}
-                onSave={async (input) => {
-                  let saved: Agent | null = null;
-                  const success = await act(
-                    `profile-${primary.id}`,
-                    async () => {
-                      saved = await client.saveProfile(primary.id, {
-                        ...input,
-                        expectedRevision:
-                          input.expectedRevision ?? primary.profile.revision,
-                      });
-                    },
-                    primary.runtime.threadId
-                      ? "Profile saved. Restart to apply changed instructions."
-                      : "Profile saved. Start will use these instructions.",
-                  );
-                  return success ? saved : null;
-                }}
-              />
-            ) : null,
-        },
         ...settingsPanels,
         {
           id: "crew-attention",
@@ -399,7 +363,7 @@ export function AgentsApp({
   const detailVisible = view === "agents" && selectedId !== null;
   const normalView =
     !setupVisible &&
-    (view === "conversation" || view === "agents" || view === "scratchpad") &&
+    (view === "conversation" || view === "agents" || view === "scratchpad" || view === "browser") &&
     !detailVisible;
   return (
     <div className="agents-app flex h-dvh min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -441,6 +405,7 @@ export function AgentsApp({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          {renderBrowser && <Button variant={view === "browser" ? "secondary" : "ghost"} aria-pressed={view === "browser"} onClick={() => setView("browser")}><Globe /><span className="hidden sm:inline">Browser</span><span className="sr-only sm:hidden">Browser</span></Button>}
           <Button
             variant={view === "settings" ? "secondary" : "ghost"}
             aria-pressed={view === "settings"}
@@ -662,10 +627,10 @@ export function AgentsApp({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => openSettings("agent-setup")}
+                  onClick={() => openSettings("agents")}
                 >
                   <Plus />
-                  Create agent / update access
+                  Manage agents
                 </Button>
               </div>
               <AgentWorkerList
@@ -676,6 +641,7 @@ export function AgentsApp({
               />
             </aside>
           </main>
+          {renderBrowser?.({ snapshot, selectedAgent: snapshot.agents.find(agent => agent.id === selectedId) ?? primary, client, visible: !setupVisible && view === "browser" })}
           {snapshot.agents
             .filter(
               (agent) => visitedIds.has(agent.id) && agent.id !== primary?.id,
@@ -708,6 +674,7 @@ export function AgentsApp({
                     setSelectedId(null);
                     setView("agents");
                   }}
+                  onEdit={() => openSettings("agents")}
                 />
               </div>
             ))}
@@ -965,13 +932,14 @@ function AgentSessionPanel({
         Stop preserves the chat, notes and resources. Start never connects voice
         or creates an assignment.
       </p>
-      {pendingProfile && session.instructionPreparation?.state !== "compacting" && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {agent.runtime.threadId
-            ? "Saved instructions or skills are waiting for Restart."
-            : "Start applies your saved instructions and skills."}
-        </p>
-      )}
+      {pendingProfile &&
+        session.instructionPreparation?.state !== "compacting" && (
+          <p role="status" className="text-sm text-muted-foreground">
+            {agent.runtime.threadId
+              ? "Saved instructions or skills are waiting for Restart."
+              : "Start applies your saved instructions and skills."}
+          </p>
+        )}
       {session.instructionPreparation?.state === "compacting" && (
         <p role="status" className="text-sm text-muted-foreground">
           Updating instructions in this chat. Codex is summarizing its active
@@ -1029,6 +997,7 @@ function AgentDetail({
   visible,
   onBack,
   onArchived,
+  onEdit,
 }: {
   agent: Agent;
   snapshot: AgentsSnapshot;
@@ -1039,6 +1008,7 @@ function AgentDetail({
   visible: boolean;
   onBack(): void;
   onArchived(): void;
+  onEdit(): void;
 }) {
   const [tab, setTab] = useState<
     "overview" | "conversation" | "notes" | "links"
@@ -1138,36 +1108,15 @@ function AgentDetail({
             pending={pending}
             act={act}
           />
-          <details className="border-t pt-5">
-            <summary className="text-sm font-medium">
-              Profile and instructions
-            </summary>
-            <div className="mt-5">
-              <ProfileEditor
-                agent={agent}
-                client={client}
-                skills={snapshot.skills}
-                pending={pending.has(`profile-${agent.id}`)}
-                onSave={async (input) => {
-                  let saved: Agent | null = null;
-                  const success = await act(
-                    `profile-${agent.id}`,
-                    async () => {
-                      saved = await client.saveProfile(agent.id, {
-                        ...input,
-                        expectedRevision:
-                          input.expectedRevision ?? agent.profile.revision,
-                      });
-                    },
-                    agent.runtime.threadId
-                      ? "Profile saved. Restart to apply changed instructions."
-                      : "Profile saved. Start will use these instructions.",
-                  );
-                  return success ? saved : null;
-                }}
-              />
-            </div>
-          </details>
+          <section className="border-t pt-5">
+            <Button variant="outline" onClick={onEdit}>
+              Edit agent configuration
+            </Button>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Identity, instructions, voice, skills and access are managed
+              together in Agents settings.
+            </p>
+          </section>
           <p className="text-xs text-muted-foreground">
             Reports to {actorLabel(agent.reportsTo, snapshot)} ·{" "}
             {agent.access.permissionGroupIds.length} permission groups ·{" "}
@@ -1440,7 +1389,7 @@ function Conversation({
                   />
                 </MessageScrollerItem>
               ))}
-              {hasVoice && !readOnly && (
+              {hasVoice && !readOnly && snapshot.voiceArtifactsRevision == null && (
                 <MessageScrollerItem messageId="voice-history-limit">
                   <p className="text-xs text-muted-foreground">
                     Live voice transcripts are currently available only during
@@ -1450,6 +1399,11 @@ function Conversation({
               )}
               {!readOnly && (
                 <div ref={transcriptTarget} className="empty:hidden" />
+              )}
+              {snapshot.voiceArtifactsRevision != null && client.readVoiceArtifacts && (
+                <MessageScrollerItem messageId="saved-voice-artifacts">
+                  <SavedVoiceArtifacts key={`${agent.id}:${agent.runtime.threadId}`} agent={agent} client={client} revision={snapshot.voiceArtifactsRevision} visible={visible} />
+                </MessageScrollerItem>
               )}
               {(intents.length > 0 || receipts.length > 0) && (
                 <MessageScrollerItem messageId="delivery-activity">
@@ -1800,348 +1754,6 @@ function DeliveryItem({
         ))}
       </details>
     </div>
-  );
-}
-
-type ProfileSave = {
-  profile: ProfileInput;
-  skills: Agent["skills"];
-  expectedRevision?: number;
-};
-function ProfileEditor({
-  agent,
-  client,
-  skills,
-  pending,
-  onSave,
-}: {
-  agent?: Agent;
-  client: AgentsClient;
-  skills: Skill[];
-  pending: boolean;
-  onSave: (input: ProfileSave) => Promise<Agent | null>;
-}) {
-  const [profile, setProfile] = useState<ProfileInput>(() =>
-    agent
-      ? {
-          name: agent.profile.name,
-          pictureRef: agent.profile.pictureRef,
-          personality: agent.profile.personality,
-          systemPrompt: agent.profile.systemPrompt,
-        }
-      : { name: "", pictureRef: null, personality: "", systemPrompt: "" },
-  );
-  const [revision, setRevision] = useState(agent?.profile.revision);
-  const [selection, setSelection] = useState<Agent["skills"]>(
-    agent?.skills ?? [],
-  );
-  const savedSource = useRef(agent);
-  const [dirty, setDirty] = useState(false);
-  const editVersion = useRef(0);
-  const pictureInputId = useId();
-  const pictureRequest = useRef(0);
-  const [draftPicture, setDraftPicture] = useState<string | null | undefined>(
-    undefined,
-  );
-  const [readingPicture, setReadingPicture] = useState(false);
-  const [savingPicture, setSavingPicture] = useState(false);
-  const [pictureError, setPictureError] = useState("");
-  useEffect(
-    () => () => {
-      pictureRequest.current++;
-    },
-    [],
-  );
-  useEffect(() => {
-    if (!agent || dirty || savedSource.current === agent) return;
-    setProfile({
-      name: agent.profile.name,
-      pictureRef: agent.profile.pictureRef,
-      personality: agent.profile.personality,
-      systemPrompt: agent.profile.systemPrompt,
-    });
-    setRevision(agent.profile.revision);
-    setSelection(agent.skills);
-    setDraftPicture(undefined);
-    savedSource.current = agent;
-  }, [agent, dirty]);
-  const change = <K extends keyof ProfileInput>(
-    key: K,
-    value: ProfileInput[K],
-  ) => {
-    editVersion.current++;
-    setDirty(true);
-    setProfile((current) => ({ ...current, [key]: value }));
-  };
-  const choosePicture = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    event.target.value = "";
-    if (!file) return;
-    const request = ++pictureRequest.current;
-    editVersion.current++;
-    setDirty(true);
-    setReadingPicture(true);
-    setPictureError("");
-    try {
-      const picture = await readProfilePicture(file);
-      if (request === pictureRequest.current) setDraftPicture(picture);
-    } catch (error) {
-      if (request === pictureRequest.current) setPictureError(errorText(error));
-    } finally {
-      if (request === pictureRequest.current) setReadingPicture(false);
-    }
-  };
-  return (
-    <form
-      className="space-y-6"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (
-          pending ||
-          savingPicture ||
-          readingPicture ||
-          (agent && dirty && revision !== agent.profile.revision)
-        )
-          return;
-        const submittedVersion = editVersion.current;
-        setSavingPicture(true);
-        setPictureError("");
-        try {
-          const pictureRef =
-            draftPicture === undefined
-              ? profile.pictureRef
-              : draftPicture === null
-                ? null
-                : client.saveImage
-                  ? (await client.saveImage(draftPicture)).imageRef
-                  : await Promise.reject(
-                      new Error(
-                        "Picture uploads are unavailable. Try again when this project reconnects.",
-                      ),
-                    );
-          const saved = await onSave({
-            profile: { ...profile, pictureRef },
-            skills: selection,
-            expectedRevision: revision,
-          });
-          if (saved) {
-            setRevision(saved.profile.revision);
-            if (submittedVersion === editVersion.current) {
-              setProfile({
-                name: saved.profile.name,
-                pictureRef: saved.profile.pictureRef,
-                personality: saved.profile.personality,
-                systemPrompt: saved.profile.systemPrompt,
-              });
-              setDraftPicture(undefined);
-              savedSource.current = saved;
-              setDirty(false);
-            }
-          }
-        } catch {
-          setPictureError(
-            "The profile could not be saved. Your changes are kept; try again.",
-          );
-        } finally {
-          setSavingPicture(false);
-        }
-      }}
-    >
-      <div>
-        <h2 className="text-lg font-semibold">
-          {agent ? "Agent profile" : "Identity and instructions"}
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Profile changes are saved separately from the running session.
-        </p>
-      </div>
-      {agent && dirty && revision !== agent.profile.revision && (
-        <p
-          role="alert"
-          className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
-        >
-          The saved profile changed while you were editing. Your draft is
-          retained; reload the saved version before saving again.
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={pending || savingPicture}
-            onClick={() => {
-              pictureRequest.current++;
-              editVersion.current++;
-              setReadingPicture(false);
-              setDraftPicture(undefined);
-              setPictureError("");
-              setDirty(false);
-            }}
-          >
-            Reload saved profile
-          </Button>
-        </p>
-      )}
-      <Field label="Name">
-        <Input
-          required
-          maxLength={160}
-          value={profile.name}
-          onChange={(event) => change("name", event.target.value)}
-        />
-      </Field>
-      <div className="space-y-2">
-        <p className="text-sm font-medium">Picture</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <AgentPicture
-            client={client}
-            imageRef={profile.pictureRef}
-            picture={draftPicture}
-            className="size-12"
-          />
-          <label
-            htmlFor={pictureInputId}
-            className="cursor-pointer text-xs text-primary"
-          >
-            Choose picture
-          </label>
-          <input
-            id={pictureInputId}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            aria-label="Agent picture"
-            className="max-w-full text-xs"
-            disabled={
-              pending || savingPicture || readingPicture || !client.saveImage
-            }
-            onChange={(event) => void choosePicture(event)}
-          />
-          {(draftPicture === undefined ? profile.pictureRef : draftPicture) && (
-            <Button
-              type="button"
-              variant="link"
-              size="sm"
-              disabled={pending || savingPicture}
-              onClick={() => {
-                pictureRequest.current++;
-                setReadingPicture(false);
-                setPictureError("");
-                setDraftPicture(null);
-                change("pictureRef", null);
-              }}
-            >
-              Remove picture
-            </Button>
-          )}
-        </div>
-        <p className="text-xs leading-5 text-muted-foreground">
-          PNG, JPEG or WebP, up to 512 KB and 2048 × 2048 pixels. The picture
-          stays in this project on this Mac.
-        </p>
-        {readingPicture && (
-          <p role="status" className="text-xs text-muted-foreground">
-            Checking picture…
-          </p>
-        )}
-        {!client.saveImage && (
-          <p className="text-xs text-muted-foreground">
-            Picture uploads are unavailable in this connection.
-          </p>
-        )}
-        {pictureError && (
-          <p role="alert" className="text-xs text-destructive">
-            {pictureError}
-          </p>
-        )}
-      </div>
-      <Field label="Personality">
-        <Textarea
-          rows={3}
-          placeholder="How should this colleague communicate and approach work?"
-          value={profile.personality}
-          onChange={(event) => change("personality", event.target.value)}
-        />
-      </Field>
-      <Field label="Instructions">
-        <Textarea
-          rows={9}
-          className="min-h-56 font-mono text-sm"
-          value={profile.systemPrompt}
-          onChange={(event) => change("systemPrompt", event.target.value)}
-        />
-      </Field>
-      <details className="rounded-lg border px-4 py-3 text-sm">
-        <summary className="font-medium">Writing useful instructions</summary>
-        <div className="mt-3 space-y-3 text-muted-foreground">
-          <p>
-            Describe the agent’s responsibilities, useful project context and
-            how you want decisions or questions brought to you. For example:
-            “Keep research concise, link evidence and ask me when a decision
-            changes the agreed scope.”
-          </p>
-          <p>
-            These instructions define this agent’s behavior. Permissions are
-            managed separately. Saving does not start a turn or alter active
-            instructions. Start uses the profile for a new chat. For an existing
-            chat, use Restart to apply changed instructions; Codex summarizes
-            active context while keeping the readable chat history. This uses
-            model allowance. Unchanged instructions do not trigger that work.
-          </p>
-        </div>
-      </details>
-      <fieldset className="space-y-3 border-t pt-5">
-        <legend className="pr-2 text-sm font-medium">Skills</legend>
-        {skills.length ? (
-          skills.map((skill) => (
-            <label
-              key={skill.id}
-              className="flex items-start gap-3 rounded-lg border p-3 text-sm"
-            >
-              <input
-                type="checkbox"
-                className="mt-1"
-                checked={selection.some(
-                  (item) => item.skillId === skill.id && item.enabled,
-                )}
-                onChange={(event) => {
-                  editVersion.current++;
-                  setDirty(true);
-                  setSelection((current) => [
-                    ...current.filter((item) => item.skillId !== skill.id),
-                    { skillId: skill.id, enabled: event.target.checked },
-                  ]);
-                }}
-              />
-              <span>
-                <span className="font-medium">{skill.name}</span>
-                <span className="mt-1 block text-xs text-muted-foreground">
-                  {skill.description}
-                </span>
-              </span>
-            </label>
-          ))
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            No project skills are available. Native skill authoring is managed
-            separately.
-          </p>
-        )}
-      </fieldset>
-      <div className="flex justify-end border-t pt-5">
-        <Button
-          type="submit"
-          disabled={
-            pending ||
-            savingPicture ||
-            readingPicture ||
-            !profile.name.trim() ||
-            Boolean(agent && dirty && revision !== agent.profile.revision)
-          }
-        >
-          {(pending || savingPicture) && (
-            <LoaderCircle className="animate-spin" />
-          )}{" "}
-          {agent ? "Save profile" : "Create agent"}
-        </Button>
-      </div>
-    </form>
   );
 }
 

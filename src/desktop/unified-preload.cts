@@ -9,6 +9,7 @@ const allowed = new Set([
   "chooseProjectDirectory",
   "createProject",
   "selectProject",
+  "recoverProject",
   "renameProject",
   "ownerSnapshot",
   "ownerCommand",
@@ -18,6 +19,7 @@ const allowed = new Set([
   "copyText",
   "openWebLink",
   "updates",
+  "browser",
 ]);
 contextBridge.exposeInMainWorld(
   "crewDesktop",

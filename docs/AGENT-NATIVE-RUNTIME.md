@@ -614,6 +614,11 @@ turn pagination omits voice transcript segments. Reopening the app therefore can
 live transcript. The absent promotion still prevents attributing the server-created coding turn
 to owner voice; private and unknown turns remain hidden by the existing history filter.
 
+#107 adds separately labelled [owner-readable voice artifacts](AGENT-VOICE-ARTIFACTS.md)
+for newly observed public typed transcript items. This does not make native timeline retrieval
+available or alter the coding-turn visibility boundary. The live projection itself remains
+call-scoped; saved artifacts are an explicit Crew-owned display capability.
+
 The transcript controller waits for native started with a nonnull realtime session ID before
 accepting item transcripts, then requires exact item/session identity. Deltas require a role
 registered by an accepted item in that call. Delayed prior-call items cannot be relabeled with

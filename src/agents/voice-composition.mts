@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { VoiceTranscriptRecord } from "./voice-artifacts.mjs";
 import type { ExecutionAdmissionGate, RuntimeBinding } from "./contracts.mjs";
 import type {
   CodexRealtimeAudio,
@@ -52,6 +53,9 @@ export interface PrimaryAgentVoiceOptions {
     input: PublicVoiceTurn,
   ): Promise<void>;
   flush(): Promise<void>;
+  /** Explicit owner-readable artifacts, separate from native chat/model context. */
+  recordVoiceTranscript?(record: VoiceTranscriptRecord): Promise<void>;
+  closeVoiceTranscript?(binding: RuntimeBinding, callId: string): Promise<void>;
   selectedVoice?(binding: RuntimeBinding): string | null;
 }
 type Call = PrimaryVoiceCall & {
@@ -111,6 +115,7 @@ export class PrimaryAgentVoice {
     (event: CodexRealtimeEvent & { callId: string }) => void
   >();
   private correlations = new Set<Promise<void>>();
+  private artifactWrites = new Set<Promise<void>>();
   private readonly unsubscribe: () => void;
 
   constructor(private readonly options: PrimaryAgentVoiceOptions) {
@@ -174,8 +179,20 @@ export class PrimaryAgentVoice {
     if (!call.closedPublished) {
       call.closedPublished = true;
       this.publish(call, "closed");
+      if (this.options.closeVoiceTranscript)
+        this.saveArtifact(() =>
+          this.options.closeVoiceTranscript!(call.binding, call.callId),
+        );
     }
     this.flush();
+  }
+  private saveArtifact(write: () => Promise<void>) {
+    // The host exposes persistence failures independently of audio lifecycle.
+    const pending = Promise.resolve()
+      .then(write)
+      .catch(() => {});
+    this.artifactWrites.add(pending);
+    void pending.finally(() => this.artifactWrites.delete(pending));
   }
   private captureNativeIdentity(call: Call) {
     const native = this.options.runtime.realtimeStatus(call.binding);
@@ -471,6 +488,7 @@ export class PrimaryAgentVoice {
     await this.disconnectNative(call);
     await call.connectDone;
     if (!call.nativeClosed) await this.disconnectNative(call);
+    await Promise.all(this.artifactWrites);
     this.flush();
   }
 
@@ -492,6 +510,7 @@ export class PrimaryAgentVoice {
     this.closed(call);
     await call.connectDone;
     await Promise.all(this.correlations);
+    await Promise.all(this.artifactWrites);
     if (call.correlationFailed)
       throw new Error(
         "Native voice exited, but public handoff persistence remains unresolved.",
@@ -503,6 +522,7 @@ export class PrimaryAgentVoice {
     this.disposed = true;
     await this.disconnect();
     await Promise.all(this.correlations);
+    await Promise.all(this.artifactWrites);
     if (!this.settlement().settled) throw new Error(this.settlement().detail);
     this.unsubscribe();
     this.listeners.clear();
@@ -573,6 +593,26 @@ export class PrimaryAgentVoice {
       return;
     }
     if (call.voiceSessionId !== event.voiceSessionId) return;
+    if (
+      event.kind === "transcript" &&
+      event.itemId &&
+      event.realtimeSessionId &&
+      this.options.recordVoiceTranscript
+    ) {
+      const record: VoiceTranscriptRecord = {
+        binding: { ...call.binding },
+        callId: call.callId,
+        voiceSessionId: event.voiceSessionId,
+        realtimeSessionId: event.realtimeSessionId,
+        itemId: event.itemId,
+        role: event.role,
+        text: event.text,
+        done: event.done,
+        delta: event.delta,
+        observedAt: event.observedAt,
+      };
+      this.saveArtifact(() => this.options.recordVoiceTranscript!(record));
+    }
     if (event.kind === "closed") this.closed(call);
     else if (event.kind === "error") {
       this.refreshAfterFailure(call);
