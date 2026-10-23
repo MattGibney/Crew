@@ -650,3 +650,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - The component audit in docs/UI-COMPONENTS.md records installed shadcn Base UI/Nova components and composition boundaries. Keep generated registry files intact; application behavior belongs in consumers. Preserve mounted voice resources and drafts when adopting Tabs, and use one Sonner Toaster per app root.
 
 - Settings navigation has one Settings heading; do not repeat it with a Project settings subheading above the same navigation list.
+
+- Agent Settings tables present observed started sessions as Online and other session states as Offline, with a green or grey dot inside a pale circular halo to the left of the label. Keep the underlying session state available in the tooltip; availability is separate from agent-reported work progress.

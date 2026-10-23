@@ -654,7 +654,7 @@ export function AgentSetupWizard(props: Props) {
                             Reports to
                           </TableHead>
                           <TableHead className="px-4 py-3 font-medium">
-                            Session
+                            Status
                           </TableHead>
                           <TableHead className="px-4 py-3 font-medium">
                             Voice
@@ -691,10 +691,23 @@ export function AgentSetupWizard(props: Props) {
                                   )?.profile.name ?? "Unavailable agent")}
                             </TableCell>
                             <TableCell className="px-4 py-3 text-muted-foreground">
-                              {agent.runtime.session.observedState
-                                .charAt(0)
-                                .toUpperCase() +
-                                agent.runtime.session.observedState.slice(1)}
+                              <span
+                                className="inline-flex items-center gap-2 whitespace-nowrap"
+                                title={`Session: ${agent.runtime.session.observedState}`}
+                              >
+                                <span
+                                  aria-hidden="true"
+                                  className={`flex size-6 shrink-0 items-center justify-center rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500/10" : "bg-gray-400/10"}`}
+                                >
+                                  <span
+                                    className={`size-2.5 rounded-full ${agent.runtime.session.observedState === "started" ? "bg-green-500" : "bg-gray-400"}`}
+                                  />
+                                </span>
+                                {agent.runtime.session.observedState ===
+                                "started"
+                                  ? "Online"
+                                  : "Offline"}
+                              </span>
                             </TableCell>
                             <TableCell className="px-4 py-3 text-muted-foreground">
                               {agent.profile.voice ?? "Native default"}
