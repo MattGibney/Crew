@@ -648,3 +648,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Check the project’s configured shadcn base/style before installing. Preserve the canonical theme and branding, and compose the installed components using their supported variants and props. If the user links an example, follow its actual component composition.
 
 - The component audit in docs/UI-COMPONENTS.md records installed shadcn Base UI/Nova components and composition boundaries. Keep generated registry files intact; application behavior belongs in consumers. Preserve mounted voice resources and drafts when adopting Tabs, and use one Sonner Toaster per app root.
+
+- Settings navigation has one Settings heading; do not repeat it with a Project settings subheading above the same navigation list.

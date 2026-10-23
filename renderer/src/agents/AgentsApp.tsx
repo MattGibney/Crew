@@ -2775,9 +2775,6 @@ function SettingsView({
           </h1>
           <nav aria-label="Settings pages" className="space-y-6">
             <div>
-              <h2 className="mb-2 px-3 text-[11px] font-medium text-muted-foreground">
-                Project settings
-              </h2>
               <div className="flex flex-wrap gap-2 md:flex-col">
                 {panels.map((item) => {
                   const Icon = item.icon ?? Settings2;
