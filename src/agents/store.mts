@@ -3,13 +3,13 @@ import {
   mkdir,
   open,
   lstat,
-  rename,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import { Ajv } from "ajv";
+import { AgentFileStorage } from "./agent-storage.mjs";
 import type {
   Agent,
   AgentContent,
@@ -712,11 +712,19 @@ export class FoundationStore {
   private failed = false;
   private closing: Promise<void> | null = null;
   private readonly listeners = new Set<() => void>();
+  private readonly files: AgentFileStorage;
   private constructor(
     private readonly directory: string,
     private readonly lock: FileHandle,
     private state: FoundationState,
-  ) {}
+  ) {
+    this.files = new AgentFileStorage(
+      directory,
+      { projectId: state.projectId, ownerUserId: state.ownerUserId },
+      (value) => validateState(value, state.projectId, state.ownerUserId),
+      () => this.ownsLock(),
+    );
+  }
 
   static async open(input: {
     directory: string;
@@ -779,32 +787,10 @@ export class FoundationStore {
         JSON.stringify({ pid: process.pid, token: randomUUID() }),
       );
       await lock.sync();
-      let file: FileHandle | undefined;
-      try {
-        file = await open(
-          join(input.directory, "foundation.json"),
-          constants.O_RDONLY | constants.O_NOFOLLOW,
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      if (file) {
-        try {
-          const stat = await file.stat();
-          if (
-            !stat.isFile() ||
-            stat.nlink !== 1 ||
-            (stat.mode & 0o077) !== 0 ||
-            (process.getuid && stat.uid !== process.getuid()) ||
-            stat.size > 32 * 1024 * 1024
-          )
-            throw new Error("Unsafe foundation state file.");
-          const saved: unknown = JSON.parse(await file.readFile("utf8"));
-          validateState(saved, input.projectId, input.ownerUserId);
-          store.state = saved;
-        } finally {
-          await file.close();
-        }
+      const saved = await store.files.load();
+      if (saved) {
+        validateState(saved, input.projectId, input.ownerUserId);
+        store.state = saved;
       } else await store.persist(initial);
       return store;
     } catch {
@@ -880,35 +866,7 @@ export class FoundationStore {
   private async persist(state: FoundationState): Promise<void> {
     if (!(await this.ownsLock()))
       throw new Error("Foundation writer ownership was lost.");
-    const serialized = JSON.stringify(state);
-    if (Buffer.byteLength(serialized) > 32 * 1024 * 1024)
-      throw new Error("Foundation state exceeds its storage limit.");
-    const temporary = join(this.directory, `foundation-${randomUUID()}.tmp`);
-    const file = await open(
-      temporary,
-      constants.O_WRONLY |
-        constants.O_CREAT |
-        constants.O_EXCL |
-        constants.O_NOFOLLOW,
-      0o600,
-    );
-    try {
-      await file.writeFile(serialized);
-      await file.sync();
-      await file.close();
-      if (!(await this.ownsLock()))
-        throw new Error("Foundation writer ownership was lost.");
-      await rename(temporary, join(this.directory, "foundation.json"));
-      const directory = await open(this.directory, constants.O_RDONLY);
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    } finally {
-      await file.close().catch(() => undefined);
-      await unlink(temporary).catch(() => undefined);
-    }
+    await this.files.persist(state);
   }
 
   close(): Promise<void> {
