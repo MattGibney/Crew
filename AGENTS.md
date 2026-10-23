@@ -662,3 +662,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Cancel must discard only unapplied editor intent without changing an agent or template. Do not embed an independently saving environment selector inside a form promising global Save/Cancel. Keep revision checks, recoverable applying-state errors and truthful partial-success notices.
 
 - Sticky agent-editor actions need a mostly opaque theme background with backdrop blur, including the top scroll inset and side padding, so form content cannot remain sharply visible above or behind the title and Save/Cancel controls.
+
+- Agent editor sections are unboxed, separated by official shadcn Separator horizontal rules. Do not wrap Identity, Instructions, Access, Environment or Runtime sections in cards or bordered panels.

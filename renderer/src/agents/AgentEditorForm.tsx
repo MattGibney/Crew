@@ -4,13 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
-import {
-  Card,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-  CardContent,
-} from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
 import { Choice } from "../access/shared";
 import { AgentPicture, type AgentImageClient } from "./AgentPicture";
 import type { AgentSetupDraft } from "../../../src/desktop/agent-setup-contracts.mjs";
@@ -68,15 +62,15 @@ export function AgentEditorForm({
     groups.flatMap((group) => group.grants.environmentPolicyIds),
   );
   return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Identity</CardTitle>
-          <CardDescription>
+    <div className="space-y-8">
+      <section className="space-y-5">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">Identity</h2>
+          <p className="text-sm text-muted-foreground">
             How this team member appears and communicates.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5">
+          </p>
+        </div>
+        <div className="space-y-5">
           <div className="space-y-2">
             <Label htmlFor={`${id}-name`}>
               Name <span className="text-muted-foreground">(required)</span>
@@ -185,16 +179,17 @@ export function AgentEditorForm({
               </p>
             )}
           </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Instructions</CardTitle>
-          <CardDescription>
+        </div>
+      </section>
+      <Separator />
+      <section className="space-y-5">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">Instructions</h2>
+          <p className="text-sm text-muted-foreground">
             Define responsibilities, working style and when to ask for help.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-2">
+          </p>
+        </div>
+        <div className="space-y-2">
           <Label htmlFor={`${id}-instructions`}>System prompt</Label>
           <Textarea
             id={`${id}-instructions`}
@@ -209,17 +204,18 @@ export function AgentEditorForm({
             changed instructions while retaining readable chat history; this
             uses model allowance.
           </p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Access</CardTitle>
-          <CardDescription>
+        </div>
+      </section>
+      <Separator />
+      <section className="space-y-5">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">Access</h2>
+          <p className="text-sm text-muted-foreground">
             Group memberships determine permissions, project resources, skills
             and service connections.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-5">
+          </p>
+        </div>
+        <div className="space-y-5">
           {!access ? (
             <p role="status" className="text-sm text-muted-foreground">
               Loading access groups…
@@ -297,17 +293,18 @@ export function AgentEditorForm({
               Manage groups and connections
             </Button>
           )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Environment</CardTitle>
-          <CardDescription>
+        </div>
+      </section>
+      <Separator />
+      <section className="space-y-5">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">Environment</h2>
+          <p className="text-sm text-muted-foreground">
             Select the tools available to this agent. Access is still controlled
             by its groups.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+          </p>
+        </div>
+        <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor={`${id}-template`}>Environment template</Label>
             <NativeSelect
@@ -368,16 +365,17 @@ export function AgentEditorForm({
                 : "No folder access granted by selected groups."}
             </p>
           </div>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Runtime</CardTitle>
-          <CardDescription>
+        </div>
+      </section>
+      <Separator />
+      <section className="space-y-5">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold">Runtime</h2>
+          <p className="text-sm text-muted-foreground">
             Model access is separate from service credentials.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+          </p>
+        </div>
+        <div>
           <p className="text-sm">
             {options?.runtime.label ??
               "ChatGPT subscription · Crew isolated Codex profile"}
@@ -386,8 +384,8 @@ export function AgentEditorForm({
             This project’s configured runtime is shared by its agents. Manage
             account sign-in and model configuration in Subscription & usage.
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }
