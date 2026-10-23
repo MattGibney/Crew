@@ -697,3 +697,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Sessions bulk selection uses stable agent IDs and includes only non-archived agents. Bulk Start/Stop/Restart reuse the per-agent lifecycle transport and lock, skip inapplicable or busy sessions, prevent overlapping batches, and report acknowledged/skipped/failed results. Selecting agents starts no work; never report command acknowledgement as verified native liveness.
 
 - Session rows place Start/Stop/Restart in a vertical-ellipsis shadcn DropdownMenu. Preserve state-dependent disabled actions and per-agent labels; bulk actions stay visible above the table and error rows retain the prominent Recover session action.
+
+- Sessions bulk actions use one labelled Bulk action dropdown with Start/Stop/Restart selected items, rather than three exposed buttons. Keep selection count and Clear selection visible.

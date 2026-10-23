@@ -1108,31 +1108,19 @@ function AgentSessionsSettings({
               Clear selection
             </Button>
           </div>
-          <div
-            role="group"
-            aria-label="Bulk session actions"
-            className="flex flex-wrap gap-2"
-          >
-            {(["start", "stop", "restart"] as const).map((action) => (
-              <Button
-                key={action}
-                variant="outline"
-                disabled={
-                  running || !selected.some((agent) => eligible(agent, action))
-                }
-                onClick={() => void runBulk(action)}
-              >
-                {action === "start" ? (
-                  <Play />
-                ) : action === "stop" ? (
-                  <Square />
-                ) : (
-                  <RotateCw />
-                )}
-                {action[0].toUpperCase() + action.slice(1)} selected
-              </Button>
-            ))}
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" disabled={running} />}>
+              {running ? "Applying actions…" : "Bulk action"}<ChevronDown className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              {(["start", "stop", "restart"] as const).map((action) => (
+                <DropdownMenuItem key={action} disabled={running || !selected.some((agent) => eligible(agent, action))} onClick={() => void runBulk(action)}>
+                  {action === "start" ? <Play /> : action === "stop" ? <Square /> : <RotateCw />}
+                  {action[0].toUpperCase() + action.slice(1)} selected
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
       {result && (
