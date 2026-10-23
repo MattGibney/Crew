@@ -369,7 +369,7 @@ export function AgentSettings(props: Props) {
       <div
         className={`flex flex-wrap items-start justify-between gap-3 ${active ? "sticky -top-10 z-20 -mx-4 -mt-10 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/70 supports-backdrop-filter:backdrop-blur-md" : ""}`}
       >
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-semibold tracking-tight">
             {firstUse
               ? "Create your first agent"
@@ -396,7 +396,7 @@ export function AgentSettings(props: Props) {
           </Button>
         )}
         {active && (
-          <div className="flex gap-2">
+          <div className="flex shrink-0 gap-2">
             <Button
               variant="ghost"
               disabled={busy || saving || record.phase === "applying"}
