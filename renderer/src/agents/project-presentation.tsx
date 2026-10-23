@@ -11,6 +11,7 @@ import {
   CalendarClock,
   FolderOpen,
   LogIn,
+  Plug,
   ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import type {
   SubscriptionUsageState,
 } from "../../../src/application/subscription-usage-contracts.mjs";
 import type { PrimaryVoiceClient, PrimaryVoiceEvent } from "./voice/client";
+import type { AgentSettingsPanel } from "./AgentsApp";
 import type { ProjectPresentation } from "./DesktopApplication";
 import type { AgentsSnapshot } from "./client";
 import { AgentSettings } from "./AgentSettings";
@@ -170,7 +172,8 @@ export function createProjectPresentation(
             command={command}
             subscribe={onOwnerChange}
             visible={visible}
-            onOpenConnections={() => openSettings("access")}
+            onOpenConnections={() => openSettings("connections")}
+            onOpenGroups={() => openSettings("access")}
           />
         ),
       },
@@ -192,14 +195,34 @@ export function createProjectPresentation(
           </div>
         ),
       },
-      {
-        id: "access",
-        label: "Connections & access",
-        icon: ShieldCheck,
-        description:
-          "Manage service connections, permissions and approved agent defaults.",
-        render: ({ snapshot, refresh, visible }) => (
+      ...(
+        [
+          {
+            id: "connections",
+            label: "Connections",
+            icon: Plug,
+            section: "connections",
+            description:
+              "Connect and manage service accounts shared by your agents.",
+          },
+          {
+            id: "access",
+            label: "Groups & permissions",
+            icon: ShieldCheck,
+            section: "groups",
+            description:
+              "Control what agents can access through their groups and approvals.",
+          },
+        ] as const
+      ).map(({ section, ...panel }) => ({
+        ...panel,
+        render: ({
+          snapshot,
+          refresh,
+          visible,
+        }: Parameters<AgentSettingsPanel["render"]>[0]) => (
           <AccessSettings
+            section={section}
             projectId={projectId}
             command={command}
             subscribe={onOwnerChange}
@@ -208,7 +231,7 @@ export function createProjectPresentation(
             visible={visible}
           />
         ),
-      },
+      })),
       {
         id: "workspace",
         label: "Workspace",
@@ -260,7 +283,8 @@ export function createProjectPresentation(
           subscribe={onOwnerChange}
           visible={context.visible}
           firstUse
-          onOpenConnections={() => context.openSettings("access")}
+          onOpenConnections={() => context.openSettings("connections")}
+          onOpenGroups={() => context.openSettings("access")}
         />
       );
     },
@@ -319,6 +343,7 @@ function validVoiceEvent(
 }
 
 function AccessSettings({
+  section,
   projectId,
   command,
   subscribe,
@@ -326,6 +351,7 @@ function AccessSettings({
   refreshProject,
   visible,
 }: {
+  section: "connections" | "groups";
   projectId: string;
   command: Command;
   subscribe: Subscribe;
@@ -420,6 +446,7 @@ function AccessSettings({
       )}
       {access ? (
         <OwnerAccessSettings
+          section={section}
           snapshot={access}
           workspaces={workspaces.map((workspace) => ({
             policy: workspace.policy,
@@ -569,7 +596,7 @@ function WorkspaceSettings({
         setToast({
           id: crypto.randomUUID(),
           message:
-            "Workspace approved. Assign its policy to an agent's permission group in Connections & access.",
+            "Workspace approved. Assign its policy to an agent's permission group in Groups & permissions.",
         });
       }
       await Promise.all([reload(), refreshProject()]);
@@ -591,7 +618,7 @@ function WorkspaceSettings({
         </h2>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Approve the registered project folder, then assign its policy to a
-          permission group in Connections & access.
+          permission group in Groups & permissions.
         </p>
       </div>
       {saved ? (

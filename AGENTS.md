@@ -677,3 +677,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Connection creation and editing open in a centred official shadcn Dialog, not an expanded table row or side sheet. Keep the table mounted behind the dialog, scroll long forms internally and retain explicit Cancel/Save actions and busy-state protection.
 - Service names in connection tables include their brand logo through the reusable ServiceLogo component. Bundle authentic assets locally, retain visible names and use a generic fallback for unknown providers.
+
+- Keep Connections and Groups & permissions as separate Settings pages. Connections owns service accounts and authentication; Groups & permissions owns group grants, creation presets, access requests and approvals. Agent editor links should name and open the specific destination.

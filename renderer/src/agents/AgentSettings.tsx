@@ -41,6 +41,7 @@ interface Props {
   visible: boolean;
   firstUse?: boolean;
   onOpenConnections?(): void;
+  onOpenGroups?(): void;
 }
 const same = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -685,7 +686,8 @@ export function AgentSettings(props: Props) {
                   change({ pictureRef: result.imageRef });
               });
             }}
-            onOpenAccess={props.onOpenConnections}
+            onOpenAccess={props.onOpenGroups}
+            onOpenConnections={props.onOpenConnections}
           />
         </>
       )}

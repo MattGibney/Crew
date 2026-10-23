@@ -31,6 +31,7 @@ export function AgentEditorForm({
   onChange,
   onPicture,
   onOpenAccess,
+  onOpenConnections,
 }: {
   draft: AgentSetupDraft;
   access: AccessOwnerView | null;
@@ -44,6 +45,7 @@ export function AgentEditorForm({
   onChange(patch: Partial<AgentSetupDraft>): void;
   onPicture(file: File): void;
   onOpenAccess?(): void;
+  onOpenConnections?(): void;
 }) {
   const id = useId();
   const pictureInput = useRef<HTMLInputElement>(null);
@@ -333,11 +335,18 @@ export function AgentEditorForm({
                 : "No folder access granted by selected groups."}
             </p>
           </div>
-          {onOpenAccess && (
-            <Button variant="link" className="px-0" onClick={onOpenAccess}>
-              Manage groups and connections
-            </Button>
-          )}
+          <div className="flex flex-wrap gap-x-5 gap-y-2">
+            {onOpenAccess && (
+              <Button variant="link" className="px-0" onClick={onOpenAccess}>
+                Manage groups and permissions
+              </Button>
+            )}
+            {onOpenConnections && (
+              <Button variant="link" className="px-0" onClick={onOpenConnections}>
+                Manage connections
+              </Button>
+            )}
+          </div>
         </div>
       </section>
       <Separator />
