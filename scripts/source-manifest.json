@@ -565,6 +565,7 @@
     "src/workers/worker-verification.mts",
     "src/workers/worktree-evidence.mts",
     "src/workers/worktree-paths.mts",
+    "tests/access-group-removal.test.mjs",
     "tests/access-owner-preset-template.test.mjs",
     "tests/agent-archive.test.mjs",
     "tests/agent-configuration.test.mjs",

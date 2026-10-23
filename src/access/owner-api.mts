@@ -360,6 +360,13 @@ export function createAccessOwnerApi(
       const run = tail.then(async () => {
         await authorization.snapshot(actor); // Verify the store owner on every command.
         switch (name) {
+          case "removeGroup": {
+            object(input, ["groupId", "expectedRevision"]);
+            const revision = expected(input.expectedRevision);
+            if (revision === null) throw new Error("Group revision required.");
+            await authorization.removeGroup(actor, id(input.groupId), revision);
+            return null;
+          }
           case "saveGroup": {
             object(input, ["id", "expectedRevision", "draft"]);
             const draft = object(input.draft, [

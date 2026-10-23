@@ -703,3 +703,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Connections uses one compact title/description with its add action aligned alongside, not a generic page heading followed by a duplicate service-connections heading.
 
 - Connection rows omit a redundant leading service name from the displayed connection label while preserving saved names and identities. Reuse OnlineStatus for dot/halo styling with connection-specific labels; only verified connected state gets the green indicator.
+
+- Permission group row menus include destructive Delete with a named confirmation. Owner-only revision-checked deletion atomically removes memberships from agents/templates and refreshes derived access and revisions; preserve agents, connections, other groups and historical audit/approval records.

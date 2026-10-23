@@ -150,6 +150,9 @@ export function OwnerAccessSettings({
                 ),
             )}
             onSave={(change) => command("saveGroup", change)}
+            onRemove={(groupId, expectedRevision) =>
+              command("removeGroup", { groupId, expectedRevision })
+            }
           />
           {showAgentAssignments && (
             <>

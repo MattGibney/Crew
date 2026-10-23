@@ -1,7 +1,19 @@
 import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import {
   ChevronDown as DisclosureChevronDown,
   MoreVertical,
   Pencil,
+  Trash2,
 } from "lucide-react";
 import {
   Table,
@@ -31,7 +43,7 @@ import {
   CollapsibleTrigger,
   CollapsibleContent,
 } from "@/components/ui/collapsible";
-import { useId, useState } from "react";
+import { useId, useState, useRef } from "react";
 import type {
   Agent,
   CrewPermission,
@@ -80,6 +92,7 @@ export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   agents: readonly Agent[];
   workspaces?: readonly WorkspacePermissionChoice[];
   onSave: (change: GroupSave) => Promise<void>;
+  onRemove(groupId: string, expectedRevision: number): Promise<void>;
 }
 
 export function PermissionGroupsPanel(props: PermissionGroupsPanelProps) {
@@ -92,6 +105,9 @@ export function PermissionGroupsPanel(props: PermissionGroupsPanelProps) {
 
 function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
   const [editing, setEditing] = useState<PermissionGroup | "new" | null>(null);
+  const [removing, setRemoving] = useState<PermissionGroup | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const action = useAccessAction(props.onNotify);
   return (
     <AccessSection
       fullWidth
@@ -103,6 +119,54 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
         </Button>
       }
     >
+      <AlertDialog
+        open={!!removing}
+        onOpenChange={(open) => {
+          if (!open && !action.busy) setRemoving(null);
+        }}
+      >
+        <AlertDialogContent size="sm" initialFocus={cancel}>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete {removing?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the group from all agents and templates, removing the
+              access it grants. Agents, service accounts and other groups are
+              kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ErrorMessage>{action.error}</ErrorMessage>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              ref={cancel}
+              disabled={action.busy}
+              onClick={() => setRemoving(null)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={action.busy}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (
+                  removing &&
+                  (await action.run(
+                    () => props.onRemove(removing.id, removing.revision),
+                    "Permission group deleted.",
+                    "Could not delete this group. Refresh and try again.",
+                  ))
+                )
+                  setRemoving(null);
+              }}
+            >
+              Delete group
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {editing && (
         <GroupEditor
           key={editing === "new" ? "new" : editing.id}
@@ -196,6 +260,13 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
                       >
                         <Pencil className="size-4" />
                         Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setRemoving(group)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

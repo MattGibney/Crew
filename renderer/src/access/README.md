@@ -126,3 +126,5 @@ those references, and clearing the choice removes all its aliases from that grou
 Selecting a new choice adds one canonical policy ID. Different configurations remain
 separate and unavailable saved IDs stay visible until explicitly removed. This rendering
 never rewrites attachments or historical records.
+
+Permission group deletion uses `removeGroup` with the group ID and expected revision. It requires the project owner and atomically removes the group, removes memberships from assignments and creation templates, recalculates derived selections, increments affected revisions and records `group.removed` in the audit. Existing agents, service connections, other groups and historical approval records are preserved. The UI requires a destructive confirmation before submitting.

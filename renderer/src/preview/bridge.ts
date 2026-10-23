@@ -306,6 +306,69 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
     const view = project.access;
     const draft = object(args.draft);
     if (command === "access.snapshot") return view;
+    if (command === "access.removeGroup") {
+      const group = view.groups.find((item) => item.id === args.groupId);
+      if (!group || group.revision !== args.expectedRevision)
+        throw new Error("Group changed.");
+      view.groups = view.groups.filter((item) => item.id !== args.groupId);
+      for (const assignment of view.assignments)
+        if (assignment.permissionGroupIds.includes(String(args.groupId))) {
+          assignment.permissionGroupIds = assignment.permissionGroupIds.filter(
+            (id) => id !== args.groupId,
+          );
+          assignment.serviceConnectionIds = [
+            ...new Set(
+              view.groups
+                .filter((group) =>
+                  assignment.permissionGroupIds.includes(group.id),
+                )
+                .flatMap((group) =>
+                  group.grants.services.map((service) => service.connectionId),
+                ),
+            ),
+          ];
+          assignment.revision++;
+        }
+      for (const preset of view.presets)
+        if (preset.permissionGroupIds.includes(String(args.groupId))) {
+          preset.permissionGroupIds = preset.permissionGroupIds.filter(
+            (id) => id !== args.groupId,
+          );
+          const groups = view.groups.filter((group) =>
+            preset.permissionGroupIds.includes(group.id),
+          );
+          preset.serviceConnectionIds = [
+            ...new Set(
+              groups.flatMap((group) =>
+                group.grants.services.map((service) => service.connectionId),
+              ),
+            ),
+          ];
+          preset.skills = [
+            ...new Set(groups.flatMap((group) => group.grants.skillIds ?? [])),
+          ].map((skillId) => ({ skillId, enabled: true }));
+          preset.revision++;
+        }
+      for (const agent of project.snapshot.agents)
+        if (agent.access.permissionGroupIds.includes(String(args.groupId))) {
+          agent.access.permissionGroupIds =
+            agent.access.permissionGroupIds.filter((id) => id !== args.groupId);
+          const groups = view.groups.filter((group) =>
+            agent.access.permissionGroupIds.includes(group.id),
+          );
+          agent.access.serviceConnectionIds = [
+            ...new Set(
+              groups.flatMap((group) =>
+                group.grants.services.map((service) => service.connectionId),
+              ),
+            ),
+          ];
+          agent.skills = [
+            ...new Set(groups.flatMap((group) => group.grants.skillIds ?? [])),
+          ].map((skillId) => ({ skillId, enabled: true }));
+        }
+      return null;
+    }
     if (command === "access.saveGroup" || command === "access.savePreset") {
       const list = command === "access.saveGroup" ? view.groups : view.presets;
       const index = list.findIndex((item) => item.id === args.id);
