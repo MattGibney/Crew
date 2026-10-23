@@ -1,3 +1,9 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../components/ui/collapsible.js";
+import { Checkbox } from "@/components/ui/checkbox";
 import type { FormEvent } from "react";
 import { errorText } from "./api.js";
 import type {
@@ -193,14 +199,12 @@ export function WorkerEnvironment({
               </h4>
               {editing && (
                 <label className="flex items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    className="accent-primary"
+                  <Checkbox
                     checked={Boolean(hook)}
                     disabled={saving}
-                    onChange={(event) =>
+                    onCheckedChange={(checked) =>
                       update((value) => {
-                        if (event.target.checked)
+                        if (checked)
                           value[phase] = plan
                             ? {
                                 command: "",
@@ -434,23 +438,25 @@ export function WorkerEnvironment({
               Permissions reference: {plan.permissionsSource.path}
             </p>
           )}
-          <details className="text-xs">
-            <summary className="cursor-pointer font-medium">
+          <Collapsible className="text-xs">
+            <CollapsibleTrigger className="text-left cursor-pointer font-medium">
               Captured project dependencies
-            </summary>
-            <ul className="mt-3 space-y-3">
-              {plan.sources.map((source) => (
-                <li
-                  key={source.path}
-                  className="break-all text-muted-foreground"
-                >
-                  {source.path}
-                  <br />
-                  SHA-256: {source.sha256}
-                </li>
-              ))}
-            </ul>
-          </details>
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <ul className="mt-3 space-y-3">
+                {plan.sources.map((source) => (
+                  <li
+                    key={source.path}
+                    className="break-all text-muted-foreground"
+                  >
+                    {source.path}
+                    <br />
+                    SHA-256: {source.sha256}
+                  </li>
+                ))}
+              </ul>
+            </CollapsibleContent>
+          </Collapsible>
         </section>
       )}
       {stale && (

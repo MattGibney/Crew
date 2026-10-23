@@ -646,3 +646,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Prefer actual shadcn/ui components throughout Crew. Install the official component from the appropriate registry using the shadcn CLI and use its generated components directly. Do not approximate examples with custom markup, manually recreate registry components, or treat using the same underlying Base UI primitive as equivalent.
 - Check the project’s configured shadcn base/style before installing. Preserve the canonical theme and branding, and compose the installed components using their supported variants and props. If the user links an example, follow its actual component composition.
+
+- The component audit in docs/UI-COMPONENTS.md records installed shadcn Base UI/Nova components and composition boundaries. Keep generated registry files intact; application behavior belongs in consumers. Preserve mounted voice resources and drafts when adopting Tabs, and use one Sonner Toaster per app root.

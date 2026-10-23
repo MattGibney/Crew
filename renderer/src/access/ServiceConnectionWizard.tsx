@@ -1,3 +1,4 @@
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useEffect, useId, useRef, useState } from "react";
 import type {
   AccessOwnerView,
@@ -446,31 +447,34 @@ function ConnectionWizardContent(props: ServiceConnectionWizardProps) {
           <legend className="mb-2 text-sm font-medium">
             Which account should Crew use?
           </legend>
-          {(["personal", "dedicated"] as const).map((kind) => (
-            <label key={kind} className="flex items-start gap-3 py-2 text-sm">
-              <input
-                type="radio"
-                name={`${id}-account`}
-                value={kind}
-                checked={accountKind === kind}
-                onChange={() => setAccountKind(kind)}
-                className="mt-1 size-4 accent-primary"
-              />
-              <span>
-                <span className="font-medium">
-                  {kind === "personal"
-                    ? "My personal account"
-                    : "A dedicated agent account"}
+          <RadioGroup
+            name={`${id}-account`}
+            value={accountKind}
+            aria-label="Which account should Crew use?"
+            onValueChange={(value) => {
+              if (value === "personal" || value === "dedicated")
+                setAccountKind(value);
+            }}
+          >
+            {(["personal", "dedicated"] as const).map((kind) => (
+              <label key={kind} className="flex items-start gap-3 py-2 text-sm">
+                <RadioGroupItem value={kind} className="mt-1" />
+                <span>
+                  <span className="font-medium">
+                    {kind === "personal"
+                      ? "My personal account"
+                      : "A dedicated agent account"}
+                  </span>
+                  <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+                    {guide?.accountOwnership[kind] ??
+                      (kind === "personal"
+                        ? "I explicitly choose to let Crew use my own account through this saved connection."
+                        : "I choose the separate account my organization intends Crew to use.")}
+                  </span>
                 </span>
-                <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-                  {guide?.accountOwnership[kind] ??
-                    (kind === "personal"
-                      ? "I explicitly choose to let Crew use my own account through this saved connection."
-                      : "I choose the separate account my organization intends Crew to use.")}
-                </span>
-              </span>
-            </label>
-          ))}
+              </label>
+            ))}
+          </RadioGroup>
           <p className="text-xs leading-5 text-muted-foreground">
             This records your intended account choice. Verification identifies
             the account where the provider supports it. Crew does not import

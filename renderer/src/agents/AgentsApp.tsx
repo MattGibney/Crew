@@ -1,3 +1,5 @@
+import { Toaster } from "@/components/ui/sonner";
+import { SettingsToast } from "../manager/settings/SettingsToast";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -36,6 +38,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Message } from "../manager/Message";
 import { ArchivedAgentsSettings } from "./ArchivedAgentsSettings";
 import { ManagerOverview } from "./ManagerOverview";
@@ -872,23 +880,9 @@ export function AgentsApp({
           })}
         </>
       )}
+      <Toaster position="bottom-right" closeButton />
       {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-xl border bg-background px-4 py-3 text-sm shadow-lg"
-        >
-          <Check className="size-4 shrink-0 text-primary" />
-          <span>{toast}</span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Dismiss confirmation"
-            onClick={() => setToast("")}
-          >
-            <X />
-          </Button>
-        </div>
+        <SettingsToast message={toast} onDismiss={() => setToast("")} />
       )}
     </div>
   );
@@ -941,11 +935,12 @@ function AgentWorkerList({
             .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
           return (
             <article key={agent.id} className="h-full min-w-0">
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={() => onSelect(agent.id)}
                 aria-label={`Open worker ${agent.profile.name}`}
-                className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group items-stretch justify-start whitespace-normal flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5">
                   <WorkerReference
@@ -992,7 +987,7 @@ function AgentWorkerList({
                       : `Session ${agent.runtime.session.observedState}`}
                   </p>
                 )}
-              </button>
+              </Button>
             </article>
           );
         })}
@@ -1178,9 +1173,11 @@ function AgentDetail({
     (job) => job.assignment.assignedToAgentId === agent.id,
   );
   return (
-    <section
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value as typeof tab)}
       aria-label="Worker detail"
-      className="flex min-h-0 flex-1 flex-col"
+      className="flex min-h-0 flex-1 flex-col gap-0"
     >
       <div className="shrink-0 border-b px-5 pt-4 sm:px-8">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
@@ -1201,10 +1198,10 @@ function AgentDetail({
             Session {agent.runtime.session.observedState}
           </Badge>
         </div>
-        <div
-          role="tablist"
+        <TabsList
+          variant="line"
           aria-label="Worker detail tabs"
-          className="-mb-px mt-3 flex gap-4 overflow-x-auto sm:gap-5"
+          className="-mb-px mt-3 w-full justify-start overflow-x-auto"
         >
           {(
             [
@@ -1214,23 +1211,17 @@ function AgentDetail({
               ["links", "Links", Link2],
             ] as const
           ).map(([value, label, Icon]) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={tab === value}
-              onClick={() => setTab(value)}
-              className={`flex shrink-0 items-center gap-2 border-b-2 pb-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            >
+            <TabsTrigger key={value} value={value} className="flex-none">
               <Icon className="size-3.5" />
               {label}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
       </div>
-      <div
-        hidden={tab !== "conversation"}
-        className="min-h-0 flex-1 flex flex-col"
+      <TabsContent
+        value="conversation"
+        keepMounted
+        className="min-h-0 flex-1 flex flex-col data-[hidden]:hidden"
       >
         <Conversation
           agent={agent}
@@ -1243,15 +1234,17 @@ function AgentDetail({
           readOnly
           onReturnToPrimary={onBack}
         />
-      </div>
-      <div
-        hidden={tab !== "notes"}
+      </TabsContent>
+      <TabsContent
+        value="notes"
+        keepMounted
         className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
       >
         <AgentScratchpad agent={agent} />
-      </div>
-      <div
-        hidden={tab !== "overview"}
+      </TabsContent>
+      <TabsContent
+        value="overview"
+        keepMounted
         className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
       >
         <div className="mx-auto max-w-4xl space-y-8">
@@ -1302,9 +1295,10 @@ function AgentDetail({
             </Button>
           )}
         </div>
-      </div>
-      <div
-        hidden={tab !== "links"}
+      </TabsContent>
+      <TabsContent
+        value="links"
+        keepMounted
         className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
       >
         <div className="mx-auto max-w-3xl space-y-4">
@@ -1334,8 +1328,8 @@ function AgentDetail({
               </p>
             )}
         </div>
-      </div>
-    </section>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -1458,6 +1452,17 @@ function Conversation({
     }
   };
   const effectiveMode = hasVoice ? inputMode : "text";
+  const voicePanelTarget = useRef<HTMLDivElement | null>(null);
+  const compactVoiceTarget = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Only the controls portal moves; the voice runtime and audio stay mounted.
+    voiceTarget?.(
+      effectiveMode === "voice"
+        ? voicePanelTarget.current
+        : compactVoiceTarget.current,
+    );
+    return () => voiceTarget?.(null);
+  }, [effectiveMode, voiceTarget]);
   return (
     <MessageScrollerProvider
       autoScroll
@@ -1701,36 +1706,45 @@ function Conversation({
                 )}
               {(intents.length > 0 || receipts.length > 0) && (
                 <MessageScrollerItem messageId="delivery-activity">
-                  <details className="rounded-lg border px-4 py-3 text-sm">
-                    <summary className="text-xs font-medium text-muted-foreground">
+                  <Collapsible className="rounded-lg border px-4 py-3 text-sm">
+                    <CollapsibleTrigger
+                      type="button"
+                      className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring text-xs font-medium text-muted-foreground"
+                    >
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+                      />
                       Delivery activity
                       {intents.length ? ` · ${intents.length} pending` : ""}
-                    </summary>
-                    <div className="mt-3 divide-y">
-                      {intents.map((message) => (
-                        <DeliveryItem
-                          key={message.id}
-                          message={message}
-                          client={client}
-                          snapshot={snapshot}
-                          act={act}
-                          pending={pending}
-                        />
-                      ))}
-                      {receipts
-                        .slice(-10)
-                        .reverse()
-                        .map((receipt) => (
-                          <p
-                            key={receipt.messageId}
-                            className="py-2 text-xs text-muted-foreground"
-                          >
-                            Accepted · {actorLabel(receipt.sender, snapshot)} ·{" "}
-                            {formatDate(receipt.acknowledgedAt)}
-                          </p>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent keepMounted>
+                      <div className="mt-3 divide-y">
+                        {intents.map((message) => (
+                          <DeliveryItem
+                            key={message.id}
+                            message={message}
+                            client={client}
+                            snapshot={snapshot}
+                            act={act}
+                            pending={pending}
+                          />
                         ))}
-                    </div>
-                  </details>
+                        {receipts
+                          .slice(-10)
+                          .reverse()
+                          .map((receipt) => (
+                            <p
+                              key={receipt.messageId}
+                              className="py-2 text-xs text-muted-foreground"
+                            >
+                              Accepted · {actorLabel(receipt.sender, snapshot)}{" "}
+                              · {formatDate(receipt.acknowledgedAt)}
+                            </p>
+                          ))}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </MessageScrollerItem>
               )}
             </MessageScrollerContent>
@@ -1748,18 +1762,23 @@ function Conversation({
         {readOnly ? (
           <div className="shrink-0 border-t px-5 py-3 text-xs text-muted-foreground sm:px-8">
             Read-only worker history.{" "}
-            <button
+            <Button
+              variant="ghost"
               type="button"
-              className="underline underline-offset-4"
+              className="h-auto p-0 underline underline-offset-4"
               onClick={onReturnToPrimary}
             >
               Return to your conversation
-            </button>{" "}
+            </Button>{" "}
             to send directions.
           </div>
         ) : (
-          <div className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7">
-            <div className="mx-auto max-w-3xl">
+          <Tabs
+            value={effectiveMode}
+            onValueChange={(value) => onInputMode?.(value as "text" | "voice")}
+            className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7"
+          >
+            <div className="mx-auto w-full max-w-3xl">
               <form
                 id="manager-composer"
                 tabIndex={-1}
@@ -1772,75 +1791,25 @@ function Conversation({
               >
                 {hasVoice && (
                   <div className="flex items-center justify-between gap-3 px-3 pt-2">
-                    <div
-                      role="tablist"
-                      aria-label="Input method"
-                      className="flex gap-1 rounded-lg bg-muted/60 p-0.5"
-                    >
-                      {(["text", "voice"] as const).map((mode) => (
-                        <button
-                          key={mode}
-                          id={`input-tab-${mode}`}
-                          type="button"
-                          role="tab"
-                          aria-selected={effectiveMode === mode}
-                          aria-controls={`input-panel-${mode}`}
-                          tabIndex={effectiveMode === mode ? 0 : -1}
-                          onClick={() => onInputMode?.(mode)}
-                          onKeyDown={(event) => {
-                            if (
-                              [
-                                "ArrowLeft",
-                                "ArrowRight",
-                                "Home",
-                                "End",
-                              ].includes(event.key)
-                            ) {
-                              event.preventDefault();
-                              const next =
-                                event.key === "Home"
-                                  ? "text"
-                                  : event.key === "End"
-                                    ? "voice"
-                                    : mode === "text"
-                                      ? "voice"
-                                      : "text";
-                              onInputMode?.(next);
-                              document
-                                .getElementById(`input-tab-${next}`)
-                                ?.focus();
-                            }
-                          }}
-                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${effectiveMode === mode ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
-                        >
-                          {mode === "text" ? (
-                            <Keyboard className="size-3.5" />
-                          ) : (
-                            <Mic className="size-3.5" />
-                          )}
-                          {mode === "text" ? "Text" : "Voice"}
-                        </button>
-                      ))}
-                    </div>
+                    <TabsList aria-label="Input method">
+                      <TabsTrigger value="text">
+                        <Keyboard className="size-3.5" />
+                        Text
+                      </TabsTrigger>
+                      <TabsTrigger value="voice">
+                        <Mic className="size-3.5" />
+                        Voice
+                      </TabsTrigger>
+                    </TabsList>
                     <span className="text-[11px] text-muted-foreground">
                       Message this agent
                     </span>
                   </div>
                 )}
-                <div
-                  ref={voiceTarget}
-                  id="input-panel-voice"
-                  role="tabpanel"
-                  aria-labelledby="input-tab-voice"
-                  className={effectiveMode === "text" ? "order-3" : ""}
-                />
-                <div
-                  id="input-panel-text"
-                  role="tabpanel"
-                  aria-labelledby={hasVoice ? "input-tab-text" : undefined}
-                  hidden={effectiveMode !== "text"}
-                  className="p-2"
-                >
+                <TabsContent value="voice" keepMounted>
+                  <div ref={voicePanelTarget} />
+                </TabsContent>
+                <TabsContent value="text" keepMounted className="p-2">
                   <Textarea
                     aria-label="Message this agent"
                     placeholder="Message this agent…"
@@ -1897,10 +1866,14 @@ function Conversation({
                       )}
                     </Button>
                   </div>
-                </div>
+                </TabsContent>
+                <div
+                  ref={compactVoiceTarget}
+                  hidden={effectiveMode !== "text"}
+                />
               </form>
             </div>
-          </div>
+          </Tabs>
         )}
       </div>
     </MessageScrollerProvider>
@@ -1929,17 +1902,26 @@ function HistoryItem({
   const technical = item.kind === "tool" || item.kind === "approval";
   if (technical)
     return (
-      <details className="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
-        <summary className="text-xs font-medium text-muted-foreground">
+      <Collapsible className="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+        <CollapsibleTrigger
+          type="button"
+          className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring text-xs font-medium text-muted-foreground"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+          />
           {item.kind === "approval"
             ? "Native approval record"
             : "Tool activity"}
-        </summary>
-        <div className="mt-3">
-          <Content blocks={item.content} client={client} />
-        </div>
-        <HistoryCorrelation item={item} />
-      </details>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-3">
+            <Content blocks={item.content} client={client} />
+          </div>
+          <HistoryCorrelation item={item} />
+        </CollapsibleContent>
+      </Collapsible>
     );
   const text = item.content
     .filter((block) => block.type === "text")
@@ -1978,13 +1960,24 @@ function HistoryItem({
 }
 function HistoryCorrelation({ item }: { item: RuntimeHistoryItem }) {
   return (
-    <details className="mt-3 text-xs text-muted-foreground">
-      <summary>Reference</summary>
-      <p className="mt-1 break-all">
-        {item.runtimeRef}
-        {item.turnId ? ` · Turn ${item.turnId}` : ""}
-      </p>
-    </details>
+    <Collapsible className="mt-3 text-xs text-muted-foreground">
+      <CollapsibleTrigger
+        type="button"
+        className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+        />
+        Reference
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted>
+        <p className="mt-1 break-all">
+          {item.runtimeRef}
+          {item.turnId ? ` · Turn ${item.turnId}` : ""}
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 function DeliveryItem({
@@ -2043,18 +2036,30 @@ function DeliveryItem({
           {message.delivery.error.message}
         </p>
       )}
-      <details className="mt-2 text-xs text-muted-foreground">
-        <summary>Retained message and attempts</summary>
-        <div className="mt-3 text-foreground">
-          <Content blocks={message.content} client={client} />
-        </div>
-        <p className="mt-3 break-all">Message {message.id}</p>
-        {message.delivery.attempts.map((attempt) => (
-          <p key={attempt.id} className="mt-1 break-all">
-            {attempt.outcome} · {attempt.id} · {formatDate(attempt.attemptedAt)}
-          </p>
-        ))}
-      </details>
+      <Collapsible className="mt-2 text-xs text-muted-foreground">
+        <CollapsibleTrigger
+          type="button"
+          className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+          />
+          Retained message and attempts
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-3 text-foreground">
+            <Content blocks={message.content} client={client} />
+          </div>
+          <p className="mt-3 break-all">Message {message.id}</p>
+          {message.delivery.attempts.map((attempt) => (
+            <p key={attempt.id} className="mt-1 break-all">
+              {attempt.outcome} · {attempt.id} ·{" "}
+              {formatDate(attempt.attemptedAt)}
+            </p>
+          ))}
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }
@@ -2187,19 +2192,30 @@ function JobCard({
             <Markdown text={job.work.objective} />
           </div>
           {job.work.updates.length > 0 && (
-            <details className="mt-4 text-sm">
-              <summary>Updates ({job.work.updates.length})</summary>
-              {job.work.updates.map((update) => (
-                <div key={update.id} className="mt-3 border-l-2 pl-3">
-                  <p className="text-xs text-muted-foreground">
-                    {agentName(update.recordedByAgentId, snapshot)} ·{" "}
-                    {formatDate(update.recordedAt)}
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap">{update.text}</p>
-                  <WorkLinks links={update.links} />
-                </div>
-              ))}
-            </details>
+            <Collapsible className="mt-4 text-sm">
+              <CollapsibleTrigger
+                type="button"
+                className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+                />
+                Updates ({job.work.updates.length})
+              </CollapsibleTrigger>
+              <CollapsibleContent keepMounted>
+                {job.work.updates.map((update) => (
+                  <div key={update.id} className="mt-3 border-l-2 pl-3">
+                    <p className="text-xs text-muted-foreground">
+                      {agentName(update.recordedByAgentId, snapshot)} ·{" "}
+                      {formatDate(update.recordedAt)}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap">{update.text}</p>
+                    <WorkLinks links={update.links} />
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
           )}
           {job.work.outcome && (
             <div className="mt-4 rounded-lg bg-muted/50 p-3 text-sm">
@@ -2215,62 +2231,77 @@ function JobCard({
           this assignment and its reported progress.
         </p>
       )}
-      <details className="mt-5 border-t pt-3 text-sm">
-        <summary>Assignment and history</summary>
-        <form
-          className="mt-4 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void act(
-              `assign-${job.id}`,
-              () =>
-                client.assignJob(job.id, assignee || null, instruction || null),
-              "Assignment saved.",
-            );
-          }}
+      <Collapsible className="mt-5 border-t pt-3 text-sm">
+        <CollapsibleTrigger
+          type="button"
+          className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Field label="Assigned agent">
-            <NativeSelect
-              value={assignee}
-              onChange={(event) => setAssignee(event.target.value)}
-            >
-              <option value="">Unassigned</option>
-              {snapshot.agents
-                .filter((agent) => !agent.archivedAt)
-                .map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.profile.name}
-                  </option>
-                ))}
-            </NativeSelect>
-          </Field>
-          <Field label="Assignment-specific direction">
-            <Textarea
-              value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
-            />
-          </Field>
-          <Button
-            type="submit"
-            variant="outline"
-            disabled={pending.has(`assign-${job.id}`)}
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+          />
+          Assignment and history
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <form
+            className="mt-4 space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void act(
+                `assign-${job.id}`,
+                () =>
+                  client.assignJob(
+                    job.id,
+                    assignee || null,
+                    instruction || null,
+                  ),
+                "Assignment saved.",
+              );
+            }}
           >
-            Save assignment
-          </Button>
-        </form>
-        <ol className="mt-4 space-y-2 text-xs text-muted-foreground">
-          {job.assignmentHistory.map((event) => (
-            <li key={event.id}>
-              {formatDate(event.recordedAt)} ·{" "}
-              {actorLabel(event.changedBy, snapshot)} assigned{" "}
-              {event.assignedAgentId
-                ? agentName(event.assignedAgentId, snapshot)
-                : "no agent"}
-              {event.instruction ? ` · ${event.instruction}` : ""}
-            </li>
-          ))}
-        </ol>
-      </details>
+            <Field label="Assigned agent">
+              <NativeSelect
+                value={assignee}
+                onChange={(event) => setAssignee(event.target.value)}
+              >
+                <option value="">Unassigned</option>
+                {snapshot.agents
+                  .filter((agent) => !agent.archivedAt)
+                  .map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.profile.name}
+                    </option>
+                  ))}
+              </NativeSelect>
+            </Field>
+            <Field label="Assignment-specific direction">
+              <Textarea
+                value={instruction}
+                onChange={(event) => setInstruction(event.target.value)}
+              />
+            </Field>
+            <Button
+              type="submit"
+              variant="outline"
+              disabled={pending.has(`assign-${job.id}`)}
+            >
+              Save assignment
+            </Button>
+          </form>
+          <ol className="mt-4 space-y-2 text-xs text-muted-foreground">
+            {job.assignmentHistory.map((event) => (
+              <li key={event.id}>
+                {formatDate(event.recordedAt)} ·{" "}
+                {actorLabel(event.changedBy, snapshot)} assigned{" "}
+                {event.assignedAgentId
+                  ? agentName(event.assignedAgentId, snapshot)
+                  : "no agent"}
+                {event.instruction ? ` · ${event.instruction}` : ""}
+              </li>
+            ))}
+          </ol>
+        </CollapsibleContent>
+      </Collapsible>
     </article>
   );
 }

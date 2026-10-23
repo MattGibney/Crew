@@ -75,11 +75,12 @@ function WorkerCard({
   const title = assignment.brief?.trim().split("\n")[0] || "Worker task";
   return (
     <article data-worker-id={task.id} className="h-full min-w-0">
-      <button
+      <Button
+        variant="ghost"
         type="button"
         onClick={() => onSelect(task.id)}
         aria-label={`Open worker ${reference.context}: ${title}`}
-        className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="group items-stretch justify-start whitespace-normal flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5">
           <WorkerReference
@@ -138,7 +139,7 @@ function WorkerCard({
             </span>
           </div>
         )}
-      </button>
+      </Button>
     </article>
   );
 }

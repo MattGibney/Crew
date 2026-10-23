@@ -1,3 +1,10 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -372,31 +379,40 @@ export function ProjectSkillsPanel({
                 }
               />
             </div>
-            <details className="text-sm text-muted-foreground">
-              <summary className="cursor-pointer font-medium text-foreground">
+            <Collapsible className="text-sm text-muted-foreground">
+              <CollapsibleTrigger
+                type="button"
+                className="group flex w-full items-center gap-2 text-left cursor-pointer font-medium text-foreground"
+              >
+                <DisclosureChevronDown
+                  className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                  aria-hidden="true"
+                />
                 Writing a skill
-              </summary>
-              <div className="mt-3 space-y-2 leading-6">
-                <p>
-                  Keep the YAML name and description between the opening ---
-                  lines. Use a short lowercase name with hyphens, and describe
-                  when the skill should be used. Put reusable instructions below
-                  the metadata.
-                </p>
-                <p>
-                  Save here or ask a permitted agent to create or edit the same
-                  project skill. Select it in an agent's profile, then Start or
-                  Restart that agent. Saving does not replace instructions
-                  already loaded by an active session.
-                </p>
-                <p>
-                  Files remain in Crew's project storage, outside personal Codex
-                  folders and source repositories. Limit: 128 KiB instructions,
-                  64 text resources of up to 256 KiB each, and 2 MiB total.
-                  Binary resource upload is not supported.
-                </p>
-              </div>
-            </details>
+              </CollapsibleTrigger>
+              <CollapsibleContent keepMounted>
+                <div className="mt-3 space-y-2 leading-6">
+                  <p>
+                    Keep the YAML name and description between the opening ---
+                    lines. Use a short lowercase name with hyphens, and describe
+                    when the skill should be used. Put reusable instructions
+                    below the metadata.
+                  </p>
+                  <p>
+                    Save here or ask a permitted agent to create or edit the
+                    same project skill. Select it in an agent's profile, then
+                    Start or Restart that agent. Saving does not replace
+                    instructions already loaded by an active session.
+                  </p>
+                  <p>
+                    Files remain in Crew's project storage, outside personal
+                    Codex folders and source repositories. Limit: 128 KiB
+                    instructions, 64 text resources of up to 256 KiB each, and 2
+                    MiB total. Binary resource upload is not supported.
+                  </p>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
             <div className="space-y-3 border-t pt-5">
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-sm font-medium">Supporting resources</h4>
@@ -483,15 +499,14 @@ export function ProjectSkillsPanel({
                   />
                   {resource.path.startsWith("scripts/") && (
                     <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={resource.executable === true}
-                        onChange={(event) =>
+                        onCheckedChange={(checked) =>
                           edit((value) => ({
                             ...value,
                             resources: value.resources.map((item, position) =>
                               position === index
-                                ? { ...item, executable: event.target.checked }
+                                ? { ...item, executable: checked }
                                 : item,
                             ),
                           }))

@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../../components/ui/collapsible.js";
 import type { SettingsState } from "../../contracts/manager.js";
 import type { ManagerProps } from "../../contracts/manager.js";
 import { errorText } from "../api.js";
@@ -160,64 +165,66 @@ export function PromptEditor({
           other secrets.
         </p>
       )}
-      <details className="group mt-5">
-        <summary className="flex w-fit cursor-pointer list-none items-center gap-2 rounded text-xs font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <Collapsible className="group mt-5">
+        <CollapsibleTrigger className="text-left flex w-fit cursor-pointer list-none items-center gap-2 rounded text-xs font-medium text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <CircleHelp
             className="size-4 shrink-0 text-muted-foreground"
             aria-hidden="true"
           />
           What to include and how it’s used
           <ChevronDown
-            className="ml-auto size-3.5 shrink-0 transition-transform group-open:rotate-180"
+            className="ml-auto size-3.5 shrink-0 transition-transform group-data-[open]:rotate-180"
             aria-hidden="true"
           />
-        </summary>
-        <div className="mt-4 space-y-4 border-l-2 pl-4 text-xs leading-6 text-muted-foreground">
-          <div>
-            <h3 className="font-medium text-foreground">What to include</h3>
-            <ul className="mt-1 list-disc space-y-1 pl-4">
-              {(managerRole
-                ? [
-                    "Project context, priorities and any terminology your manager should understand.",
-                    "Your preferred tone, level of detail and format for updates.",
-                    "How to plan work, explain trade-offs and raise decisions that need your input.",
-                  ]
-                : [
-                    "Project conventions and quality standards to follow during agreed tasks.",
-                    "How to check changes and record findings, decisions and limitations.",
-                    "When to raise a question or blocker with the manager.",
-                  ]
-              ).map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-            <p className="mt-2">
-              Keep these instructions reusable. Put individual tasks and
-              changing requirements in the manager conversation.
-            </p>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-4 space-y-4 border-l-2 pl-4 text-xs leading-6 text-muted-foreground">
+            <div>
+              <h3 className="font-medium text-foreground">What to include</h3>
+              <ul className="mt-1 list-disc space-y-1 pl-4">
+                {(managerRole
+                  ? [
+                      "Project context, priorities and any terminology your manager should understand.",
+                      "Your preferred tone, level of detail and format for updates.",
+                      "How to plan work, explain trade-offs and raise decisions that need your input.",
+                    ]
+                  : [
+                      "Project conventions and quality standards to follow during agreed tasks.",
+                      "How to check changes and record findings, decisions and limitations.",
+                      "When to raise a question or blocker with the manager.",
+                    ]
+                ).map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                Keep these instructions reusable. Put individual tasks and
+                changing requirements in the manager conversation.
+              </p>
+            </div>
+            <div>
+              <h3 className="font-medium text-foreground">Example</h3>
+              <blockquote className="mt-2 border-l-2 border-primary/30 pl-3 text-foreground">
+                {managerRole
+                  ? "Keep updates concise and use plain language. Explain the options before recommending a direction. Ask me about unclear priorities, and distinguish verified results from assumptions."
+                  : "Follow the project’s existing conventions. Check the agreed behaviour, record what was verified and describe any remaining limitations. Raise unclear requirements with the manager before changing scope."}
+              </blockquote>
+            </div>
+            <div>
+              <h3 className="font-medium text-foreground">How it’s used</h3>
+              <p className="mt-1">
+                {managerRole
+                  ? "This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately."
+                  : "This text replaces Crew’s default worker instructions for this project. Saved changes apply when Crew next supplies a worker prompt, including a direction or explicit preparation. Saving does not interrupt work already running. Earlier supplied instructions remain in history."}
+              </p>
+              <p className="mt-2">
+                Crew still supplies project and task context. These instructions
+                don’t change Codex permissions or approval requirements.
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="font-medium text-foreground">Example</h3>
-            <blockquote className="mt-2 border-l-2 border-primary/30 pl-3 text-foreground">
-              {managerRole
-                ? "Keep updates concise and use plain language. Explain the options before recommending a direction. Ask me about unclear priorities, and distinguish verified results from assumptions."
-                : "Follow the project’s existing conventions. Check the agreed behaviour, record what was verified and describe any remaining limitations. Raise unclear requirements with the manager before changing scope."}
-            </blockquote>
-          </div>
-          <div>
-            <h3 className="font-medium text-foreground">How it’s used</h3>
-            <p className="mt-1">
-              {managerRole
-                ? "This text replaces Crew’s default manager instructions for this project and guides both typed and voice conversations. An optional manager name and personality above supplement this text; they never rewrite it. Clear the name and personality to use these instructions alone. Save your edits, then explicitly start or restart the manager in Sessions to apply them. Worker instructions are configured separately."
-                : "This text replaces Crew’s default worker instructions for this project. Saved changes apply when Crew next supplies a worker prompt, including a direction or explicit preparation. Saving does not interrupt work already running. Earlier supplied instructions remain in history."}
-            </p>
-            <p className="mt-2">
-              Crew still supplies project and task context. These instructions
-              don’t change Codex permissions or approval requirements.
-            </p>
-          </div>
-        </div>
-      </details>
+        </CollapsibleContent>
+      </Collapsible>
       {stale && (
         <Alert className="mt-3" role="alert">
           <AlertDescription>

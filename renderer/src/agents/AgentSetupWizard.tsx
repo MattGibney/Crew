@@ -1,3 +1,9 @@
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import {
   useCallback,
   useEffect,
@@ -24,6 +30,16 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from "@/components/ui/dropdown-menu";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  TableCaption,
+} from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -600,57 +616,23 @@ export function AgentSetupWizard(props: Props) {
           )}
 
           {!firstUse && (
-            <div className="space-y-4">
-              <div
-                role="tablist"
-                aria-label="Agent types"
-                className="flex gap-5 border-b"
-              >
-                {agentSections.map(({ title, rows }, index) => (
-                  <button
-                    key={title}
-                    id={`${id}-agent-tab-${index}`}
-                    type="button"
-                    role="tab"
-                    aria-selected={agentTab === title}
-                    aria-controls={`${id}-agent-panel-${index}`}
-                    tabIndex={agentTab === title ? 0 : -1}
-                    onClick={() => setAgentTab(title)}
-                    onKeyDown={(event) => {
-                      if (
-                        !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                          event.key,
-                        )
-                      )
-                        return;
-                      event.preventDefault();
-                      const next =
-                        event.key === "Home"
-                          ? 0
-                          : event.key === "End"
-                            ? agentSections.length - 1
-                            : (index +
-                                (event.key === "ArrowRight" ? 1 : -1) +
-                                agentSections.length) %
-                              agentSections.length;
-                      setAgentTab(agentSections[next].title);
-                      document
-                        .getElementById(`${id}-agent-tab-${next}`)
-                        ?.focus();
-                    }}
-                    className={`-mb-px flex items-center gap-2 border-b-2 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${agentTab === title ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-                  >
+            <Tabs
+              value={agentTab}
+              onValueChange={(value) => setAgentTab(String(value))}
+              className="space-y-4"
+            >
+              <TabsList variant="line" aria-label="Agent types">
+                {agentSections.map(({ title, rows }) => (
+                  <TabsTrigger key={title} value={title}>
                     {title} <span className="text-xs">({rows.length})</span>
-                  </button>
+                  </TabsTrigger>
                 ))}
-              </div>
-              {agentSections.map(({ title, description, rows }, index) => (
-                <section
+              </TabsList>
+              {agentSections.map(({ title, description, rows }) => (
+                <TabsContent
                   key={title}
-                  id={`${id}-agent-panel-${index}`}
-                  role="tabpanel"
-                  aria-labelledby={`${id}-agent-tab-${index}`}
-                  hidden={agentTab !== title}
+                  value={title}
+                  keepMounted
                   className="space-y-3"
                 >
                   <div>
@@ -659,25 +641,33 @@ export function AgentSetupWizard(props: Props) {
                     </p>
                   </div>
                   <div className="overflow-x-auto rounded-lg border">
-                    <table className="w-full text-left text-sm">
-                      <caption className="sr-only">
+                    <Table className="w-full text-left text-sm">
+                      <TableCaption className="sr-only">
                         {title} and their saved configuration
-                      </caption>
-                      <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
-                        <tr>
-                          <th className="px-4 py-3 font-medium">Agent</th>
-                          <th className="px-4 py-3 font-medium">Reports to</th>
-                          <th className="px-4 py-3 font-medium">Session</th>
-                          <th className="px-4 py-3 font-medium">Voice</th>
-                          <th className="px-4 py-3 font-medium">
+                      </TableCaption>
+                      <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground">
+                        <TableRow>
+                          <TableHead className="px-4 py-3 font-medium">
+                            Agent
+                          </TableHead>
+                          <TableHead className="px-4 py-3 font-medium">
+                            Reports to
+                          </TableHead>
+                          <TableHead className="px-4 py-3 font-medium">
+                            Session
+                          </TableHead>
+                          <TableHead className="px-4 py-3 font-medium">
+                            Voice
+                          </TableHead>
+                          <TableHead className="px-4 py-3 font-medium">
                             <span className="sr-only">Actions</span>
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y">
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody className="divide-y">
                         {rows.map((agent) => (
-                          <tr key={agent.id}>
-                            <td className="px-4 py-3">
+                          <TableRow key={agent.id}>
+                            <TableCell className="px-4 py-3">
                               <div className="flex items-center gap-3">
                                 <AgentPicture
                                   client={imageClient}
@@ -688,8 +678,8 @@ export function AgentSetupWizard(props: Props) {
                                   {agent.profile.name}
                                 </span>
                               </div>
-                            </td>
-                            <td className="px-4 py-3 text-muted-foreground">
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">
                               {agent.reportsTo.type === "user"
                                 ? "You"
                                 : (snapshot.agents.find(
@@ -699,17 +689,17 @@ export function AgentSetupWizard(props: Props) {
                                         ? agent.reportsTo.agentId
                                         : null),
                                   )?.profile.name ?? "Unavailable agent")}
-                            </td>
-                            <td className="px-4 py-3 text-muted-foreground">
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">
                               {agent.runtime.session.observedState
                                 .charAt(0)
                                 .toUpperCase() +
                                 agent.runtime.session.observedState.slice(1)}
-                            </td>
-                            <td className="px-4 py-3 text-muted-foreground">
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-muted-foreground">
                               {agent.profile.voice ?? "Native default"}
-                            </td>
-                            <td className="px-4 py-3 text-right">
+                            </TableCell>
+                            <TableCell className="px-4 py-3 text-right">
                               <DropdownMenu>
                                 <DropdownMenuTrigger
                                   render={
@@ -764,11 +754,11 @@ export function AgentSetupWizard(props: Props) {
                                   </DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         ))}
-                      </tbody>
-                    </table>
+                      </TableBody>
+                    </Table>
                     {!rows.length && (
                       <p className="px-4 py-8 text-sm text-muted-foreground">
                         {title === "Team members"
@@ -777,9 +767,9 @@ export function AgentSetupWizard(props: Props) {
                       </p>
                     )}
                   </div>
-                </section>
+                </TabsContent>
               ))}
-            </div>
+            </Tabs>
           )}
         </div>
       ) : (
@@ -790,7 +780,8 @@ export function AgentSetupWizard(props: Props) {
           >
             {steps.map((label, index) => (
               <li key={label}>
-                <button
+                <Button
+                  variant="ghost"
                   type="button"
                   disabled={locked}
                   aria-current={draft.step === index ? "step" : undefined}
@@ -807,7 +798,7 @@ export function AgentSetupWizard(props: Props) {
                     )}
                   </span>
                   {label}
-                </button>
+                </Button>
               </li>
             ))}
           </ol>
@@ -822,20 +813,27 @@ export function AgentSetupWizard(props: Props) {
               <p className="break-all rounded-lg border bg-muted/30 px-4 py-3 text-sm">
                 {directory || "Loading folder…"}
               </p>
-              <fieldset disabled={locked} className="space-y-3">
-                <legend className="sr-only">Folder access</legend>
+              <RadioGroup
+                disabled={locked}
+                className="space-y-3"
+                aria-label="Folder access"
+                name={`${id}-folder`}
+                value={draft.folderAccess}
+                onValueChange={(value) => {
+                  if (
+                    value === "none" ||
+                    value === "read_only" ||
+                    value === "read_write"
+                  )
+                    change({ folderAccess: value });
+                }}
+              >
                 {(["none", "read_only", "read_write"] as const).map((value) => (
                   <label
                     key={value}
                     className={`flex cursor-pointer items-start gap-3 rounded-lg border p-4 ${draft.folderAccess === value ? "border-primary bg-primary/5" : ""}`}
                   >
-                    <input
-                      className="mt-1 accent-primary"
-                      type="radio"
-                      name={`${id}-folder`}
-                      checked={draft.folderAccess === value}
-                      onChange={() => change({ folderAccess: value })}
-                    />
+                    <RadioGroupItem className="mt-1" value={value} />
                     <span>
                       <span className="block text-sm font-medium">
                         {folderLabels[value]}
@@ -850,7 +848,7 @@ export function AgentSetupWizard(props: Props) {
                     </span>
                   </label>
                 ))}
-              </fieldset>
+              </RadioGroup>
               <p className="text-xs leading-5 text-muted-foreground">
                 Access applies to this exact folder. Existing shared groups are
                 included in the final review.
@@ -1018,19 +1016,21 @@ export function AgentSetupWizard(props: Props) {
                   }
                 />
               </div>
-              <details className="rounded-lg border px-4 py-3 text-sm">
-                <summary className="font-medium">
+              <Collapsible className="rounded-lg border px-4 py-3 text-sm">
+                <CollapsibleTrigger type="button" className="font-medium">
                   Writing useful instructions
-                </summary>
-                <p className="mt-3 text-xs leading-5 text-muted-foreground">
-                  Describe responsibilities, project context and how decisions
-                  should reach you. Permissions are reviewed separately. Saving
-                  keeps the chat and does not start work. For an existing chat,
-                  explicit Restart applies changed instructions by summarizing
-                  active context while retaining readable history; this uses
-                  model allowance.
-                </p>
-              </details>
+                </CollapsibleTrigger>
+                <CollapsibleContent keepMounted>
+                  <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                    Describe responsibilities, project context and how decisions
+                    should reach you. Permissions are reviewed separately.
+                    Saving keeps the chat and does not start work. For an
+                    existing chat, explicit Restart applies changed instructions
+                    by summarizing active context while retaining readable
+                    history; this uses model allowance.
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
               <fieldset className="space-y-3 border-t pt-5">
                 <legend className="pr-2 text-sm font-medium">
                   Group skills
@@ -1160,44 +1160,49 @@ export function AgentSetupWizard(props: Props) {
                       {bundle.label}
                     </Choice>
                   ))}
-                  <details>
-                    <summary className="cursor-pointer text-sm font-medium">
+                  <Collapsible>
+                    <CollapsibleTrigger
+                      type="button"
+                      className="cursor-pointer text-sm font-medium"
+                    >
                       Choose individual permissions
-                    </summary>
-                    <div className="mt-3">
-                      {access.crewCapabilities
-                        .filter(
-                          (capability) =>
-                            ![
-                              "environments.read",
-                              "environments.attach",
-                              "environments.execute",
-                            ].includes(capability.action),
-                        )
-                        .map((capability) => (
-                          <Choice
-                            key={capability.action}
-                            checked={draft.crewActions.includes(
-                              capability.action,
-                            )}
-                            disabled={locked}
-                            onChange={(checked) =>
-                              change({
-                                crewActions: toggle(
-                                  draft.crewActions,
-                                  capability.action,
-                                  checked,
-                                ) as CrewAction[],
-                              })
-                            }
-                            description={capability.description}
-                          >
-                            {permissionLabels[capability.action] ??
-                              capability.label}
-                          </Choice>
-                        ))}
-                    </div>
-                  </details>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent keepMounted>
+                      <div className="mt-3">
+                        {access.crewCapabilities
+                          .filter(
+                            (capability) =>
+                              ![
+                                "environments.read",
+                                "environments.attach",
+                                "environments.execute",
+                              ].includes(capability.action),
+                          )
+                          .map((capability) => (
+                            <Choice
+                              key={capability.action}
+                              checked={draft.crewActions.includes(
+                                capability.action,
+                              )}
+                              disabled={locked}
+                              onChange={(checked) =>
+                                change({
+                                  crewActions: toggle(
+                                    draft.crewActions,
+                                    capability.action,
+                                    checked,
+                                  ) as CrewAction[],
+                                })
+                              }
+                              description={capability.description}
+                            >
+                              {permissionLabels[capability.action] ??
+                                capability.label}
+                            </Choice>
+                          ))}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
               )}
             </section>

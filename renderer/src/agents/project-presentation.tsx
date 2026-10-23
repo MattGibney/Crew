@@ -1,3 +1,10 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BookOpen,
@@ -626,21 +633,32 @@ function WorkspaceSettings({
                   <p className="mt-1 text-xs text-muted-foreground">
                     {workspaceConfigurationDescription(row)}
                   </p>
-                  <details className="mt-2 text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">Policy details</summary>
-                    {policyIds.map((id) => (
-                      <p key={id} className="mt-2 break-all">
-                        {id}
-                      </p>
-                    ))}
-                    {policyIds.length > 1 && (
-                      <p className="mt-2">
-                        Equivalent legacy approvals retained for existing
-                        assignments and environments. Update edits the first
-                        listed policy.
-                      </p>
-                    )}
-                  </details>
+                  <Collapsible className="mt-2 text-xs text-muted-foreground">
+                    <CollapsibleTrigger
+                      type="button"
+                      className="group flex w-full items-center gap-2 text-left cursor-pointer"
+                    >
+                      <DisclosureChevronDown
+                        className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                        aria-hidden="true"
+                      />
+                      Policy details
+                    </CollapsibleTrigger>
+                    <CollapsibleContent keepMounted>
+                      {policyIds.map((id) => (
+                        <p key={id} className="mt-2 break-all">
+                          {id}
+                        </p>
+                      ))}
+                      {policyIds.length > 1 && (
+                        <p className="mt-2">
+                          Equivalent legacy approvals retained for existing
+                          assignments and environments. Update edits the first
+                          listed policy.
+                        </p>
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
                 {!draft && simple(row) && (
                   <Button
@@ -664,13 +682,11 @@ function WorkspaceSettings({
           {draft && (
             <div className="space-y-4">
               <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="accent-primary"
+                <Checkbox
                   disabled={busy || stale}
                   checked={draft.writable}
-                  onChange={(event) =>
-                    setDraft({ ...draft, writable: event.target.checked })
+                  onCheckedChange={(checked) =>
+                    setDraft({ ...draft, writable: checked })
                   }
                 />
                 Allow writes in the project folder
@@ -684,9 +700,13 @@ function WorkspaceSettings({
               {stale && (
                 <p role="alert" className="text-sm text-destructive">
                   The saved policy changed elsewhere.{" "}
-                  <button className="underline" onClick={() => setDraft(null)}>
+                  <Button
+                    variant="ghost"
+                    className="h-auto p-0 underline"
+                    onClick={() => setDraft(null)}
+                  >
                     Reload the saved policy
-                  </button>{" "}
+                  </Button>{" "}
                   before editing.
                 </p>
               )}

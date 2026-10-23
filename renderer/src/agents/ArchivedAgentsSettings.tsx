@@ -1,6 +1,26 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Archive, RotateCcw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogTrigger,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import type { Agent } from "../../../src/agents/contracts.mjs";
 import type { AgentsClient } from "./client";
 
@@ -23,6 +43,9 @@ export function ArchivedAgentsSettings({
   act: Action;
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
   const archived = agents.filter((agent) => Boolean(agent.archivedAt));
   useEffect(() => {
     if (confirmId && !archived.some((agent) => agent.id === confirmId))
@@ -49,84 +72,55 @@ export function ArchivedAgentsSettings({
         stopped until you start it.
       </p>
       <div className="overflow-x-auto rounded-xl border">
-        <table
+        <Table
           className="w-full text-left text-sm"
           aria-label="Archived agents"
         >
-          <thead className="border-b bg-muted/40 text-muted-foreground">
-            <tr>
-              <th scope="col" className="px-4 py-3 font-medium">
+          <TableHeader className="border-b bg-muted/40 text-muted-foreground">
+            <TableRow>
+              <TableHead scope="col" className="px-4 py-3 font-medium">
                 Name
-              </th>
-              <th scope="col" className="px-4 py-3 font-medium">
+              </TableHead>
+              <TableHead scope="col" className="px-4 py-3 font-medium">
                 ID
-              </th>
-              <th scope="col" className="px-4 py-3 font-medium">
+              </TableHead>
+              <TableHead scope="col" className="px-4 py-3 font-medium">
                 Last used
-              </th>
-              <th scope="col" className="px-4 py-3 font-medium">
+              </TableHead>
+              <TableHead scope="col" className="px-4 py-3 font-medium">
                 Actions
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="divide-y">
             {archived.map((agent) => {
               const busy =
                 pending.has(`restore-${agent.id}`) ||
-                pending.has(`delete-${agent.id}`);
+                pending.has(`delete-${agent.id}`) ||
+                deletingId === agent.id;
               return (
-                <tr key={agent.id}>
-                  <th scope="row" className="px-4 py-4 align-top font-medium">
+                <TableRow key={agent.id}>
+                  <TableHead
+                    scope="row"
+                    className="px-4 py-4 align-top font-medium"
+                  >
                     {agent.profile.name}
-                  </th>
-                  <td className="px-4 py-4 align-top">
+                  </TableHead>
+                  <TableCell className="whitespace-normal px-4 py-4 align-top">
                     <code className="break-all text-xs">{agent.id}</code>
-                  </td>
-                  <td className="whitespace-nowrap px-4 py-4 align-top">
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap px-4 py-4 align-top">
                     {lastUsed(agent)}
-                  </td>
-                  <td className="min-w-64 px-4 py-4 align-top">
-                    {confirmId === agent.id ? (
-                      <div
-                        className="space-y-3"
-                        role="group"
-                        aria-label={`Confirm permanent deletion of ${agent.profile.name}`}
-                      >
-                        <p className="max-w-sm text-sm">
-                          Permanently delete {agent.profile.name}’s local agent
-                          folder and record? This cannot be undone. Shared work
-                          history, native chat archives, recovery snapshots,
-                          resources and external accounts are retained.
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            disabled={busy || !client.deleteAgent}
-                            onClick={async () => {
-                              if (
-                                await act(
-                                  `delete-${agent.id}`,
-                                  () => client.deleteAgent!(agent.id),
-                                  "Agent permanently deleted.",
-                                )
-                              )
-                                setConfirmId(null);
-                            }}
-                          >
-                            Delete permanently
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={busy}
-                            onClick={() => setConfirmId(null)}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
+                  </TableCell>
+                  <TableCell className="min-w-64 whitespace-normal px-4 py-4 align-top">
+                    <AlertDialog
+                      open={confirmId === agent.id}
+                      onOpenChange={(open) => {
+                        if (busy) return;
+                        setDeleteError("");
+                        setConfirmId(open ? agent.id : null);
+                      }}
+                    >
                       <div className="flex flex-wrap gap-2">
                         <Button
                           variant="outline"
@@ -143,24 +137,94 @@ export function ArchivedAgentsSettings({
                           <RotateCcw aria-hidden="true" />
                           Restore
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="text-destructive"
+                        <AlertDialogTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="text-destructive"
+                            />
+                          }
                           disabled={busy || !client.deleteAgent}
-                          onClick={() => setConfirmId(agent.id)}
                         >
                           <Trash2 aria-hidden="true" />
                           Permanently delete
-                        </Button>
+                        </AlertDialogTrigger>
                       </div>
-                    )}
-                  </td>
-                </tr>
+                      <AlertDialogContent size="sm" initialFocus={cancel}>
+                        <AlertDialogHeader>
+                          <AlertDialogMedia className="bg-destructive/10 text-destructive dark:bg-destructive/20">
+                            <Trash2 aria-hidden="true" />
+                          </AlertDialogMedia>
+                          <AlertDialogTitle>
+                            Permanently delete {agent.profile.name}?
+                          </AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Permanently delete {agent.profile.name}’s local
+                            agent folder and record? This cannot be undone.
+                            Shared work history, native chat archives, recovery
+                            snapshots, resources and external accounts are
+                            retained.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        {deleteError && (
+                          <p role="alert" className="text-sm text-destructive">
+                            {deleteError}
+                          </p>
+                        )}
+                        <AlertDialogFooter>
+                          <AlertDialogCancel ref={cancel} disabled={busy}>
+                            Cancel
+                          </AlertDialogCancel>
+                          <AlertDialogAction
+                            variant="destructive"
+                            disabled={busy || !client.deleteAgent}
+                            onClick={async () => {
+                              setDeletingId(agent.id);
+                              setDeleteError("");
+                              let detail = "";
+                              try {
+                                const deleted = await act(
+                                  `delete-${agent.id}`,
+                                  async () => {
+                                    try {
+                                      return await client.deleteAgent!(
+                                        agent.id,
+                                      );
+                                    } catch (cause) {
+                                      detail =
+                                        cause instanceof Error
+                                          ? cause.message
+                                          : String(cause);
+                                      throw cause;
+                                    }
+                                  },
+                                  "Agent permanently deleted.",
+                                );
+                                if (deleted) setConfirmId(null);
+                                else
+                                  setDeleteError(
+                                    detail ||
+                                      "The agent could not be deleted. Review the error and try again.",
+                                  );
+                              } finally {
+                                setDeletingId(null);
+                              }
+                            }}
+                          >
+                            {deletingId === agent.id
+                              ? "Deleting…"
+                              : "Delete permanently"}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

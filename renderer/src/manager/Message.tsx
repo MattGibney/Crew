@@ -1,3 +1,11 @@
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 import { WebLink } from "./WebLink.js";
 import type { ReactNode } from "react";
 import type { MessageRecord, ManagerProfile } from "../contracts/manager.js";
@@ -88,10 +96,15 @@ export function Message({
                 </code>
               ),
               img: MessageImage,
-              table: ({ children }) => (
-                <div className="overflow-auto">
-                  <table>{children}</table>
-                </div>
+              table: ({ children }) => <Table>{children}</Table>,
+              thead: ({ children }) => <TableHeader>{children}</TableHeader>,
+              tbody: ({ children }) => <TableBody>{children}</TableBody>,
+              tr: ({ children }) => <TableRow>{children}</TableRow>,
+              th: ({ children, style }) => (
+                <TableHead style={style}>{children}</TableHead>
+              ),
+              td: ({ children, style }) => (
+                <TableCell style={style}>{children}</TableCell>
               ),
             }}
           >

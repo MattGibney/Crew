@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { api, errorText } from "./api.js";
 import { WorkerStatus } from "./WorkerAttention.js";
@@ -96,9 +97,11 @@ export function WorkerDetail({
     attention = pendingAttention(task),
     assignment = currentAssignment(task);
   return (
-    <section
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(String(value))}
       aria-label="Worker detail"
-      className="flex min-h-0 flex-1 flex-col"
+      className="flex min-h-0 flex-1 flex-col gap-0"
     >
       <div className="shrink-0 border-b px-5 pb-0 pt-4 sm:px-8">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
@@ -125,10 +128,10 @@ export function WorkerDetail({
           </h1>
           <WorkerStatus task={task} />
         </div>
-        <div
-          role="tablist"
+        <TabsList
+          variant="line"
           aria-label="Worker detail tabs"
-          className="-mb-px mt-3 flex gap-4 overflow-x-auto sm:gap-5"
+          className="-mb-px mt-3 w-full justify-start overflow-x-auto"
         >
           {(
             [
@@ -138,41 +141,12 @@ export function WorkerDetail({
               ["links", "Links", Link2],
             ] as [string, string, LucideIcon][]
           ).map(([value, label, Icon]) => (
-            <button
-              key={value}
-              type="button"
-              id={`worker-tab-${value}`}
-              role="tab"
-              aria-selected={tab === value}
-              aria-controls={`worker-panel-${value}`}
-              tabIndex={tab === value ? 0 : -1}
-              onKeyDown={(event) => {
-                const values = ["overview", "conversation", "notes", "links"];
-                const offset =
-                  event.key === "ArrowRight"
-                    ? 1
-                    : event.key === "ArrowLeft"
-                      ? -1
-                      : 0;
-                if (offset) {
-                  event.preventDefault();
-                  const next =
-                    values[
-                      (values.indexOf(value) + offset + values.length) %
-                        values.length
-                    ];
-                  setTab(next);
-                  document.getElementById(`worker-tab-${next}`)?.focus();
-                }
-              }}
-              onClick={() => setTab(value)}
-              className={`flex shrink-0 items-center gap-2 border-b-2 pb-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            >
+            <TabsTrigger key={value} value={value} className="flex-none">
               <Icon className="size-3.5" />
               {label}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
       </div>
       <div
         ref={scroll}
@@ -183,10 +157,6 @@ export function WorkerDetail({
             node.scrollHeight - node.scrollTop - node.clientHeight < 100;
         }}
         className="min-h-0 flex-1 overflow-y-auto px-5 py-6 sm:px-8"
-        role="tabpanel"
-        id={`worker-panel-${tab}`}
-        aria-labelledby={`worker-tab-${tab}`}
-        tabIndex={0}
       >
         <div
           className={`mx-auto ${tab === "conversation" ? "max-w-3xl" : "max-w-4xl"}`}
@@ -219,7 +189,7 @@ export function WorkerDetail({
               Loading worker evidence…
             </p>
           )}
-          {tab === "overview" && (
+          <TabsContent value="overview">
             <WorkerOverview
               task={task}
               manager={manager}
@@ -227,8 +197,8 @@ export function WorkerDetail({
               actions={actions}
               timing={timing}
             />
-          )}
-          {tab === "conversation" && (
+          </TabsContent>
+          <TabsContent value="conversation">
             <div className="space-y-6">
               <p className="text-xs leading-5 text-muted-foreground">
                 {detail?.historyNotice ||
@@ -308,11 +278,15 @@ export function WorkerDetail({
                 </p>
               )}
             </div>
-          )}
-          {tab === "notes" && detail && <WorkerNotes detail={detail} />}
-          {tab === "links" && detail && <WorkerLinks detail={detail} />}
+          </TabsContent>
+          <TabsContent value="notes">
+            {detail && <WorkerNotes detail={detail} />}
+          </TabsContent>
+          <TabsContent value="links">
+            {detail && <WorkerLinks detail={detail} />}
+          </TabsContent>
         </div>
       </div>
-    </section>
+    </Tabs>
   );
 }

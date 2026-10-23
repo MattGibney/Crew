@@ -1,9 +1,16 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   GrantScope,
   ServiceConnectionView,
 } from "../../../src/agents/contracts.mjs";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 
 export function OwnerRequired() {
@@ -59,12 +66,11 @@ export function Choice({
 }) {
   return (
     <label className="flex min-w-0 items-start gap-3 py-2 text-sm">
-      <input
-        type="checkbox"
-        className="mt-1 size-4 shrink-0 accent-primary"
+      <Checkbox
+        className="mt-1 shrink-0"
         checked={checked}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
+        onCheckedChange={(checked) => onChange(checked === true)}
       />
       <span className="min-w-0 break-words">
         <span className="font-medium">{children}</span>
@@ -180,12 +186,23 @@ export function ScopeSummary({
               ? " with exactly the arguments shown above."
               : " with the exact arguments approved for this grant."}
           </p>
-          <details className="text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Argument fingerprint</summary>
-            <p className="mt-2 break-all font-mono">
-              {scope.argumentsFingerprint}
-            </p>
-          </details>
+          <Collapsible className="text-xs text-muted-foreground">
+            <CollapsibleTrigger
+              type="button"
+              className="group flex w-full items-center gap-2 text-left cursor-pointer"
+            >
+              <DisclosureChevronDown
+                className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                aria-hidden="true"
+              />
+              Argument fingerprint
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <p className="mt-2 break-all font-mono">
+                {scope.argumentsFingerprint}
+              </p>
+            </CollapsibleContent>
+          </Collapsible>
         </>
       ) : (
         <>

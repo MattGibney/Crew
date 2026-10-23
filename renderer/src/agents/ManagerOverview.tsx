@@ -1,4 +1,6 @@
+import { Card } from "@/components/ui/card";
 import { ArrowRight, CircleHelp, Settings2, Users } from "lucide-react";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Agent } from "../../../src/agents/contracts.mjs";
@@ -54,56 +56,60 @@ function ManagerCard({
   const working = label === "Working";
 
   return (
-    <button
-      type="button"
-      aria-label={`Open ${agent.profile.name}`}
-      disabled={pending}
-      onClick={() => onOpen(agent)}
-      className="group flex min-w-0 flex-col rounded-2xl border border-border bg-card p-6 text-left text-card-foreground shadow-sm transition-colors hover:border-primary/40 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
-    >
-      <div className="mb-6 flex items-start justify-between gap-3">
-        <span className="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-muted text-xl font-semibold text-muted-foreground">
-          {picture ? (
-            <img src={picture} alt="" className="size-full object-cover" />
-          ) : (
-            initials
-          )}
-        </span>
-        <Badge
-          variant={label === "Error" ? "destructive" : "outline"}
-          className="gap-1.5"
-        >
-          <span
-            aria-hidden="true"
-            className={`size-1.5 rounded-full ${working ? "bg-primary" : "bg-current opacity-50"}`}
-          />
-          {label}
-        </Badge>
-      </div>
-      <h2 className="break-words text-xl font-semibold tracking-tight">
-        {agent.profile.name}
-      </h2>
-      <p className="mt-2 line-clamp-3 min-h-15 text-sm leading-5 text-muted-foreground">
-        {agent.profile.personality.trim() ||
-          "Open this team member’s chat to discuss work and coordinate their team."}
-      </p>
-      <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
-        <span className="inline-flex items-center gap-1.5">
-          <Users aria-hidden="true" className="size-3.5" />
-          {workers} {workers === 1 ? "worker" : "workers"}
-        </span>
-        {questions > 0 && (
-          <span className="inline-flex items-center gap-1.5 text-foreground">
-            <CircleHelp aria-hidden="true" className="size-3.5" />
-            {questions} {questions === 1 ? "open question" : "open questions"}
+    <Card className="gap-0 p-0">
+      <Button
+        variant="ghost"
+        type="button"
+        aria-label={`Open ${agent.profile.name}`}
+        disabled={pending}
+        onClick={() => onOpen(agent)}
+        className="group items-stretch justify-start whitespace-normal flex h-full min-w-0 flex-1 flex-col p-6 text-left transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+      >
+        <div className="mb-6 flex items-start justify-between gap-3">
+          <Avatar className="size-16 rounded-2xl">
+            {picture && (
+              <AvatarImage src={picture} alt="" className="rounded-2xl" />
+            )}
+            <AvatarFallback className="rounded-2xl text-xl font-semibold">
+              {initials}
+            </AvatarFallback>
+          </Avatar>
+          <Badge
+            variant={label === "Error" ? "destructive" : "outline"}
+            className="gap-1.5"
+          >
+            <span
+              aria-hidden="true"
+              className={`size-1.5 rounded-full ${working ? "bg-primary" : "bg-current opacity-50"}`}
+            />
+            {label}
+          </Badge>
+        </div>
+        <h2 className="break-words text-xl font-semibold tracking-tight">
+          {agent.profile.name}
+        </h2>
+        <p className="mt-2 line-clamp-3 min-h-15 text-sm leading-5 text-muted-foreground">
+          {agent.profile.personality.trim() ||
+            "Open this team member’s chat to discuss work and coordinate their team."}
+        </p>
+        <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-4 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <Users aria-hidden="true" className="size-3.5" />
+            {workers} {workers === 1 ? "worker" : "workers"}
           </span>
-        )}
-        <ArrowRight
-          aria-hidden="true"
-          className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
-        />
-      </div>
-    </button>
+          {questions > 0 && (
+            <span className="inline-flex items-center gap-1.5 text-foreground">
+              <CircleHelp aria-hidden="true" className="size-3.5" />
+              {questions} {questions === 1 ? "open question" : "open questions"}
+            </span>
+          )}
+          <ArrowRight
+            aria-hidden="true"
+            className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground"
+          />
+        </div>
+      </Button>
+    </Card>
   );
 }
 
@@ -131,8 +137,8 @@ export function ManagerOverview({
             Team members
           </h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            Choose a team member to chat, review their work, and coordinate their
-            team.
+            Choose a team member to chat, review their work, and coordinate
+            their team.
           </p>
         </div>
         <Button variant="outline" onClick={onManage} disabled={pending}>

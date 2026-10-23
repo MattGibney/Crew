@@ -1,8 +1,13 @@
 import type { WorkspaceSnapshot, WorkspaceBridge } from "../contracts/setup.js";
 import { errorText } from "./api.js";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, Plus, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Popover,
+  PopoverTrigger,
+  PopoverContent,
+} from "@/components/ui/popover";
 import { NativeSelect } from "@/components/ui/native-select";
 
 export function ProjectSwitcher({
@@ -16,7 +21,7 @@ export function ProjectSwitcher({
   const [snapshot, setSnapshot] = useState<WorkspaceSnapshot | null>(null);
   const [error, setError] = useState("");
   const [working, setWorking] = useState(false);
-  const menu = useRef<HTMLDetailsElement | null>(null);
+  const [open, setOpen] = useState(false);
   const selected = snapshot?.projects.find(
     (project) => project.id === snapshot?.selectedId,
   );
@@ -44,30 +49,6 @@ export function ProjectSwitcher({
     };
   }, [bridge]);
 
-  useEffect(() => {
-    const dismiss = (event: PointerEvent) => {
-      if (
-        menu.current &&
-        !menu.current.contains(
-          event.target instanceof Node ? event.target : null,
-        )
-      )
-        if (menu.current) menu.current.open = false;
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && menu.current?.open) {
-        if (menu.current) menu.current.open = false;
-        menu.current.querySelector("summary")?.focus();
-      }
-    };
-    document.addEventListener("pointerdown", dismiss);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", dismiss);
-      document.removeEventListener("keydown", escape);
-    };
-  }, []);
-
   async function run(operation: () => Promise<unknown>, after?: () => void) {
     setWorking(true);
     setError("");
@@ -88,8 +69,8 @@ export function ProjectSwitcher({
       </p>
     );
   return (
-    <details ref={menu} className="group relative min-w-0">
-      <summary
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         id="instance-project"
         aria-label={`Project: ${selected?.name || fallbackName || "Your project"}. Manage projects`}
         className="flex cursor-pointer list-none items-center gap-1 rounded-md py-1 text-sm font-medium outline-none focus-visible:ring-3 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden"
@@ -98,14 +79,14 @@ export function ProjectSwitcher({
           {selected?.name || fallbackName || "Your project"}
         </span>
         <ChevronDown
-          className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180"
+          className="size-3.5 shrink-0 text-muted-foreground transition-transform in-aria-expanded:rotate-180"
           aria-hidden="true"
         />
-      </summary>
-      <div
-        role="region"
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
         aria-label="Manage projects"
-        className="fixed left-4 top-20 z-50 max-h-[calc(100dvh-6rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border bg-popover p-4 text-popover-foreground shadow-lg sm:absolute sm:left-0 sm:top-full sm:mt-2"
+        className="max-h-[calc(100dvh-6rem)] w-[min(22rem,calc(100vw-2rem))] overflow-y-auto p-4"
       >
         <div className="mb-3 flex items-center gap-2 text-sm font-semibold">
           <FolderOpen className="size-4 text-primary" aria-hidden="true" />
@@ -128,7 +109,7 @@ export function ProjectSwitcher({
               run(
                 () => bridge.select(nextId),
                 () => {
-                  if (menu.current) menu.current.open = false;
+                  setOpen(false);
                 },
               );
           }}
@@ -159,7 +140,7 @@ export function ProjectSwitcher({
             run(
               () => bridge.add(),
               () => {
-                if (menu.current) menu.current.open = false;
+                setOpen(false);
               },
             )
           }
@@ -177,7 +158,7 @@ export function ProjectSwitcher({
             Saving…
           </p>
         )}
-      </div>
-    </details>
+      </PopoverContent>
+    </Popover>
   );
 }

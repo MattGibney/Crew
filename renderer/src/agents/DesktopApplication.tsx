@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
@@ -8,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { AgentsApp } from "./AgentsApp";
@@ -416,11 +422,11 @@ function DesktopUpdates({
           </p>
         )}
         {phase === "downloading" && status?.downloadPercent != null && (
-          <progress
+          <Progress
             aria-label="Update download"
             value={status.downloadPercent}
             max={100}
-            className="h-2 w-full accent-primary"
+            className="w-full [&_[data-slot=progress-track]]:h-2"
           />
         )}
         <div className="flex flex-wrap gap-2">
@@ -613,27 +619,29 @@ function ProjectReadiness({
                     {agent.detail}
                   </p>
                 )}
-                <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">
+                <Collapsible className="text-xs text-muted-foreground">
+                  <CollapsibleTrigger type="button" className="cursor-pointer">
                     Preparation details
-                  </summary>
-                  <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-                    <dt>Session</dt>
-                    <dd className="break-all">{agent.sessionId}</dd>
-                    <dt>Continuation saved</dt>
-                    <dd className="break-all">
-                      {agent.continuationSavedAt ?? "Not reported"}
-                    </dd>
-                    {"preparationId" in agent && (
-                      <>
-                        <dt>Request</dt>
-                        <dd className="break-all">
-                          {String(agent.preparationId)}
-                        </dd>
-                      </>
-                    )}
-                  </dl>
-                </details>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent keepMounted>
+                    <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+                      <dt>Session</dt>
+                      <dd className="break-all">{agent.sessionId}</dd>
+                      <dt>Continuation saved</dt>
+                      <dd className="break-all">
+                        {agent.continuationSavedAt ?? "Not reported"}
+                      </dd>
+                      {"preparationId" in agent && (
+                        <>
+                          <dt>Request</dt>
+                          <dd className="break-all">
+                            {String(agent.preparationId)}
+                          </dd>
+                        </>
+                      )}
+                    </dl>
+                  </CollapsibleContent>
+                </Collapsible>
               </li>
             ))}
           </ul>

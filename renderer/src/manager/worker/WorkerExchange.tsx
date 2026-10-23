@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../../components/ui/collapsible.js";
 import { WebLink } from "../WebLink.js";
 import type { WorkerExchangeRecord } from "../../contracts/manager.js";
 import { ChevronDown, Terminal } from "lucide-react";
@@ -69,11 +74,11 @@ export function WorkerExchange({ item }: { item: WorkerExchangeRecord }) {
   const kind = (item.kind || "event").replaceAll("_", " ");
   if (activity)
     return (
-      <details
+      <Collapsible
         aria-label={`${item.actor || "Controller"} ${item.kind || "event"}`}
         className="group ml-9 rounded-lg bg-muted/40 px-3 py-2.5 text-xs text-muted-foreground"
       >
-        <summary className="flex cursor-pointer list-none items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <CollapsibleTrigger className="flex w-full cursor-pointer list-none items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
           <Terminal className="size-3.5 shrink-0" aria-hidden="true" />
           <span className="shrink-0 capitalize">
             {actor} · {kind}
@@ -82,15 +87,17 @@ export function WorkerExchange({ item }: { item: WorkerExchangeRecord }) {
             {item.message?.split("\n")[0]}
           </span>
           <ChevronDown
-            className="size-3.5 shrink-0 transition-transform group-open:rotate-180"
+            className="size-3.5 shrink-0 transition-transform group-data-[open]:rotate-180"
             aria-hidden="true"
           />
-        </summary>
-        <div className="space-y-4 pt-3">
-          <Markdown>{item.message}</Markdown>
-          <ExchangeDetails item={item} />
-        </div>
-      </details>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="space-y-4 pt-3">
+            <Markdown>{item.message}</Markdown>
+            <ExchangeDetails item={item} />
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
     );
   return (
     <Message
@@ -107,12 +114,16 @@ export function WorkerExchange({ item }: { item: WorkerExchangeRecord }) {
         item.runId ||
         item.assignmentId ||
         (item.evidence?.length || 0) > 0) && (
-        <details className="mt-2 text-[11px] text-muted-foreground">
-          <summary className="w-fit cursor-pointer">Details</summary>
-          <div className="pt-2">
-            <ExchangeDetails item={item} />
-          </div>
-        </details>
+        <Collapsible className="mt-2 text-[11px] text-muted-foreground">
+          <CollapsibleTrigger className="text-left w-fit cursor-pointer">
+            Details
+          </CollapsibleTrigger>
+          <CollapsibleContent keepMounted>
+            <div className="pt-2">
+              <ExchangeDetails item={item} />
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </Message>
   );

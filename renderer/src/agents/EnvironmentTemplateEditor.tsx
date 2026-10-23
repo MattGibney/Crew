@@ -1,3 +1,10 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -404,14 +411,13 @@ export function EnvironmentTemplateEditor({
     if (!draft) return null;
     return (
       <label className="flex items-start gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="mt-1 accent-primary"
+        <Checkbox
+          className="mt-1"
           checked={draft[key]}
-          onChange={(event) =>
+          onCheckedChange={(checked) =>
             setDraft({
               ...draft,
-              [key]: event.target.checked,
+              [key]: checked,
               ...(key === "docker" ? { dockerAcknowledged: false } : {}),
             })
           }
@@ -557,19 +563,28 @@ export function EnvironmentTemplateEditor({
               </>
             )}
           </div>
-          <details>
-            <summary className="cursor-pointer text-sm font-medium">
+          <Collapsible>
+            <CollapsibleTrigger
+              type="button"
+              className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
+            >
+              <DisclosureChevronDown
+                className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                aria-hidden="true"
+              />
               Advanced nonsecret configuration
-            </summary>
-            <div className="mt-3 space-y-2">
-              {field(
-                "Environment and preparation (JSON)",
-                "advanced",
-                true,
-                'Use environment for nonsecret string values. Preparation has instructions and suggested commands as argument arrays, for example [["npm", "ci"]]. Agents explicitly run those commands after preparation. Never enter credentials.',
-              )}
-            </div>
-          </details>
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <div className="mt-3 space-y-2">
+                {field(
+                  "Environment and preparation (JSON)",
+                  "advanced",
+                  true,
+                  'Use environment for nonsecret string values. Preparation has instructions and suggested commands as argument arrays, for example [["npm", "ci"]]. Agents explicitly run those commands after preparation. Never enter credentials.',
+                )}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
           {stale && (
             <p role="alert" className="text-sm text-destructive">
               The saved template changed elsewhere. Your draft is retained.

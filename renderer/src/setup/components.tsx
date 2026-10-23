@@ -1,3 +1,10 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { trackingPreferences } from "../../../src/shared/tracking.mjs";
 import type { SetupSnapshot, CheckStatus } from "../contracts/setup.js";
 import type * as React from "react";
@@ -50,9 +57,9 @@ export function SetupButton({
 export function SetupCheckbox({
   disabled,
   ...props
-}: Omit<React.ComponentProps<"input">, "type">) {
+}: React.ComponentProps<typeof Checkbox>) {
   const busy = useContext(BusyContext);
-  return <input {...props} type="checkbox" disabled={disabled || busy} />;
+  return <Checkbox {...props} disabled={disabled || busy} />;
 }
 export function Select({
   disabled,
@@ -245,23 +252,32 @@ export function ToolsCheck({ snapshot }: { snapshot: SetupSnapshot | null }) {
           <Status name="GitHub advertised tools" value={tools.github} />
         )}
       {(tools?.servers?.length ?? 0) > 0 && (
-        <details className="space-y-3 rounded-lg border border-border p-3">
-          <summary className="cursor-pointer text-sm font-medium">
+        <Collapsible className="space-y-3 rounded-lg border border-border p-3">
+          <CollapsibleTrigger
+            type="button"
+            className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
+          >
+            <DisclosureChevronDown
+              className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+              aria-hidden="true"
+            />
             Inspect {tools!.servers!.length} connected-tool entries
-          </summary>
-          <div className="space-y-2 pt-3">
-            {tools!.servers!.map((server, index) => (
-              <Status
-                key={`${server.name}-${index}`}
-                name={server.name}
-                value={{
-                  status: server.tools.length ? "advertised" : server.status,
-                  detail: `${authLabels[server.auth] || server.auth}; ${server.tools.length} tools advertised. Access is not yet verified.`,
-                }}
-              />
-            ))}
-          </div>
-        </details>
+          </CollapsibleTrigger>
+          <CollapsibleContent keepMounted>
+            <div className="space-y-2 pt-3">
+              {tools!.servers!.map((server, index) => (
+                <Status
+                  key={`${server.name}-${index}`}
+                  name={server.name}
+                  value={{
+                    status: server.tools.length ? "advertised" : server.status,
+                    detail: `${authLabels[server.auth] || server.auth}; ${server.tools.length} tools advertised. Access is not yet verified.`,
+                  }}
+                />
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </div>
   );

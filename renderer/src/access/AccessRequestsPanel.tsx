@@ -1,3 +1,9 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import { useId, useState } from "react";
 import type {
   AccessRequest,
@@ -161,41 +167,61 @@ function RequestReview({
           </dd>
         </div>
       </dl>
-      <details className="space-y-3">
-        <summary className="cursor-pointer text-sm font-medium">
+      <Collapsible className="space-y-3">
+        <CollapsibleTrigger
+          type="button"
+          className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
+        >
+          <DisclosureChevronDown
+            className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+            aria-hidden="true"
+          />
           Requested future scope
-        </summary>
-        <div className="mt-3 rounded-lg border p-3">
-          <p className="mb-2 break-all text-xs text-muted-foreground">
-            Connection:{" "}
-            {props.connections.find(
-              (item) => item.id === request.requestedScope.connectionId,
-            )?.name ?? request.requestedScope.connectionId}
-          </p>
-          <ScopeSummary scope={request.requestedScope} />
-        </div>
-      </details>
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Request identity</summary>
-        <dl className="mt-2 space-y-1 break-all">
-          <div>
-            <dt className="inline font-medium">Agent: </dt>
-            <dd className="inline">{request.caller.agentId}</dd>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-3 rounded-lg border p-3">
+            <p className="mb-2 break-all text-xs text-muted-foreground">
+              Connection:{" "}
+              {props.connections.find(
+                (item) => item.id === request.requestedScope.connectionId,
+              )?.name ?? request.requestedScope.connectionId}
+            </p>
+            <ScopeSummary scope={request.requestedScope} />
           </div>
-          <div>
-            <dt className="inline font-medium">Session: </dt>
-            <dd className="inline">{request.caller.sessionId}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">Invocation: </dt>
-            <dd className="inline">{request.operation.invocationId}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">Request: </dt>
-            <dd className="inline">{request.id}</dd>
-          </div>
-        </dl>
-      </details>
+        </CollapsibleContent>
+      </Collapsible>
+      <Collapsible className="text-xs text-muted-foreground">
+        <CollapsibleTrigger
+          type="button"
+          className="group flex w-full items-center gap-2 text-left cursor-pointer"
+        >
+          <DisclosureChevronDown
+            className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+            aria-hidden="true"
+          />
+          Request identity
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <dl className="mt-2 space-y-1 break-all">
+            <div>
+              <dt className="inline font-medium">Agent: </dt>
+              <dd className="inline">{request.caller.agentId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">Session: </dt>
+              <dd className="inline">{request.caller.sessionId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">Invocation: </dt>
+              <dd className="inline">{request.operation.invocationId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">Request: </dt>
+              <dd className="inline">{request.id}</dd>
+            </div>
+          </dl>
+        </CollapsibleContent>
+      </Collapsible>
       <form
         className="space-y-4"
         onSubmit={async (event) => {

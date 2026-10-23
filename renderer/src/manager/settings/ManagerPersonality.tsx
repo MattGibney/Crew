@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../../components/ui/collapsible.js";
 import { useState } from "react";
 import type { FormEvent } from "react";
 import type { ManagerProps } from "../../contracts/manager.js";
@@ -63,24 +68,26 @@ export function ManagerPersonality({
                 placeholder="For example: calm and direct, curious about alternatives, with concise updates."
                 onChange={(event) => setDraft(event.target.value)}
               />
-              <details className="mt-3 text-xs leading-6 text-muted-foreground">
-                <summary className="cursor-pointer font-medium">
+              <Collapsible className="mt-3 text-xs leading-6 text-muted-foreground">
+                <CollapsibleTrigger className="text-left cursor-pointer font-medium">
                   How personality is used
-                </summary>
-                <p className="mt-2">
-                  Describe tone, communication style and preferences. Leave this
-                  empty to use your manager instructions alone. Saved
-                  personality is added as explicit profile preferences alongside
-                  your existing instructions for typed and voice conversations
-                  after an explicit Start or Restart in Sessions. It does not
-                  replace your instructions, change the selected audio voice or
-                  change Codex permissions.
-                </p>
-                <p className="mt-2">
-                  Keep task requirements in the conversation. Don’t include
-                  passwords, API keys or other secrets.
-                </p>
-              </details>
+                </CollapsibleTrigger>
+                <CollapsibleContent keepMounted>
+                  <p className="mt-2">
+                    Describe tone, communication style and preferences. Leave
+                    this empty to use your manager instructions alone. Saved
+                    personality is added as explicit profile preferences
+                    alongside your existing instructions for typed and voice
+                    conversations after an explicit Start or Restart in
+                    Sessions. It does not replace your instructions, change the
+                    selected audio voice or change Codex permissions.
+                  </p>
+                  <p className="mt-2">
+                    Keep task requirements in the conversation. Don’t include
+                    passwords, API keys or other secrets.
+                  </p>
+                </CollapsibleContent>
+              </Collapsible>
             </>
           ) : (
             <p className="whitespace-pre-wrap break-words text-sm leading-6 text-muted-foreground">

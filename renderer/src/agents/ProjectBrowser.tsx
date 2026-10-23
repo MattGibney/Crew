@@ -1,3 +1,5 @@
+import { NativeSelect } from "@/components/ui/native-select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
@@ -388,7 +390,7 @@ export function ProjectBrowser({
         <label htmlFor="browser-owner" className="text-sm font-medium">
           Browser for
         </label>
-        <select
+        <NativeSelect
           id="browser-owner"
           className="project-browser-agent-select"
           value={ownerId ?? ""}
@@ -403,66 +405,73 @@ export function ProjectBrowser({
               {agent.profile.name}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         <span className="text-xs text-muted-foreground">
           Each agent keeps its own tabs.
         </span>
       </div>
-      <div
-        className="project-browser-tabs"
-        role="tablist"
-        aria-label="Browser tabs"
+      <Tabs
+        value={tabId}
+        onValueChange={(value) => {
+          if (value && !pending)
+            void run({ action: "select_tab", tabId: String(value) });
+        }}
       >
-        {(state.tabs ?? []).map((tab) => (
-          <div
-            className="project-browser-tab"
-            data-active={tab.id === tabId}
-            key={tab.id}
-          >
-            <button
-              type="button"
-              role="tab"
-              aria-selected={tab.id === tabId}
-              aria-label={tab.title || tab.url || "New tab"}
-              disabled={pending}
-              onClick={() => void run({ action: "select_tab", tabId: tab.id })}
-            >
-              {tab.loading ? (
-                <LoaderCircle
-                  className="size-3 animate-spin"
-                  aria-hidden="true"
-                />
-              ) : (
-                <Globe className="size-3" aria-hidden="true" />
-              )}
-              <span>
-                {tab.title ||
-                  (tab.url && tab.url !== "about:blank" ? tab.url : "New tab")}
-              </span>
-            </button>
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Close ${tab.title || "tab"}`}
-              title="Close tab"
-              disabled={pending}
-              onClick={() => void run({ action: "close_tab", tabId: tab.id })}
-            >
-              <X />
-            </Button>
-          </div>
-        ))}
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="New tab"
-          title="New tab"
-          disabled={pending || !bridge || !owner}
-          onClick={() => void run({ action: "new_tab" })}
+        <TabsList
+          variant="line"
+          className="project-browser-tabs"
+          aria-label="Browser tabs"
         >
-          <Plus />
-        </Button>
-      </div>
+          {(state.tabs ?? []).map((tab) => (
+            <div
+              className="project-browser-tab"
+              data-active={tab.id === tabId}
+              key={tab.id}
+            >
+              <TabsTrigger
+                value={tab.id}
+                aria-label={tab.title || tab.url || "New tab"}
+                disabled={pending}
+              >
+                {tab.loading ? (
+                  <LoaderCircle
+                    className="size-3 animate-spin"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Globe className="size-3" aria-hidden="true" />
+                )}
+                <span>
+                  {tab.title ||
+                    (tab.url && tab.url !== "about:blank"
+                      ? tab.url
+                      : "New tab")}
+                </span>
+              </TabsTrigger>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={`Close ${tab.title || "tab"}`}
+                title="Close tab"
+                disabled={pending}
+                onClick={() => void run({ action: "close_tab", tabId: tab.id })}
+              >
+                <X />
+              </Button>
+            </div>
+          ))}
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="New tab"
+            title="New tab"
+            disabled={pending || !bridge || !owner}
+            onClick={() => void run({ action: "new_tab" })}
+          >
+            <Plus />
+          </Button>
+        </TabsList>
+      </Tabs>
       <div className="project-browser-toolbar">
         <Button
           variant="ghost"

@@ -1,3 +1,5 @@
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useEffect, useRef, useState } from "react";
 import type {
   ManagerSchedule,
@@ -151,12 +153,11 @@ export function ManagerSchedules({
           {editing === schedule.id && (
             <div className="mt-5 space-y-4">
               <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+                <Checkbox
                   id={`enabled-${schedule.id}`}
                   checked={schedule.enabled}
-                  onChange={(event) =>
-                    update(schedule.id, { enabled: event.target.checked })
+                  onCheckedChange={(checked) =>
+                    update(schedule.id, { enabled: checked })
                   }
                 />
                 <Label htmlFor={`enabled-${schedule.id}`}>Enabled</Label>
@@ -195,39 +196,37 @@ export function ManagerSchedules({
               </div>
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-medium">When</legend>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      name={`timing-${schedule.id}`}
-                      checked={schedule.timing.kind === "interval"}
-                      onChange={() =>
-                        update(schedule.id, {
-                          timing: { kind: "interval", minutes: 10 },
-                        })
-                      }
-                    />
+                <RadioGroup
+                  className="flex gap-4"
+                  name={`timing-${schedule.id}`}
+                  value={schedule.timing.kind}
+                  aria-label="Schedule timing"
+                  onValueChange={(kind) => {
+                    if (kind === "interval") {
+                      update(schedule.id, {
+                        timing: { kind: "interval", minutes: 10 },
+                      });
+                    } else if (kind === "daily") {
+                      update(schedule.id, {
+                        timing: {
+                          kind: "daily",
+                          time: "09:00",
+                          timeZone:
+                            Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        },
+                      });
+                    }
+                  }}
+                >
+                  <Label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value="interval" />
                     Interval
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      name={`timing-${schedule.id}`}
-                      checked={schedule.timing.kind === "daily"}
-                      onChange={() =>
-                        update(schedule.id, {
-                          timing: {
-                            kind: "daily",
-                            time: "09:00",
-                            timeZone:
-                              Intl.DateTimeFormat().resolvedOptions().timeZone,
-                          },
-                        })
-                      }
-                    />
+                  </Label>
+                  <Label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value="daily" />
                     Daily
-                  </label>
-                </div>
+                  </Label>
+                </RadioGroup>
                 {schedule.timing.kind === "interval" ? (
                   <div className="space-y-2">
                     <Label htmlFor={`minutes-${schedule.id}`}>

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { VoiceControls } from "../VoiceControls.js";
 import { ManagerCallBar } from "../ManagerCallBar.js";
-import { Message } from "../Message.js";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { useManagerComposer } from "./useManagerComposer.js";
 export function ManagerComposer({
   manager,
@@ -23,8 +23,12 @@ export function ManagerComposer({
     submit,
   } = composer;
   return (
-    <div className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7">
-      <div className="mx-auto max-w-3xl">
+    <Tabs
+      value={inputMode}
+      onValueChange={(value) => selectInput(String(value))}
+      className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7"
+    >
+      <div className="mx-auto w-full max-w-3xl">
         <form
           id="manager-composer"
           tabIndex={-1}
@@ -33,51 +37,16 @@ export function ManagerComposer({
           className="overflow-hidden rounded-xl border bg-background shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20"
         >
           <div className="flex items-center justify-between gap-3 px-3 pt-2">
-            <div
-              role="tablist"
-              aria-label="Input method"
-              className="flex gap-1 rounded-lg bg-muted/60 p-0.5"
-            >
-              {["text", "voice"].map((mode) => (
-                <button
-                  key={mode}
-                  id={`input-tab-${mode}`}
-                  type="button"
-                  role="tab"
-                  aria-selected={inputMode === mode}
-                  aria-controls={`input-panel-${mode}`}
-                  tabIndex={inputMode === mode ? 0 : -1}
-                  onClick={() => selectInput(mode)}
-                  onKeyDown={(event) => {
-                    if (
-                      ["ArrowLeft", "ArrowRight", "Home", "End"].includes(
-                        event.key,
-                      )
-                    ) {
-                      event.preventDefault();
-                      const next =
-                        event.key === "Home"
-                          ? "text"
-                          : event.key === "End"
-                            ? "voice"
-                            : mode === "text"
-                              ? "voice"
-                              : "text";
-                      selectInput(next);
-                      document.getElementById(`input-tab-${next}`)?.focus();
-                    }
-                  }}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${inputMode === mode ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
-                >
-                  {mode === "text" ? (
-                    <Keyboard className="size-3.5" aria-hidden="true" />
-                  ) : (
-                    <Mic className="size-3.5" aria-hidden="true" />
-                  )}
-                  {mode === "text" ? "Text" : "Voice"}
-                </button>
-              ))}
-            </div>
+            <TabsList aria-label="Input method">
+              <TabsTrigger value="text">
+                <Keyboard className="size-3.5" aria-hidden="true" />
+                Text
+              </TabsTrigger>
+              <TabsTrigger value="voice">
+                <Mic className="size-3.5" aria-hidden="true" />
+                Voice
+              </TabsTrigger>
+            </TabsList>
             {inputMode === "text" &&
               !manager.voice.allocated &&
               !manager.voice.busy && (
@@ -86,12 +55,7 @@ export function ManagerComposer({
                 </span>
               )}
           </div>
-          <div
-            id="input-panel-voice"
-            role="tabpanel"
-            aria-labelledby="input-tab-voice"
-            hidden={inputMode !== "voice"}
-          >
+          <TabsContent value="voice" keepMounted>
             <VoiceControls manager={manager} embedded />
             {busy && (
               <div className="px-4 pb-3">
@@ -108,14 +72,8 @@ export function ManagerComposer({
                 </Button>
               </div>
             )}
-          </div>
-          <div
-            id="input-panel-text"
-            role="tabpanel"
-            aria-labelledby="input-tab-text"
-            hidden={inputMode !== "text"}
-            className="p-2"
-          >
+          </TabsContent>
+          <TabsContent value="text" keepMounted className="p-2">
             <label htmlFor="message-input" className="sr-only">
               Message your manager
             </label>
@@ -173,7 +131,7 @@ export function ManagerComposer({
                 <ArrowUp />
               </Button>
             </div>
-          </div>
+          </TabsContent>
           {inputMode === "text" &&
             (manager.voice.allocated || manager.voice.busy) && (
               <ManagerCallBar
@@ -183,6 +141,6 @@ export function ManagerComposer({
             )}
         </form>
       </div>
-    </div>
+    </Tabs>
   );
 }

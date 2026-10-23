@@ -118,7 +118,7 @@ export function ManagerIdentity({
                 >
                   Choose picture
                 </Label>
-                <input
+                <Input
                   id="manager-profile-picture"
                   type="file"
                   accept="image/png,image/jpeg,image/webp"

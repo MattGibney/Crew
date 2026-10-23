@@ -1,3 +1,4 @@
+import { Checkbox } from "@/components/ui/checkbox";
 import type {
   Approval,
   WorkItem,
@@ -293,10 +294,9 @@ export function ApprovalForm({
             <option value="session">This session</option>
           </NativeSelect>
           <Label className="flex items-center gap-2">
-            <input
-              type="checkbox"
+            <Checkbox
               checked={strictAutoReview}
-              onChange={(event) => setStrictAutoReview(event.target.checked)}
+              onCheckedChange={(checked) => setStrictAutoReview(checked)}
             />
             Review every subsequent command in this turn
           </Label>

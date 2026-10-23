@@ -1,3 +1,9 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import { useId, useState } from "react";
 import type {
   Agent,
@@ -408,55 +414,64 @@ function GroupEditor({
             approved scope.
           </p>
         </fieldset>
-        <details className="border-t pt-4">
-          <summary className="cursor-pointer text-sm font-medium">
+        <Collapsible className="border-t pt-4">
+          <CollapsibleTrigger
+            type="button"
+            className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
+          >
+            <DisclosureChevronDown
+              className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+              aria-hidden="true"
+            />
             Crew permissions
-          </summary>
-          <div className="mt-3 space-y-3">
-            {props.crewCapabilities.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                The Crew permission catalogue is unavailable. Existing
-                permissions are retained.
-              </p>
-            )}
-            {props.crewCapabilities.map((choice) => {
-              const permission = draft.grants.crew.find(
-                (item) => item.action === choice.action,
-              );
-              return (
-                <div key={choice.action}>
-                  <Choice
-                    checked={!!permission}
-                    onChange={(checked) =>
-                      setCrew(
-                        choice.action,
-                        checked ? { action: choice.action } : null,
-                      )
-                    }
-                    description={choice.description}
-                  >
-                    {choice.label}
-                  </Choice>
-                </div>
-              );
-            })}
-            {draft.grants.crew
-              .filter(
-                (permission) =>
-                  !props.crewCapabilities.some(
-                    (choice) => choice.action === permission.action,
-                  ),
-              )
-              .map((permission) => (
-                <p
-                  key={permission.action}
-                  className="break-words text-xs text-muted-foreground"
-                >
-                  {permission.action} · existing permission retained
+          </CollapsibleTrigger>
+          <CollapsibleContent keepMounted>
+            <div className="mt-3 space-y-3">
+              {props.crewCapabilities.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  The Crew permission catalogue is unavailable. Existing
+                  permissions are retained.
                 </p>
-              ))}
-          </div>
-        </details>
+              )}
+              {props.crewCapabilities.map((choice) => {
+                const permission = draft.grants.crew.find(
+                  (item) => item.action === choice.action,
+                );
+                return (
+                  <div key={choice.action}>
+                    <Choice
+                      checked={!!permission}
+                      onChange={(checked) =>
+                        setCrew(
+                          choice.action,
+                          checked ? { action: choice.action } : null,
+                        )
+                      }
+                      description={choice.description}
+                    >
+                      {choice.label}
+                    </Choice>
+                  </div>
+                );
+              })}
+              {draft.grants.crew
+                .filter(
+                  (permission) =>
+                    !props.crewCapabilities.some(
+                      (choice) => choice.action === permission.action,
+                    ),
+                )
+                .map((permission) => (
+                  <p
+                    key={permission.action}
+                    className="break-words text-xs text-muted-foreground"
+                  >
+                    {permission.action} · existing permission retained
+                  </p>
+                ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
         <fieldset className="space-y-3 border-t pt-4">
           <legend className="text-sm font-medium">Workspaces</legend>
           <p className="text-sm text-muted-foreground">

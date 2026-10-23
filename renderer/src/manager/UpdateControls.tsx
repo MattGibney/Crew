@@ -14,6 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { api, errorText } from "./api.js";
 
@@ -172,11 +173,11 @@ export function UpdateControls({
           {!quit &&
             phase === "downloading" &&
             status?.downloadPercent != null && (
-              <progress
+              <Progress
                 aria-label="Update download"
                 value={status?.downloadPercent}
                 max={100}
-                className="h-2 w-full accent-primary"
+                className="w-full [&_[data-slot=progress-track]]:h-2"
               />
             )}
           {!quit && phase === "downloaded" && status?.installBlocked && (

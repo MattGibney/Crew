@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../../components/ui/collapsible.js";
 import { workReference } from "../../../../src/shared/tracking.mjs";
 import type { WorkerTask } from "../../contracts/manager.js";
 import { workerWorkflow, queuedAssignments } from "../worker-model.js";
@@ -18,40 +23,42 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
           approvals are shown separately.
         </p>
         {(task.workflowHistory?.length || 0) > 0 && (
-          <details className="mt-3 text-xs">
-            <summary className="cursor-pointer text-muted-foreground">
+          <Collapsible className="mt-3 text-xs">
+            <CollapsibleTrigger className="text-left cursor-pointer text-muted-foreground">
               Workflow history
-            </summary>
-            <ol className="mt-3 space-y-3">
-              {task.workflowHistory?.map((item, index) => (
-                <li key={item.requestId || index} className="break-words">
-                  <p className="font-medium">{item.value}</p>
-                  {typeof item.progressPercent === "number" && (
-                    <p className="mt-1 text-muted-foreground">
-                      Reported estimate: {item.progressPercent}%
-                    </p>
-                  )}
-                  {item.progressPercent === null && (
-                    <p className="mt-1 text-muted-foreground">
-                      Progress estimate unset
-                    </p>
-                  )}
-                  <p className="mt-1 text-muted-foreground">
-                    {item.actor === "worker" ? "Worker" : "Manager"}
-                    {item.at && (
-                      <>
-                        {" "}
-                        ·{" "}
-                        <time dateTime={item.at}>
-                          {new Date(item.at).toLocaleString()}
-                        </time>
-                      </>
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <ol className="mt-3 space-y-3">
+                {task.workflowHistory?.map((item, index) => (
+                  <li key={item.requestId || index} className="break-words">
+                    <p className="font-medium">{item.value}</p>
+                    {typeof item.progressPercent === "number" && (
+                      <p className="mt-1 text-muted-foreground">
+                        Reported estimate: {item.progressPercent}%
+                      </p>
                     )}
-                  </p>
-                </li>
-              ))}
-            </ol>
-          </details>
+                    {item.progressPercent === null && (
+                      <p className="mt-1 text-muted-foreground">
+                        Progress estimate unset
+                      </p>
+                    )}
+                    <p className="mt-1 text-muted-foreground">
+                      {item.actor === "worker" ? "Worker" : "Manager"}
+                      {item.at && (
+                        <>
+                          {" "}
+                          ·{" "}
+                          <time dateTime={item.at}>
+                            {new Date(item.at).toLocaleString()}
+                          </time>
+                        </>
+                      )}
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            </CollapsibleContent>
+          </Collapsible>
         )}
       </section>
       {queued.length > 0 && (
@@ -104,11 +111,11 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
                   item.status !== "queued",
               )
               .map((item) => (
-                <details
+                <Collapsible
                   key={item.id}
                   className="rounded-lg border p-3 text-xs"
                 >
-                  <summary className="cursor-pointer">
+                  <CollapsibleTrigger className="text-left cursor-pointer">
                     <span className="font-medium">
                       {workReference(item, "Local assignment").context} ·{" "}
                       {item.brief?.trim().split("\n")[0]}
@@ -120,29 +127,31 @@ export function WorkerWorkHistory({ task }: { task: WorkerTask }) {
                           ? "Native steering acknowledged"
                           : item.status}
                     </span>
-                  </summary>
-                  <div className="mt-3 space-y-3">
-                    <p className="whitespace-pre-wrap break-words text-muted-foreground">
-                      {item.brief}
-                    </p>
-                    {item.delivery?.state === "acknowledged" && (
-                      <p className="text-muted-foreground">
-                        Native input accepted in the existing turn. Worker
-                        reports and conversation provide evidence of any action
-                        taken.
+                  </CollapsibleTrigger>
+                  <CollapsibleContent keepMounted>
+                    <div className="mt-3 space-y-3">
+                      <p className="whitespace-pre-wrap break-words text-muted-foreground">
+                        {item.brief}
                       </p>
-                    )}
-                    {item.result?.message && (
-                      <Markdown>{item.result.message}</Markdown>
-                    )}
-                    <p className="break-all text-muted-foreground">
-                      Assignment {item.id}
-                      {item.runIds?.length
-                        ? ` · Runs ${item.runIds.join(", ")}`
-                        : ""}
-                    </p>
-                  </div>
-                </details>
+                      {item.delivery?.state === "acknowledged" && (
+                        <p className="text-muted-foreground">
+                          Native input accepted in the existing turn. Worker
+                          reports and conversation provide evidence of any
+                          action taken.
+                        </p>
+                      )}
+                      {item.result?.message && (
+                        <Markdown>{item.result.message}</Markdown>
+                      )}
+                      <p className="break-all text-muted-foreground">
+                        Assignment {item.id}
+                        {item.runIds?.length
+                          ? ` · Runs ${item.runIds.join(", ")}`
+                          : ""}
+                      </p>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
               ))}
           </div>
         </section>
