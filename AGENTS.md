@@ -683,3 +683,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Permission groups use the same full-width shadcn table treatment as agents and connections, with group descriptions, access counts and a vertical-ellipsis Edit menu. Create/Edit opens a centred Dialog with internally scrolling content and explicit actions.
 
 - Group permission choices show readable operation names, not raw upstream snake_case names or internal connection/capability IDs. Keep IDs unchanged in stored grants and callbacks; avoid repeating descriptions that only restate the label.
+
+- Agent templates use the same full-width shadcn table and vertical-ellipsis Edit menu as agents, connections and permission groups. Show availability, group/connection counts and the default template. Create/Edit uses a centred Dialog with scrolling content and explicit actions.
