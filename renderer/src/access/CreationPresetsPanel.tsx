@@ -8,7 +8,15 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
   AccessSection,
@@ -71,34 +79,45 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
       )}
       <div className="space-y-2">
         <Label htmlFor={`${id}-default`}>Default for new agents</Label>
-        <NativeSelect
-          id={`${id}-default`}
+        <Select
           value={props.creationDefaults.presetId ?? ""}
           disabled={action.busy}
-          onChange={(event) =>
+          onValueChange={(selectedValue) =>
             void action.run(
               () =>
                 props.onSetDefault(
-                  event.target.value || null,
+                  (selectedValue ?? "") || null,
                   props.creationDefaults.revision,
                 ),
               "Creation default saved.",
               "Could not change the default. Refresh and try again.",
             )
           }
+          items={[
+            { value: "", label: "No automatic default" },
+            ...props.presets.map((preset) => ({
+              value: preset.id,
+              label: `${preset.name}${preset.enabled ? "" : " (disabled)"}`,
+            })),
+          ]}
         >
-          <option value="">No automatic default</option>
-          {props.presets.map((preset) => (
-            <option
-              key={preset.id}
-              value={preset.id}
-              disabled={!preset.enabled}
-            >
-              {preset.name}
-              {preset.enabled ? "" : " (disabled)"}
-            </option>
-          ))}
-        </NativeSelect>
+          <SelectTrigger id={`${id}-default`} className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="">No automatic default</SelectItem>
+            {props.presets.map((preset) => (
+              <SelectItem
+                key={preset.id}
+                value={preset.id}
+                disabled={!preset.enabled}
+              >
+                {preset.name}
+                {preset.enabled ? "" : " (disabled)"}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <ErrorMessage>{action.error}</ErrorMessage>
       </div>
       {editing === "new" && (
@@ -108,7 +127,7 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
           onClose={() => setEditing(null)}
         />
       )}
-      <div className="divide-y border-y">
+      <div className="divide-y">
         {!props.presets.length && (
           <p className="py-4 text-sm text-muted-foreground">
             No approved presets yet.
@@ -254,12 +273,11 @@ function PresetEditor({
             <Label htmlFor={`${id}-template`}>
               Start from an existing agent
             </Label>
-            <NativeSelect
-              id={`${id}-template`}
+            <Select
               defaultValue={first.id}
-              onChange={(event) => {
+              onValueChange={(selectedValue) => {
                 const agent = props.agents.find(
-                  (row) => row.id === event.target.value,
+                  (row) => row.id === (selectedValue ?? ""),
                 );
                 if (agent)
                   setDraft((current) => ({
@@ -275,13 +293,22 @@ function PresetEditor({
                     configRef: agent.runtime.configRef,
                   }));
               }}
+              items={props.agents.map((agent) => ({
+                value: agent.id,
+                label: agent.profile.name,
+              }))}
             >
-              {props.agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.profile.name}
-                </option>
-              ))}
-            </NativeSelect>
+              <SelectTrigger id={`${id}-template`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {props.agents.map((agent) => (
+                  <SelectItem key={agent.id} value={agent.id}>
+                    {agent.profile.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <p className="mt-1 text-xs text-muted-foreground">
               Copies the profile and supported runtime. Skills and services
               derive from groups. Choose access separately below.

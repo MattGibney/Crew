@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import type {
   SubscriptionUsageClient,
   SubscriptionUsageSnapshot,
@@ -166,11 +168,13 @@ export function SubscriptionUsagePanel({ client, visible }: Props) {
   const snapshot = state?.snapshot;
   const stale = Boolean(snapshot && state?.status !== "available");
   return (
-    <section aria-label="Codex allowance" className="space-y-5 py-6">
+    <section aria-label="Codex allowance" className="space-y-6 pb-8">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold tracking-tight">Codex allowance</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+          <h2 className="text-base font-semibold tracking-tight">
+            Codex allowance
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
             Account-wide allowance shared with other Codex clients, projects and
             agents. These figures do not measure Crew alone.
           </p>
@@ -223,8 +227,9 @@ export function SubscriptionUsagePanel({ client, visible }: Props) {
               <section
                 key={bucketIndex}
                 aria-label={`${bucket.limitName ?? "Codex allowance"} usage`}
-                className="space-y-4 border-t pt-5"
+                className="space-y-5"
               >
+                <Separator />
                 <h3 className="text-sm font-medium">
                   {bucket.limitName ?? "Codex allowance"}
                 </h3>
@@ -294,20 +299,12 @@ function UsageWindow({
         </p>
       </div>
       {window.usedPercent !== null && (
-        <div
-          role="progressbar"
+        <Progress
+          value={clampPercent(window.usedPercent)}
           aria-label={`${windowLabel} allowance used`}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={clampPercent(window.usedPercent)}
           aria-valuetext={`${percent(window.usedPercent)} used, ${percent(remaining!)} remaining`}
-          className="h-2 overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className="h-full rounded-full bg-primary"
-            style={{ width: `${clampPercent(window.usedPercent)}%` }}
-          />
-        </div>
+          className="[&_[data-slot=progress-track]]:h-2"
+        />
       )}
       <p className="text-xs text-muted-foreground">
         {window.resetsAt !== null ? (
@@ -328,7 +325,8 @@ function UsageWindow({
 function FullResets({ snapshot }: { snapshot: SubscriptionUsageSnapshot }) {
   const resets = snapshot.resetCredits;
   return (
-    <section className="space-y-3 border-t pt-5">
+    <section className="space-y-5">
+      <Separator />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm font-medium">Earned full resets</h3>
         <p className="text-sm">

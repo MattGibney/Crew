@@ -1,3 +1,4 @@
+import { Separator } from "@/components/ui/separator";
 import {
   Collapsible,
   CollapsibleTrigger,
@@ -405,10 +406,12 @@ function DesktopUpdates({
     unavailable: "Update status is unavailable. Refresh to retry.",
   };
   return (
-    <div className="space-y-6">
-      <section className="space-y-4" aria-label="Crew update status">
+    <div className="space-y-10 pb-8">
+      <section className="space-y-5" aria-label="Crew update status">
         <div className="flex flex-wrap items-center gap-3">
-          <h3 className="text-base font-semibold">Crew updates</h3>
+          <h3 className="text-base font-semibold tracking-tight">
+            Crew updates
+          </h3>
           {status?.currentVersion && (
             <Badge variant="secondary">{status.currentVersion}</Badge>
           )}
@@ -467,12 +470,12 @@ function DesktopUpdates({
         </div>
       </section>
       {(downloaded || (preparing && preparing.state !== "idle")) && (
-        <section
-          className="space-y-4 border-t pt-6"
-          aria-label="Update preparation"
-        >
+        <section className="space-y-5" aria-label="Update preparation">
+          <Separator />
           <div className="flex flex-wrap items-center gap-3">
-            <h3 className="text-base font-semibold">Prepare every project</h3>
+            <h3 className="text-base font-semibold tracking-tight">
+              Prepare every project
+            </h3>
             {preparing && (
               <Badge variant="outline" className="capitalize">
                 {preparing.state}

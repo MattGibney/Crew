@@ -12,6 +12,7 @@ import type {
 } from "../../../src/agents/contracts.mjs";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 
 export function OwnerRequired() {
   return (
@@ -25,28 +26,50 @@ export function AccessSection({
   title,
   description,
   action,
+  fullWidth = false,
   children,
 }: {
   title: string;
   description: string;
   action?: ReactNode;
+  fullWidth?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className="min-w-0 space-y-5 py-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h2 id={id} className="text-base font-semibold">
-            {title}
-          </h2>
-          <p className="max-w-prose text-sm leading-6 text-muted-foreground">
-            {description}
-          </p>
+    <section aria-labelledby={id} className="min-w-0 space-y-10">
+      <div
+        className={
+          fullWidth
+            ? "space-y-6"
+            : "grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8"
+        }
+      >
+        <div
+          className={
+            fullWidth
+              ? "flex flex-wrap items-start justify-between gap-4"
+              : "min-w-0 space-y-2"
+          }
+        >
+          <div className={fullWidth ? "min-w-0 flex-1 space-y-2" : "space-y-2"}>
+            <h2 id={id} className="text-xl font-semibold tracking-tight">
+              {title}
+            </h2>
+            <p className="text-sm leading-6 text-muted-foreground">
+              {description}
+            </p>
+          </div>
+          {fullWidth && action}
         </div>
-        {action}
+        <div className="min-w-0 space-y-5">
+          {!fullWidth && action && (
+            <div className="flex flex-wrap justify-end gap-2">{action}</div>
+          )}
+          {children}
+        </div>
       </div>
-      {children}
+      <Separator />
     </section>
   );
 }

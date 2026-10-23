@@ -8,7 +8,15 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { WebLink } from "../manager/WebLink";
 import { Choice, ErrorMessage, OwnerRequired } from "./shared";
 import type { OwnerPanelProps } from "./types";
@@ -346,7 +354,9 @@ function ConnectionWizardContent(props: ServiceConnectionWizardProps) {
   if (savedConnectionId)
     return (
       <section className="space-y-4 py-6">
-        <h2 className="text-base font-semibold">Service connection saved</h2>
+        <h2 className="text-xl font-semibold tracking-tight">
+          Service connection saved
+        </h2>
         <p role="status" className="text-sm">
           The reviewed connection and access are saved.
         </p>
@@ -355,9 +365,9 @@ function ConnectionWizardContent(props: ServiceConnectionWizardProps) {
     );
 
   return (
-    <section aria-labelledby={`${id}-title`} className="min-w-0 space-y-5 py-6">
+    <section aria-labelledby={`${id}-title`} className="min-w-0 space-y-6">
       <div className="space-y-2">
-        <h2 id={`${id}-title`} className="text-base font-semibold">
+        <h2 id={`${id}-title`} className="text-xl font-semibold tracking-tight">
           Connect a service
         </h2>
         <p className="text-sm leading-6 text-muted-foreground">
@@ -388,12 +398,10 @@ function ConnectionWizardContent(props: ServiceConnectionWizardProps) {
         <div className="space-y-5">
           <div className="space-y-2">
             <Label htmlFor={`${id}-service`}>Service or saved connection</Label>
-            <NativeSelect
-              id={`${id}-service`}
-              className="w-full"
+            <Select
               value={selection}
-              onChange={(event) => {
-                const next = event.target.value;
+              onValueChange={(selectedValue) => {
+                const next = selectedValue ?? "";
                 const saved = snapshot.connections.find(
                   (row) => `existing:${row.id}` === next,
                 );
@@ -404,30 +412,53 @@ function ConnectionWizardContent(props: ServiceConnectionWizardProps) {
                 setCredential("");
                 setError("");
               }}
-            >
-              <option value="">Choose a service</option>
-              <optgroup label="New connection">
-                {snapshot.setupChoices
+              items={[
+                { value: "", label: "Choose a service" },
+                ...snapshot.setupChoices
                   .filter(
                     (row) =>
                       row.guide && row.authenticationMethods.includes("token"),
                   )
-                  .map((row) => (
-                    <option key={row.id} value={`new:${row.id}`}>
-                      {row.label}
-                    </option>
-                  ))}
-              </optgroup>
-              {snapshot.connections.length > 0 && (
-                <optgroup label="Use a connection already saved in Crew">
-                  {snapshot.connections.map((row) => (
-                    <option key={row.id} value={`existing:${row.id}`}>
-                      {row.name} · {row.identity.displayName}
-                    </option>
-                  ))}
-                </optgroup>
-              )}
-            </NativeSelect>
+                  .map((row) => ({ value: `new:${row.id}`, label: row.label })),
+                ...snapshot.connections.map((row) => ({
+                  value: `existing:${row.id}`,
+                  label: `${row.name} · ${row.identity.displayName}`,
+                })),
+              ]}
+            >
+              <SelectTrigger id={`${id}-service`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">Choose a service</SelectItem>
+                <SelectGroup>
+                  <SelectLabel>New connection</SelectLabel>
+                  {snapshot.setupChoices
+                    .filter(
+                      (row) =>
+                        row.guide &&
+                        row.authenticationMethods.includes("token"),
+                    )
+                    .map((row) => (
+                      <SelectItem key={row.id} value={`new:${row.id}`}>
+                        {row.label}
+                      </SelectItem>
+                    ))}
+                </SelectGroup>
+                {snapshot.connections.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>
+                      Use a connection already saved in Crew
+                    </SelectLabel>
+                    {snapshot.connections.map((row) => (
+                      <SelectItem key={row.id} value={`existing:${row.id}`}>
+                        {row.name} · {row.identity.displayName}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+              </SelectContent>
+            </Select>
           </div>
           {selection && !choice && (
             <p role="alert" className="text-sm text-destructive">

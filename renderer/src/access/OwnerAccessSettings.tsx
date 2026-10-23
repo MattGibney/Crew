@@ -7,7 +7,15 @@ import { ServiceConnectionsPanel } from "./ServiceConnectionsPanel";
 import { ServiceConnectionWizard } from "./ServiceConnectionWizard";
 import { AccessRequestsPanel } from "./AccessRequestsPanel";
 import { ApprovalGrantsPanel } from "./ApprovalGrantsPanel";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { OwnerRequired } from "./shared";
 import type { WorkspacePermissionChoice } from "./types";
@@ -44,7 +52,7 @@ export function OwnerAccessSettings({
     await onCommand(name, args);
   };
   return (
-    <div className="min-w-0 divide-y">
+    <div className="min-w-0 space-y-10">
       {connecting ? (
         <ServiceConnectionWizard
           {...common}
@@ -121,20 +129,34 @@ export function OwnerAccessSettings({
         <>
           <section className="py-6">
             <Label htmlFor="crew-access-agent">Agent access</Label>
-            <NativeSelect
-              id="crew-access-agent"
+            <Select
               value={agent?.id ?? ""}
-              onChange={(event) => setSelectedId(event.target.value)}
+              onValueChange={(selectedValue) =>
+                setSelectedId(selectedValue ?? "")
+              }
+              items={
+                snapshot.agents.length
+                  ? snapshot.agents.map((row) => ({
+                      value: row.id,
+                      label: row.profile.name,
+                    }))
+                  : [{ value: "", label: "No agents configured" }]
+              }
             >
-              {!snapshot.agents.length && (
-                <option value="">No agents configured</option>
-              )}
-              {snapshot.agents.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.profile.name}
-                </option>
-              ))}
-            </NativeSelect>
+              <SelectTrigger id={"crew-access-agent"} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {!snapshot.agents.length && (
+                  <SelectItem value="">No agents configured</SelectItem>
+                )}
+                {snapshot.agents.map((row) => (
+                  <SelectItem key={row.id} value={row.id}>
+                    {row.profile.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {/* Keep editors mounted so changing agents retains drafts and pending saves. */}
             {snapshot.agents.map((row) => (
               <div key={row.id} hidden={agent?.id !== row.id}>

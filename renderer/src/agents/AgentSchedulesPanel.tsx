@@ -5,7 +5,14 @@ import type {
   ManagerSchedules as SavedSchedules,
 } from "../contracts/manager";
 import { ManagerSchedules } from "../manager/settings/ManagerSchedules";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
@@ -46,38 +53,63 @@ export function AgentSchedulesPanel({
   }, [selectedId, primaryAgentId]);
   const selected = agents.find((agent) => agent.id === selectedId);
   return (
-    <div className="space-y-6">
-      <div className="max-w-md space-y-2">
-        <Label htmlFor="schedule-agent">Schedules for</Label>
-        <NativeSelect
-          id="schedule-agent"
-          value={selectedId ?? ""}
-          onChange={(event) => {
-            const id = event.target.value;
-            setSelectedId(id || null);
-            if (id) setVisited((previous) => new Set([...previous, id]));
-          }}
-        >
-          <option value="">Choose an agent</option>
-          {agents
-            .filter((agent) => !agent.archivedAt || agent.id === selectedId)
-            .map((agent) => (
-              <option
-                key={agent.id}
-                value={agent.id}
-                disabled={Boolean(agent.archivedAt)}
-              >
-                {agent.profile.name}
-                {agent.archivedAt ? " (archived)" : ""}
-              </option>
-            ))}
-          {selectedId && !selected && (
-            <option value={selectedId} disabled>
-              Unavailable agent
-            </option>
-          )}
-        </NativeSelect>
-      </div>
+    <div className="space-y-10 pb-8">
+      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+        <div className="space-y-2">
+          <h3 className="text-base font-semibold">Agent</h3>
+          <p className="text-sm leading-6 text-muted-foreground">
+            Choose whose schedules to review and manage.
+          </p>
+        </div>
+        <div className="max-w-md space-y-2">
+          <Label htmlFor="schedule-agent">Schedules for</Label>
+          <Select
+            value={selectedId ?? ""}
+            items={[
+              { value: "", label: "Choose an agent" },
+              ...agents
+                .filter((agent) => !agent.archivedAt || agent.id === selectedId)
+                .map((agent) => ({
+                  value: agent.id,
+                  label: `${agent.profile.name}${agent.archivedAt ? " (archived)" : ""}`,
+                })),
+              ...(selectedId && !selected
+                ? [{ value: selectedId, label: "Unavailable agent" }]
+                : []),
+            ]}
+            onValueChange={(value) => {
+              const id = value || null;
+              setSelectedId(id);
+              if (id) setVisited((previous) => new Set([...previous, id]));
+            }}
+          >
+            <SelectTrigger id="schedule-agent" className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">Choose an agent</SelectItem>
+              {agents
+                .filter((agent) => !agent.archivedAt || agent.id === selectedId)
+                .map((agent) => (
+                  <SelectItem
+                    key={agent.id}
+                    value={agent.id}
+                    disabled={Boolean(agent.archivedAt)}
+                  >
+                    {agent.profile.name}
+                    {agent.archivedAt ? " (archived)" : ""}
+                  </SelectItem>
+                ))}
+              {selectedId && !selected && (
+                <SelectItem value={selectedId} disabled>
+                  Unavailable agent
+                </SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+        </div>
+      </section>
+      <Separator />
       {!selectedId && (
         <p className="text-sm text-muted-foreground">
           Choose whose schedules you want to review.

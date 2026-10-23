@@ -4,6 +4,8 @@ import {
   CollapsibleTrigger,
   CollapsibleContent,
 } from "@/components/ui/collapsible";
+import { AccessSection } from "../access/shared";
+import { Separator } from "@/components/ui/separator";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -411,16 +413,10 @@ export function EnvironmentTemplateEditor({
     );
   }
   return (
-    <section className="space-y-5 border-t py-6">
-      <div>
-        <h2 className="font-semibold tracking-tight">Environment templates</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          Define tools and explicit access for agent environments. Saving does
-          not install tools, run preparation commands or start an agent. Agents
-          receive durable update notices and choose when to reconcile; existing
-          prepared execution keeps its saved revision.
-        </p>
-      </div>
+    <AccessSection
+      title="Environment templates"
+      description="Define the tools, setup and network access available to agents. Agents prepare their own environments and receive a notice when their template changes."
+    >
       {templates === null ? (
         <p className="text-sm text-muted-foreground">
           Templates are not loaded.
@@ -471,9 +467,10 @@ export function EnvironmentTemplateEditor({
       )}
       {draft && (
         <fieldset disabled={busy} className="min-w-0 space-y-5">
-          <legend className="mb-4 text-sm font-medium">
+          <legend className="mb-4 text-base font-semibold">
             {draft.id ? "Update template" : "New template"}
           </legend>
+          <Separator />
           {field("Name", "name")}
           {field("Description", "description", true)}
           <div className="grid gap-4 sm:grid-cols-2">
@@ -515,7 +512,8 @@ export function EnvironmentTemplateEditor({
             {toggle("Allow outbound network access", "network")}
             {toggle("Allow package downloads", "packageDownloads")}
           </div>
-          <div className="space-y-3 border-y py-4">
+          <Separator />
+          <div className="space-y-3">
             {toggle("Enable host Docker access", "docker")}
             {draft.docker && (
               <>
@@ -601,7 +599,7 @@ export function EnvironmentTemplateEditor({
         Refresh templates
       </Button>
       {inspection && (
-        <div className="space-y-3 rounded-lg border p-4" role="status">
+        <div className="space-y-3 border-t pt-6" role="status">
           <h3 className="text-sm font-medium">
             Tool inspection:{" "}
             {templates?.find((row) => row.id === inspection.templateId)?.name ??
@@ -644,6 +642,6 @@ export function EnvironmentTemplateEditor({
           onDismiss={() => setToast(null)}
         />
       )}
-    </section>
+    </AccessSection>
   );
 }

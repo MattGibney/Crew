@@ -53,7 +53,7 @@ export function ArchivedAgentsSettings({
   }, [agents, confirmId]);
   if (!archived.length)
     return (
-      <div className="rounded-xl border border-dashed px-6 py-12 text-center">
+      <div className="py-12 text-center">
         <Archive
           className="mx-auto mb-3 size-6 text-muted-foreground"
           aria-hidden="true"
@@ -66,8 +66,8 @@ export function ArchivedAgentsSettings({
       </div>
     );
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
+    <div className="space-y-6 pb-8">
+      <p className="text-sm leading-6 text-muted-foreground">
         Restoring keeps the same identity and chat references. The agent stays
         stopped until you start it.
       </p>

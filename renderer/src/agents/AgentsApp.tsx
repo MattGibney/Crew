@@ -38,6 +38,15 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { OnlineStatus } from "@/components/online-status";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Collapsible,
@@ -1022,18 +1031,29 @@ function AgentSessionPanel({
     session.appliedConfiguration.profileRevision !== agent.profile.revision ||
     !sameSkills(agent, skills);
   return (
-    <div className="space-y-3">
-      <h2 className="text-sm font-semibold">{agent.profile.name}</h2>
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <AgentPicture
+          imageRef={agent.profile.pictureRef}
+          client={client}
+          className="size-10"
+        />
+        <h2 className="text-base font-semibold">{agent.profile.name}</h2>
+      </div>
+      <Separator />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Badge
-          variant={
-            session.observedState === "started" ? "secondary" : "outline"
-          }
-        >
-          {session.instructionPreparation?.state === "compacting"
-            ? "Applying instructions"
-            : session.observedState}
-        </Badge>
+        {session.instructionPreparation?.state === "compacting" ? (
+          <Badge variant="secondary">Applying instructions</Badge>
+        ) : ["started", "stopped"].includes(session.observedState) ? (
+          <OnlineStatus
+            online={session.observedState === "started"}
+            className="text-sm"
+          />
+        ) : (
+          <Badge variant="outline" className="capitalize">
+            {session.observedState}
+          </Badge>
+        )}
         <div className="flex flex-wrap gap-2">
           {["unknown", "error"].includes(session.observedState) &&
             client.recoverSession && (
@@ -2464,10 +2484,6 @@ function OwnerInbox({
   );
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeading
-        title="Inbox"
-        description="Questions and native approvals that need your response."
-      />
       {!requests.length && !snapshot.nativeApprovals.length && (
         <Empty icon={<Inbox />} title="Nothing waiting for you">
           <p>Agents bring questions here when they need your help.</p>
@@ -2477,7 +2493,7 @@ function OwnerInbox({
         {snapshot.nativeApprovals.map((approval) => (
           <article
             key={`${approval.agentId}:${approval.approvalId}`}
-            className="rounded-xl border p-5"
+            className="border-b pb-8 last:border-b-0"
           >
             <div className="flex items-center justify-between gap-3">
               <h2 className="font-medium">
@@ -2578,7 +2594,7 @@ function HelpCard({
   )?.content;
   const job = snapshot.jobs.find((item) => item.id === request.jobId);
   return (
-    <article className="rounded-xl border p-5">
+    <article className="border-b pb-8 last:border-b-0">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-medium">
           {agentName(request.requesterAgentId, snapshot)} needs your help
@@ -2657,11 +2673,11 @@ function Preparation({
     useState<ExecutionReservation["reason"]>("restart");
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeading
-        title="Prepare for a pause"
-        description="Ask agents to save continuation notes and report readiness before a restart, update or quit."
-      />
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border p-5">
+      <p className="mb-6 text-sm leading-6 text-muted-foreground">
+        Ask agents to save continuation notes and report readiness before a
+        restart, update or quit.
+      </p>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 pb-6">
         <div>
           <label
             className="mb-2 block text-sm font-medium"
@@ -2669,17 +2685,26 @@ function Preparation({
           >
             Prepare for
           </label>
-          <NativeSelect
-            id="prepare-reason"
+          <Select
             value={reason}
-            onChange={(event) =>
-              setReason(event.target.value as ExecutionReservation["reason"])
-            }
+            onValueChange={(value) => {
+              if (value) setReason(value as ExecutionReservation["reason"]);
+            }}
+            items={[
+              { value: "restart", label: "Restart" },
+              { value: "update", label: "App update" },
+              { value: "quit", label: "Quit" },
+            ]}
           >
-            <option value="restart">Restart</option>
-            <option value="update">App update</option>
-            <option value="quit">Quit</option>
-          </NativeSelect>
+            <SelectTrigger id="prepare-reason" className="min-w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="restart">Restart</SelectItem>
+              <SelectItem value="update">App update</SelectItem>
+              <SelectItem value="quit">Quit</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <Button
           disabled={pending.has("prepare")}
@@ -2702,11 +2727,11 @@ function Preparation({
       </p>
       {actions && <div className="mb-5">{actions}</div>}
       {snapshot.readiness.length ? (
-        <div className="divide-y rounded-xl border">
+        <div className="divide-y">
           {snapshot.readiness.map((item) => (
             <div
               key={`${item.agentId}:${item.sessionId}`}
-              className="flex flex-wrap items-start justify-between gap-4 p-4"
+              className="flex flex-wrap items-start justify-between gap-4 py-6"
             >
               <div>
                 <h2 className="font-medium">
@@ -2801,11 +2826,8 @@ function SettingsView({
         </aside>
         <div className="min-w-0 space-y-8">
           {panel?.id !== "agents" && (
-            <div>
-              <p className="mb-2 text-xs font-medium text-primary">
-                {snapshot.projectName}
-              </p>
-              <h2 className="text-2xl font-semibold tracking-tight">
+            <div className="sticky -top-10 z-20 -mx-4 -mt-10 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/70 supports-backdrop-filter:backdrop-blur-md">
+              <h2 className="text-xl font-semibold tracking-tight">
                 {panel?.label || "Project settings"}
               </h2>
               {panel?.description && (

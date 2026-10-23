@@ -60,11 +60,7 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
       title="Permission groups"
       description="Assign groups to agents to enable their capabilities. Multiple groups add permissions together. Groups also select the skills and service identities available to their members."
       action={
-        <Button
-          disabled={editing !== null}
-          variant="outline"
-          onClick={() => setEditing("new")}
-        >
+        <Button disabled={editing !== null} onClick={() => setEditing("new")}>
           Create group
         </Button>
       }
@@ -72,7 +68,7 @@ function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
       {editing === "new" && (
         <GroupEditor {...props} group={null} onClose={() => setEditing(null)} />
       )}
-      <div className="divide-y border-y">
+      <div className="divide-y">
         {props.groups.length === 0 && (
           <p className="py-5 text-sm text-muted-foreground">
             No permission groups yet.

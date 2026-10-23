@@ -16,7 +16,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
 import type {
   EnvironmentPolicy,
@@ -585,17 +584,19 @@ function WorkspaceSettings({
     }
   }
   return (
-    <section className="space-y-5 py-6">
+    <section className="space-y-8">
       <div>
-        <h2 className="font-semibold tracking-tight">Project workspace</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        <h2 className="text-base font-semibold tracking-tight">
+          Project folder access
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Approve the registered project folder, then assign its policy to a
           permission group in Connections & access.
         </p>
       </div>
       {saved ? (
         <>
-          <div className="grid items-start gap-3 border-y py-6 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+          <div className="grid items-start gap-6 border-b pb-8 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)_auto] md:gap-8">
             <h3 className="text-sm font-medium">Project folder</h3>
             <p className="break-all text-sm text-muted-foreground">
               {saved.folder}
@@ -924,11 +925,13 @@ function SubscriptionSettings({
     }
   }
   return (
-    <section className="space-y-5 py-6">
+    <section className="space-y-6 pb-8">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold tracking-tight">ChatGPT subscription</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+          <h2 className="text-base font-semibold tracking-tight">
+            ChatGPT subscription
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
             Sign in with your existing ChatGPT account to use its subscription
             in Crew. Crew keeps its project profile and configuration separate
             from your personal Codex setup. Service connections and agent
@@ -936,15 +939,15 @@ function SubscriptionSettings({
           </p>
         </div>
         <Button
-          variant="link"
-          className="h-auto p-0 text-sm font-semibold"
+          variant="outline"
+          size="sm"
           disabled={busy}
           onClick={() => void reload()}
         >
           Refresh status
         </Button>
       </div>
-      <div className="border-y py-5">
+      <div className="space-y-3">
         <p className="text-sm">
           {status?.state === "signed_in"
             ? `Signed in${status.plan ? ` · ${status.plan}` : ""}`
@@ -980,7 +983,7 @@ function SubscriptionSettings({
               Open sign-in page
             </Button>
             <Button
-              variant="outline"
+              variant="ghost"
               disabled={busy}
               onClick={() => void run("cancelSignIn")}
             >
@@ -1000,7 +1003,7 @@ function SubscriptionSettings({
               : "Waiting for a confirmed sign-in result."}
           </p>
           <Button
-            variant="outline"
+            variant="ghost"
             disabled={busy}
             onClick={() => void run("cancelSignIn")}
           >

@@ -2,7 +2,7 @@ import type { WorkspaceSnapshot } from "../../contracts/setup.js";
 
 import { errorText } from "../api.js";
 import { useEffect, useState } from "react";
-import { Save } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
 
 import { Label } from "@/components/ui/label";
@@ -69,12 +69,12 @@ export function ProjectGeneral({ workspace, onNotify }: WorkspaceProps) {
     }
   };
   return (
-    <section aria-labelledby="project-name-heading" className="border-y py-6">
+    <section aria-labelledby="project-name-heading" className="space-y-8 py-2">
       <form
         onSubmit={save}
-        className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6"
+        className="grid items-start gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)_auto] md:gap-8"
       >
-        <h3 id="project-name-heading" className="text-sm font-medium">
+        <h3 id="project-name-heading" className="text-base font-semibold">
           Project name
         </h3>
         <div className="min-w-0">
@@ -113,8 +113,7 @@ export function ProjectGeneral({ workspace, onNotify }: WorkspaceProps) {
             <>
               <Button
                 type="button"
-                variant="link"
-                className="h-auto p-0 text-xs text-muted-foreground"
+                variant="ghost"
                 disabled={saving}
                 onClick={() => {
                   setDraft(null);
@@ -148,6 +147,7 @@ export function ProjectGeneral({ workspace, onNotify }: WorkspaceProps) {
           )}
         </div>
       </form>
+      <Separator />
     </section>
   );
 }
@@ -182,14 +182,14 @@ export function GlobalSettings({ workspace, onNotify }: WorkspaceProps) {
   return (
     <section
       aria-labelledby="global-capacity-heading"
-      className="border-y py-6"
+      className="space-y-8 py-2"
     >
       <form
         onSubmit={save}
-        className="grid items-start gap-3 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6"
+        className="grid items-start gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)_auto] md:gap-8"
       >
         <div>
-          <h3 id="global-capacity-heading" className="text-sm font-medium">
+          <h3 id="global-capacity-heading" className="text-base font-semibold">
             Worker limit
           </h3>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
@@ -240,8 +240,7 @@ export function GlobalSettings({ workspace, onNotify }: WorkspaceProps) {
             <>
               <Button
                 type="button"
-                variant="link"
-                className="h-auto p-0 text-xs text-muted-foreground"
+                variant="ghost"
                 disabled={saving}
                 onClick={() => {
                   setDraft(null);
@@ -278,6 +277,7 @@ export function GlobalSettings({ workspace, onNotify }: WorkspaceProps) {
           )}
         </div>
       </form>
+      <Separator />
     </section>
   );
 }

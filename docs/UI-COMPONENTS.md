@@ -49,3 +49,7 @@ Environment selection is staged with the form, then assigned using its own revis
 Validation includes fictional preview creation, editing and reopening saved values, cancel/reopen preserving profile and template, required-name validation, group-derived summaries and deferred environment assignment. Disposable backend checks verify revision-safe discard, retained-draft recovery, rejection during partial application, no agent writes on discard and folder-access derivation. Typecheck/build are separate from installed desktop/provider acceptance.
 
 Agent environment templates no longer expose server-port allow-lists. Workspace executors allow TCP/UDP binding and loopback connections on arbitrary ports; host OS restrictions still apply. Outbound internet access remains a separate template capability. Legacy saved port arrays remain readable but no longer restrict workspace servers. This does not broaden the isolated Codex runtime gateway endpoints. Existing running processes need to be relaunched using the updated build to receive the new sandbox policy.
+
+## Settings layout
+
+Agent settings establish the shared settings visual language. Pages use one compact heading, consistent sticky header treatment, unboxed sections and horizontal separators. Form sections pair a concise introduction with controls; tables and long editors use the full content width. Connections use the installed Table and DropdownMenu components. Preserve drafts, revision conflicts and explicit save/lifecycle actions during presentation changes.

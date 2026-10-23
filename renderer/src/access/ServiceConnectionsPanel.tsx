@@ -1,10 +1,34 @@
+import { Fragment } from "react";
+import { MoreVertical } from "lucide-react";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import { useId, useState } from "react";
 import type { CSSProperties } from "react";
 import type { ServiceConnection } from "../../../src/agents/contracts.mjs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type {
   ConnectionDraft,
@@ -60,13 +84,13 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
   const action = useAccessAction(props.onNotify);
   return (
     <AccessSection
+      fullWidth
       title="Service connections"
       description="Connect a service identity for agents to use through approved operations. Credentials stay private to Crew's trusted service execution."
       action={
         <div className="flex flex-wrap gap-2">
           {props.onConnect && (
             <Button
-              variant="outline"
               disabled={editing !== null || action.busy}
               onClick={props.onConnect}
             >
@@ -112,139 +136,195 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
             onClose={() => setEditing(null)}
           />
         )}
-      <div className="divide-y border-y">
-        {!props.connections.length && (
-          <p className="py-5 text-sm text-muted-foreground">
-            No service connections yet.
-          </p>
-        )}
-        {props.connections.map((connection) => (
-          <div key={connection.id} className="space-y-3 py-5">
-            {editing !== "new" && editing?.id === connection.id ? (
-              <ConnectionEditor
-                {...props}
-                connection={editing}
-                onClose={() => setEditing(null)}
-              />
-            ) : (
-              <>
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 space-y-2 text-sm">
-                    <ServiceIdentity connection={connection} />
-                    <p className="text-xs text-muted-foreground">
-                      {connectionStates[connection.observedState]} ·{" "}
+      <div className="overflow-hidden rounded-xl border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Service</TableHead>
+              <TableHead>Connection</TableHead>
+              <TableHead>Account</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {!props.connections.length && (
+              <TableRow>
+                <TableCell colSpan={5} className="py-6 text-muted-foreground">
+                  No service connections yet.
+                </TableCell>
+              </TableRow>
+            )}
+            {props.connections.map((connection) => (
+              <Fragment key={connection.id}>
+                <TableRow>
+                  <TableCell className="capitalize">
+                    {connection.service.toLowerCase() === "github"
+                      ? "GitHub"
+                      : connection.service}
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    {connection.name}
+                  </TableCell>
+                  <TableCell>
+                    {connection.identity.displayName || "Identity unverified"}
+                  </TableCell>
+                  <TableCell>
+                    <span>{connectionStates[connection.observedState]}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
                       {connection.lastVerifiedAt
-                        ? `Last verified ${new Date(connection.lastVerifiedAt).toLocaleString()}`
+                        ? `Verified ${new Date(connection.lastVerifiedAt).toLocaleString()}`
                         : "No verification recorded"}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {props.onVerify && (
-                      <Button
-                        variant="ghost"
-                        disabled={editing !== null || action.busy}
-                        onClick={() =>
-                          void action.run(
-                            () =>
-                              props.onVerify!(
-                                connection.id,
-                                connection.revision,
-                              ),
-                            "Connection verification completed. Check its current status.",
-                            "Could not verify this connection. Check its service credential and configured adapter.",
-                          )
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Actions for ${connection.name}`}
+                            disabled={editing !== null || action.busy}
+                          />
                         }
                       >
-                        Verify connection
-                      </Button>
-                    )}
-                    {props.onReconnect && (
-                      <Button
-                        variant="ghost"
-                        disabled={editing !== null || action.busy}
-                        onClick={() =>
-                          void action.run(
-                            () =>
-                              props.onReconnect!(
-                                connection.id,
-                                connection.revision,
-                              ),
-                            "Connection sign-in flow completed. Check its current verification status.",
-                            "Could not reconnect this service. Check the gateway's authentication availability and try again.",
-                          )
-                        }
-                      >
-                        Reconnect
-                      </Button>
-                    )}
-                    <Button
-                      variant="link"
-                      disabled={editing !== null || action.busy}
-                      aria-label={`Update ${connection.name}`}
-                      onClick={() => {
-                        setRemoving(null);
-                        setEditing(connection);
-                      }}
-                    >
-                      Update
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      disabled={editing !== null || action.busy}
-                      aria-label={`Remove ${connection.name}`}
-                      onClick={() => setRemoving(connection)}
-                    >
-                      Remove
-                    </Button>
-                  </div>
-                </div>
+                        <MoreVertical />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {props.onVerify && (
+                          <DropdownMenuItem
+                            disabled={editing !== null || action.busy}
+                            onClick={() =>
+                              void action.run(
+                                () =>
+                                  props.onVerify!(
+                                    connection.id,
+                                    connection.revision,
+                                  ),
+                                "Connection verification completed. Check its current status.",
+                                "Could not verify this connection. Check its service credential and configured adapter.",
+                              )
+                            }
+                          >
+                            Verify connection
+                          </DropdownMenuItem>
+                        )}
+                        {props.onReconnect && (
+                          <DropdownMenuItem
+                            disabled={editing !== null || action.busy}
+                            onClick={() =>
+                              void action.run(
+                                () =>
+                                  props.onReconnect!(
+                                    connection.id,
+                                    connection.revision,
+                                  ),
+                                "Connection sign-in flow completed. Check its current verification status.",
+                                "Could not reconnect this service. Check the gateway's authentication availability and try again.",
+                              )
+                            }
+                          >
+                            Reconnect
+                          </DropdownMenuItem>
+                        )}
+                        <DropdownMenuItem
+                          disabled={editing !== null || action.busy}
+                          aria-label={`Update ${connection.name}`}
+                          onClick={() => {
+                            setRemoving(null);
+                            setEditing(connection);
+                          }}
+                        >
+                          Update
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={editing !== null || action.busy}
+                          variant="destructive"
+                          aria-label={`Remove ${connection.name}`}
+                          onClick={() => setRemoving(connection)}
+                        >
+                          Remove
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+                {editing !== "new" && editing?.id === connection.id && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="whitespace-normal py-6">
+                      <ConnectionEditor
+                        {...props}
+                        connection={editing}
+                        onClose={() => setEditing(null)}
+                      />
+                    </TableCell>
+                  </TableRow>
+                )}
+                {removing?.id === connection.id && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="whitespace-normal py-4">
+                      {" "}
+                      {removing?.id === connection.id && (
+                        <div className="space-y-3 border-t pt-4">
+                          <p className="text-sm">
+                            Remove {removing.name}? Agents will lose this
+                            connection. Calls already admitted may finish. The
+                            external service account is not deleted.
+                          </p>
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <Button
+                              variant="ghost"
+                              disabled={action.busy}
+                              onClick={() => setRemoving(null)}
+                            >
+                              Keep connection
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              disabled={action.busy}
+                              onClick={async () => {
+                                if (
+                                  await action.run(
+                                    () =>
+                                      props.onRemove(
+                                        removing.id,
+                                        removing.revision,
+                                      ),
+                                    "Service connection removed.",
+                                    "Could not remove the connection. Refresh its current state and try again.",
+                                  )
+                                )
+                                  setRemoving(null);
+                              }}
+                            >
+                              Confirm removal
+                            </Button>
+                          </div>
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )}
                 {connection.authentication.method === "oauth" &&
                   connection.service !== "gmail" &&
                   !props.onReconnect && (
-                    <p className="text-xs text-muted-foreground">
-                      OAuth reconnect is unavailable until the gateway
-                      authentication adapter is connected.
-                    </p>
+                    <TableRow>
+                      <TableCell
+                        colSpan={5}
+                        className="whitespace-normal text-xs text-muted-foreground"
+                      >
+                        OAuth reconnect is unavailable until the gateway
+                        authentication adapter is connected.
+                      </TableCell>
+                    </TableRow>
                   )}
-                {removing?.id === connection.id && (
-                  <div className="space-y-3 rounded-lg border p-3">
-                    <p className="text-sm">
-                      Remove {removing.name}? Agents will lose this connection.
-                      Calls already admitted may finish. The external service
-                      account is not deleted.
-                    </p>
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button
-                        variant="ghost"
-                        disabled={action.busy}
-                        onClick={() => setRemoving(null)}
-                      >
-                        Keep connection
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        disabled={action.busy}
-                        onClick={async () => {
-                          if (
-                            await action.run(
-                              () =>
-                                props.onRemove(removing.id, removing.revision),
-                              "Service connection removed.",
-                              "Could not remove the connection. Refresh its current state and try again.",
-                            )
-                          )
-                            setRemoving(null);
-                        }}
-                      >
-                        Confirm removal
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        ))}
+              </Fragment>
+            ))}
+          </TableBody>
+        </Table>
       </div>
       <ErrorMessage>{action.error}</ErrorMessage>
       <p className="text-xs leading-5 text-muted-foreground">
@@ -366,14 +446,12 @@ function ConnectionEditor({
         </legend>
         <div className="space-y-2">
           <Label htmlFor={`${id}-adapter`}>Service adapter</Label>
-          <NativeSelect
-            id={`${id}-adapter`}
-            className="w-full"
+          <Select
             value={choiceId}
             disabled={!!connection}
-            onChange={(event) => {
+            onValueChange={(selectedValue) => {
               const next = props.setupChoices.find(
-                (option) => option.id === event.target.value,
+                (option) => option.id === (selectedValue ?? ""),
               );
               if (!next) return;
               setChoiceId(next.id);
@@ -385,14 +463,32 @@ function ConnectionEditor({
                 authenticationMethod: next.authenticationMethods[0] ?? "none",
               });
             }}
+            items={[
+              ...(!choice
+                ? [{ value: choiceId, label: "Current adapter unavailable" }]
+                : []),
+              ...props.setupChoices.map((option) => ({
+                value: option.id,
+                label: option.label,
+              })),
+            ]}
           >
-            {!choice && <option value="">Current adapter unavailable</option>}
-            {props.setupChoices.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </NativeSelect>
+            <SelectTrigger id={`${id}-adapter`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {!choice && (
+                <SelectItem value={choiceId} disabled>
+                  Current adapter unavailable
+                </SelectItem>
+              )}
+              {props.setupChoices.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <div className="space-y-2">
           <Label htmlFor={`${id}-name`}>Connection name</Label>
@@ -471,21 +567,20 @@ function ConnectionEditor({
         </fieldset>
         <div className="space-y-2">
           <Label htmlFor={`${id}-authentication`}>Service authentication</Label>
-          <NativeSelect
-            id={`${id}-authentication`}
+          <Select
             value={draft.authenticationMethod}
-            onChange={(event) => {
+            onValueChange={(selectedValue) => {
               const method = methods.find(
-                (value) => value === event.target.value,
+                (value) => value === (selectedValue ?? ""),
               );
               if (!method) return;
               setCredential("");
               setDraft({ ...draft, authenticationMethod: method });
             }}
-          >
-            {methods.map((method) => (
-              <option key={method} value={method}>
-                {method === "oauth"
+            items={methods.map((method) => ({
+              value: method,
+              label:
+                method === "oauth"
                   ? draft.service === "gmail"
                     ? "Google OAuth credential bundle"
                     : "OAuth sign-in"
@@ -493,10 +588,28 @@ function ConnectionEditor({
                     ? "Service token"
                     : method === "ssh-key"
                       ? "SSH key"
-                      : "No authentication"}
-              </option>
-            ))}
-          </NativeSelect>
+                      : "No authentication",
+            }))}
+          >
+            <SelectTrigger id={`${id}-authentication`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {methods.map((method) => (
+                <SelectItem key={method} value={method}>
+                  {method === "oauth"
+                    ? draft.service === "gmail"
+                      ? "Google OAuth credential bundle"
+                      : "OAuth sign-in"
+                    : method === "token"
+                      ? "Service token"
+                      : method === "ssh-key"
+                        ? "SSH key"
+                        : "No authentication"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         {needsCredential && (
           <div className="space-y-2">

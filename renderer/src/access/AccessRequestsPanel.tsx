@@ -15,7 +15,15 @@ import type {
 } from "../../../src/agents/contracts.mjs";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { AccessDecision, OwnerPanelProps } from "./types";
 import {
@@ -53,7 +61,7 @@ export function AccessRequestsPanel(props: AccessRequestsPanelProps) {
           No pending access requests.
         </p>
       )}
-      <div className="divide-y border-y">
+      <div className="divide-y">
         {pending.map((request) => (
           <RequestReview key={request.id} {...props} request={request} />
         ))}
@@ -179,7 +187,7 @@ function RequestReview({
           Requested future scope
         </CollapsibleTrigger>
         <CollapsibleContent keepMounted>
-          <div className="mt-3 rounded-lg border p-3">
+          <div className="mt-3 border-t pt-4">
             <p className="mb-2 break-all text-xs text-muted-foreground">
               Connection:{" "}
               {props.connections.find(
@@ -244,12 +252,10 @@ function RequestReview({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor={`${id}-duration`}>Duration</Label>
-              <NativeSelect
-                id={`${id}-duration`}
-                className="w-full"
+              <Select
                 value={durationType}
-                onChange={(event) => {
-                  const value = event.target.value;
+                onValueChange={(selectedValue) => {
+                  const value = selectedValue ?? "";
                   const next =
                     value === "session" || value === "persistent"
                       ? value
@@ -257,36 +263,72 @@ function RequestReview({
                   setDurationType(next);
                   if (next === "once") setScopeChoice("exact");
                 }}
+                items={[
+                  { value: "once", label: "Once, for this invocation" },
+                  { value: "session", label: "Until this session stops" },
+                  { value: "persistent", label: "Until revoked" },
+                ]}
               >
-                <option value="once">Once, for this invocation</option>
-                <option value="session">Until this session stops</option>
-                <option value="persistent">Until revoked</option>
-              </NativeSelect>
+                <SelectTrigger id={`${id}-duration`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="once">
+                    Once, for this invocation
+                  </SelectItem>
+                  <SelectItem value="session">
+                    Until this session stops
+                  </SelectItem>
+                  <SelectItem value="persistent">Until revoked</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor={`${id}-scope`}>Final scope</Label>
-              <NativeSelect
-                id={`${id}-scope`}
-                className="w-full"
+              <Select
                 value={finalScope.type === "capability" ? "requested" : "exact"}
-                onChange={(event) =>
+                onValueChange={(selectedValue) =>
                   setScopeChoice(
-                    event.target.value === "requested" ? "requested" : "exact",
+                    (selectedValue ?? "") === "requested"
+                      ? "requested"
+                      : "exact",
                   )
                 }
+                items={[
+                  {
+                    value: "exact",
+                    label: "This exact operation and arguments",
+                  },
+                  ...(requestedAvailable
+                    ? [
+                        {
+                          value: "requested",
+                          label: "Requested capabilities and restrictions",
+                        },
+                      ]
+                    : []),
+                ]}
               >
-                <option value="exact">
-                  This exact operation and arguments
-                </option>
-                {requestedAvailable && (
-                  <option value="requested" disabled={durationType === "once"}>
-                    Requested capabilities and restrictions
-                  </option>
-                )}
-              </NativeSelect>
+                <SelectTrigger id={`${id}-scope`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="exact">
+                    This exact operation and arguments
+                  </SelectItem>
+                  {requestedAvailable && (
+                    <SelectItem
+                      value="requested"
+                      disabled={durationType === "once"}
+                    >
+                      Requested capabilities and restrictions
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div className="rounded-lg border p-3">
+          <div className="border-t pt-4">
             <ScopeSummary scope={finalScope} exactArgumentsShown />
             <p className="mt-3 text-xs leading-5 text-muted-foreground">
               {durationType === "once"

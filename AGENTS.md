@@ -670,3 +670,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Explain agent Personality as tone and communication style, automatically combined with the system prompt. System prompt guidance should focus on responsibilities, technical requirements and workflows. Explain Save versus Restart separately, including retained chat history and Codex context summarization/allowance when applying changed instructions.
 
 - Profile pictures throughout Crew use rounded squares, including image, fallback and border layers. Compose the official Avatar with proportional corner radii; do not use circular profile crops or change unrelated circular status indicators.
+
+- All settings pages follow the agent editor visual language: a single compact page heading, aligned actions, 70% sticky background with medium backdrop blur, generous section spacing and unboxed content separated by horizontal rules. Use two-column section introductions for forms and full-width layouts for tables and long editors. Service connections use the official shadcn Table and row action menus.
