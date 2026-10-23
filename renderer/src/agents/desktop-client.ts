@@ -1,5 +1,5 @@
 import type { AgentsClient, AgentsClientEvent, AgentsSnapshot } from "./client";
-import type { DesktopQuitSnapshot } from "../../../src/desktop/unified-quit.mjs";
+import type { SimpleQuitSnapshot } from "../../../src/desktop/simple-quit.mjs";
 import type { UnifiedUpdateSnapshot } from "../../../src/desktop/unified-updates.mjs";
 
 export interface DesktopSnapshot {
@@ -10,11 +10,11 @@ export interface DesktopSnapshot {
     error?: string | null;
   }[];
   selectedId: string | null;
-  quit: DesktopQuitSnapshot;
+  quit: SimpleQuitSnapshot;
   updates: UnifiedUpdateSnapshot | null;
 }
 export type DesktopUpdateAction =
-  "status" | "check" | "download" | "prepare" | "cancel" | "install";
+  "status" | "check" | "download" | "cancel" | "install" | "confirmInstall";
 export interface DesktopBridge {
   integratedTitlebar: boolean;
   request(method: string, value?: unknown): Promise<unknown>;

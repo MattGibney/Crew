@@ -140,7 +140,6 @@ export interface AgentsAppProps {
     onTranscript: (items: LiveTranscriptItem[]) => void;
   }) => ReactNode;
   headerActions?: ReactNode;
-  headerUpdates?: ReactNode;
   nativeWindow?: boolean;
   navigationRequest?: { id: string; view: View };
   renderPreparationActions?: (context: {
@@ -182,7 +181,6 @@ export function AgentsApp({
   renderSetup,
   renderVoice,
   headerActions,
-  headerUpdates,
   nativeWindow = false,
   navigationRequest,
   renderPreparationActions,
@@ -450,19 +448,16 @@ export function AgentsApp({
         },
         {
           id: "crew-preparation",
-          label: "Restart and Quit",
+          label: "Quit Crew",
           description:
-            "Review continuation notes and readiness before closing Crew.",
+            "Close Crew while keeping your agents and saved conversations.",
           icon: RotateCw,
-          render: () => (
-            <Preparation
-              snapshot={snapshot}
-              client={client}
-              pending={pending}
-              act={act}
-              actions={renderPreparationActions?.({ snapshot, refresh })}
-            />
-          ),
+          render: () =>
+            renderPreparationActions?.({ snapshot, refresh }) ?? (
+              <p className="text-sm text-muted-foreground">
+                Use the desktop application menu to quit Crew.
+              </p>
+            ),
         },
       ]
     : [];
@@ -537,7 +532,6 @@ export function AgentsApp({
             <span className="hidden sm:inline">Settings</span>
             <span className="sr-only sm:hidden">Settings</span>
           </Button>
-          {headerUpdates}
         </div>
       </header>
       {banner && (
@@ -2864,112 +2858,6 @@ function HelpCard({
         </div>
       </form>
     </article>
-  );
-}
-function Preparation({
-  snapshot,
-  client,
-  pending,
-  act,
-  actions,
-}: {
-  snapshot: AgentsSnapshot;
-  client: AgentsClient;
-  pending: Set<string>;
-  act: Action;
-  actions?: ReactNode;
-}) {
-  const [reason, setReason] =
-    useState<ExecutionReservation["reason"]>("restart");
-  return (
-    <div className="mx-auto max-w-4xl">
-      <p className="mb-6 text-sm leading-6 text-muted-foreground">
-        Ask agents to save continuation notes and report readiness before a
-        restart, update or quit.
-      </p>
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 pb-6">
-        <div>
-          <label
-            className="mb-2 block text-sm font-medium"
-            htmlFor="prepare-reason"
-          >
-            Prepare for
-          </label>
-          <Select
-            value={reason}
-            onValueChange={(value) => {
-              if (value) setReason(value as ExecutionReservation["reason"]);
-            }}
-            items={[
-              { value: "restart", label: "Restart" },
-              { value: "update", label: "App update" },
-              { value: "quit", label: "Quit" },
-            ]}
-          >
-            <SelectTrigger id="prepare-reason" className="min-w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="restart">Restart</SelectItem>
-              <SelectItem value="update">App update</SelectItem>
-              <SelectItem value="quit">Quit</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        <Button
-          disabled={pending.has("prepare")}
-          onClick={() =>
-            void act(
-              "prepare",
-              () => client.prepare(reason),
-              "Preparation requested. Agents report their own readiness.",
-            )
-          }
-        >
-          {pending.has("prepare") && <LoaderCircle className="animate-spin" />}
-          Request preparation
-        </Button>
-      </div>
-      <p className="mb-5 text-sm text-muted-foreground">
-        Preparation keeps communication available. It does not stop sessions or
-        remove environments. The host must also verify execution has settled
-        before reserving an actual restart.
-      </p>
-      {actions && <div className="mb-5">{actions}</div>}
-      {snapshot.readiness.length ? (
-        <div className="divide-y">
-          {snapshot.readiness.map((item) => (
-            <div
-              key={`${item.agentId}:${item.sessionId}`}
-              className="flex flex-wrap items-start justify-between gap-4 py-6"
-            >
-              <div>
-                <h2 className="font-medium">
-                  {agentName(item.agentId, snapshot)}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {item.detail || "No readiness detail supplied."}
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {item.continuationSavedAt
-                    ? `Continuation saved ${formatDate(item.continuationSavedAt)}`
-                    : "Continuation save not yet confirmed"}
-                </p>
-              </div>
-              <span
-                className={`rounded-md px-2 py-1 text-xs capitalize ${item.state === "blocked" ? "bg-destructive/10 text-destructive" : item.state === "ready" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}
-              >
-                {item.state}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <Empty icon={<CircleHelp />} title="No preparation requested">
-          <p>Readiness appears here after an explicit request.</p>
-        </Empty>
-      )}
-    </div>
   );
 }
 function SettingsView({

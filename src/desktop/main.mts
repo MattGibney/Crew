@@ -1,3 +1,4 @@
+import { createSimpleQuit } from "./simple-quit.mjs";
 // #95: packaged and development entry points use this single composition.
 import {
   app,
@@ -39,19 +40,13 @@ import {
 } from "./unified-registry.mjs";
 import { startDesktopRenderer } from "./unified-renderer.mjs";
 import { createUnifiedWindow } from "./unified-window.mjs";
-import {
-  createUnifiedQuit,
-  type DesktopLifecycleProject,
-} from "./unified-quit.mjs";
 import { createUnifiedUpdates } from "./unified-updates.mjs";
 import { openWebLink } from "./external-links.mjs";
 import { AgentSetupError, openAgentSetup } from "./agent-setup.mjs";
 import {
   recoverInterruptedProject,
-  verifyUnavailableProjectIdle,
   ProjectRecoveryError,
 } from "./project-recovery.mjs";
-import { randomUUID } from "node:crypto";
 import { createUnifiedProjectBrowser } from "../browser/unified-browser.mjs";
 import { combineAgentToolExtensions } from "../agents/tool-extensions.mjs";
 import { createAgentConfiguration } from "../application/agent-configuration.mjs";
@@ -70,7 +65,7 @@ const locked = app.requestSingleInstanceLock();
 let registry: Awaited<ReturnType<typeof openUnifiedRegistry>>;
 let renderer: Awaited<ReturnType<typeof startDesktopRenderer>>;
 let surface: ReturnType<typeof createUnifiedWindow>;
-let quit: ReturnType<typeof createUnifiedQuit>;
+let quit: ReturnType<typeof createSimpleQuit>;
 let updates: Awaited<ReturnType<typeof createUnifiedUpdates>>;
 let tray: Tray | undefined;
 let quitting = false,
@@ -476,18 +471,8 @@ function destroyTray() {
   if (current && !current.isDestroyed()) current.destroy();
 }
 async function prepareQuit() {
-  if (registry.snapshot().projects.length === 0) {
-    await quit.prepare();
-    await quit.quit();
-    return;
-  }
-  await surface.open();
-  surface.notify({ type: "navigate", view: "prepare" });
-  if (switching || openings.size || updates.holding())
-    throw new Error(
-      "Finish the project or update transition before preparing Quit.",
-    );
-  await quit.prepare();
+  await quit.request();
+  if (quit.snapshot().state === "confirmation") await surface.open();
 }
 async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
   if (quit.holding() || updates.holding())
@@ -499,15 +484,21 @@ async function ownerCommand(host: ProjectHost, command: string, args: unknown) {
     return host.application.environmentOwnerApi.templates.snapshot();
   if (command === "environments.templates.save")
     return host.application.environmentOwnerApi.templates.save(
-      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["save"]>[0],
+      args as Parameters<
+        UnifiedApplication["environmentOwnerApi"]["templates"]["save"]
+      >[0],
     );
   if (command === "environments.templates.assign")
     return host.application.environmentOwnerApi.templates.assign(
-      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["assign"]>[0],
+      args as Parameters<
+        UnifiedApplication["environmentOwnerApi"]["templates"]["assign"]
+      >[0],
     );
   if (command === "environments.templates.inspect")
     return host.application.environmentOwnerApi.templates.inspect(
-      args as Parameters<UnifiedApplication["environmentOwnerApi"]["templates"]["inspect"]>[0],
+      args as Parameters<
+        UnifiedApplication["environmentOwnerApi"]["templates"]["inspect"]
+      >[0],
     );
   if (command === "environments.projectFolder")
     return { directory: host.project.directory };
@@ -590,9 +581,9 @@ async function request(method: string, value: unknown) {
     if (action === "status") return updates.status();
     if (action === "check") return updates.check();
     if (action === "download") return updates.download();
-    if (action === "prepare") return updates.prepare();
     if (action === "cancel") return updates.cancel();
     if (action === "install") return updates.install();
+    if (action === "confirmInstall") return updates.install(true);
     throw new Error("Unsupported update action.");
   }
   if (method === "copyText") {
@@ -616,7 +607,8 @@ async function request(method: string, value: unknown) {
   }
   if (method === "prepareQuit") return prepareQuit();
   if (method === "cancelQuit") return quit.cancel();
-  if (method === "quit") return quit.quit();
+  if (method === "quit") return prepareQuit();
+  if (method === "confirmQuit") return quit.request(true);
   const input = object(value);
   if (method === "createProject") {
     if (switching || quit.holding() || updates.holding())
@@ -689,102 +681,59 @@ async function start() {
     throw new Error("Crew storage must be absolute.");
   await mkdir(desktopDirectory, { recursive: true, mode: 0o700 });
   registry = await openUnifiedRegistry(desktopDirectory);
-  const lifecycleProjects = (
-    includeUnavailable = false,
-  ): DesktopLifecycleProject[] => {
-    if ((!includeUnavailable && failures.size) || openings.size || switching)
-      throw new Error(
-        "Every project must be available for the shutdown check.",
-      );
-    const available: DesktopLifecycleProject[] = [...hosts.values()].map(
-      (host) => ({
-        id: host.project.id,
-        name: host.project.name,
-        lifecycle: host.application.foundation,
-        observePreparation: () =>
-          host.application.foundation.store.snapshot().preparation,
-        async close(reservation) {
-          await host.schedules.close();
-          await host.browser.close();
-          await host.application.close(reservation.id);
-          host.unsubscribe();
-        },
-      }),
-    );
-    if (includeUnavailable) {
-      for (const project of registry
+  const activeTurns = () =>
+    [...hosts.values()].flatMap((host) =>
+      host.application.foundation.store
         .snapshot()
-        .projects.filter((row) => failures.has(row.id))) {
-        const verify = () =>
-          verifyUnavailableProjectIdle(registry.stateDirectory(project.id));
-        const unavailable = async (): Promise<never> => {
-          throw new ProjectRecoveryError(
-            "Recover this project before starting an agent.",
-          );
-        };
-        available.push({
-          id: project.id,
-          name: project.name,
-          lifecycle: {
-            start: unavailable,
-            stop: unavailable,
-            restart: unavailable,
-            async prepare() {
-              await verify();
-              return [];
-            },
-            async reserveExecution(projectId, reason) {
-              if (projectId !== project.id || reason !== "quit")
-                throw new Error("Invalid unavailable-project shutdown.");
-              await verify();
-              return {
-                state: "reserved",
-                reservation: {
-                  id: randomUUID(),
-                  projectId,
-                  reason,
-                  acquiredAt: new Date().toISOString(),
-                },
-              };
-            },
-            async releaseExecution() {},
-          },
-          async close() {
-            await verify();
-          },
-        });
-      }
-    }
-    return available;
+        .agents.filter((agent) => Boolean(agent.runtime.session.activeTurnId))
+        .map((agent) => ({
+          projectId: host.project.id,
+          projectName: host.project.name,
+          agentId: agent.id,
+          agentName: agent.profile.name,
+        })),
+    );
+  const seal = () => {
+    for (const host of hosts.values()) host.application.beginQuit();
   };
-  quit = createUnifiedQuit({
-    projects: () => lifecycleProjects(true),
+  const shutdown = async () => {
+    await Promise.allSettled([
+      disconnectVoice(),
+      ...[...hosts.values()].map(async (host) => {
+        host.unsubscribe();
+        await host.schedules.close();
+        await host.application.closeForQuit();
+        await host.browser.close();
+      }),
+    ]);
+  };
+  quit = createSimpleQuit({
+    activeTurns,
+    seal,
+    shutdown,
     changed,
     async finish() {
-      await disconnectVoice();
       surface.destroy();
       destroyTray();
-      await renderer.close();
+      void renderer.close().catch(() => {});
       quitting = true;
       app.quit();
     },
   });
   updates = await createUnifiedUpdates({
     updatesDirectory: join(desktopDirectory, "updates"),
-    projects: lifecycleProjects,
-    busy: () =>
-      switching ||
-      openings.size > 0 ||
-      quitting ||
-      quit.holding() ||
-      quit.snapshot().state === "preparing",
+    activeTurns,
+    seal,
+    shutdown,
     changed,
     async beforeInstall() {
-      await disconnectVoice();
-      surface.destroy();
-      destroyTray();
-      await renderer.close();
+      // Keep the control surface available if the native installer fails.
+      // Electron disposes it on the actual native quit event.
       quitting = true;
+    },
+    installFailed() {
+      quitting = false;
+      changed();
     },
   });
   renderer = await startDesktopRenderer(

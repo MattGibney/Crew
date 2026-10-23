@@ -29,11 +29,33 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
   let selected = initial;
   const listeners = new Set<(event: unknown) => void>();
   const browsers = new Map<string, BrowserState>();
-  let quit: DesktopSnapshot["quit"] = {
-    state: "idle",
+  let quit: DesktopSnapshot["quit"] = { state: "idle", activeTurns: [] };
+  const activeTurns = () =>
+    Object.values(projects).flatMap((project) =>
+      project.snapshot.agents
+        .filter((agent) => !!agent.runtime.session.activeTurnId)
+        .map((agent) => ({
+          projectId: project.snapshot.projectId,
+          projectName: project.snapshot.projectName,
+          agentId: agent.id,
+          agentName: agent.profile.name,
+        })),
+    );
+  const updates: NonNullable<DesktopSnapshot["updates"]> = {
+    phase: "idle",
+    currentVersion: "0.18.0",
+    availableVersion: null,
+    downloadPercent: null,
+    supported: true,
+    error: null,
+    installBlocked: false,
+    reasons: [],
+    notices: [],
+    releaseUrl: "https://github.com/MattGibney/Crew/releases/latest",
+    confirmation: { state: "idle", activeTurns: [] },
+    preparation: { state: "idle", detail: null, projects: [] },
+    holding: false,
     recoveryRequired: false,
-    detail: null,
-    projects: [],
   };
   const emit = (event: unknown) =>
     listeners.forEach((listener) => listener(clone(event)));
@@ -45,7 +67,7 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
     })),
     selectedId: projects[selected].snapshot.projectId,
     quit,
-    updates: null,
+    updates,
   });
   const applicationChanged = () =>
     emit({ type: "application", snapshot: desktop() });
@@ -1048,24 +1070,48 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
         throw new Error(
           "Use the Empty project sample to preview project setup.",
         );
-      if (method === "prepareQuit") {
+      if (method === "quit" || method === "prepareQuit") {
+        const turns = activeTurns();
         quit = {
-          ...quit,
-          state: "ready",
-          detail: "Preview prepared. No processes were stopped.",
+          state: turns.length ? "confirmation" : "idle",
+          activeTurns: turns,
         };
         applicationChanged();
-        return quit;
+        return { preview: true, wouldQuit: !turns.length };
       }
-      if (method === "cancelQuit") {
-        quit = { ...quit, state: "idle", detail: null };
+      if (method === "cancelQuit" || method === "confirmQuit") {
+        quit = { state: "idle", activeTurns: [] };
         applicationChanged();
-        return quit;
+        return { preview: true, wouldQuit: method === "confirmQuit" };
       }
-      if (method === "quit")
-        throw new Error("Close this browser tab to leave the preview.");
-      if (method === "updates")
-        throw new Error("Updates are disabled in UI preview.");
+      if (method === "updates") {
+        if (args.action === "check") {
+          updates.phase = "available";
+          updates.availableVersion = "0.19.0";
+        }
+        if (args.action === "download") {
+          updates.phase = "downloaded";
+          updates.downloadPercent = 100;
+        }
+        if (args.action === "cancel")
+          updates.confirmation = { state: "idle", activeTurns: [] };
+        if (args.action === "install" || args.action === "confirmInstall") {
+          const turns = activeTurns();
+          if (turns.length && args.action !== "confirmInstall")
+            updates.confirmation = {
+              state: "confirmation",
+              activeTurns: turns,
+            };
+          else {
+            updates.confirmation = { state: "idle", activeTurns: [] };
+            updates.notices = [
+              "Preview only: Crew would now install and restart. No update was installed.",
+            ];
+          }
+        }
+        applicationChanged();
+        return clone(updates);
+      }
       const project = findProject(args.projectId);
       if (method === "ownerSnapshot") return clone(project.snapshot);
       if (method === "ownerCommand")

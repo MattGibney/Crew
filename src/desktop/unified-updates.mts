@@ -1,3 +1,8 @@
+import {
+  createSimpleQuit,
+  type ActiveQuitTurn,
+  type SimpleQuitSnapshot,
+} from "./simple-quit.mjs";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
 import type {
@@ -32,6 +37,7 @@ export interface UnifiedUpdatePreparation {
   }[];
 }
 export interface UnifiedUpdateSnapshot extends UpdateStatus {
+  confirmation: SimpleQuitSnapshot;
   preparation: UnifiedUpdatePreparation;
   holding: boolean;
   recoveryRequired: boolean;
@@ -420,12 +426,16 @@ export function createUnifiedUpdateLifecycle(options: LifecycleOptions) {
 
 /** Signed native updates remain explicit. This adapter never kills a process,
  * starts a project, or installs in response to preparation becoming ready. */
-export async function createUnifiedUpdates(
-  options: LifecycleOptions & {
-    updatesDirectory: string;
-    beforeInstall(): Promise<void>;
-  },
-) {
+interface ExplicitUpdateOptions {
+  changed(): void;
+  updatesDirectory: string;
+  activeTurns(): ActiveQuitTurn[];
+  seal(): void;
+  shutdown(): Promise<void>;
+  beforeInstall(): Promise<void>;
+  installFailed?(): void;
+}
+export async function createUnifiedUpdates(options: ExplicitUpdateOptions) {
   const { app } = await import("electron");
   const support = await signedUpdateSupport({ packaged: app.isPackaged });
   let updater: NativeUpdater;
@@ -436,22 +446,61 @@ export async function createUnifiedUpdates(
     support.supported = false;
     support.error = "The updater is unavailable in this build.";
   }
-  const lease = createInstallLease({ directory: options.updatesDirectory });
-  const lifecycle = createUnifiedUpdateLifecycle(options);
+  return createExplicitUpdateController(options, {
+    app,
+    support,
+    updater,
+    lease: createInstallLease({ directory: options.updatesDirectory }),
+    otherInstances: () => otherNativeInstances(),
+  });
+}
+
+/** Manual installer wiring can be exercised without replacing an application. */
+export function createExplicitUpdateController(
+  options: ExplicitUpdateOptions,
+  dependencies: {
+    app: EventEmitter & { getVersion(): string };
+    support: { supported: boolean; error: string | null };
+    updater: NativeUpdater;
+    lease: { acquire(): Promise<() => Promise<void>> };
+    otherInstances(): Promise<number[]>;
+  },
+) {
+  const { app, support, updater, lease } = dependencies;
   let installing = false;
+  let confirmedActiveTurns = false;
   const native = createUpdateCoordinator({
     updater,
     currentVersion: app.getVersion(),
     support,
     lease,
-    activity: async () => lifecycle.activity(),
-    prepare: () => lifecycle.reserve(),
-    cancel: () => lifecycle.cancel(),
+    activity: async () => ({ safe: true }),
+    prepare: async () => {
+      if (!confirmedActiveTurns && options.activeTurns().length)
+        throw new Error("Agents started working before installation.");
+      return { reserved: true };
+    },
+    cancel: async () => {
+      options.installFailed?.();
+    },
     stopBackend: async () => {
-      await lifecycle.close();
+      if (!confirmedActiveTurns && options.activeTurns().length)
+        throw new Error("Agents started working before installation.");
+      options.seal();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          options.shutdown().catch(() => {}),
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, 2500);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
       await options.beforeInstall();
     },
-    otherInstances: () => otherNativeInstances(),
+    otherInstances: dependencies.otherInstances,
     onState: () => options.changed(),
     install: () =>
       new Promise<void>((resolve, reject) => {
@@ -479,70 +528,43 @@ export async function createUnifiedUpdates(
         }
       }),
   });
+  const confirmation = createSimpleQuit({
+    activeTurns: options.activeTurns,
+    seal() {},
+    shutdown: async () => {},
+    finish: async () => {
+      await native.request("restart");
+    },
+    changed: options.changed,
+  });
   const snapshot = (): UnifiedUpdateSnapshot => ({
     ...native.getStatus(),
-    preparation: lifecycle.snapshot(),
-    holding: installing || lifecycle.holding(),
-    recoveryRequired: lifecycle.recoveryRequired(),
+    confirmation: confirmation.snapshot(),
+    preparation: { state: "idle", detail: null, projects: [] },
+    holding: installing,
+    recoveryRequired: false,
   });
-  let observedPreparation = JSON.stringify(lifecycle.snapshot());
   let refreshing: Promise<UnifiedUpdateSnapshot> | null = null;
-  let refreshQueued = false,
-    refreshNeeded = false;
-  function queueRefresh() {
-    refreshNeeded = true;
-    if (refreshing || refreshQueued) return;
-    refreshQueued = true;
-    queueMicrotask(() => {
-      refreshQueued = false;
-      void status().catch(() => {
-        /* The next explicit status request can retry observation. */
-      });
-    });
-  }
   function status(): Promise<UnifiedUpdateSnapshot> {
     if (refreshing) return refreshing;
-    refreshNeeded = false;
     refreshing = (async () => {
       try {
         await native.refresh();
         return snapshot();
       } finally {
         refreshing = null;
-        if (refreshNeeded) queueRefresh();
       }
     })();
     return refreshing;
   }
-  function observe() {
-    lifecycle.observe();
-    const next = JSON.stringify(lifecycle.snapshot());
-    if (next === observedPreparation) return;
-    observedPreparation = next;
-    // Native onState calls changed(), which may observe again. Only a real
-    // preparation edge queues another refresh; no notification happens inline.
-    queueRefresh();
-  }
   return {
     snapshot,
-    observe,
-    holding: () => installing || lifecycle.holding(),
+    observe() {},
+    holding: () => installing,
     status,
-    async prepare() {
-      if (installing)
-        throw new Error(
-          "Crew is already preparing its final update installation.",
-        );
-      await lifecycle.prepare();
-      return status();
-    },
     async cancel() {
-      if (installing)
-        throw new Error(
-          "Crew is completing its final update installation check.",
-        );
-      await lifecycle.cancel();
-      return status();
+      confirmation.cancel();
+      return snapshot();
     },
     async check() {
       await native.request("check");
@@ -552,16 +574,20 @@ export async function createUnifiedUpdates(
       await native.request("download");
       return snapshot();
     },
-    async install() {
+    async install(confirmed = false) {
       if (installing)
         throw new Error("An update installation is already in progress.");
       installing = true;
+      confirmedActiveTurns = confirmed;
       options.changed();
       try {
-        await native.request("restart");
+        await confirmation.request(confirmed);
         return snapshot();
       } catch (error) {
-        lifecycle.failed();
+        if (!confirmed && options.activeTurns().length) {
+          await confirmation.request(false);
+          return snapshot();
+        }
         throw error;
       } finally {
         installing = false;
@@ -570,7 +596,7 @@ export async function createUnifiedUpdates(
     },
     /** All native launches use this same installation lease before opening projects. */
     async withStartupLease<T>(operation: () => Promise<T>): Promise<T> {
-      if (installing || lifecycle.holding())
+      if (installing)
         throw new Error("Crew has reserved this installation for an update.");
       const release = await lease.acquire();
       try {

@@ -705,3 +705,9 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Connection rows omit a redundant leading service name from the displayed connection label while preserving saved names and identities. Reuse OnlineStatus for dot/halo styling with connection-specific labels; only verified connected state gets the green indicator.
 
 - Permission group row menus include destructive Delete with a named confirmation. Owner-only revision-checked deletion atomically removes memberships from agents/templates and refreshes derived access and revisions; preserve agents, connections, other groups and historical audit/approval records.
+
+## Owner Quit and explicit update installation (#137)
+
+- Owner Quit and Install and restart use the same rule: proceed immediately when no agent has an active turn; otherwise warn and let the owner cancel or continue. Active turns are the only work-related warning. Do not require preparation notes, readiness reports, idle sessions, resolved approvals or environment teardown.
+- Updates remain explicit. Preserve signed-release verification and installer ownership checks. Ordinary Quit never installs. Cleanup is bounded and only closes owned transports; preserve saved conversations, sign-in and uncertain execution journals rather than claim unconfirmed shutdown or kill unrelated processes.
+- Updates belongs in Settings; omit the duplicate global header shortcut.

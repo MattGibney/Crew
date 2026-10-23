@@ -2171,6 +2171,11 @@ export class AgentFoundation implements AgentLifecycle {
     void this.flush().catch(() => {});
   }
 
+  /** Owner Quit closes admission immediately, without requesting model preparation. */
+  beginQuit(): void {
+    this.disposed = true;
+  }
+
   async dispose(completedReservationId?: string): Promise<void> {
     // Transport shutdown is not native Stop, service cleanup or destructive archive.
     this.disposed = true;
