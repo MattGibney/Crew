@@ -1,3 +1,4 @@
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InheritedPermissions } from "./InheritedPermissions";
 import { useId, useRef } from "react";
 import { Button } from "@/components/ui/button";
@@ -303,29 +304,30 @@ export function AgentEditorForm({
         <div className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor={`${id}-template`}>Environment template</Label>
-            <NativeSelect
-              id={`${id}-template`}
+            <Select
               value={environment.templateId ?? ""}
               disabled={locked || environment.loading || !environment.loaded}
-              onChange={(event) =>
-                environment.select(event.target.value || null)
-              }
+              onValueChange={(value) => environment.select(value || null)}
+              items={[
+                { value: "", label: "No template" },
+                ...environment.templates.map((template) => ({ value: template.id, label: template.name })),
+                ...(environment.templateId && !environment.templates.some((template) => template.id === environment.templateId)
+                  ? [{ value: environment.templateId, label: "Saved template (unavailable)" }] : []),
+              ]}
             >
-              <option value="">No template</option>
-              {environment.templateId &&
-                !environment.templates.some(
-                  (template) => template.id === environment.templateId,
-                ) && (
-                  <option value={environment.templateId}>
-                    Saved template (unavailable)
-                  </option>
+              <SelectTrigger id={`${id}-template`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="">No template</SelectItem>
+                {environment.templateId && !environment.templates.some((template) => template.id === environment.templateId) && (
+                  <SelectItem value={environment.templateId}>Saved template (unavailable)</SelectItem>
                 )}
-              {environment.templates.map((template) => (
-                <option key={template.id} value={template.id}>
-                  {template.name}
-                </option>
-              ))}
-            </NativeSelect>
+                {environment.templates.map((template) => (
+                  <SelectItem key={template.id} value={template.id}>{template.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             {environment.loading && (
               <p className="text-xs text-muted-foreground">
                 Loading templates…
