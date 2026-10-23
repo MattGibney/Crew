@@ -204,13 +204,20 @@ export function AgentEditorForm({
         <div className="space-y-2">
           <h2 className="text-base font-semibold tracking-tight">Instructions</h2>
           <p className="text-sm leading-6 text-muted-foreground">
-            Define responsibilities, working style and when to ask for help.
+            Define responsibilities, technical requirements and the workflow this agent should follow.
           </p>
         </div>
         <div className="space-y-2">
           <Label htmlFor={`${id}-instructions`}>System prompt</Label>
+          <p id={`${id}-instructions-help`} className="text-xs leading-5 text-muted-foreground">
+            Describe what the agent does, how it carries out tasks, and when it should
+            ask for help. Include technical standards, tools and workflow requirements.
+            Crew automatically combines this with the Personality above, so you don’t
+            need to repeat its tone or communication style here.
+          </p>
           <Textarea
             id={`${id}-instructions`}
+            aria-describedby={`${id}-instructions-help ${id}-instructions-save`}
             rows={8}
             className="min-h-56 leading-6"
             maxLength={200000}
@@ -218,11 +225,10 @@ export function AgentEditorForm({
             disabled={locked}
             onChange={(event) => onChange({ instructions: event.target.value })}
           />
-          <p className="text-xs leading-5 text-muted-foreground">
-            Saving does not start work. For an existing agent, Restart applies
-            changed instructions while retaining readable chat history; this
-            uses model allowance.
-          </p>
+          <div id={`${id}-instructions-save`} className="space-y-2 text-xs leading-5 text-muted-foreground">
+            <p><span className="font-medium text-foreground">Save changes</span> stores your edits without starting the agent or interrupting its current work.</p>
+            <p><span className="font-medium text-foreground">Apply to an existing chat:</span> restart the agent after saving changes to its instructions or personality. Crew keeps the same chat and readable history. Codex summarizes its active context to apply the changes, which uses some of your subscription allowance.</p>
+          </div>
         </div>
       </section>
       <Separator />
