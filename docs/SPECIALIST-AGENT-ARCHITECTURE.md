@@ -26,7 +26,7 @@ Runtime tools:
 - `project_resources({})`: discover resources currently available through assigned groups.
 - `project_resource_read({resourceId})`: read metadata for one currently available resource.
 
-Both require group capability `resources.read` and the exact active agent session. Reference visibility uses group `grants.resourceIds`. Working-folder visibility uses the group's canonical `environmentPolicyIds`; service visibility uses its nonempty `services` operation grants. There is no second resource allowlist for those executable resources. Fresh membership is checked on every call. The gateway and environment tools separately authorize actual operations; seeing metadata is not evidence that an operation ran successfully.
+Both require group capability `resources.read` and the exact active agent session. Reference visibility uses group `grants.resourceIds`. Working-folder visibility uses the group's canonical `environmentPolicyIds`; service visibility uses its `services` connection grants. An empty operation list makes that identity discoverable for a separately approved operation; it grants no operation by itself. There is no second resource allowlist for those executable resources. Fresh membership is checked on every call. The gateway and environment tools separately authorize actual operations; seeing metadata is not evidence that an operation ran successfully.
 
 ## Agent operating guidance
 

@@ -764,7 +764,9 @@ export async function startUnifiedApplication(
         : null;
       return projectResources({
         references: resources!.list(),
-        workspaces: environments!.ownerSnapshot(owner).workspaces,
+        workspaces: environments!
+          .ownerSnapshot(owner)
+          .workspaces.filter((row) => !row.privateContext),
         connections: assigned
           ? access.connections.filter((connection) =>
               assigned.serviceConnectionIds.includes(connection.id),

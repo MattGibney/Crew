@@ -229,9 +229,7 @@ export function projectResources(input: {
   );
   const connections = new Set(
     groups?.flatMap((group) =>
-      group.grants.services
-        .filter((row) => row.capabilities.length)
-        .map((row) => row.connectionId),
+      group.grants.services.map((row) => row.connectionId),
     ),
   );
   return [
