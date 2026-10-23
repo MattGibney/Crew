@@ -145,6 +145,7 @@ export function AgentSetupWizard(props: Props) {
     refresh,
   } = props;
   const id = useId();
+  const [agentTab, setAgentTab] = useState("Team members");
   const [record, setRecord] = useState<AgentSetupRecord | null>(null);
   const [draft, setDraft] = useState<AgentSetupDraft | null>(null);
   const [access, setAccess] = useState<AccessOwnerView | null>(null);
@@ -411,6 +412,18 @@ export function AgentSetupWizard(props: Props) {
     });
   }
   const agents = snapshot.agents.filter((agent) => !agent.archivedAt);
+  const agentSections = [
+    {
+      title: "Team members",
+      description: "Agents who report directly to you.",
+      rows: agents.filter((agent) => agent.reportsTo.type === "user"),
+    },
+    {
+      title: "Worker agents",
+      description: "Agents who report to another agent.",
+      rows: agents.filter((agent) => agent.reportsTo.type === "agent"),
+    },
+  ];
   const active = record && record.phase !== "complete" && draft && !paused;
   const locked = busy || conflict || record?.phase === "applying";
   const dirty = !same(draft, record?.draft);
@@ -549,131 +562,165 @@ export function AgentSetupWizard(props: Props) {
               onNotify={setNotice}
             />
           )}
-          {!firstUse &&
-            [
-              {
-                title: "Team members",
-                description: "Agents who report directly to you.",
-                rows: agents.filter((agent) => agent.reportsTo.type === "user"),
-              },
-              {
-                title: "Worker agents",
-                description: "Agents who report to another agent.",
-                rows: agents.filter(
-                  (agent) => agent.reportsTo.type === "agent",
-                ),
-              },
-            ].map(({ title, description, rows }) => (
-              <section key={title} aria-label={title} className="space-y-3">
-                <div>
-                  <h3 className="font-semibold tracking-tight">
-                    {title}{" "}
-                    <span className="text-sm font-normal text-muted-foreground">
-                      ({rows.length})
-                    </span>
-                  </h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {description}
-                  </p>
-                </div>
-                <div className="overflow-x-auto rounded-lg border">
-                  <table className="w-full text-left text-sm">
-                    <caption className="sr-only">
-                      {title} and their saved configuration
-                    </caption>
-                    <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
-                      <tr>
-                        <th className="px-4 py-3 font-medium">Agent</th>
-                        <th className="px-4 py-3 font-medium">Reports to</th>
-                        <th className="px-4 py-3 font-medium">Session</th>
-                        <th className="px-4 py-3 font-medium">Voice</th>
-                        <th className="px-4 py-3 font-medium">
-                          <span className="sr-only">Actions</span>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {rows.map((agent) => (
-                        <tr key={agent.id}>
-                          <td className="px-4 py-3">
-                            <div className="flex items-center gap-3">
-                              <AgentPicture
-                                client={imageClient}
-                                imageRef={agent.profile.pictureRef}
-                                className="size-9"
-                              />
-                              <span className="font-medium">
-                                {agent.profile.name}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {agent.reportsTo.type === "user"
-                              ? "You"
-                              : (snapshot.agents.find(
-                                  (parent) =>
-                                    parent.id ===
-                                    (agent.reportsTo.type === "agent"
-                                      ? agent.reportsTo.agentId
-                                      : null),
-                                )?.profile.name ?? "Unavailable agent")}
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {agent.runtime.session.observedState}
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {agent.profile.voice ?? "Native default"}
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={busy || record?.phase === "applying"}
-                              onClick={() => begin("repair", agent.id)}
-                            >
-                              Edit {agent.profile.name}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={
-                                busy || saving || record?.phase === "applying"
-                              }
-                              title="Stop its session and archive the agent. Its records are retained."
-                              onClick={() =>
-                                void run(async () => {
-                                  await command("archiveAgent", {
-                                    agentId: agent.id,
-                                  });
-                                  setNotice(
-                                    `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
-                                  );
-                                  await refresh().catch(() =>
-                                    setError(
-                                      "Agent archived. Refresh the project to see the updated list.",
-                                    ),
-                                  );
-                                })
-                              }
-                            >
-                              <Archive aria-hidden="true" />
-                              Archive {agent.profile.name}
-                            </Button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {!rows.length && (
-                    <p className="px-4 py-8 text-sm text-muted-foreground">
-                      {title === "Team members"
-                        ? "No team members yet."
-                        : "No worker agents yet."}
+          {!firstUse && (
+            <div className="space-y-4">
+              <div
+                role="tablist"
+                aria-label="Agent types"
+                className="flex gap-5 border-b"
+              >
+                {agentSections.map(({ title, rows }, index) => (
+                  <button
+                    key={title}
+                    id={`${id}-agent-tab-${index}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={agentTab === title}
+                    aria-controls={`${id}-agent-panel-${index}`}
+                    tabIndex={agentTab === title ? 0 : -1}
+                    onClick={() => setAgentTab(title)}
+                    onKeyDown={(event) => {
+                      if (
+                        !["ArrowLeft", "ArrowRight", "Home", "End"].includes(
+                          event.key,
+                        )
+                      )
+                        return;
+                      event.preventDefault();
+                      const next =
+                        event.key === "Home"
+                          ? 0
+                          : event.key === "End"
+                            ? agentSections.length - 1
+                            : (index +
+                                (event.key === "ArrowRight" ? 1 : -1) +
+                                agentSections.length) %
+                              agentSections.length;
+                      setAgentTab(agentSections[next].title);
+                      document
+                        .getElementById(`${id}-agent-tab-${next}`)
+                        ?.focus();
+                    }}
+                    className={`-mb-px flex items-center gap-2 border-b-2 pb-3 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${agentTab === title ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                  >
+                    {title} <span className="text-xs">({rows.length})</span>
+                  </button>
+                ))}
+              </div>
+              {agentSections.map(({ title, description, rows }, index) => (
+                <section
+                  key={title}
+                  id={`${id}-agent-panel-${index}`}
+                  role="tabpanel"
+                  aria-labelledby={`${id}-agent-tab-${index}`}
+                  hidden={agentTab !== title}
+                  className="space-y-3"
+                >
+                  <div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {description}
                     </p>
-                  )}
-                </div>
-              </section>
-            ))}
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border">
+                    <table className="w-full text-left text-sm">
+                      <caption className="sr-only">
+                        {title} and their saved configuration
+                      </caption>
+                      <thead className="border-b bg-muted/30 text-xs text-muted-foreground">
+                        <tr>
+                          <th className="px-4 py-3 font-medium">Agent</th>
+                          <th className="px-4 py-3 font-medium">Reports to</th>
+                          <th className="px-4 py-3 font-medium">Session</th>
+                          <th className="px-4 py-3 font-medium">Voice</th>
+                          <th className="px-4 py-3 font-medium">
+                            <span className="sr-only">Actions</span>
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {rows.map((agent) => (
+                          <tr key={agent.id}>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-3">
+                                <AgentPicture
+                                  client={imageClient}
+                                  imageRef={agent.profile.pictureRef}
+                                  className="size-9"
+                                />
+                                <span className="font-medium">
+                                  {agent.profile.name}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {agent.reportsTo.type === "user"
+                                ? "You"
+                                : (snapshot.agents.find(
+                                    (parent) =>
+                                      parent.id ===
+                                      (agent.reportsTo.type === "agent"
+                                        ? agent.reportsTo.agentId
+                                        : null),
+                                  )?.profile.name ?? "Unavailable agent")}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {agent.runtime.session.observedState}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {agent.profile.voice ?? "Native default"}
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={busy || record?.phase === "applying"}
+                                onClick={() => begin("repair", agent.id)}
+                              >
+                                Edit {agent.profile.name}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                disabled={
+                                  busy || saving || record?.phase === "applying"
+                                }
+                                title="Stop its session and archive the agent. Its records are retained."
+                                onClick={() =>
+                                  void run(async () => {
+                                    await command("archiveAgent", {
+                                      agentId: agent.id,
+                                    });
+                                    setNotice(
+                                      `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
+                                    );
+                                    await refresh().catch(() =>
+                                      setError(
+                                        "Agent archived. Refresh the project to see the updated list.",
+                                      ),
+                                    );
+                                  })
+                                }
+                              >
+                                <Archive aria-hidden="true" />
+                                Archive {agent.profile.name}
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {!rows.length && (
+                      <p className="px-4 py-8 text-sm text-muted-foreground">
+                        {title === "Team members"
+                          ? "No team members yet."
+                          : "No worker agents yet."}
+                      </p>
+                    )}
+                  </div>
+                </section>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <>

@@ -630,4 +630,4 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 
 - Team member cards use the agent’s saved profile picture, with initials only when no picture is available. Populated UI preview agents should include sample profile pictures through the normal image-reference path.
 
-- Settings > Agents separates active Team members (reporting to the user) from Worker agents (reporting to another agent), and shows who each reports to. These remain the same agent model; group permissions do not determine this presentation.
+- Settings > Agents uses a tabbed switch to separate active Team members (reporting to the user) from Worker agents (reporting to another agent), and shows who each reports to. These remain the same agent model; group permissions do not determine this presentation.
