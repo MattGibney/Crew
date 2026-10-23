@@ -30,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Choice } from "../access/shared";
 import { AgentPicture, type AgentImageClient } from "./AgentPicture";
+import { ArchiveAgentDialog } from "./ArchiveAgentDialog";
 import { AgentEnvironmentTemplate } from "./AgentEnvironmentTemplate";
 import { readProfilePicture } from "../manager/profile";
 import type { AgentConfigurationOptions } from "../../../src/application/agent-configuration-contracts.mjs";
@@ -153,6 +154,10 @@ export function AgentSetupWizard(props: Props) {
   } = props;
   const id = useId();
   const [agentTab, setAgentTab] = useState("Team members");
+  const [archiveTarget, setArchiveTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [record, setRecord] = useState<AgentSetupRecord | null>(null);
   const [draft, setDraft] = useState<AgentSetupDraft | null>(null);
   const [access, setAccess] = useState<AccessOwnerView | null>(null);
@@ -439,6 +444,28 @@ export function AgentSetupWizard(props: Props) {
     <div
       className={`${firstUse ? "mx-auto max-w-3xl px-5 py-8 sm:px-8" : ""} min-w-0 space-y-6`}
     >
+      <ArchiveAgentDialog
+        agent={archiveTarget}
+        busy={busy}
+        error={error}
+        onCancel={() => setArchiveTarget(null)}
+        onConfirm={() => {
+          if (!archiveTarget) return;
+          const target = archiveTarget;
+          void run(async () => {
+            await command("archiveAgent", { agentId: target.id });
+            setArchiveTarget(null);
+            setNotice(
+              `${target.name} archived. Restore them from Archived agents settings when needed.`,
+            );
+            await refresh().catch(() =>
+              setError(
+                "Agent archived. Refresh the project to see the updated list.",
+              ),
+            );
+          });
+        }}
+      />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
@@ -674,7 +701,10 @@ export function AgentSetupWizard(props: Props) {
                                   )?.profile.name ?? "Unavailable agent")}
                             </td>
                             <td className="px-4 py-3 text-muted-foreground">
-                              {agent.runtime.session.observedState}
+                              {agent.runtime.session.observedState
+                                .charAt(0)
+                                .toUpperCase() +
+                                agent.runtime.session.observedState.slice(1)}
                             </td>
                             <td className="px-4 py-3 text-muted-foreground">
                               {agent.profile.voice ?? "Native default"}
@@ -718,21 +748,13 @@ export function AgentSetupWizard(props: Props) {
                                       record?.phase === "applying"
                                     }
                                     title="Stop its session and archive the agent. Its records are retained."
-                                    onClick={() =>
-                                      void run(async () => {
-                                        await command("archiveAgent", {
-                                          agentId: agent.id,
-                                        });
-                                        setNotice(
-                                          `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
-                                        );
-                                        await refresh().catch(() =>
-                                          setError(
-                                            "Agent archived. Refresh the project to see the updated list.",
-                                          ),
-                                        );
-                                      })
-                                    }
+                                    onClick={() => {
+                                      setError("");
+                                      setArchiveTarget({
+                                        id: agent.id,
+                                        name: agent.profile.name,
+                                      });
+                                    }}
                                   >
                                     <Archive
                                       aria-hidden="true"
