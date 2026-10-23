@@ -2772,19 +2772,21 @@ function SettingsView({
           </nav>
         </aside>
         <div className="min-w-0 space-y-8">
-          <div>
-            <p className="mb-2 text-xs font-medium text-primary">
-              {snapshot.projectName}
-            </p>
-            <h2 className="text-2xl font-semibold tracking-tight">
-              {panel?.label || "Project settings"}
-            </h2>
-            {panel?.description && (
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                {panel.description}
+          {panel?.id !== "agents" && (
+            <div>
+              <p className="mb-2 text-xs font-medium text-primary">
+                {snapshot.projectName}
               </p>
-            )}
-          </div>
+              <h2 className="text-2xl font-semibold tracking-tight">
+                {panel?.label || "Project settings"}
+              </h2>
+              {panel?.description && (
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {panel.description}
+                </p>
+              )}
+            </div>
+          )}
           {panels.map((item) => (
             <div key={item.id} hidden={panel?.id !== item.id}>
               {item.render({

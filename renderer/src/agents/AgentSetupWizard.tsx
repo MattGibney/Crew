@@ -429,7 +429,7 @@ export function AgentSetupWizard(props: Props) {
   const review = !dirty ? record?.review : null;
   return (
     <div
-      className={`${firstUse ? "mx-auto max-w-3xl px-5 py-8 sm:px-8" : "py-6"} min-w-0 space-y-6`}
+      className={`${firstUse ? "mx-auto max-w-3xl px-5 py-8 sm:px-8" : ""} min-w-0 space-y-6`}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
@@ -440,14 +440,24 @@ export function AgentSetupWizard(props: Props) {
                 ? draft.mode === "repair"
                   ? "Edit agent"
                   : "Create an agent"
-                : "Your agents"}
+                : "Agents"}
           </h1>
-          <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-            {active && draft.mode === "repair"
-              ? `Configure ${draft.name}, its skills and the access it can use.`
-              : "Choose how your agent can help, the files it can use and any services it needs."}
-          </p>
+          {(firstUse || active) && (
+            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+              {active && draft.mode === "repair"
+                ? `Configure ${draft.name}, its skills and the access it can use.`
+                : "Choose how your agent can help, the files it can use and any services it needs."}
+            </p>
+          )}
         </div>
+        {!firstUse && !active && (
+          <Button
+            disabled={!loaded || busy || record?.phase === "applying"}
+            onClick={() => begin("create")}
+          >
+            <Plus /> Create agent
+          </Button>
+        )}
         {active && (
           <Button
             variant="ghost"
@@ -544,7 +554,7 @@ export function AgentSetupWizard(props: Props) {
               <Button onClick={() => setPaused(false)}>Resume setup</Button>
             </div>
           ) : null}
-          {(!firstUse || !record || record.phase === "complete") && (
+          {firstUse && (!record || record.phase === "complete") && (
             <Button
               disabled={busy || record?.phase === "applying"}
               onClick={() => begin("create")}
