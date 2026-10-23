@@ -9,6 +9,8 @@ The top preview strip switches between two independent projects:
 
 The app’s project selector also switches between them. Local actions change only in-memory sample data. **Reset sample data** restores both project datasets and clears preview form state. Reload also restores the samples. Nothing is saved to the installed app or its profiles.
 
+The populated project opens on the **Managers** card grid. Select a specialist to open its chat and workers; use **Managers** to return. The empty project retains first-agent onboarding. This navigation is the actual app component and will carry into desktop builds.
+
 This uses the current `DesktopApplication`, `AgentsApp`, setup and Settings components, not the former manager UI. The developer entry and synthetic bridge are strict TypeScript and included in typechecking. The preview entry is injected only by the development server; production Vite entries do not import it, and sample data is not bundled into the packaged app.
 
 ## Boundaries

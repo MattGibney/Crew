@@ -4,7 +4,9 @@ A project can have several specialist agents: engineering, marketing, customer s
 
 ## Direct contact
 
-Use **Talk to** to choose an agent. Its own native chat, composer draft, scratchpad, Sessions controls and browser become the selected context. Each profile retains its own voice. Selecting a contact starts no session, task or microphone. Start stopped agents explicitly; one voice call is supported at a time. Disconnect that call before changing contact. Other specialists and their workers can keep working independently.
+The project opens on **Managers**, a responsive card grid of active agents reporting directly to the owner. Select a card to open that agent's existing workspace, and use **Managers** to return. Cards show its profile, observed session state, direct worker count and open questions; child workers and archived agents are not included in the grid. The workspace identifies the selected agent instead of showing a Talk to dropdown.
+
+Its own native chat, composer draft, scratchpad, Sessions controls and browser become the selected context. Each profile retains its own voice. Selecting a card or returning to the overview starts no session, task or microphone. Start stopped agents explicitly; one voice call is supported at a time. Disconnect that call before selecting another contact. Returning to the grid does not disconnect an existing call. Other specialists and their workers can keep working independently.
 
 Owner-created specialists report directly to the owner. Creating another specialist no longer makes it report to the first one. Existing saved reporting relationships and native thread identities are preserved. The old primary-agent identifier remains a compatibility fallback; the user is not required to choose one exclusive manager to use the team.
 

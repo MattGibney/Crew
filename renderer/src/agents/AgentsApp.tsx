@@ -38,6 +38,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
 import { ArchivedAgentsSettings } from "./ArchivedAgentsSettings";
+import { ManagerOverview } from "./ManagerOverview";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
 import { useVoiceArtifacts } from "./useVoiceArtifacts";
@@ -131,6 +132,7 @@ type Action = (
   success?: string,
 ) => Promise<boolean>;
 type View =
+  | "managers"
   | "browser"
   | "conversation"
   | "agents"
@@ -162,8 +164,8 @@ export function AgentsApp({
   renderPreparationActions,
 }: AgentsAppProps) {
   const [snapshot, setSnapshot] = useState<AgentsSnapshot | null>(null);
-  const [view, setView] = useState<View>("conversation");
-  const [settingsReturn, setSettingsReturn] = useState<View>("conversation");
+  const [view, setView] = useState<View>("managers");
+  const [settingsReturn, setSettingsReturn] = useState<View>("managers");
   const [settingsRequest, setSettingsRequest] = useState({
     id: "initial",
     page: "crew-sessions",
@@ -293,7 +295,14 @@ export function AgentsApp({
     ) ?? null;
   useEffect(() => {
     setSelectedId(null);
-    setView((current) => (current === "agents" ? "conversation" : current));
+    setView((current) =>
+      !primary &&
+      ["conversation", "agents", "scratchpad", "browser"].includes(current)
+        ? "managers"
+        : current === "agents"
+          ? "conversation"
+          : current,
+    );
   }, [primary?.id]);
   useEffect(() => {
     if (
@@ -316,6 +325,30 @@ export function AgentsApp({
     if (view !== "settings") setSettingsReturn(view);
     if (page) setSettingsRequest({ id: crypto.randomUUID(), page });
     setView("settings");
+  };
+  const openManager = async (agent: Agent) => {
+    if (pending.has("contact")) return;
+    if (primary?.id !== agent.id) {
+      const settings = snapshot?.projectSettings;
+      if (!client.selectContact || !settings) {
+        setError(
+          "Agent selection is unavailable. Refresh the project and try again.",
+        );
+        return;
+      }
+      const selected = await act("contact", async () => {
+        await client.selectContact!(agent.id, settings.revision);
+        const next = await client.readSnapshot();
+        if (primaryAgentId(next) !== agent.id)
+          throw new Error(
+            "The selected agent could not be confirmed. Please try again.",
+          );
+        setSnapshot(next);
+      });
+      if (!selected) return;
+    }
+    setSelectedId(null);
+    setView("conversation");
   };
   const setup = snapshot
     ? renderSetup?.({
@@ -466,7 +499,7 @@ export function AgentsApp({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {renderBrowser && (
+          {renderBrowser && view !== "managers" && primary && !setupVisible && (
             <Button
               variant={view === "browser" ? "secondary" : "ghost"}
               aria-pressed={view === "browser"}
@@ -499,42 +532,62 @@ export function AgentsApp({
       )}
       <nav
         aria-label="Workspace views"
-        className={`${normalView ? "flex" : "hidden"} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}
+        className={`${normalView ? "flex" : "hidden"} shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-5`}
       >
-        <Button
-          variant={view === "conversation" ? "secondary" : "ghost"}
-          aria-pressed={view === "conversation"}
-          className="h-8 text-xs"
-          onClick={() => {
-            setView("conversation");
-            setSelectedId(null);
-          }}
-        >
-          <MessageSquare />
-          Conversation
-          {attentionCount > 0 && <Badge>{attentionCount} to review</Badge>}
-        </Button>
-        <Button
-          variant={view === "agents" ? "secondary" : "ghost"}
-          aria-pressed={view === "agents"}
-          className="h-8 text-xs"
-          onClick={() => {
-            setView("agents");
-            setSelectedId(null);
-          }}
-        >
-          <Layers />
-          Workers
-        </Button>
-        <Button
-          variant={view === "scratchpad" ? "secondary" : "ghost"}
-          aria-pressed={view === "scratchpad"}
-          className="h-8 text-xs"
-          onClick={() => setView("scratchpad")}
-        >
-          <NotebookPen />
-          Scratchpad
-        </Button>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSelectedId(null);
+              setView("managers");
+            }}
+          >
+            <ArrowLeft aria-hidden="true" />
+            Managers
+          </Button>
+          {primary && (
+            <span className="min-w-0 truncate text-sm font-semibold">
+              {primary.profile.name}
+            </span>
+          )}
+        </div>
+        <div className="flex w-full gap-1 sm:w-auto">
+          <Button
+            variant={view === "conversation" ? "secondary" : "ghost"}
+            aria-pressed={view === "conversation"}
+            className="h-8 text-xs"
+            onClick={() => {
+              setView("conversation");
+              setSelectedId(null);
+            }}
+          >
+            <MessageSquare />
+            Conversation
+            {attentionCount > 0 && <Badge>{attentionCount} to review</Badge>}
+          </Button>
+          <Button
+            variant={view === "agents" ? "secondary" : "ghost"}
+            aria-pressed={view === "agents"}
+            className="h-8 text-xs"
+            onClick={() => {
+              setView("agents");
+              setSelectedId(null);
+            }}
+          >
+            <Layers />
+            Workers
+          </Button>
+          <Button
+            variant={view === "scratchpad" ? "secondary" : "ghost"}
+            aria-pressed={view === "scratchpad"}
+            className="h-8 text-xs"
+            onClick={() => setView("scratchpad")}
+          >
+            <NotebookPen />
+            Scratchpad
+          </Button>
+        </div>
       </nav>
       {error && (
         <div
@@ -577,36 +630,18 @@ export function AgentsApp({
               {setup}
             </section>
           )}
-          {!setupVisible &&
-            client.selectContact &&
-            snapshot.projectSettings && (
-              <label className="flex shrink-0 items-center gap-3 border-b px-5 py-2 text-sm">
-                Talk to
-                <select
-                  className="min-w-0 rounded-md border bg-background px-2 py-1"
-                  aria-label="Talk to agent"
-                  value={primary?.id ?? ""}
-                  disabled={pending.has("contact")}
-                  onChange={(event) =>
-                    void act("contact", () =>
-                      client.selectContact!(
-                        event.target.value,
-                        snapshot.projectSettings!.revision,
-                      ),
-                    )
-                  }
-                >
-                  {!primary && <option value="">Choose an agent</option>}
-                  {snapshot.agents
-                    .filter((agent) => !agent.archivedAt)
-                    .map((agent) => (
-                      <option value={agent.id} key={agent.id}>
-                        {agent.profile.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
+          <div
+            hidden={setupVisible || view !== "managers"}
+            className="min-h-0 flex-1 overflow-y-auto"
+          >
+            <ManagerOverview
+              snapshot={snapshot}
+              client={client}
+              pending={pending.has("contact")}
+              onOpen={(agent) => void openManager(agent)}
+              onManage={() => openSettings("agents")}
+            />
+          </div>
           <main
             ref={workspace}
             id="workspace-content"
@@ -797,7 +832,10 @@ export function AgentsApp({
           <div
             ref={setSecondaryVoiceTarget}
             hidden={
-              setupVisible || view === "conversation" || view === "settings"
+              setupVisible ||
+              view === "conversation" ||
+              view === "settings" ||
+              view === "managers"
             }
             className="shrink-0 border-t bg-background"
           />
@@ -816,9 +854,10 @@ export function AgentsApp({
           {renderVoice?.({
             primaryAgent: primary,
             snapshot,
-            visible: !setupVisible && view !== "settings",
+            visible:
+              !setupVisible && view !== "settings" && view !== "managers",
             mode:
-              setupVisible || view === "settings"
+              setupVisible || view === "settings" || view === "managers"
                 ? "hidden"
                 : view === "conversation"
                   ? inputMode === "voice"
