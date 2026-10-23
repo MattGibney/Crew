@@ -7,7 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowLeft, ArrowRight, Check, Plus, Users } from "lucide-react";
+import {
+  Archive,
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Plus,
+  Users,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -416,7 +423,7 @@ export function AgentSetupWizard(props: Props) {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
             {firstUse
-              ? "Set up your manager"
+              ? "Create your first agent"
               : active
                 ? draft.mode === "repair"
                   ? "Edit agent"
@@ -575,11 +582,9 @@ export function AgentSetupWizard(props: Props) {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
-                        {agent.id ===
-                        (snapshot.projectSettings?.primaryAgentId ??
-                          snapshot.primaryAgentId)
-                          ? "Manager"
-                          : "Agent"}
+                        {agent.reportsTo.type === "user"
+                          ? "Specialist"
+                          : "Worker"}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {agent.runtime.session.observedState}
@@ -596,6 +601,32 @@ export function AgentSetupWizard(props: Props) {
                         >
                           Edit {agent.profile.name}
                         </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          disabled={
+                            busy || saving || record?.phase === "applying"
+                          }
+                          title="Stop its session and archive the agent. Its records are retained."
+                          onClick={() =>
+                            void run(async () => {
+                              await command("archiveAgent", {
+                                agentId: agent.id,
+                              });
+                              setNotice(
+                                `${agent.profile.name} archived. Restore it from Archived agents settings when needed.`,
+                              );
+                              await refresh().catch(() =>
+                                setError(
+                                  "Agent archived. Refresh the project to see the updated list.",
+                                ),
+                              );
+                            })
+                          }
+                        >
+                          <Archive aria-hidden="true" />
+                          Archive {agent.profile.name}
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -603,7 +634,7 @@ export function AgentSetupWizard(props: Props) {
               </table>
               {!agents.length && (
                 <p className="px-4 py-8 text-sm text-muted-foreground">
-                  Create your first agent to choose a manager.
+                  Create agents with their own role, personality and voice.
                 </p>
               )}
             </div>
@@ -798,8 +829,8 @@ export function AgentSetupWizard(props: Props) {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Saved for this agent’s next call. Choosing a manager keeps
-                  each agent’s own voice.
+                  Saved for this agent’s next call. Each agent keeps its own
+                  voice.
                 </p>
                 {options?.voices.state !== "available" && (
                   <p className="text-xs text-muted-foreground">
@@ -896,21 +927,6 @@ export function AgentSetupWizard(props: Props) {
                   </p>
                 )}
               </fieldset>
-              {draft.mode === "create" ? (
-                <Choice
-                  checked={draft.makePrimary}
-                  disabled={locked}
-                  onChange={(value) => change({ makePrimary: value })}
-                  description="The manager is the agent you talk to in the main conversation."
-                >
-                  Use as my manager
-                </Choice>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Manager selection is managed in the Agents table. Saving this
-                  agent keeps that selection unchanged.
-                </p>
-              )}
             </section>
           )}
           {draft.step === 3 && access && (
@@ -1242,9 +1258,7 @@ export function AgentSetupWizard(props: Props) {
                       ? "Continue setup"
                       : draft.mode === "repair"
                         ? "Save agent"
-                        : draft.makePrimary
-                          ? "Create manager"
-                          : "Create agent"}
+                        : "Create agent"}
                 </Button>
               )}
             </div>
@@ -1281,12 +1295,7 @@ function Review({
   return (
     <div className="divide-y rounded-lg border px-4">
       <div className="py-4">
-        <p className="text-sm font-medium">
-          {draft.name}
-          {draft.mode === "create" && draft.makePrimary
-            ? " · Your manager"
-            : ""}
-        </p>
+        <p className="text-sm font-medium">{draft.name}</p>
         <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
           {draft.personality || "No personality guidance."}
         </p>

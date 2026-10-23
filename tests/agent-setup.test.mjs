@@ -227,7 +227,7 @@ async function reviewed(setup) {
     expectedRevision: null,
     mode: "create",
   });
-  assert.equal(initial.draft.name, "Manager");
+  assert.equal(initial.draft.name, "Agent");
   assert.equal(initial.draft.makePrimary, true);
   assert.deepEqual(initial.draft.crewActions, []);
   return setup.command("setup.review", { expectedRevision: initial.revision });
@@ -746,4 +746,39 @@ test("repair retains current memberships and refuses a draft that would restore 
   assert.equal(f.creates(), 0);
   assert.deepEqual(f.access.assignments[0].permissionGroupIds, []);
   assert.deepEqual(f.access.assignments[0].serviceConnectionIds, []);
+});
+
+test("owner-created specialists remain peers when a primary contact already exists", async (t) => {
+  const f = await fixture(t),
+    setup = await f.open();
+  f.owner.agents.push({
+    id: "engineering",
+    archivedAt: null,
+    profile: { name: "Engineering" },
+  });
+  f.owner.projectSettings.primaryAgentId = "engineering";
+  let state = await setup.command("setup.new", {
+    expectedRevision: null,
+    mode: "create",
+  });
+  assert.equal(state.draft.makePrimary, false);
+  state = await setup.command("setup.save", {
+    expectedRevision: state.revision,
+    draft: { ...state.draft, name: "Marketing" },
+  });
+  state = await setup.command("setup.review", {
+    expectedRevision: state.revision,
+  });
+  assert(
+    state.review.warnings.includes("This agent will report directly to you."),
+  );
+  state = await setup.command("setup.complete", {
+    expectedRevision: state.revision,
+  });
+  assert.equal(state.phase, "complete");
+  assert.deepEqual(
+    f.owner.agents.find((a) => a.id === state.result.agentId).reportsTo,
+    { type: "user", userId: "owner" },
+  );
+  assert.equal(f.owner.projectSettings.primaryAgentId, "engineering");
 });

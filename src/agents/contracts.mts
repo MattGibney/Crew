@@ -64,6 +64,8 @@ export interface Agent {
   createdAt: Timestamp;
   updatedAt: Timestamp;
   archivedAt: Timestamp | null;
+  /** Actual session/message activity; absent legacy values are unknown. */
+  lastUsedAt?: Timestamp | null;
   profile: {
     revision: Revision;
     name: string;
@@ -812,7 +814,8 @@ export interface ExecutionAdmissionGate {
 }
 /** Trusted composition port. Access is the only assignment/preset authority. */
 export interface AgentProvisioning {
-  listPresets(): Promise<AgentCreationPreset[]>;
+  /** Omitted actor is trusted owner enumeration; agent callers see only delegable choices. */
+  listPresets(actor?: Actor): Promise<AgentCreationPreset[]>;
   applyPreset(input: {
     actor: Actor;
     agentId: Id;

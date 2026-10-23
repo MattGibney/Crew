@@ -289,7 +289,11 @@ export function createOwnerApi(
             args.instruction as string | null,
           );
         case "archiveAgent":
-          return foundation.records.archive(principal, text(args.agentId));
+          return foundation.archive(principal, text(args.agentId));
+        case "restoreAgent":
+          return foundation.restore(principal, text(args.agentId));
+        case "deleteAgent":
+          return foundation.permanentlyDelete(principal, text(args.agentId));
         case "recoverSession":
           return foundation.recoverSession(principal, text(args.agentId));
         case "cancelTurn":

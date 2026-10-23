@@ -4,11 +4,11 @@ A project represents a business/product. It can contain repositories and working
 
 ## Direct text and voice contact
 
-`ProjectAgentSettings.primaryAgentId` remains the default coordinating agent. Optional `contactAgentId` selects the existing specialist the owner currently talks to. Null/absent falls back to the primary. The authenticated owner command `setContactAgent({agentId,expectedRevision})` persists this selection through the same foundation writer and admission gate. The compatibility UI offers **Talk to** above the existing chat.
+`ProjectAgentSettings.primaryAgentId` is retained as a compatibility fallback, not an exclusive coordinating role. Optional `contactAgentId` selects the existing specialist the owner currently talks to. Null/absent falls back to the primary. The authenticated owner command `setContactAgent({agentId,expectedRevision})` persists this selection through the same foundation writer and admission gate. The compatibility UI offers **Talk to** above the existing chat.
 
 Selection never starts/stops a native session, sends a message, connects a microphone, changes reporting relationships or reassigns jobs. Each agent retains its own native thread, scratchpad and profile voice. The selected agent is the sole public voice binding; an existing live voice session must be disconnected before selection changes. Native promotion still requires the exact agent/session/thread and preserves private-turn boundaries. Concurrent group calls and cross-agent shared memory are not implemented here.
 
-Stopped specialists can be selected without consuming model allowance; start them explicitly when needed. Starting an idle session is not a model task. Changing the selected contact does not change the primary manager role. Specialist delegation remains controlled by existing creation permissions and owner-approved presets.
+Stopped specialists can be selected without consuming model allowance; start them explicitly when needed. Starting an idle session is not a model task. Changing the selected contact does not alter any reporting relationship. Owner-created specialists report directly to the owner. Agent-created workers report to their creator. Specialist delegation uses current group membership and eligible owner-approved presets; child groups must be a subset of the creator’s groups and cannot carry agent-creation permission. See [specialist teams](SPECIALIST-TEAMS.md).
 
 ## Shared project resources
 

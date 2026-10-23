@@ -599,3 +599,20 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Connection creation boundary (#129)
 
 - Create and verify service connections only in Settings → Connections & access. Agent setup/editing selects already saved named connections through group access; it must not embed provider catalogues, credential entry or a connection-creation wizard. Empty saved catalogues show an honest empty state and a navigation action to Settings, retaining the agent draft. Multiple named accounts of one service and shared group membership remain supported.
+
+
+## Specialist team and delegation (#131)
+
+- The owner now communicates directly with several specialist agents by text or voice. The earlier single-human-contact/sole-manager rule is superseded. Preserve one common agent runtime, separate native chats, saved profiles/voices and group-derived access; one connected voice call at a time remains supported.
+- Owner-created specialists report to the owner, independent of the retained primary fallback. Agent-created children report to their creator. Existing reporting relationships are historical/current user data and must not be rewritten on upgrade.
+- Agent delegation may use only current approved presets whose child groups are a subset of the creator's current groups and do not grant agent creation. A domain worker group plus a supplemental manager group supplies the intended distinction without different agent types. Enforce fresh authority at provisioning, not only discovery; owner-created managers remain possible.
+- Retirement means confirmed stop plus archive, preserving chat, notes, work and resource records. It does not authorize deleting shared resources or discarding files. Keep setup and views usable without choosing one exclusive manager; switching contact never starts a session, sends an assignment or opens a microphone.
+
+## Peer agent filesystem storage (#133)
+
+- Each agent has a stable peer folder with an authoritative core `agent.json`; hierarchy remains data (`reportsTo`), never filesystem nesting beneath another agent. Reparenting must not relocate its folder or change native thread/resource identities.
+- Project `foundation.json` is the shared index and project coordination record, with exact references to agent folders rather than duplicated inline agent cores. Shared group/connection/skill definitions, encrypted credentials and Codex-owned chat remain referenced in their existing authorities.
+- Multi-file persistence must retain the exclusive project writer lease, prepare a durable recovery journal before changing agent cores, validate exact identities/paths/content hashes, and publish the index only after cores are durable. Recover or fail closed after interruption; never silently reset, skip a missing core, follow a symlink or discard a prepared transaction.
+- Preserve a private exact legacy snapshot before migration. Test on disposable state only; changing source does not authorize migrating the owner's live profile or replacing the running app. Profile image references and external environment/chat paths are preserved; do not duplicate shared assets or move native history into an agent folder merely to make the layout uniform.
+- New agent identities are immutable UUIDs; rename/reporting changes never replace them. Independently version persisted agent records and upgrade known older formats before use; reject unknown versions without rewriting. Agent folders hold no gateway credentials or authentication tokens, although owner-authored notes/assets remain private data.
+- Archive is the default removal action for every agent and hides it from normal views. Settings has a dedicated Archived agents table with ID/name/last used/Restore/Permanently delete. Restoration is owner-only and idle; permanent deletion needs explicit confirmation and an archived stopped agent. Retain immutable shared work attribution through ID-only deletion markers, never delete shared accounts/resources by implication, and leave export/import to a later task.

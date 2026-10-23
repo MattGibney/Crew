@@ -156,7 +156,7 @@ export function createProjectPresentation(
         label: "Agents",
         icon: ShieldCheck,
         description:
-          "Configure your agents and choose which one acts as your manager.",
+          "Create and configure your team’s roles, personalities and voices.",
         render: ({ snapshot, refresh, visible, openSettings }) => (
           <AgentSetupWizard
             snapshot={snapshot}
@@ -245,12 +245,7 @@ export function createProjectPresentation(
       },
     ],
     renderSetup: (context) => {
-      const primaryId = primaryAgentId(context.snapshot);
-      if (
-        context.snapshot.agents.some(
-          (agent) => agent.id === primaryId && !agent.archivedAt,
-        )
-      )
+      if (context.snapshot.agents.some((agent) => !agent.archivedAt))
         return null;
       return (
         <AgentSetupWizard
@@ -287,7 +282,8 @@ export function createProjectPresentation(
 
 function primaryAgentId(snapshot: AgentsSnapshot) {
   return snapshot.projectSettings
-    ? snapshot.projectSettings.primaryAgentId
+    ? (snapshot.projectSettings.contactAgentId ??
+        snapshot.projectSettings.primaryAgentId)
     : (snapshot.primaryAgentId ?? null);
 }
 

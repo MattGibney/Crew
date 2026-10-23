@@ -350,12 +350,20 @@ export class FoundationRecords {
         );
       const reportsTo = input.reportsTo ?? creator;
       validateActor(state, reportsTo);
+      let agentId: string;
+      do {
+        agentId = randomUUID();
+      } while (
+        state.agents.some((row) => row.id === agentId) ||
+        (state.deletedAgents ?? []).some((row) => row.id === agentId)
+      );
       const agent: Agent = {
-        id: randomUUID(),
+        id: agentId,
         projectId: state.projectId,
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
+        lastUsedAt: null,
         profile: { ...input.profile, revision: 1 },
         skills: structuredClone(input.skills ?? []),
         access: {
@@ -516,6 +524,7 @@ export class FoundationRecords {
     agentId: string,
     archived = true,
   ): Promise<Agent> {
+    if (archived === false) return this.restore(principal, agentId);
     if (typeof archived !== "boolean")
       throw new Error("Invalid archive visibility.");
     await this.authorize(principal, "agents.archive", {
@@ -525,10 +534,155 @@ export class FoundationRecords {
     return this.store.update((state) => {
       this.actor(state, principal);
       const agent = getAgent(state, agentId);
+      if (
+        principal.type === "agent" &&
+        (agent.reportsTo.type !== "agent" ||
+          agent.reportsTo.agentId !== principal.caller.agentId)
+      )
+        throw new Error(
+          "Only the owner or this agent's current reporting manager can archive it.",
+        );
+      if (
+        archived &&
+        (agent.runtime.session.observedState !== "stopped" ||
+          agent.runtime.session.activeTurnId !== null)
+      )
+        throw new Error(
+          "Agent must have a confirmed stopped session before archival.",
+        );
       const now = new Date().toISOString();
       agent.archivedAt = archived ? (agent.archivedAt ?? now) : null;
       agent.updatedAt = now;
       return agent;
+    });
+  }
+
+  async restore(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<Agent> {
+    if (principal.type !== "owner")
+      throw new Error("Only the owner can restore agents.");
+    return this.store.update((state) => {
+      this.actor(state, principal);
+      const agent = getAgent(state, agentId);
+      if (!agent.archivedAt) throw new Error("Agent is not archived.");
+      if (
+        agent.runtime.session.observedState !== "stopped" ||
+        agent.runtime.session.activeTurnId !== null
+      )
+        throw new Error("Agent must be confirmed stopped before restoration.");
+      agent.archivedAt = null;
+      agent.runtime.session.desiredState = "stopped";
+      agent.updatedAt = new Date().toISOString();
+      return agent;
+    });
+  }
+
+  async permanentlyDelete(
+    principal: FoundationPrincipal,
+    agentId: string,
+  ): Promise<{ agentId: string; deletedAt: string }> {
+    if (principal.type !== "owner")
+      throw new Error("Only the owner can permanently delete agents.");
+    return this.store.update((state) => {
+      const actor = this.actor(state, principal);
+      const agent = getAgent(state, agentId);
+      if (
+        !agent.archivedAt ||
+        agent.runtime.session.observedState !== "stopped" ||
+        agent.runtime.session.desiredState !== "stopped" ||
+        agent.runtime.session.activeTurnId !== null
+      )
+        throw new Error(
+          "Only archived, confirmed stopped agents can be permanently deleted.",
+        );
+      if (
+        state.messages.some(
+          (row) =>
+            row.recipientAgentId === agentId &&
+            (row.delivery.state === "sending" ||
+              row.delivery.state === "uncertain"),
+        )
+      )
+        throw new Error(
+          "Resolve uncertain message delivery before permanent deletion.",
+        );
+      const deletedAt = new Date().toISOString();
+      for (const child of state.agents) {
+        if (
+          child.reportsTo.type === "agent" &&
+          child.reportsTo.agentId === agentId
+        ) {
+          child.reportsTo = actor;
+          child.updatedAt = deletedAt;
+        }
+      }
+      for (const job of state.jobs) {
+        if (job.assignment.assignedToAgentId !== agentId) continue;
+        job.assignmentHistory.push({
+          id: randomUUID(),
+          recordedAt: deletedAt,
+          changedBy: actor,
+          previousAgentId: agentId,
+          assignedAgentId: null,
+          instruction: null,
+        });
+        job.assignment = {
+          assignedBy: actor,
+          assignedToAgentId: null,
+          instruction: null,
+        };
+        job.updatedAt = deletedAt;
+      }
+      for (const message of state.messages) {
+        if (
+          message.recipientAgentId === agentId &&
+          message.delivery.state !== "delivered"
+        ) {
+          message.delivery.state = "failed";
+          message.delivery.error = {
+            code: "cancelled",
+            message: "Recipient was permanently deleted.",
+          };
+        }
+      }
+      for (const request of state.helpRequests) {
+        if (
+          request.state === "open" &&
+          (request.requesterAgentId === agentId ||
+            (request.target.type === "agent" &&
+              request.target.agentId === agentId))
+        )
+          request.state = "cancelled";
+      }
+      state.ownerInbox = state.ownerInbox.filter((row) =>
+        state.helpRequests.some(
+          (request) =>
+            request.id === row.helpRequestId && request.state === "open",
+        ),
+      );
+      state.provisioning = state.provisioning.filter(
+        (row) => row.agentId !== agentId,
+      );
+      state.nativeApprovals = state.nativeApprovals.filter(
+        (row) => row.agentId !== agentId,
+      );
+      state.nativeStartAttempts = state.nativeStartAttempts.filter(
+        (row) => row.agentId !== agentId,
+      );
+      if (state.preparation)
+        state.preparation.readiness = state.preparation.readiness.filter(
+          (row) => row.agentId !== agentId,
+        );
+      if (state.projectSettings.primaryAgentId === agentId)
+        state.projectSettings.primaryAgentId = null;
+      if (state.projectSettings.contactAgentId === agentId)
+        state.projectSettings.contactAgentId = null;
+      state.projectSettings.revision += 1;
+      state.agents = state.agents.filter((row) => row.id !== agentId);
+      (state.deletedAgents ??= []).push({ id: agentId, deletedAt });
+      return { agentId, deletedAt };
     });
   }
 

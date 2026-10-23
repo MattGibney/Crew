@@ -3,6 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  Archive,
   GitBranch,
   Globe,
   Keyboard,
@@ -36,6 +37,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Message } from "../manager/Message";
+import { ArchivedAgentsSettings } from "./ArchivedAgentsSettings";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
 import { useVoiceArtifacts } from "./useVoiceArtifacts";
@@ -185,6 +187,7 @@ export function AgentsApp({
   const workspace = useRef<HTMLElement | null>(null);
   const resizing = useRef(false);
   const locks = useRef(new Set<string>());
+  const composerDrafts = useRef(new Map<string, string>());
   const refreshVersion = useRef(0);
   const alive = useRef(true);
   const selectedRef = useRef<string | null>(null);
@@ -285,8 +288,25 @@ export function AgentsApp({
     return completed;
   };
   const primary =
-    snapshot?.agents.find((agent) => agent.id === primaryAgentId(snapshot)) ??
-    null;
+    snapshot?.agents.find(
+      (agent) => !agent.archivedAt && agent.id === primaryAgentId(snapshot),
+    ) ?? null;
+  useEffect(() => {
+    setSelectedId(null);
+    setView((current) => (current === "agents" ? "conversation" : current));
+  }, [primary?.id]);
+  useEffect(() => {
+    if (
+      selectedId &&
+      snapshot &&
+      !snapshot.agents.some(
+        (agent) => agent.id === selectedId && !agent.archivedAt,
+      )
+    ) {
+      setSelectedId(null);
+      setView((current) => (current === "agents" ? "conversation" : current));
+    }
+  }, [selectedId, snapshot]);
   const showWorker = (id: string) => {
     setVisitedIds((current) => new Set([...current, id]));
     setSelectedId(id);
@@ -333,11 +353,38 @@ export function AgentsApp({
               />
             ) : (
               <p className="text-sm text-muted-foreground">
-                Choose your primary agent during setup.
+                Choose an agent in Agents settings.
               </p>
             ),
         },
-        ...settingsPanels,
+        ...settingsPanels.map((panel) => ({
+          ...panel,
+          render: (context: Parameters<AgentSettingsPanel["render"]>[0]) =>
+            panel.render({
+              ...context,
+              snapshot: {
+                ...context.snapshot,
+                agents: context.snapshot.agents.filter(
+                  (agent) => !agent.archivedAt,
+                ),
+              },
+            }),
+        })),
+        {
+          id: "crew-archived-agents",
+          label: "Archived agents",
+          description:
+            "Restore an agent or permanently delete its local agent records.",
+          icon: Archive,
+          render: () => (
+            <ArchivedAgentsSettings
+              agents={snapshot.agents}
+              client={client}
+              pending={pending}
+              act={act}
+            />
+          ),
+        },
         {
           id: "crew-attention",
           label: "Questions and approvals",
@@ -530,6 +577,36 @@ export function AgentsApp({
               {setup}
             </section>
           )}
+          {!setupVisible &&
+            client.selectContact &&
+            snapshot.projectSettings && (
+              <label className="flex shrink-0 items-center gap-3 border-b px-5 py-2 text-sm">
+                Talk to
+                <select
+                  className="min-w-0 rounded-md border bg-background px-2 py-1"
+                  aria-label="Talk to agent"
+                  value={primary?.id ?? ""}
+                  disabled={pending.has("contact")}
+                  onChange={(event) =>
+                    void act("contact", () =>
+                      client.selectContact!(
+                        event.target.value,
+                        snapshot.projectSettings!.revision,
+                      ),
+                    )
+                  }
+                >
+                  {!primary && <option value="">Choose an agent</option>}
+                  {snapshot.agents
+                    .filter((agent) => !agent.archivedAt)
+                    .map((agent) => (
+                      <option value={agent.id} key={agent.id}>
+                        {agent.profile.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            )}
           <main
             ref={workspace}
             id="workspace-content"
@@ -543,41 +620,14 @@ export function AgentsApp({
             className={`${!setupVisible && (view === "conversation" || (view === "agents" && !selectedId)) ? "grid" : "hidden"} min-h-0 flex-1 ${view === "conversation" ? "manager-split" : ""}`}
           >
             <section
-              aria-label="Manager workspace"
+              aria-label="Agent workspace"
               className={`${view === "conversation" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col overflow-hidden`}
             >
-              {client.selectContact && snapshot.projectSettings && (
-                <label className="flex items-center gap-3 border-b px-5 py-2 text-sm">
-                  Talk to
-                  <select
-                    className="min-w-0 rounded-md border bg-background px-2 py-1"
-                    aria-label="Talk to agent"
-                    value={primary?.id ?? ""}
-                    disabled={pending.has("contact")}
-                    onChange={(event) =>
-                      void act("contact", () =>
-                        client.selectContact!(
-                          event.target.value,
-                          snapshot.projectSettings!.revision,
-                        ),
-                      )
-                    }
-                  >
-                    {!primary && <option value="">Choose an agent</option>}
-                    {snapshot.agents
-                      .filter((agent) => !agent.archivedAt)
-                      .map((agent) => (
-                        <option value={agent.id} key={agent.id}>
-                          {agent.profile.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              )}
               {primary ? (
                 <Conversation
                   key={primary.id}
                   agent={primary}
+                  memoryDrafts={composerDrafts.current}
                   snapshot={snapshot}
                   client={client}
                   pending={pending}
@@ -609,8 +659,8 @@ export function AgentsApp({
                 />
               ) : (
                 <div className="m-8">
-                  <Empty icon={<Settings />} title="Set up your manager">
-                    <p>Choose your primary agent in Project settings.</p>
+                  <Empty icon={<Settings />} title="Choose an agent">
+                    <p>Choose a contact in Agents settings.</p>
                     <Button onClick={() => openSettings()}>
                       Open settings
                     </Button>
@@ -695,15 +745,16 @@ export function AgentsApp({
           </main>
           {renderBrowser?.({
             snapshot,
-            selectedAgent:
-              snapshot.agents.find((agent) => agent.id === selectedId) ??
-              primary,
+            selectedAgent: primary,
             client,
             visible: !setupVisible && view === "browser",
           })}
           {snapshot.agents
             .filter(
-              (agent) => visitedIds.has(agent.id) && agent.id !== primary?.id,
+              (agent) =>
+                !agent.archivedAt &&
+                visitedIds.has(agent.id) &&
+                agent.id !== primary?.id,
             )
             .map((agent) => (
               <div
@@ -815,42 +866,32 @@ function AgentWorkerList({
   onSelect(id: string): void;
   compact: boolean;
 }) {
-  const [showArchived, setShowArchived] = useState(false);
   const workers = snapshot.agents.filter(
     (agent) =>
-      agent.id !== primaryAgentId(snapshot) &&
-      (showArchived || !agent.archivedAt),
+      agent.reportsTo.type === "agent" &&
+      agent.reportsTo.agentId === primaryAgentId(snapshot) &&
+      !agent.archivedAt,
   );
   return (
     <section aria-label="Workers and worktrees" className="min-w-0 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold">
-            Your crew{" "}
+            Workers{" "}
             <span className="ml-1 text-muted-foreground">{workers.length}</span>
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Independent work. One manager.
+            Workers reporting to your selected agent.
           </p>
         </div>
         <Layers className="size-4 text-muted-foreground" aria-hidden="true" />
       </div>
-      {snapshot.agents.some((agent) => agent.archivedAt) && (
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={showArchived}
-            onChange={(event) => setShowArchived(event.target.checked)}
-          />
-          Show archived
-        </label>
-      )}
       {!workers.length && (
         <div className="rounded-xl border border-dashed px-5 py-9 text-center">
           <FolderGit2 className="mx-auto mb-3 size-6 text-muted-foreground" />
           <h3 className="text-sm font-medium">A workspace for every task</h3>
           <p className="mt-2 text-xs leading-5 text-muted-foreground">
-            Agree a task with your manager. Its worker and progress appear here.
+            This agent’s workers and their progress appear here.
           </p>
         </div>
       )}
@@ -948,6 +989,7 @@ function AgentSessionPanel({
     !sameSkills(agent, skills);
   return (
     <div className="space-y-3">
+      <h2 className="text-sm font-semibold">{agent.profile.name}</h2>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Badge
           variant={
@@ -1110,7 +1152,7 @@ function AgentDetail({
             onClick={onBack}
           >
             <ArrowLeft />
-            Back to manager
+            Back to conversation
           </Button>
           <span className="hidden h-4 border-l sm:block" />
           <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
@@ -1217,7 +1259,7 @@ function AgentDetail({
                   onArchived();
               }}
             >
-              Archive worker
+              Archive agent
             </Button>
           )}
         </div>
@@ -1275,6 +1317,7 @@ function Conversation({
   hasVoice = false,
   onOpenSettings,
   attention,
+  memoryDrafts,
 }: {
   agent: Agent;
   snapshot: AgentsSnapshot;
@@ -1292,6 +1335,7 @@ function Conversation({
   hasVoice?: boolean;
   onOpenSettings?: () => void;
   attention?: ReactNode;
+  memoryDrafts?: Map<string, string>;
 }) {
   const {
     items,
@@ -1334,16 +1378,19 @@ function Conversation({
   );
   const picture = useAgentPicture(client, agent.profile.pictureRef);
   const draftKey = `crew-agent-draft:${snapshot.projectId}:${agent.id}`;
-  const [draft, setDraft] = useState(() => readComposerDraft(draftKey));
+  const [draft, setDraft] = useState(
+    () => memoryDrafts?.get(draftKey) ?? readComposerDraft(draftKey),
+  );
   useEffect(() => {
     if (readOnly) return;
+    memoryDrafts?.set(draftKey, draft);
     try {
       if (draft) localStorage.setItem(draftKey, draft);
       else localStorage.removeItem(draftKey);
     } catch {
       /* Unavailable local storage never discards an in-memory draft. */
     }
-  }, [draft, draftKey, readOnly]);
+  }, [draft, draftKey, readOnly, memoryDrafts]);
   const [mode, setMode] = useState<DeliveryMode>("steer");
   const intents = snapshot.pendingMessages.filter(
     (message) =>
@@ -1474,7 +1521,7 @@ function Conversation({
                           ? "No public messages in these pages. Load earlier history to continue."
                           : agent.runtime.threadId
                             ? "No saved public messages are available for this chat."
-                            : "Start your manager in Settings, then send your first message."}
+                            : "Start this agent in Settings, then send your first message."}
                   </p>
                 </MessageScrollerItem>
               )}
@@ -1667,7 +1714,7 @@ function Conversation({
               className="underline underline-offset-4"
               onClick={onReturnToPrimary}
             >
-              Return to your manager
+              Return to your conversation
             </button>{" "}
             to send directions.
           </div>
@@ -1737,7 +1784,7 @@ function Conversation({
                       ))}
                     </div>
                     <span className="text-[11px] text-muted-foreground">
-                      Message your manager
+                      Message this agent
                     </span>
                   </div>
                 )}
@@ -1756,8 +1803,8 @@ function Conversation({
                   className="p-2"
                 >
                   <Textarea
-                    aria-label="Message your manager"
-                    placeholder="Message your manager…"
+                    aria-label="Message this agent"
+                    placeholder="Message this agent…"
                     value={draft}
                     maxLength={200_000}
                     onChange={(event) => setDraft(event.target.value)}

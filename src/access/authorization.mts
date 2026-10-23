@@ -513,7 +513,15 @@ export class ProjectAuthorizationService
           return denied("Owner administration is required.");
         if (target.type !== "agent" && target.type !== "project")
           return denied("Invalid access target.");
-        if (target.type === "agent") await this.agent(state, target.agentId);
+        if (target.type === "agent") {
+          const recipient = await this.agent(state, target.agentId);
+          if (
+            action === "agents.archive" &&
+            (recipient.reportsTo.type !== "agent" ||
+              recipient.reportsTo.agentId !== caller.agentId)
+          )
+            return denied("Only your current child agents can be retired.");
+        }
         if (crewActionRequiresProject(action) && target.type !== "project")
           return denied("This operation requires project scope.");
         const assignment = state.assignments.find(
@@ -1072,12 +1080,68 @@ export class ProjectAuthorizationService
       };
     });
   }
-  async listPresets(): Promise<AgentCreationPreset[]> {
-    return this.store.transaction((state) =>
-      state.presets
-        .filter((row) => row.enabled)
-        .map((preset) => presetView(state, preset)),
-    );
+  private async creationGroups(
+    state: AccessState,
+    actor: Actor,
+  ): Promise<string[] | null> {
+    validateActor(actor);
+    if (actor.type === "user") {
+      owner(state, actor);
+      return null;
+    }
+    const creator = await this.agent(state, actor.agentId);
+    const sessionId = creator.runtime.session.sessionId;
+    if (!sessionId) throw new Error("Creating agent session is unavailable.");
+    await this.live(state, {
+      projectId: state.projectId,
+      agentId: creator.id,
+      sessionId,
+    });
+    const groups =
+      state.assignments.find((row) => row.agentId === creator.id)
+        ?.permissionGroupIds ?? [];
+    if (
+      !state.groups.some(
+        (group) =>
+          groups.includes(group.id) &&
+          group.grants.crew.some((grant) => grant.action === "agents.create"),
+      )
+    )
+      throw new Error(
+        "Creating agent does not have current agent creation permission.",
+      );
+    return groups;
+  }
+  private delegablePreset(
+    state: AccessState,
+    preset: AgentCreationPreset,
+    groups: string[] | null,
+  ): boolean {
+    return preset.permissionGroupIds.every((id) => {
+      const group = state.groups.find((row) => row.id === id);
+      return (
+        !!group &&
+        (groups === null ||
+          (groups.includes(id) &&
+            !group.grants.crew.some(
+              (grant) => grant.action === "agents.create",
+            )))
+      );
+    });
+  }
+  async listPresets(actor?: Actor): Promise<AgentCreationPreset[]> {
+    actor = actor === undefined ? undefined : structuredClone(actor);
+    return this.store.transaction(async (state) => {
+      const groups =
+        actor === undefined ? null : await this.creationGroups(state, actor);
+      return state.presets
+        .filter(
+          (row) =>
+            row.enabled &&
+            (groups === null || this.delegablePreset(state, row, groups)),
+        )
+        .map((preset) => presetView(state, preset));
+    });
   }
   async defaultPreset(): Promise<AgentCreationPreset | null> {
     return this.store.transaction((state) => {
@@ -1222,46 +1286,26 @@ export class ProjectAuthorizationService
         throw new Error(
           "Existing access has no matching preset application receipt.",
         );
-      if (input.actor.type === "user") owner(state, input.actor);
-      else {
-        if (
-          target.id === input.actor.agentId ||
+      if (
+        input.actor.type === "agent" &&
+        (target.id === input.actor.agentId ||
           target.reportsTo.type !== "agent" ||
-          target.reportsTo.agentId !== input.actor.agentId
-        )
-          throw new Error(
-            "Creation access must belong to this manager's new child.",
-          );
-        const manager = await this.agent(state, input.actor.agentId);
-        if (!manager.runtime.session.sessionId)
-          throw new Error("Creating manager session is unavailable.");
-        await this.live(state, {
-          projectId: state.projectId,
-          agentId: manager.id,
-          sessionId: manager.runtime.session.sessionId,
-        });
-        const assigned = state.assignments.find(
-          (row) => row.agentId === manager.id,
+          target.reportsTo.agentId !== input.actor.agentId)
+      )
+        throw new Error(
+          "Creation access must belong to this agent's new child.",
         );
-        if (
-          !state.groups.some(
-            (group) =>
-              assigned?.permissionGroupIds.includes(group.id) &&
-              group.grants.crew.some(
-                (grant) => grant.action === "agents.create",
-              ),
-          )
-        )
-          throw new Error(
-            "Manager does not have current agent creation permission.",
-          );
-      }
+      const creatorGroups = await this.creationGroups(state, input.actor);
       const preset = state.presets.find(
         (row) => row.id === input.presetId && row.enabled,
       );
       if (!preset || preset.revision !== input.expectedPresetRevision)
         throw new Error(
           "Creation preset changed; choose its current revision.",
+        );
+      if (!this.delegablePreset(state, preset, creatorGroups))
+        throw new Error(
+          "Child groups must be a subset of the creator's current groups and cannot grant agents.create.",
         );
       this.assertAssignments(
         state,
@@ -1599,13 +1643,16 @@ export class ProjectAuthorizationService
   ): Promise<AccessAssignment> {
     actor = structuredClone(actor);
     permissionGroupIds = [...permissionGroupIds];
-    serviceConnectionIds = serviceConnectionIds ? [...serviceConnectionIds] : undefined;
+    serviceConnectionIds = serviceConnectionIds
+      ? [...serviceConnectionIds]
+      : undefined;
     return this.store.transaction(async (state) => {
       owner(state, actor);
       await this.agent(state, agentId);
       const current = state.assignments.find((row) => row.agentId === agentId);
       if (
-        current && serviceConnectionIds !== undefined &&
+        current &&
+        serviceConnectionIds !== undefined &&
         isDeepStrictEqual(
           [...current.permissionGroupIds].sort(),
           [...permissionGroupIds].sort(),

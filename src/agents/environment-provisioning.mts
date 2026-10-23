@@ -12,14 +12,14 @@ export function withEnvironmentTemplateProvisioning(
 ): AgentProvisioning {
   const trustedOwner = structuredClone(owner);
   return {
-    listPresets: () => provisioning.listPresets(),
+    listPresets: (actor) => provisioning.listPresets(actor),
     accessFor: (agentId) => provisioning.accessFor(agentId),
     ...(provisioning.skillsFor
       ? { skillsFor: provisioning.skillsFor.bind(provisioning) }
       : {}),
     async applyPreset(input) {
       input = structuredClone(input);
-      const preset = (await provisioning.listPresets()).find(
+      const preset = (await provisioning.listPresets(input.actor)).find(
         (row) => row.id === input.presetId,
       );
       if (
