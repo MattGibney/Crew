@@ -37,6 +37,7 @@ import { WebLink } from "../manager/WebLink";
 export interface ProjectPresentation {
   settingsPanels?: AgentSettingsPanel[];
   renderSetup?: AgentsAppProps["renderSetup"];
+  renderAccessApprovals?: AgentsAppProps["renderAccessApprovals"];
   renderVoice?: AgentsAppProps["renderVoice"];
 }
 
@@ -322,6 +323,7 @@ export function DesktopApplication({
               ),
             },
           ]}
+          renderAccessApprovals={panels?.renderAccessApprovals}
           renderSetup={panels?.renderSetup}
           renderVoice={panels?.renderVoice}
           renderPreparationActions={() => preparation}

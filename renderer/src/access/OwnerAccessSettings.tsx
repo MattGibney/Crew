@@ -38,7 +38,7 @@ export function OwnerAccessSettings({
   section,
 }: {
   snapshot: AccessOwnerView;
-  section: "connections" | "groups";
+  section: "connections" | "groups" | "approvals";
   isOwner: boolean;
   onCommand(name: string, args: unknown): Promise<unknown>;
   onNotify(message: string): void;
@@ -216,6 +216,10 @@ export function OwnerAccessSettings({
               command("setDefaultPreset", { presetId, expectedRevision })
             }
           />
+        </>
+      )}
+      {section === "approvals" && (
+        <>
           <AccessRequestsPanel
             {...common}
             requests={snapshot.requests}

@@ -211,7 +211,7 @@ export function createProjectPresentation(
             icon: ShieldCheck,
             section: "groups",
             description:
-              "Control what agents can access through their groups and approvals.",
+              "Manage groups and the ongoing access their members inherit.",
           },
         ] as const
       ).map(({ section, ...panel }) => ({
@@ -272,6 +272,17 @@ export function createProjectPresentation(
         ),
       },
     ],
+    renderAccessApprovals: ({ snapshot, refresh, visible }) => (
+      <AccessSettings
+        section="approvals"
+        projectId={projectId}
+        command={command}
+        subscribe={onOwnerChange}
+        snapshot={snapshot}
+        refreshProject={refresh}
+        visible={visible}
+      />
+    ),
     renderSetup: (context) => {
       if (context.snapshot.agents.some((agent) => !agent.archivedAt))
         return null;
@@ -351,7 +362,7 @@ function AccessSettings({
   refreshProject,
   visible,
 }: {
-  section: "connections" | "groups";
+  section: "connections" | "groups" | "approvals";
   projectId: string;
   command: Command;
   subscribe: Subscribe;

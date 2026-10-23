@@ -116,6 +116,8 @@ export interface AgentsAppProps {
   client: AgentsClient;
   /** #89 supplies access, connections and approval panels; foundation owns navigation. */
   settingsPanels?: AgentSettingsPanel[];
+  /** Service access decisions appear alongside questions and native approvals. */
+  renderAccessApprovals?: AgentSettingsPanel["render"];
   banner?: ReactNode;
   /** Return null once owner setup is complete. Opening setup starts no work. */
   renderSetup?: (context: {
@@ -171,6 +173,7 @@ export function AgentsApp({
   renderBrowser,
   client,
   settingsPanels = [],
+  renderAccessApprovals,
   banner,
   renderSetup,
   renderVoice,
@@ -440,14 +443,18 @@ export function AgentsApp({
           label: "Questions and approvals",
           description: "Review requests that need your decision.",
           icon: CircleHelp,
-          render: () => (
-            <OwnerInbox
-              snapshot={snapshot}
-              client={client}
-              pending={pending}
-              act={act}
-              openAgent={showWorker}
-            />
+          render: (context) => (
+            <div className="space-y-10">
+              <OwnerInbox
+                snapshot={snapshot}
+                client={client}
+                pending={pending}
+                act={act}
+                openAgent={showWorker}
+              />
+              {renderAccessApprovals && <Separator />}
+              {renderAccessApprovals?.(context)}
+            </div>
           ),
         },
         {
@@ -2485,7 +2492,7 @@ function OwnerInbox({
   return (
     <div className="mx-auto max-w-4xl">
       {!requests.length && !snapshot.nativeApprovals.length && (
-        <Empty icon={<Inbox />} title="Nothing waiting for you">
+        <Empty icon={<Inbox />} title="No questions or session approvals">
           <p>Agents bring questions here when they need your help.</p>
         </Empty>
       )}
@@ -2567,8 +2574,7 @@ function OwnerInbox({
         ))}
       </div>
       <p className="mt-6 text-xs text-muted-foreground">
-        Work answers do not authorize service access. Access reviews are handled
-        separately in Settings.
+        Answering an agent’s question does not grant it permission to use a service.
       </p>
     </div>
   );
