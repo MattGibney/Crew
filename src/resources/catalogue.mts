@@ -1,5 +1,12 @@
-import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  rename,
+  lstat,
+  realpath,
+} from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { PermissionGroup } from "../agents/contracts.mjs";
 
@@ -82,7 +89,25 @@ export class ProjectResourceCatalogue {
   static async open(directory: string, projectId: string) {
     const catalogue = new ProjectResourceCatalogue(directory, projectId);
     await mkdir(directory, { recursive: true, mode: 0o700 });
+    const info = await lstat(directory);
+    if (
+      !info.isDirectory() ||
+      info.isSymbolicLink() ||
+      info.mode & 0o077 ||
+      (process.getuid && info.uid !== process.getuid()) ||
+      (await realpath(directory)) !== resolve(directory)
+    )
+      throw Error(
+        "Project resource storage must be canonical, private and owner-controlled.",
+      );
     try {
+      const saved = await lstat(join(directory, "references.json"));
+      if (
+        !saved.isFile() ||
+        saved.isSymbolicLink() ||
+        saved.size > 4 * 1024 * 1024
+      )
+        throw Error("Invalid project resource catalogue file.");
       const bytes = await readFile(join(directory, "references.json"), "utf8");
       if (bytes.length > 4 * 1024 * 1024)
         throw Error("Project reference catalogue is too large.");
