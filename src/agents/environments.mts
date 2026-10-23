@@ -79,7 +79,14 @@ export interface PreparedEnvironmentTemplate {
   instructions: string;
   commands: string[][];
 }
+interface PrivateContextIdentity {
+  agentId: string;
+  templateId: string;
+  templateRevision: number;
+}
 export interface ApprovedWorkspace {
+  /** Private targets are internal self-owned contexts, never published policies. */
+  privateContext?: PrivateContextIdentity;
   policy: EnvironmentPolicy;
   workspace: DirectoryIdentity;
   writable: boolean;
@@ -91,7 +98,7 @@ export interface ProjectEnvironment {
   id: string;
   agentId: string;
   policyId: string;
-  kind: "attached_workspace" | "managed_worktree";
+  kind: "attached_workspace" | "managed_worktree" | "private_context";
   directory: string;
   identity: DirectoryIdentity | null;
   state: "creating" | "attached" | "detached" | "uncertain";
@@ -180,6 +187,12 @@ export interface ProjectEnvironmentOptions {
     targetAgentId: string,
     policy: EnvironmentPolicy,
   ): Promise<void>;
+  /** Fresh group action authority for exact-self private targets, separate from
+   * shared-folder policy grants. Missing callback denies all private execution. */
+  authorizePrivateContext?(
+    caller: CallerContext,
+    action: "read" | "execute",
+  ): Promise<void>;
   /** Must reject stale/stopped sessions and the final lifecycle reservation. */
   verifyExecution(caller: CallerContext): Promise<void>;
   /** Owner inspection also participates in the final lifecycle reservation. */
@@ -198,6 +211,10 @@ export interface ProjectEnvironmentOptions {
   ): Promise<WorkspaceProcessSettlement>;
   runtimeDirectory?: string;
   templateSource?: {
+    prepareContext?(
+      agentId: string,
+      input: { expectedAssignmentRevision: number },
+    ): Promise<PrivateContextIdentity & { directory: string }>;
     resolvePreparation(
       input: EnvironmentPreparationRequest,
     ): Promise<EnvironmentPreparationPlan>;
@@ -396,14 +413,22 @@ const validate = new Ajv({
       projectId: id,
       ownerUserId: id,
       workspaces: array(
-        object({
-          policy: policySchema,
-          workspace: directorySchema,
-          writable: { type: "boolean" },
-          executableDirectories: array(directorySchema, 32),
-          managedWorktreeRoot: nullable(directorySchema),
-          gitDirectory: nullable(directorySchema),
-        }),
+        object(
+          {
+            policy: policySchema,
+            workspace: directorySchema,
+            writable: { type: "boolean" },
+            executableDirectories: array(directorySchema, 32),
+            managedWorktreeRoot: nullable(directorySchema),
+            gitDirectory: nullable(directorySchema),
+            privateContext: object({
+              agentId: id,
+              templateId: id,
+              templateRevision: { type: "integer", minimum: 1 },
+            }),
+          },
+          ["privateContext"],
+        ),
         1000,
       ),
       environments: array(
@@ -412,7 +437,13 @@ const validate = new Ajv({
             id,
             agentId: id,
             policyId: id,
-            kind: { enum: ["attached_workspace", "managed_worktree"] },
+            kind: {
+              enum: [
+                "attached_workspace",
+                "managed_worktree",
+                "private_context",
+              ],
+            },
             directory: text,
             identity: nullable(directorySchema),
             state: { enum: ["creating", "attached", "detached", "uncertain"] },
@@ -652,6 +683,28 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         throw new Error("Duplicate environment identity.");
     for (const workspace of state.workspaces) {
       if (
+        workspace.privateContext &&
+        (!this.options.runtimeDirectory ||
+          workspace.workspace.path !==
+            join(
+              this.options.runtimeDirectory,
+              createHash("sha256")
+                .update(workspace.privateContext.agentId)
+                .digest("hex")
+                .slice(0, 24),
+              createHash("sha256")
+                .update(
+                  `${workspace.privateContext.templateId}:${workspace.privateContext.templateRevision}`,
+                )
+                .digest("hex")
+                .slice(0, 24),
+              "work",
+            ))
+      )
+        throw new Error(
+          "Private context journal path must match its exact agent/template identity.",
+        );
+      if (
         workspace.policy.projectId !== state.projectId ||
         workspace.policy.enforcementConfigRef !==
           this.policyRef(workspace.policy.id, workspace.policy.revision) ||
@@ -679,6 +732,20 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
       )
         throw new Error("Invalid environment reference.");
     for (const environment of state.environments) {
+      const workspace = state.workspaces.find(
+        (row) => row.policy.id === environment.policyId,
+      )!;
+      if (
+        Boolean(workspace.privateContext) !==
+          (environment.kind === "private_context") ||
+        (workspace.privateContext &&
+          (workspace.privateContext.agentId !== environment.agentId ||
+            workspace.workspace.path !== environment.directory ||
+            !workspace.writable ||
+            workspace.managedWorktreeRoot !== null ||
+            workspace.gitDirectory !== null))
+      )
+        throw new Error("Invalid private context ownership.");
       const pin = environment.preparation;
       if (
         pin &&
@@ -1030,6 +1097,14 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         "Template assignment does not match this preparation.",
       );
     if (
+      workspace.privateContext &&
+      (workspace.privateContext.templateId !== template.id ||
+        workspace.privateContext.templateRevision !== template.revision)
+    )
+      throw new PreparationUnavailable(
+        "Use explicit private context preparation to select the context for this template revision.",
+      );
+    if (
       template.capabilities.localhostPorts.length ||
       (template.capabilities.packageDownloads && !template.capabilities.network)
     )
@@ -1091,18 +1166,21 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
       template.readableDirectories.map((path) => this.identifyDirectory(path)),
     );
     const otherRoots = [
-      ...this.state.workspaces.flatMap((row) => [
-        row.workspace,
-        row.managedWorktreeRoot,
-        row.gitDirectory,
-        ...row.executableDirectories,
-      ]),
+      ...this.state.workspaces
+        .filter((row) => !row.privateContext)
+        .flatMap((row) => [
+          row.workspace,
+          row.managedWorktreeRoot,
+          row.gitDirectory,
+          ...row.executableDirectories,
+        ]),
       ...executableDirectories,
       ...readableDirectories,
     ].filter((row): row is DirectoryIdentity => row !== null);
     if (
       otherRoots.some((row) => overlaps(row.path, runtimeDirectory)) ||
-      overlaps(environment.directory, runtimeDirectory)
+      (environment.kind !== "private_context" &&
+        overlaps(environment.directory, runtimeDirectory))
     )
       throw new PreparationUnavailable(
         "Runtime caches must be separate from workspaces and tool installations.",
@@ -1384,6 +1462,10 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
             canonicalJson({ ...record, policy: null })
         )
           return previous;
+        if (previous?.privateContext)
+          throw new Error(
+            "Private context registrations are not shared workspace approvals.",
+          );
         if ((previous?.policy.revision ?? null) !== expectedRevision)
           throw new Error("Workspace approval revision conflict.");
         // Settings used random IDs while guided setup used a deterministic ID.
@@ -1717,6 +1799,8 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
       .filter((row) => row.agentId === agentId)
       .map((row) => ({
         environmentId: row.id,
+        kind: row.kind,
+        directory: row.directory,
         preparation: row.preparation
           ? {
               templateId: row.preparation.templateId,
@@ -1734,11 +1818,12 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     const entries: JsonObject[] = [];
     for (const workspace of this.state.workspaces) {
       try {
-        await this.options.authorize(caller, "read", agentId, workspace.policy);
+        await this.authorizeWorkspace(caller, "read", agentId, workspace);
       } catch {
         continue;
       }
       entries.push({
+        kind: workspace.privateContext ? "private_context" : "shared_workspace",
         policy: { ...workspace.policy },
         workspaceDirectory: workspace.workspace.path,
         writable: workspace.writable,
@@ -1872,6 +1957,226 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     };
   }
 
+  private async authorizeWorkspace(
+    caller: CallerContext,
+    action: Action | "read",
+    agentId: string,
+    workspace: ApprovedWorkspace,
+  ) {
+    if (!workspace.privateContext)
+      return this.options.authorize(caller, action, agentId, workspace.policy);
+    if (
+      caller.agentId !== agentId ||
+      workspace.privateContext.agentId !== agentId ||
+      !this.options.authorizePrivateContext
+    )
+      throw new Error("Exact current-self private context authority required.");
+    await this.options.authorizePrivateContext(
+      caller,
+      action === "read" || action === "status" ? "read" : "execute",
+    );
+    await this.options.verifyExecution(caller);
+    // A retained old preparation stays usable while the same template is
+    // selected; clearing/changing template revokes new command admission.
+    if (!["read", "status", "stop"].includes(action)) {
+      const assignment =
+        await this.options.templateSource?.assignment?.(agentId);
+      if (assignment?.templateId !== workspace.privateContext.templateId)
+        throw new Error("Private context template is no longer assigned.");
+    }
+  }
+
+  /** Exact-self facade over the ordinary durable executor/process receipt path.
+   * Template metadata never supplies group execution authority. */
+  privateContext(
+    input: Parameters<
+      NonNullable<AgentEnvironmentService["privateContext"]>
+    >[0],
+  ): Promise<JsonValue> {
+    if (this.closed || this.closing)
+      return Promise.reject(new Error("Environment service is closing."));
+    const task = this.performPrivateContext(structuredClone(input));
+    this.active.add(task);
+    void task.finally(() => this.active.delete(task)).catch(() => {});
+    return task;
+  }
+  private async performPrivateContext(
+    input: Parameters<
+      NonNullable<AgentEnvironmentService["privateContext"]>
+    >[0],
+  ): Promise<JsonValue> {
+    validCaller(input.caller, this.options.projectId);
+    if (
+      !idValid(input.requestId) ||
+      !["prepare", "execute", "start", "status", "stop"].includes(
+        input.action,
+      ) ||
+      !jsonObject(input.arguments)
+    )
+      throw new Error("Invalid private context operation.");
+    const agentId = input.caller.agentId;
+    if (input.action !== "prepare") {
+      const environmentId = ["status", "stop"].includes(input.action)
+        ? this.state.operations.find(
+            (row) =>
+              row.id === input.arguments.operationId &&
+              row.targetAgentId === agentId,
+          )?.environmentId
+        : input.arguments.environmentId;
+      const environment = this.state.environments.find(
+        (row) =>
+          row.id === environmentId &&
+          row.agentId === agentId &&
+          row.kind === "private_context",
+      );
+      if (!environment)
+        throw new Error("Exact current-self private context required.");
+      return this.invoke({ ...input, agentId });
+    }
+    strict(input.arguments, ["expectedAssignmentRevision"]);
+    const expectedAssignmentRevision =
+      input.arguments.expectedAssignmentRevision;
+    if (
+      !Number.isSafeInteger(expectedAssignmentRevision) ||
+      (expectedAssignmentRevision as number) < 1
+    )
+      throw new Error("Exact assignment revision required.");
+    const environmentId = await this.options.admission.run(async () => {
+      if (
+        this.closed ||
+        this.closing ||
+        this.failed ||
+        !this.options.authorizePrivateContext ||
+        !this.options.templateSource?.prepareContext ||
+        !this.options.runtimeDirectory
+      )
+        throw new Error("Private context execution is unavailable.");
+      await this.options.authorizePrivateContext(input.caller, "execute");
+      await this.options.verifyExecution(input.caller);
+      const replay = this.state.operations.find(
+        (row) =>
+          sameCaller(row.caller, input.caller) &&
+          row.requestId === input.requestId,
+      );
+      if (replay) {
+        const environment = this.state.environments.find(
+          (row) =>
+            row.id === replay.environmentId &&
+            row.agentId === agentId &&
+            row.kind === "private_context",
+        );
+        if (!environment)
+          throw new Error("Private request identity was reused.");
+        return environment.id;
+      }
+      const context = await this.options.templateSource.prepareContext(
+        agentId,
+        { expectedAssignmentRevision: expectedAssignmentRevision as number },
+      );
+      const expectedDirectory = join(
+        this.options.runtimeDirectory,
+        createHash("sha256").update(agentId).digest("hex").slice(0, 24),
+        createHash("sha256")
+          .update(`${context.templateId}:${context.templateRevision}`)
+          .digest("hex")
+          .slice(0, 24),
+      );
+      const identity = await this.identifyDirectory(
+        join(context.directory, "work"),
+        true,
+      );
+      if (
+        context.agentId !== agentId ||
+        context.directory !== expectedDirectory ||
+        identity.path !== join(context.directory, "work") ||
+        this.state.workspaces.some(
+          (row) =>
+            overlaps(row.workspace.path, context.directory) &&
+            !(
+              row.privateContext?.agentId === agentId &&
+              row.privateContext.templateId === context.templateId &&
+              row.privateContext.templateRevision ===
+                context.templateRevision &&
+              row.workspace.path === identity.path
+            ),
+        )
+      )
+        throw new Error(
+          "Private context must be the exact isolated self-owned directory.",
+        );
+      const key = digest({
+        agentId,
+        templateId: context.templateId,
+        templateRevision: context.templateRevision,
+      });
+      const policyId = `private-context:${key}`;
+      return this.transaction((state) => {
+        let workspace = state.workspaces.find(
+          (row) => row.policy.id === policyId,
+        );
+        if (!workspace) {
+          workspace = {
+            privateContext: {
+              agentId,
+              templateId: context.templateId,
+              templateRevision: context.templateRevision,
+            },
+            policy: {
+              id: policyId,
+              projectId: this.options.projectId,
+              revision: 1,
+              enforcementConfigRef: this.policyRef(policyId, 1),
+            },
+            workspace: identity,
+            writable: true,
+            executableDirectories: [],
+            managedWorktreeRoot: null,
+            gitDirectory: null,
+          };
+          state.workspaces.push(workspace);
+        } else if (
+          !workspace.privateContext ||
+          canonicalJson(workspace.workspace) !== canonicalJson(identity)
+        )
+          throw new Error(
+            "Retained private context identity changed; preserve it for recovery.",
+          );
+        let environment = state.environments.find(
+          (row) =>
+            row.policyId === policyId &&
+            row.agentId === agentId &&
+            row.kind === "private_context",
+        );
+        if (!environment) {
+          environment = {
+            id: randomUUID(),
+            agentId,
+            policyId,
+            kind: "private_context",
+            directory: identity.path,
+            identity,
+            state: "attached",
+            retained: true,
+            createdAt: now(),
+            updatedAt: now(),
+          };
+          state.environments.push(environment);
+        }
+        return environment.id;
+      });
+    });
+    return this.invoke({
+      caller: input.caller,
+      agentId,
+      action: "prepare",
+      requestId: input.requestId,
+      arguments: {
+        environmentId,
+        expectedAssignmentRevision: expectedAssignmentRevision as number,
+      },
+    });
+  }
+
   invoke(
     input: Parameters<AgentEnvironmentService["invoke"]>[0],
   ): Promise<JsonValue> {
@@ -1916,11 +2221,11 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         (row) => row.policy.id === operation.policy.id,
       );
       if (!workspace) throw new Error("Unknown workspace policy.");
-      await this.options.authorize(
+      await this.authorizeWorkspace(
         input.caller,
         "read",
         input.agentId,
-        workspace.policy,
+        workspace,
       );
       return this.observeOperation(structuredClone(operation));
     }
@@ -2089,11 +2394,11 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         throw new Error(
           "Workspace has not been approved by the project owner.",
         );
-      await this.options.authorize(
+      await this.authorizeWorkspace(
         input.caller,
         input.action,
         input.agentId,
-        workspace.policy,
+        workspace,
       );
       await this.options.verifyExecution(input.caller);
       if (existing)
@@ -2104,6 +2409,15 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
           environment: null,
         };
       await this.verifyWorkspace(workspace);
+      if (
+        workspace.privateContext &&
+        (["create", "attach", "dispose"].includes(input.action) ||
+          (["execute", "start"].includes(input.action) &&
+            !environment?.preparation))
+      )
+        throw new Error(
+          "Private context requires explicit successful preparation; shared attach/create/dispose actions are unavailable.",
+        );
       if (environment && environment.state !== "attached")
         throw new Error(
           "Environment is not attached; uncertain resources require owner recovery.",
@@ -2290,11 +2604,11 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
           operation.id,
         );
         const prepared = await this.options.admission.run(async () => {
-          await this.options.authorize(
+          await this.authorizeWorkspace(
             input.caller,
             "execute",
             input.agentId,
-            workspace.policy,
+            workspace,
           );
           await this.options.verifyExecution(input.caller);
           await this.verifyWorkspace(workspace);

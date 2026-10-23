@@ -1149,7 +1149,7 @@ export class ProjectEnvironmentTemplateCatalogue {
       preparationReportAuthority:
         "Agent-reported only; this does not verify commands or change an execution snapshot.",
       privateContextState:
-        "Private working data only; shared-folder grants and command readiness remain separate.",
+        "Private working context; command operations require explicit successful preparation and fresh group authority.",
       privateContexts: (this.state.privateContexts ?? []).filter(
         (row) => row.agentId === agentId,
       ),
@@ -1236,7 +1236,13 @@ export class ProjectEnvironmentTemplateCatalogue {
     );
     // Verify every created root before use; never follow a swapped symlink or
     // repair ownership by chmod/chown. Existing agent data is retained unchanged.
-    for (const path of [root, agentRoot, directory, join(directory, "home")]) {
+    for (const path of [
+      root,
+      agentRoot,
+      directory,
+      join(directory, "home"),
+      join(directory, "work"),
+    ]) {
       await mkdir(path, { recursive: true, mode: 0o700 });
       const info = await lstat(path);
       if (

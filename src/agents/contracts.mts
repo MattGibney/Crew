@@ -829,6 +829,12 @@ export interface ProjectSkillSource {
 }
 /** Explicit environment operations. No job/status/lifecycle inference. */
 export interface AgentEnvironmentService {
+  privateContext?(input: {
+    caller: CallerContext;
+    action: "prepare" | "execute" | "start" | "status" | "stop";
+    requestId: Id;
+    arguments: JsonObject;
+  }): Promise<JsonValue>;
   resources?(agentId: Id): Agent["resources"] | Promise<Agent["resources"]>;
   list?(caller: CallerContext, agentId: Id): Promise<JsonValue>;
   invoke(input: {

@@ -270,9 +270,38 @@ const tools: { name: string; description: string; inputSchema: JsonObject }[] =
     {
       name: "environment_context_prepare",
       description:
-        "Explicitly create your private working context/home for the exact assigned template. Available without a shared project folder; it grants no shared-resource or shell authority, installs nothing and runs no setup. Files are retained per agent and template revision. Shared-folder commands still require approved environment_action policies.",
+        "Explicitly prepare your own private working directory and template-approved tools/configuration through the sandbox executor. Requires a stable requestId, exact assignment and current environments.execute group capability; shared folders/repositories are unnecessary. Runs bounded version checks, creates/reuses your private HOME/caches, runs no setup/install command and returns a private environmentId. Existing executions and retained contexts remain unchanged.",
       inputSchema: object({
+        requestId: id,
         expectedAssignmentRevision: { type: "integer", minimum: 1 },
+      }),
+    },
+    {
+      name: "environment_context_action",
+      description:
+        "Execute a bounded argv command, start a managed background command, or inspect/stop an exact operation in your explicitly prepared private environment. Use the returned environmentId for execute/start; use operationId for status/stop. The authenticated current agent can target only its own private contexts. Fresh group environments.execute/read capability and template-approved tooling/network remain authoritative; no shared-folder grant or repository is needed. Stable requestId preserves exact receipt replay. No automatic setup or cleanup.",
+      inputSchema: object({
+        action: { enum: ["execute", "start", "status", "stop"] },
+        requestId: id,
+        arguments: {
+          anyOf: [
+            object(
+              {
+                environmentId: id,
+                command: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 256,
+                  items: { type: "string", maxLength: 4096 },
+                },
+                relativeCwd: { type: "string", maxLength: 4096 },
+                timeoutMs: { type: "integer", minimum: 1, maximum: 120000 },
+              },
+              ["environmentId", "command"],
+            ),
+            object({ operationId: id }),
+          ],
+        },
       }),
     },
     {
@@ -527,10 +556,20 @@ export function createFoundationAgentTools(
             args as JsonObject,
           );
         case "environment_context_prepare":
-          return foundation.environmentTemplate(
+          return foundation.privateEnvironment(principal, {
+            action: "prepare",
+            requestId: identifier(args.requestId),
+            arguments: {
+              expectedAssignmentRevision:
+                args.expectedAssignmentRevision as number,
+            },
+          });
+        case "environment_context_action":
+          return foundation.privateEnvironment(
             principal,
-            "context",
-            args as JsonObject,
+            args as unknown as Parameters<
+              typeof foundation.privateEnvironment
+            >[1],
           );
         case "environment_template_reconcile":
           return foundation.environmentTemplate(

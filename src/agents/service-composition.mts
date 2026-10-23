@@ -294,6 +294,8 @@ export async function startUnifiedApplication(
       stopExecution: stopMacWorkspaceProcess,
       runtimeDirectory: agentContextRoot,
       templateSource: {
+        prepareContext: (agentId, input) =>
+          environmentTemplates!.preparePrivateContext(agentId, input),
         resolvePreparation: (input) =>
           environmentTemplates!.resolvePreparation(input),
         resolvePinned: (id, revision) =>
@@ -315,6 +317,13 @@ export async function startUnifiedApplication(
       },
       noteExecutionAdmitted: (caller) =>
         foundation!.noteExecutionAdmitted(caller),
+      authorizePrivateContext: async (caller, action) => {
+        await foundation!.records.authorize(
+          { type: "agent", caller },
+          action === "read" ? "environments.read" : "environments.execute",
+          { type: "agent", agentId: caller.agentId },
+        );
+      },
       authorize: async (caller, action, agentId, policy) => {
         if (
           !store
@@ -441,20 +450,11 @@ export async function startUnifiedApplication(
           const allowed =
             action === "read"
               ? []
-              : action === "context"
-                ? ["expectedAssignmentRevision"]
-                : action === "reconcile"
-                  ? ["expectedAssignmentRevision", "templateRevision"]
-                  : ["expectedAssignmentRevision", "state", "summary"];
+              : action === "reconcile"
+                ? ["expectedAssignmentRevision", "templateRevision"]
+                : ["expectedAssignmentRevision", "state", "summary"];
           if (Object.keys(input).some((key) => !allowed.includes(key)))
             throw new Error("Unknown template lifecycle argument.");
-          if (action === "context")
-            await environmentTemplates!.preparePrivateContext(
-              caller.agentId,
-              input as unknown as Parameters<
-                ProjectEnvironmentTemplateCatalogue["preparePrivateContext"]
-              >[1],
-            );
           if (action === "reconcile")
             await environmentTemplates!.reconcile(
               caller.agentId,

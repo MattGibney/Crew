@@ -20,6 +20,9 @@ import { inspectEnvironmentTemplate } from "../src/agents/environment-tool-inspe
 import {
   runMacWorkspaceCommand,
   reconcileMacWorkspaceCommand,
+  startMacWorkspaceProcess,
+  inspectMacWorkspaceProcess,
+  stopMacWorkspaceProcess,
 } from "../src/access/workspace-executor.mts";
 
 const owner = { type: "user", userId: "owner" };
@@ -50,6 +53,9 @@ test(
       environments,
       failAfterEnqueue = false;
     const gate = { run: async (fn) => fn() };
+    let contextExecuteAllowed = true,
+      contextReadAllowed = true,
+      contextCalls = 0;
     const options = {
       directory: join(controller, "templates"),
       projectId: "project",
@@ -94,6 +100,14 @@ test(
         runtimeDirectory: runtime,
         execute: runMacWorkspaceCommand,
         observeExecution: reconcileMacWorkspaceCommand,
+        startExecution: startMacWorkspaceProcess,
+        inspectExecution: inspectMacWorkspaceProcess,
+        stopExecution: stopMacWorkspaceProcess,
+        authorizePrivateContext: async (_caller, action) => {
+          contextCalls++;
+          if (action === "read" ? !contextReadAllowed : !contextExecuteAllowed)
+            throw Error("Private context group capability revoked");
+        },
         authorize: async (caller, _action, target) => {
           if (caller.agentId !== target) throw Error("Wrong resource owner");
         },
@@ -103,6 +117,8 @@ test(
         },
         noteExecutionAdmitted: async () => {},
         templateSource: {
+          prepareContext: (agentId, input) =>
+            catalogue.preparePrivateContext(agentId, input),
           resolvePreparation: (input) => catalogue.resolvePreparation(input),
           resolvePinned: (id, revision) =>
             catalogue.resolvePinned(id, revision),
@@ -126,12 +142,11 @@ test(
         },
         admissionUsesFoundationBarrier: true,
         admission: gate,
+        environments,
         // Inbox-only acceptance: no fabricated model turn or voice interaction.
         privateInputBlocked: () => true,
         environmentTemplates: {
           invoke: async (caller, action, input) => {
-            if (action === "context")
-              await catalogue.preparePrivateContext(caller.agentId, input);
             if (action === "reconcile")
               await catalogue.reconcile(caller.agentId, input);
             if (action === "report")
@@ -145,6 +160,20 @@ test(
       });
     };
     const close = async () => {
+      for (const operation of environments
+        .ownerSnapshot(owner)
+        .operations.filter((row) => row.action === "start"))
+        for (const ref of operation.processEvidenceRefs) {
+          const stopped = await stopMacWorkspaceProcess(
+            join(controller, "environments"),
+            ref,
+          );
+          assert.equal(
+            stopped.processesSettled,
+            true,
+            "Fixture background must settle before cleanup",
+          );
+        }
       await catalogue.close();
       await environments.close();
       await store.close();
@@ -223,21 +252,151 @@ test(
       (await tools().call("environment_template_read", {})).preparationRequired,
       true,
     );
-    await tools().call("environment_context_prepare", {
+    contextExecuteAllowed = false;
+    await assert.rejects(
+      tools().call("environment_context_prepare", {
+        requestId: "private-prepare",
+        expectedAssignmentRevision: 1,
+      }),
+      /capability revoked/,
+    );
+    assert.equal(
+      environments.ownerSnapshot(owner).workspaces.length,
+      0,
+      "Template assignment never supplies group execution authority",
+    );
+    contextExecuteAllowed = true;
+    const privatePrepared = await tools().call("environment_context_prepare", {
+      requestId: "private-prepare",
       expectedAssignmentRevision: 1,
     });
+    assert.equal(privatePrepared.result.state, "prepared");
+    const privateEnvironmentId = privatePrepared.environmentId;
+    const repeatedPreparation = await tools().call(
+      "environment_context_prepare",
+      { requestId: "private-prepare", expectedAssignmentRevision: 1 },
+    );
+    assert.equal(repeatedPreparation.operationId, privatePrepared.operationId);
+    let privateRequest = 0;
+    const privateAction = (action, args) =>
+      tools().call("environment_context_action", {
+        action,
+        requestId: `private-action-${++privateRequest}`,
+        arguments: args,
+      });
+    const writeOwn = await privateAction("execute", {
+      environmentId: privateEnvironmentId,
+      command: [
+        "/bin/sh",
+        "-c",
+        'printf "%s" "$TEMPLATE_MARK" > own-report.txt; ffmpeg -version',
+      ],
+    });
+    assert.equal(writeOwn.result.exitCode, 0, JSON.stringify(writeOwn));
+    assert.match(writeOwn.result.stdout, /ffmpeg version 7.1.2/);
+    const noSharedAccess = await privateAction("execute", {
+      environmentId: privateEnvironmentId,
+      command: ["/usr/bin/touch", marker],
+    });
+    assert.notEqual(
+      noSharedAccess.result.exitCode,
+      0,
+      "Private execution cannot write unrelated shared folders",
+    );
+    const noControllerRead = await privateAction("execute", {
+      environmentId: privateEnvironmentId,
+      command: [
+        "/bin/cat",
+        join(controller, "templates", "environment-templates.json"),
+      ],
+    });
+    assert.notEqual(
+      noControllerRead.result.exitCode,
+      0,
+      "Private execution cannot read controller state",
+    );
+    const otherCaller = {
+      ...caller,
+      agentId: agents[1].id,
+      sessionId: `session-${agents[1].id}`,
+    };
+    const otherTools = createFoundationAgentTools(foundation, otherCaller);
+    await otherTools.call("environment_context_prepare", {
+      requestId: "private-other",
+      expectedAssignmentRevision: 1,
+    });
+    const otherDirectory = environments.templateState(agents[1].id)[0]
+      .preparation.privateContextDirectory;
+    await assert.rejects(
+      otherTools.call("environment_context_action", {
+        action: "execute",
+        requestId: "wrong-agent",
+        arguments: {
+          environmentId: privateEnvironmentId,
+          command: ["/usr/bin/true"],
+        },
+      }),
+      /current-self/,
+    );
+    const noOtherAgentRead = await privateAction("execute", {
+      environmentId: privateEnvironmentId,
+      command: ["/bin/ls", otherDirectory],
+    });
+    assert.notEqual(
+      noOtherAgentRead.result.exitCode,
+      0,
+      "Other agent's private context remains unreadable",
+    );
+    const started = await privateAction("start", {
+      environmentId: privateEnvironmentId,
+      command: ["/bin/sleep", "30"],
+    });
+    assert.equal(started.result.state, "running");
+    contextReadAllowed = false;
+    await assert.rejects(
+      privateAction("status", { operationId: started.operationId }),
+      /capability revoked/,
+    );
+    contextReadAllowed = true;
+    const liveStatus = await privateAction("status", {
+      operationId: started.operationId,
+    });
+    assert.equal(liveStatus.observations[0].state, "running");
+    contextExecuteAllowed = false;
+    await assert.rejects(
+      privateAction("execute", {
+        environmentId: privateEnvironmentId,
+        command: ["/usr/bin/true"],
+      }),
+      /capability revoked/,
+    );
+    await assert.rejects(
+      privateAction("stop", { operationId: started.operationId }),
+      /capability revoked/,
+    );
+    contextExecuteAllowed = true;
+    const stopped = await privateAction("stop", {
+      operationId: started.operationId,
+    });
+    assert.equal(stopped.result.processesSettled, true);
+    assert.ok(
+      contextCalls > 8,
+      "Every private read/execute operation freshly checks group capability",
+    );
     const context = (await tools().call("environment_template_read", {}))
       .privateContexts[0];
     await access(join(context.directory, "home"));
     assert.equal(
-      environments.ownerSnapshot(owner).workspaces.length,
+      environments
+        .ownerSnapshot(owner)
+        .workspaces.filter((row) => !row.privateContext).length,
       0,
-      "Private context requires no shared-folder grant",
+      "Private contexts execute without any shared-folder grant",
     );
     assert.equal(
       (await tools().call("environment_template_read", {})).preparationRequired,
       true,
-      "Empty context is not tool/setup readiness",
+      "Verified tool preparation is not agent-reported project setup readiness",
     );
     await environments.approveWorkspace(
       owner,
@@ -353,11 +512,36 @@ test(
     );
     await invoke("prepare", { environmentId, expectedAssignmentRevision: 2 });
     assert.equal(await executeMark(), "two");
-    const nextContext = environments.templateState(caller.agentId)[0]
+    const nextContext = environments
+      .templateState(caller.agentId)
+      .find((row) => row.environmentId === environmentId)
       .preparation.privateContextDirectory;
     assert.notEqual(nextContext, context.directory);
     await access(context.directory);
     await assert.rejects(access(marker), { code: "ENOENT" });
+    const oldPrivateReport = await privateAction("execute", {
+      environmentId: privateEnvironmentId,
+      command: ["/bin/cat", "own-report.txt"],
+    });
+    assert.equal(
+      oldPrivateReport.result.stdout,
+      "one",
+      "Private working files persist across controller restart/template change",
+    );
+    const privateV2 = await tools().call("environment_context_prepare", {
+      requestId: "private-prepare-v2",
+      expectedAssignmentRevision: 2,
+    });
+    assert.notEqual(
+      privateV2.environmentId,
+      privateEnvironmentId,
+      "Explicit new revision creates a distinct private execution target",
+    );
+    const nextPrivateMark = await privateAction("execute", {
+      environmentId: privateV2.environmentId,
+      command: ["/bin/sh", "-c", 'printf "%s" "$TEMPLATE_MARK"'],
+    });
+    assert.equal(nextPrivateMark.result.stdout, "two");
     const history = store.snapshot();
     assert.equal(history.agents[0].runtime.threadId, `thread-${agents[0].id}`);
     assert.equal(history.messages.length, 2);
@@ -384,7 +568,7 @@ test(
       before,
     );
     t.diagnostic(
-      "Real catalogue + foundation internal inbox + discoverable self tools + sandbox executor; no native model turn, service account, customer repository or microphone used.",
+      "Real catalogue, durable foundation inbox, discoverable self tools and sandbox private execution/background receipts; no shared grant required; revocation and cross-context/controller denials verified. No native model turn, external account, customer repository or microphone used.",
     );
   },
 );

@@ -71,7 +71,7 @@ export interface FoundationOptions {
   environmentTemplates?: {
     invoke(
       caller: CallerContext,
-      action: "read" | "reconcile" | "report" | "context",
+      action: "read" | "reconcile" | "report",
       input: import("./contracts.mjs").JsonObject,
     ): Promise<JsonValue>;
   };
@@ -338,7 +338,7 @@ export class AgentFoundation implements AgentLifecycle {
 
   async environmentTemplate(
     principal: FoundationPrincipal,
-    action: "read" | "reconcile" | "report" | "context",
+    action: "read" | "reconcile" | "report",
     input: import("./contracts.mjs").JsonObject,
   ) {
     if (principal.type !== "agent")
@@ -355,6 +355,23 @@ export class AgentFoundation implements AgentLifecycle {
         action,
         input,
       );
+    });
+  }
+
+  async privateEnvironment(
+    principal: FoundationPrincipal,
+    input: Omit<
+      Parameters<NonNullable<AgentEnvironmentService["privateContext"]>>[0],
+      "caller"
+    >,
+  ) {
+    if (principal.type !== "agent" || !this.executionAllowed(principal.caller))
+      throw new Error("Current authenticated agent session required.");
+    if (!this.options.environments?.privateContext)
+      throw new Error("Private context execution unavailable.");
+    return this.options.environments.privateContext({
+      ...input,
+      caller: principal.caller,
     });
   }
 
