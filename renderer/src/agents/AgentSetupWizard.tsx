@@ -30,14 +30,6 @@ import type { AgentsSnapshot } from "./client";
 
 type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
-export interface ConnectionWizardContext {
-  snapshot: AccessOwnerView;
-  onCommand(name: string, args: unknown): Promise<unknown>;
-  onNotify(message: string): void;
-  onComplete(connectionId: string): void;
-  onCancel(): void;
-  onSkip(): void;
-}
 interface Props {
   snapshot: AgentsSnapshot;
   command: Command;
@@ -49,7 +41,7 @@ interface Props {
     visible: boolean,
     onStatus: (signedIn: boolean) => void,
   ): ReactNode;
-  renderConnectionWizard?: (context: ConnectionWizardContext) => ReactNode;
+  onOpenConnections?(): void;
 }
 const steps = [
   "Sign in",
@@ -158,8 +150,6 @@ export function AgentSetupWizard(props: Props) {
   const [notice, setNotice] = useState("");
   const [conflict, setConflict] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-  const connectionFlow = useRef<{ recordId: string } | null>(null);
   const [options, setOptions] = useState<AgentConfigurationOptions | null>(
     null,
   );
@@ -201,14 +191,6 @@ export function AgentSetupWizard(props: Props) {
   const pendingSave = useRef<Promise<AgentSetupRecord> | null>(null);
   const accept = useCallback(
     (next: AgentSetupRecord | null, replaceDraft = true) => {
-      if (
-        connectionFlow.current &&
-        (connectionFlow.current.recordId !== next?.id ||
-          next.phase === "complete")
-      ) {
-        connectionFlow.current = null;
-        if (alive.current) setConnecting(false);
-      }
       current.current = next;
       if (alive.current) {
         setRecord(next);
@@ -254,7 +236,6 @@ export function AgentSetupWizard(props: Props) {
     alive.current = true;
     return () => {
       alive.current = false;
-      connectionFlow.current = null;
       readSequence.current++;
       accessSequence.current++;
     };
@@ -427,19 +408,6 @@ export function AgentSetupWizard(props: Props) {
   const locked = busy || conflict || record?.phase === "applying";
   const dirty = !same(draft, record?.draft);
   const review = !dirty ? record?.review : null;
-  const renderedConnectionFlow = connectionFlow.current;
-  const ownsConnectionFlow = () =>
-    Boolean(
-      alive.current &&
-      renderedConnectionFlow &&
-      connectionFlow.current === renderedConnectionFlow &&
-      current.current?.id === renderedConnectionFlow.recordId,
-    );
-  const closeConnectionFlow = () => {
-    if (!ownsConnectionFlow()) return;
-    connectionFlow.current = null;
-    setConnecting(false);
-  };
   return (
     <div
       className={`${firstUse ? "mx-auto max-w-3xl px-5 py-8 sm:px-8" : "py-6"} min-w-0 space-y-6`}
@@ -465,9 +433,7 @@ export function AgentSetupWizard(props: Props) {
           <Button
             variant="ghost"
             size="sm"
-            disabled={
-              busy || saving || connecting || record.phase === "applying"
-            }
+            disabled={busy || saving || record.phase === "applying"}
             onClick={() =>
               void run(async () => {
                 await save();
@@ -653,7 +619,7 @@ export function AgentSetupWizard(props: Props) {
               <li key={label}>
                 <button
                   type="button"
-                  disabled={locked || connecting}
+                  disabled={locked}
                   aria-current={draft.step === index ? "step" : undefined}
                   onClick={() => go(index)}
                   className={`flex items-center gap-1.5 py-1 ${draft.step === index ? "font-semibold text-foreground" : "text-muted-foreground hover:text-foreground"}`}
@@ -1081,155 +1047,112 @@ export function AgentSetupWizard(props: Props) {
           {draft.step === 4 && access && (
             <section className="space-y-5">
               <StepTitle title="Connections are optional">
-                Connect the services your agent needs, or continue with local
-                work in Crew.
+                Select saved connections for this agent’s groups, or continue
+                with local work in Crew.
               </StepTitle>
-              {connecting &&
-              renderedConnectionFlow &&
-              props.renderConnectionWizard ? (
-                props.renderConnectionWizard({
-                  snapshot: access,
-                  onCommand: (name, args) => command(`access.${name}`, args),
-                  onNotify: (message) => {
-                    if (ownsConnectionFlow()) setNotice(message);
-                  },
-                  onComplete: (connectionId) => {
-                    if (!ownsConnectionFlow()) return;
-                    closeConnectionFlow();
-                    change({
-                      serviceConnectionIds: toggle(
-                        local.current?.serviceConnectionIds ?? [],
-                        connectionId,
-                        true,
-                      ),
-                    });
-                    void reloadAccess().catch(() =>
-                      setError(
-                        "Connection saved. Refresh access to select its permissions.",
-                      ),
-                    );
-                  },
-                  onCancel: closeConnectionFlow,
-                  onSkip: closeConnectionFlow,
-                })
-              ) : (
-                <>
-                  {access.connections.length === 0 && (
-                    <p className="text-sm text-muted-foreground">
-                      No services connected. You can add one now or later.
-                    </p>
-                  )}
-                  {access.connections.map((connection) => (
-                    <div key={connection.id} className="rounded-lg border p-4">
-                      <Choice
-                        checked={draft.serviceConnectionIds.includes(
+              {access.connections.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  No connections configured. Create connections in Settings →
+                  Connections & access, then return here to select them.
+                </p>
+              )}
+              {access.connections.map((connection) => (
+                <div key={connection.id} className="rounded-lg border p-4">
+                  <Choice
+                    checked={draft.serviceConnectionIds.includes(connection.id)}
+                    disabled={locked}
+                    onChange={(checked) =>
+                      change({
+                        serviceConnectionIds: toggle(
+                          draft.serviceConnectionIds,
                           connection.id,
-                        )}
-                        disabled={locked}
-                        onChange={(checked) =>
-                          change({
-                            serviceConnectionIds: toggle(
-                              draft.serviceConnectionIds,
-                              connection.id,
-                              checked,
+                          checked,
+                        ),
+                        serviceCapabilities: checked
+                          ? draft.serviceCapabilities
+                          : draft.serviceCapabilities.filter(
+                              (entry) => entry.connectionId !== connection.id,
                             ),
-                            serviceCapabilities: checked
-                              ? draft.serviceCapabilities
-                              : draft.serviceCapabilities.filter(
-                                  (entry) =>
-                                    entry.connectionId !== connection.id,
-                                ),
-                          })
-                        }
-                        description={`${connection.service} · ${connection.identity.displayName || "Account identity unavailable"} · ${connection.observedState === "connected" ? "Connected" : "Needs verification"}`}
-                      >
-                        {connection.name}
-                      </Choice>
-                      {draft.serviceConnectionIds.includes(connection.id) &&
-                        draft.groupMode === "new" && (
-                          <div className="mt-2 border-t pt-2">
-                            <p className="text-xs text-muted-foreground">
-                              Choose the actions this group can use.
-                            </p>
-                            {access.capabilities
-                              .filter(
-                                (capability) =>
-                                  capability.connectionId === connection.id,
-                              )
-                              .map((capability) => (
-                                <Choice
-                                  key={capability.id}
-                                  checked={
-                                    draft.serviceCapabilities
-                                      .find(
-                                        (entry) =>
-                                          entry.connectionId === connection.id,
-                                      )
-                                      ?.capabilities.includes(capability.id) ??
-                                    false
-                                  }
-                                  disabled={locked}
-                                  onChange={(checked) => {
-                                    const existing =
-                                      draft.serviceCapabilities.find(
-                                        (entry) =>
-                                          entry.connectionId === connection.id,
-                                      )?.capabilities ?? [];
-                                    change({
-                                      serviceCapabilities: [
-                                        ...draft.serviceCapabilities.filter(
-                                          (entry) =>
-                                            entry.connectionId !==
-                                            connection.id,
-                                        ),
-                                        {
-                                          connectionId: connection.id,
-                                          capabilities: toggle(
-                                            existing,
-                                            capability.id,
-                                            checked,
-                                          ),
-                                        },
-                                      ],
-                                    });
-                                  }}
-                                  description={capability.description}
-                                >
-                                  {capability.upstreamName}
-                                </Choice>
-                              ))}
-                            {!access.capabilities.some(
-                              (capability) =>
-                                capability.connectionId === connection.id,
-                            ) && (
-                              <p className="mt-2 text-sm text-muted-foreground">
-                                No verified actions are available for this
-                                connection yet.
-                              </p>
-                            )}
-                          </div>
+                      })
+                    }
+                    description={`${connection.service} · ${connection.identity.displayName || "Account identity unavailable"} · ${connection.observedState === "connected" ? "Connected" : "Needs verification"}`}
+                  >
+                    {connection.name}
+                  </Choice>
+                  {draft.serviceConnectionIds.includes(connection.id) &&
+                    draft.groupMode === "new" && (
+                      <div className="mt-2 border-t pt-2">
+                        <p className="text-xs text-muted-foreground">
+                          Choose the actions this group can use.
+                        </p>
+                        {access.capabilities
+                          .filter(
+                            (capability) =>
+                              capability.connectionId === connection.id,
+                          )
+                          .map((capability) => (
+                            <Choice
+                              key={capability.id}
+                              checked={
+                                draft.serviceCapabilities
+                                  .find(
+                                    (entry) =>
+                                      entry.connectionId === connection.id,
+                                  )
+                                  ?.capabilities.includes(capability.id) ??
+                                false
+                              }
+                              disabled={locked}
+                              onChange={(checked) => {
+                                const existing =
+                                  draft.serviceCapabilities.find(
+                                    (entry) =>
+                                      entry.connectionId === connection.id,
+                                  )?.capabilities ?? [];
+                                change({
+                                  serviceCapabilities: [
+                                    ...draft.serviceCapabilities.filter(
+                                      (entry) =>
+                                        entry.connectionId !== connection.id,
+                                    ),
+                                    {
+                                      connectionId: connection.id,
+                                      capabilities: toggle(
+                                        existing,
+                                        capability.id,
+                                        checked,
+                                      ),
+                                    },
+                                  ],
+                                });
+                              }}
+                              description={capability.description}
+                            >
+                              {capability.upstreamName}
+                            </Choice>
+                          ))}
+                        {!access.capabilities.some(
+                          (capability) =>
+                            capability.connectionId === connection.id,
+                        ) && (
+                          <p className="mt-2 text-sm text-muted-foreground">
+                            No verified actions are available for this
+                            connection yet.
+                          </p>
                         )}
-                    </div>
-                  ))}
-                  {props.renderConnectionWizard && (
-                    <Button
-                      variant="outline"
-                      disabled={locked}
-                      onClick={() => {
-                        connectionFlow.current = { recordId: record.id };
-                        setConnecting(true);
-                      }}
-                    >
-                      <Plus />
-                      Add connection
-                    </Button>
-                  )}
-                  {draft.serviceConnectionIds.length === 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      Local-only setup selected.
-                    </p>
-                  )}
-                </>
+                      </div>
+                    )}
+                </div>
+              ))}
+              {props.onOpenConnections && (
+                <Button variant="link" onClick={props.onOpenConnections}>
+                  Open connection settings
+                </Button>
+              )}
+              {draft.serviceConnectionIds.length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Local-only setup selected.
+                </p>
               )}
             </section>
           )}
@@ -1271,63 +1194,61 @@ export function AgentSetupWizard(props: Props) {
               )}
             </section>
           )}
-          {!connecting && (
-            <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
-              <span className="text-xs text-muted-foreground" role="status">
-                {saving
-                  ? "Saving choices…"
-                  : dirty
-                    ? "Unsaved choices"
-                    : "Progress saved"}
-              </span>
-              <div className="flex gap-2">
+          <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-5">
+            <span className="text-xs text-muted-foreground" role="status">
+              {saving
+                ? "Saving choices…"
+                : dirty
+                  ? "Unsaved choices"
+                  : "Progress saved"}
+            </span>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                disabled={locked || draft.step === 0}
+                onClick={() => go(draft.step - 1)}
+              >
+                <ArrowLeft />
+                Back
+              </Button>
+              {draft.step < 5 ? (
                 <Button
-                  variant="outline"
-                  disabled={locked || draft.step === 0}
-                  onClick={() => go(draft.step - 1)}
+                  disabled={
+                    locked ||
+                    saving ||
+                    (draft.step === 2 && !draft.name.trim()) ||
+                    (draft.step === 3 &&
+                      draft.groupMode === "new" &&
+                      !draft.groupName.trim())
+                  }
+                  onClick={() => go(draft.step + 1)}
                 >
-                  <ArrowLeft />
-                  Back
+                  Continue
+                  <ArrowRight />
                 </Button>
-                {draft.step < 5 ? (
-                  <Button
-                    disabled={
-                      locked ||
-                      saving ||
-                      (draft.step === 2 && !draft.name.trim()) ||
-                      (draft.step === 3 &&
-                        draft.groupMode === "new" &&
-                        !draft.groupName.trim())
-                    }
-                    onClick={() => go(draft.step + 1)}
-                  >
-                    Continue
-                    <ArrowRight />
-                  </Button>
-                ) : (
-                  <Button
-                    disabled={
-                      busy ||
-                      conflict ||
-                      !review ||
-                      (draft.mode === "create" && !signedIn)
-                    }
-                    onClick={complete}
-                  >
-                    {busy
-                      ? "Saving…"
-                      : record.phase === "applying"
-                        ? "Continue setup"
-                        : draft.mode === "repair"
-                          ? "Save agent"
-                          : draft.makePrimary
-                            ? "Create manager"
-                            : "Create agent"}
-                  </Button>
-                )}
-              </div>
-            </footer>
-          )}
+              ) : (
+                <Button
+                  disabled={
+                    busy ||
+                    conflict ||
+                    !review ||
+                    (draft.mode === "create" && !signedIn)
+                  }
+                  onClick={complete}
+                >
+                  {busy
+                    ? "Saving…"
+                    : record.phase === "applying"
+                      ? "Continue setup"
+                      : draft.mode === "repair"
+                        ? "Save agent"
+                        : draft.makePrimary
+                          ? "Create manager"
+                          : "Create agent"}
+                </Button>
+              )}
+            </div>
+          </footer>
         </>
       )}
     </div>

@@ -80,6 +80,7 @@ export interface AgentSettingsPanel {
   description?: string;
   icon?: LucideIcon;
   render(context: {
+    openSettings: (pageId: string) => void;
     snapshot: AgentsSnapshot;
     refresh: () => Promise<void>;
     visible: boolean;
@@ -2701,6 +2702,7 @@ function SettingsView({
           {panels.map((item) => (
             <div key={item.id} hidden={panel?.id !== item.id}>
               {item.render({
+                openSettings: setActive,
                 snapshot,
                 refresh,
                 visible: visible && panel?.id === item.id,

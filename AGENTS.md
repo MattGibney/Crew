@@ -595,3 +595,7 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Explicit owner personal/dedicated service identity is supported through the vault/gateway, independently of ChatGPT subscription sign-in. Gmail uses only fixed Google REST/refresh endpoints and owner-created OAuth material; never inherit existing personal connector sessions. Draft/send are separate ungranted capabilities. Keep fixture provider checks distinct from real account/consent/send acceptance.
 
 - Owner OAuth verification must prepare an expired/near-expiry credential before pinning identity/catalogue evidence. A self-induced refresh needs exact old/new revision provenance and durable retry correlation; never adopt arbitrary newer vault bytes as the verifier's own refresh or leave setup pinned to the replaced revision.
+
+## Connection creation boundary (#129)
+
+- Create and verify service connections only in Settings → Connections & access. Agent setup/editing selects already saved named connections through group access; it must not embed provider catalogues, credential entry or a connection-creation wizard. Empty saved catalogues show an honest empty state and a navigation action to Settings, retaining the agent draft. Multiple named accounts of one service and shared group membership remain supported.

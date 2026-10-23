@@ -31,12 +31,12 @@ creation is assumed. Advanced connection editing still uses trusted registration
 it cannot install an arbitrary endpoint or command. External connections can be
 skipped for local-only setup.
 
-## Embedding and owner API
+## Connection management and owner API
 
 `ServiceConnectionWizard` and `ServiceConnectionWizardProps` are exported from
 `renderer/src/access/index.ts`. Pass the authenticated `AccessOwnerView`, `isOwner`,
 `onCommand(name, args)`, `onNotify`, `onComplete(connectionId)`, `onCancel`, and an
-optional `onSkip`. Settings uses this same component. Mount it without a changing
+optional `onSkip`. Mount this component only in Settings → Connections & access, never in agent creation or editing. Agent management lists saved named connections and offers an empty state with a navigation action to Settings; returning preserves its draft. Several saved connections may represent different accounts for the same service. Group membership remains the authority for agent access. Mount the Settings component without a changing
 snapshot/revision key so typed non-secret choices survive refreshes. Token entry
 is transient and cleared after verification submission, cancellation or unmount.
 
