@@ -1,3 +1,5 @@
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { TriangleAlert, ChevronDown, MoreVertical } from "lucide-react";
 import { Table, TableCaption, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { Toaster } from "@/components/ui/sonner";
 import { SettingsToast } from "../manager/settings/SettingsToast";
@@ -1037,6 +1039,7 @@ function AgentSessionPanel({
   const busy =
     ["starting", "stopping"].includes(session.observedState) ||
     pending.has(`lifecycle-${agent.id}`);
+  const needsRecovery = ["unknown", "error"].includes(session.observedState);
   const pendingProfile =
     !session.appliedConfiguration ||
     Boolean(
@@ -1061,19 +1064,26 @@ function AgentSessionPanel({
             online={session.observedState === "started"}
             className="text-sm"
           />
+        ) : needsRecovery ? (
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive"><TriangleAlert className="size-3.5" aria-hidden="true" />{session.observedState === "error" ? "Session error" : "Status unknown"}</span>
         ) : (
           <Badge variant="outline" className="capitalize">
             {session.observedState}
           </Badge>
         )}
-      {["unknown", "error"].includes(session.observedState) && (
-        <p className="text-xs leading-5 text-muted-foreground">
-          Recovery checks that the previous native process exited and its work
-          settled. It preserves your sign-in and chat and never stops a live
-          process.
-        </p>
+      {needsRecovery && (
+        <Collapsible className="space-y-2">
+          <CollapsibleTrigger render={<Button variant="ghost" size="sm" className="group h-auto gap-1 px-0 py-0 text-xs text-muted-foreground" aria-label={`Session details for ${agent.profile.name}`} />}>
+            View details <ChevronDown className="size-3 transition-transform group-data-panel-open:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-2 text-xs leading-5 text-muted-foreground">
+            {session.lastError && <p role="alert" className="break-words text-foreground">{session.lastError.message}</p>}
+            <p>Recovery checks that the previous process has exited before reconnecting. Your sign-in and chat are preserved.</p>
+            {pendingProfile && <p>Saved instructions or skills will apply when you restart.</p>}
+          </CollapsibleContent>
+        </Collapsible>
       )}
-      {pendingProfile &&
+      {pendingProfile && !needsRecovery &&
         session.instructionPreparation?.state !== "compacting" && (
           <p role="status" className="text-sm text-muted-foreground">
             {agent.runtime.threadId
@@ -1093,7 +1103,7 @@ function AgentSessionPanel({
           retained; check the session error before retrying.
         </p>
       )}
-      {session.lastError && (
+      {session.lastError && !needsRecovery && (
         <p
           role="alert"
           className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
@@ -1104,7 +1114,7 @@ function AgentSessionPanel({
       </div></TableCell>
       <TableCell className="px-4 py-3 align-top">
         <div role="group" aria-label={`Session controls for ${agent.profile.name}`}>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex items-center justify-end gap-2">
           {["unknown", "error"].includes(session.observedState) &&
             client.recoverSession && (
               <Button
@@ -1117,9 +1127,19 @@ function AgentSessionPanel({
                   )
                 }
               >
-                Recover session
+                <RotateCw className="size-4" /> Recover session
               </Button>
             )}
+          {needsRecovery ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label={`More session actions for ${agent.profile.name}`} disabled={busy || Boolean(agent.archivedAt)} />}><MoreVertical className="size-4" /></DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {(["start", "stop", "restart"] as const).map((action) => <DropdownMenuItem key={action} aria-label={`${action[0].toUpperCase() + action.slice(1)} session for ${agent.profile.name}`} onClick={() => void act(`lifecycle-${agent.id}`, () => client.lifecycle(agent.id, action))}>
+                  {action === "start" ? <Play /> : action === "stop" ? <Square /> : <RotateCw />}{action[0].toUpperCase() + action.slice(1)}
+                </DropdownMenuItem>)}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : <>
           {(["start", "stop", "restart"] as const).map((action) => (
             <Button
               key={action}
@@ -1147,6 +1167,7 @@ function AgentSessionPanel({
               {action[0].toUpperCase() + action.slice(1)}
             </Button>
           ))}
+          </>}
         </div>
         </div>
       </TableCell>
