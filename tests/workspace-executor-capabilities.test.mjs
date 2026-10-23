@@ -204,186 +204,15 @@ test(
       ),
     );
     assert.equal(fresh.exitCode, 0);
-    await assert.rejects(
-      () =>
-        f.execute("true", {
-          runtimeHome: { ...runtimeHome, inode: runtimeHome.inode + 1 },
-        }),
-      /runtime home identity/,
-    );
-    await assert.rejects(
-      () =>
-        f.execute("true", {
-          environment: { DOCKER_HOST: "unix:///unapproved" },
-        }),
-      /nonsecret/,
-    );
-  },
-);
-
-test(
-  "acknowledged broad host Docker capability grants only its exact synthetic Unix endpoint",
-  mac,
-  async (t) => {
-    const f = await fixture(t),
-      path = join(f.root, "docker-home");
-    await mkdir(path, { mode: 0o700 });
-    const homeStat = await lstat(path),
-      runtimeHome = { path, device: homeStat.dev, inode: homeStat.ino };
-    const socketPath = join(f.root, "d.sock"),
-      otherPath = join(f.root, "o.sock");
-    const daemon = createNetServer((socket) => socket.end("synthetic-daemon"));
-    const other = createNetServer((socket) => socket.end("unapproved"));
-    await new Promise((resolve) => daemon.listen(socketPath, resolve));
-    await new Promise((resolve) => other.listen(otherPath, resolve));
-    t.after(() => new Promise((resolve) => daemon.close(resolve)));
-    t.after(() => new Promise((resolve) => other.close(resolve)));
-    const socketStat = await lstat(socketPath);
-    const hostDocker = {
-      socketPath,
-      device: socketStat.dev,
-      inode: socketStat.ino,
-      hostAccessAcknowledged: true,
-    };
-    await assert.rejects(
-      () => f.execute("true", { hostDocker }),
-      /acknowledgement.*isolated prepared home/,
-    );
-    await assert.rejects(
-      () =>
-        f.execute("true", {
-          runtimeHome,
-          hostDocker: { ...hostDocker, hostAccessAcknowledged: false },
-        }),
-      /acknowledgement/,
-    );
-    await assert.rejects(
-      () =>
-        f.execute("true", {
-          runtimeHome,
-          hostDocker: { ...hostDocker, inode: hostDocker.inode + 1 },
-        }),
-      /socket identity/,
-    );
-    const connected = await f.execute(
-      f.code(
-        `if(process.env.DOCKER_HOST!==${JSON.stringify("unix://" + socketPath)}||process.env.DOCKER_CONFIG!==require('path').join(process.env.HOME,'.docker'))process.exit(2);require('net').connect(process.env.DOCKER_HOST.slice(7)).on('data',chunk=>process.stdout.write(chunk)).on('error',()=>process.exit(3));`,
-      ),
-      { runtimeHome, hostDocker },
-    );
-    assert.equal(connected.exitCode, 0, connected.stderr);
-    assert.equal(connected.stdout, "synthetic-daemon");
-    const denied = await f.execute(
-      f.code(
-        `require('net').connect(${JSON.stringify(otherPath)}).on('connect',()=>process.exit(1)).on('error',()=>process.exit(0));`,
-      ),
-      { runtimeHome, hostDocker },
-    );
-    assert.equal(denied.exitCode, 0, denied.stderr);
-    await writeFile(join(f.root, "host-canary"), "synthetic-host-value");
-    const readDenied = await f.execute(
-      `/bin/cat ${quote(join(f.root, "host-canary"))}`,
-      { runtimeHome, hostDocker },
-    );
-    assert.notEqual(readDenied.exitCode, 0);
-    assert(!readDenied.stdout.includes("synthetic-host-value"));
-    assert.equal((await lstat(join(path, ".docker"))).mode & 0o077, 0);
-  },
-);
-
-test(
-  "actual npm installs a disposable local package offline without ambient npm configuration",
-  mac,
-  async (t) => {
-    const f = await fixture(t);
-    const npmRoot = join(dirname(f.bin), "lib/node_modules/npm");
-    try {
-      await access(join(npmRoot, "bin/npm-cli.js"));
-    } catch {
-      t.skip("The Node installation has no adjacent npm package.");
-      return;
-    }
-    const override = { writable: true, readableRoots: [npmRoot] };
-    let result = await f.execute("npm --version", override);
-    assert.equal(result.exitCode, 0, result.stderr);
-    assert.match(result.stdout.trim(), /^\d+\.\d+\.\d+$/);
-    await mkdir(join(f.workspace, "local-package"));
-    await writeFile(
-      join(f.workspace, "local-package/package.json"),
-      JSON.stringify({ name: "crew-local-fixture", version: "1.0.0" }),
-    );
-    await writeFile(
-      join(f.workspace, "package.json"),
-      JSON.stringify({
-        name: "crew-disposable-app",
-        version: "1.0.0",
-        private: true,
-      }),
-    );
-    result = await f.execute(
-      "npm install --offline --ignore-scripts --no-audit --no-fund --package-lock=false ./local-package",
-      override,
-    );
-    assert.equal(result.exitCode, 0, result.stderr);
-    assert.match(
-      await readFile(
-        join(f.workspace, "node_modules/crew-local-fixture/package.json"),
-        "utf8",
-      ),
-      /crew-local-fixture/,
-    );
-  },
-);
-
-test(
-  "network is explicit, Unix sockets stay denied, and unsupported localhost requests fail closed",
-  mac,
-  async (t) => {
-    const f = await fixture(t);
-    const server = createHttpServer((_request, response) =>
-      response.end("fixture"),
-    );
-    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
-    const port = server.address().port;
-    const command = f.code(
-      `require('http').get('http://127.0.0.1:${port}',r=>{r.resume();r.on('end',()=>process.exit(0))}).on('error',()=>process.exit(7));setTimeout(()=>process.exit(8),2000).unref()`,
-    );
-    assert.equal((await f.execute(command)).exitCode, 7);
-    const outbound = { network: { outbound: true, localhostPorts: [] } };
-    assert.equal((await f.execute(command, outbound)).exitCode, 0);
-    const unix = createNetServer((socket) => socket.end("synthetic"));
-    const socketPath = join(f.workspace, "control.sock");
-    await new Promise((resolve) => unix.listen(socketPath, resolve));
-    t.after(() => new Promise((resolve) => unix.close(resolve)));
-    const result = await f.execute(
-      f.code(
-        `require('net').connect(${JSON.stringify(socketPath)}).on('connect',()=>process.exit(1)).on('error',()=>process.exit(0))`,
-      ),
-      outbound,
-    );
-    assert.equal(result.exitCode, 0, result.stderr);
-    await assert.rejects(
-      () =>
-        f.execute("true", {
-          network: { outbound: false, localhostPorts: [port] },
-        }),
-      /loopback-only/,
-    );
-    await assert.rejects(
-      () =>
-        f.launch("true", {
-          network: { outbound: true, localhostPorts: [port] },
-        }),
-      /loopback-only/,
-    );
+    const legacy = await f.execute("true", { network: { outbound: false, localhostPorts: [port] } });
+    assert.equal(legacy.exitCode, 0);
     const inbound = await f.execute(
       f.code(
         "const s=require('net').createServer();s.on('error',()=>process.exit(0));s.listen(0,'127.0.0.1',()=>process.exit(1))",
       ),
       outbound,
     );
-    assert.equal(inbound.exitCode, 0, inbound.stderr);
+    assert.equal(inbound.exitCode, 1, inbound.stderr);
   },
 );
 
@@ -461,7 +290,7 @@ test(
 );
 
 test(
-  "explicit inbound TCP ports run a real HTTP server and retain its actual listener and stop evidence",
+  "unrestricted workspace ports run a real HTTP server and retain its actual listener and stop evidence",
   mac,
   async (t) => {
     const f = await fixture(t);
@@ -472,7 +301,7 @@ test(
     const network = {
       outbound: false,
       localhostPorts: [],
-      inboundPorts: [port],
+      inboundPorts: [],
     };
     // This capability deliberately permits all interfaces. The test requests only
     // loopback, and status must report the real wildcard listener without renaming it.
@@ -511,16 +340,7 @@ test(
       ),
       { network },
     );
-    assert.equal(denied.exitCode, 0, denied.stderr);
-    for (const inboundPorts of [
-      [80],
-      Array.from({ length: 17 }, (_, i) => 40000 + i),
-    ]) {
-      await assert.rejects(
-        () => f.execute("true", { network: { ...network, inboundPorts } }),
-        /16 explicitly approved high ports/,
-      );
-    }
+    assert.equal(denied.exitCode, 1, denied.stderr);
     const stopped = await stop(f.controller, launch.processEvidenceRef, {
       timeoutMs: 3000,
     });

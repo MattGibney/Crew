@@ -95,22 +95,6 @@ const lines = (value: string) =>
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-function ports(value: string): number[] {
-  if (!value.trim()) return [];
-  const items = value.split(",").map((port) => port.trim());
-  if (
-    items.length > 16 ||
-    items.some(
-      (port) =>
-        !/^\d+$/.test(port) || Number(port) < 1024 || Number(port) > 65535,
-    ) ||
-    new Set(items.map(Number)).size !== items.length
-  )
-    throw new Error(
-      "Use up to 16 distinct comma-separated ports from 1024 to 65535.",
-    );
-  return items.map(Number);
-}
 function definition(value: EditorDraft): EnvironmentTemplateDraft {
   if (!value.name.trim()) throw new Error("Enter a template name.");
   const advanced = JSON.parse(value.advanced);
@@ -166,8 +150,8 @@ function definition(value: EditorDraft): EnvironmentTemplateDraft {
     capabilities: {
       network: value.network,
       packageDownloads: value.packageDownloads,
-      localhostPorts: ports(value.localhostPorts),
-      inboundPorts: ports(value.inboundPorts),
+      localhostPorts: [],
+      inboundPorts: [],
     },
     ...(value.docker
       ? {
@@ -531,17 +515,6 @@ export function EnvironmentTemplateEditor({
             {toggle("Allow outbound network access", "network")}
             {toggle("Allow package downloads", "packageDownloads")}
           </div>
-          <p className="text-xs leading-5 text-muted-foreground">
-            Loopback-only server access is unavailable on this executor. Use
-            explicit inbound ports below only when access on all interfaces is
-            acceptable.
-          </p>
-          {field(
-            "Inbound ports on all interfaces",
-            "inboundPorts",
-            false,
-            "Optional incoming TCP access on every network interface, separate from outbound access. Leave empty for none.",
-          )}
           <div className="space-y-3 border-y py-4">
             {toggle("Enable host Docker access", "docker")}
             {draft.docker && (

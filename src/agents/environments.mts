@@ -1048,10 +1048,6 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
     if (
       canonicalJson(expectedEnvironment) !== canonicalJson(pin.environment) ||
       pin.network.outbound !== template.capabilities.network ||
-      pin.network.localhostPorts.length ||
-      canonicalJson(pin.network.inboundPorts ?? []) !==
-        canonicalJson(template.capabilities.inboundPorts ?? []) ||
-      template.capabilities.localhostPorts.length ||
       (template.capabilities.packageDownloads && !template.capabilities.network)
     )
       throw new Error(
@@ -1105,11 +1101,10 @@ export class ProjectEnvironmentService implements AgentEnvironmentService {
         "Use explicit private context preparation to select the context for this template revision.",
       );
     if (
-      template.capabilities.localhostPorts.length ||
       (template.capabilities.packageDownloads && !template.capabilities.network)
     )
       throw new PreparationUnavailable(
-        "Template capability is unavailable: localhost-only ports are unsupported and package downloads require explicit network access.",
+        "Package downloads require explicit network access.",
       );
     const hostDocker = template.hostDocker
       ? await this.identifyHostDocker(template.hostDocker)

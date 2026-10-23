@@ -134,19 +134,6 @@ export function nativeSeatbeltPolicy(input: {
     )
   )
     throw new Error("Invalid native endpoint.");
-  if (
-    input.workspaceNetwork?.inboundPorts !== undefined &&
-    (!Array.isArray(input.workspaceNetwork.inboundPorts) ||
-      input.workspaceNetwork.inboundPorts.length > 16 ||
-      input.workspaceNetwork.inboundPorts.some(
-        (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
-      ))
-  )
-    throw new Error("Invalid approved incoming TCP ports.");
-  if (input.workspaceNetwork?.localhostPorts.length)
-    throw new Error(
-      "Localhost servers require a transport that enforces loopback-only access.",
-    );
   return `(version 1)
 (deny default)
 (allow process-fork process-exec)
@@ -170,7 +157,7 @@ ${input.writeRoots?.map((root) => `(allow file-read* file-write* (subpath ${quot
 ${input.workspaceFileDescriptors ? '(allow file-read* file-write* (subpath "/dev/fd") (literal "/dev/stdin") (literal "/dev/stdout") (literal "/dev/stderr"))' : ""}
 ${input.ports.map((port) => `(allow network-outbound (remote tcp "localhost:${port}"))`).join("\n")}
 ${input.workspaceNetwork?.outbound ? '(allow network-outbound (remote tcp "*:*"))\n(allow network-outbound (remote udp "*:53"))\n(allow mach-lookup (global-name "com.apple.mDNSResponder"))\n(allow file-read* (literal "/private/etc/hosts") (literal "/private/etc/resolv.conf") (literal "/private/var/run/resolv.conf"))\n(allow network-outbound (literal "/private/var/run/mDNSResponder"))' : ""}
-${(input.workspaceNetwork?.inboundPorts ?? []).map((port) => `(allow network-bind network-inbound (local tcp "*:${port}"))`).join("\n")}
+${input.workspaceNetwork ? '(allow network-bind network-inbound (local tcp "*:*"))\n(allow network-bind network-inbound (local udp "*:*"))\n(allow network-outbound (remote tcp "localhost:*"))\n(allow network-outbound (remote udp "localhost:*"))' : ""}
 ${input.workspaceHostDockerSocket ? `(allow network-outbound (literal ${quote(input.workspaceHostDockerSocket)}))` : ""}
 ${input.ownerSignInCallback ? '(allow network-bind network-inbound (local tcp "localhost:1455"))' : ""}
 `;

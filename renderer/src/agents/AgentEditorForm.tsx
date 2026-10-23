@@ -382,7 +382,6 @@ export function AgentEditorForm({
                 <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 text-xs">
                   <dt className="text-muted-foreground">Network access</dt><dd>{selectedTemplate.capabilities.network ? "Enabled" : "Disabled"}</dd>
                   <dt className="text-muted-foreground">Package downloads</dt><dd>{selectedTemplate.capabilities.packageDownloads ? "Enabled" : "Disabled"}</dd>
-                  <dt className="text-muted-foreground">Local server ports</dt><dd>{selectedTemplate.capabilities.localhostPorts.join(", ") || "None specified"}</dd>
                 </dl>
                 <p className="text-xs leading-5 text-muted-foreground">Template requirements, not confirmation that tools are installed. The agent prepares its environment separately.</p>
               </div>

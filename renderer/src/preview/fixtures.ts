@@ -801,7 +801,7 @@ export function createPreviewProject(kind: "empty" | "full"): PreviewProject {
         capabilities: {
           packageDownloads: index === 0,
           network: true,
-          localhostPorts: index === 0 ? [3000, 5173] : [],
+          localhostPorts: [],
         },
         preparation: {
           instructions:
