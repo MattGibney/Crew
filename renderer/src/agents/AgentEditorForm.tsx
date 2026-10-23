@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -43,6 +43,7 @@ export function AgentEditorForm({
   onOpenAccess?(): void;
 }) {
   const id = useId();
+  const pictureInput = useRef<HTMLInputElement>(null);
   const groups =
     access?.groups.filter((group) => draft.groupIds.includes(group.id)) ?? [];
   const skillIds = new Set(
@@ -62,15 +63,53 @@ export function AgentEditorForm({
     groups.flatMap((group) => group.grants.environmentPolicyIds),
   );
   return (
-    <div className="space-y-8">
-      <section className="space-y-5">
-        <div className="space-y-1">
-          <h2 className="text-base font-semibold">Identity</h2>
-          <p className="text-sm text-muted-foreground">
+    <div className="space-y-10 pb-8">
+      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold tracking-tight">Identity</h2>
+          <p className="text-sm leading-6 text-muted-foreground">
             How this team member appears and communicates.
           </p>
         </div>
         <div className="space-y-5">
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-picture`}>Profile picture</Label>
+            <div className="flex flex-wrap items-center gap-3">
+              <AgentPicture
+                client={imageClient}
+                imageRef={draft.pictureRef}
+                className="size-20 shrink-0"
+              />
+              <Input
+                id={`${id}-picture`}
+                ref={pictureInput}
+                className="hidden"
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                disabled={locked}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) onPicture(file);
+                }}
+              />
+              <Button variant="outline" disabled={locked} onClick={() => pictureInput.current?.click()}>
+                Change picture
+              </Button>
+              {draft.pictureRef && (
+                <Button
+                  variant="ghost"
+                  disabled={locked}
+                  onClick={() => onChange({ pictureRef: null })}
+                >
+                  Remove
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              PNG, JPEG or WebP, up to 512 KB and 2048 × 2048 pixels.
+            </p>
+          </div>
           <div className="space-y-2">
             <Label htmlFor={`${id}-name`}>
               Name <span className="text-muted-foreground">(required)</span>
@@ -90,44 +129,11 @@ export function AgentEditorForm({
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor={`${id}-picture`}>Profile picture</Label>
-            <div className="flex flex-wrap items-center gap-3">
-              <AgentPicture
-                client={imageClient}
-                imageRef={draft.pictureRef}
-                className="size-14"
-              />
-              <Input
-                id={`${id}-picture`}
-                className="max-w-xs"
-                type="file"
-                accept="image/png,image/jpeg,image/webp"
-                disabled={locked}
-                onChange={(event) => {
-                  const file = event.target.files?.[0];
-                  event.target.value = "";
-                  if (file) onPicture(file);
-                }}
-              />
-              {draft.pictureRef && (
-                <Button
-                  variant="ghost"
-                  disabled={locked}
-                  onClick={() => onChange({ pictureRef: null })}
-                >
-                  Remove picture
-                </Button>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              PNG, JPEG or WebP, up to 512 KB and 2048 × 2048 pixels.
-            </p>
-          </div>
-          <div className="space-y-2">
             <Label htmlFor={`${id}-personality`}>Personality</Label>
             <Textarea
               id={`${id}-personality`}
               rows={3}
+              className="min-h-24 leading-6"
               value={draft.personality}
               disabled={locked}
               onChange={(event) =>
@@ -182,10 +188,10 @@ export function AgentEditorForm({
         </div>
       </section>
       <Separator />
-      <section className="space-y-5">
-        <div className="space-y-1">
-          <h2 className="text-base font-semibold">Instructions</h2>
-          <p className="text-sm text-muted-foreground">
+      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold tracking-tight">Instructions</h2>
+          <p className="text-sm leading-6 text-muted-foreground">
             Define responsibilities, working style and when to ask for help.
           </p>
         </div>
@@ -194,6 +200,7 @@ export function AgentEditorForm({
           <Textarea
             id={`${id}-instructions`}
             rows={8}
+            className="min-h-56 leading-6"
             maxLength={200000}
             value={draft.instructions}
             disabled={locked}
@@ -207,21 +214,21 @@ export function AgentEditorForm({
         </div>
       </section>
       <Separator />
-      <section className="space-y-5">
-        <div className="space-y-1">
-          <h2 className="text-base font-semibold">Access</h2>
-          <p className="text-sm text-muted-foreground">
+      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold tracking-tight">Access</h2>
+          <p className="text-sm leading-6 text-muted-foreground">
             Group memberships determine permissions, project resources, skills
             and service connections.
           </p>
         </div>
         <div className="space-y-5">
           {!access ? (
-            <p role="status" className="text-sm text-muted-foreground">
+            <p role="status" className="text-sm leading-6 text-muted-foreground">
               Loading access groups…
             </p>
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-2">
               {access.groups.map((group) => (
                 <Choice
                   key={group.id}
@@ -240,13 +247,13 @@ export function AgentEditorForm({
                 </Choice>
               ))}
               {!access.groups.length && (
-                <p className="text-sm text-muted-foreground">
+                <p className="text-sm leading-6 text-muted-foreground">
                   No access groups configured yet.
                 </p>
               )}
             </div>
           )}
-          <div className="grid gap-4 border-t pt-4 sm:grid-cols-2">
+          <div className="grid gap-6 border-t pt-5 sm:grid-cols-2">
             <div>
               <h3 className="text-sm font-medium">Inherited permissions</h3>
               <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
@@ -289,17 +296,17 @@ export function AgentEditorForm({
             </div>
           </div>
           {onOpenAccess && (
-            <Button variant="link" onClick={onOpenAccess}>
+            <Button variant="link" className="px-0" onClick={onOpenAccess}>
               Manage groups and connections
             </Button>
           )}
         </div>
       </section>
       <Separator />
-      <section className="space-y-5">
-        <div className="space-y-1">
-          <h2 className="text-base font-semibold">Environment</h2>
-          <p className="text-sm text-muted-foreground">
+      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold tracking-tight">Environment</h2>
+          <p className="text-sm leading-6 text-muted-foreground">
             Select the tools available to this agent. Access is still controlled
             by its groups.
           </p>
@@ -368,10 +375,10 @@ export function AgentEditorForm({
         </div>
       </section>
       <Separator />
-      <section className="space-y-5">
-        <div className="space-y-1">
-          <h2 className="text-base font-semibold">Runtime</h2>
-          <p className="text-sm text-muted-foreground">
+      <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+        <div className="space-y-2">
+          <h2 className="text-base font-semibold tracking-tight">Runtime</h2>
+          <p className="text-sm leading-6 text-muted-foreground">
             Model access is separate from service credentials.
           </p>
         </div>
