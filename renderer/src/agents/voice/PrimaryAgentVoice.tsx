@@ -15,7 +15,7 @@ import type {
 } from "../../../../src/agents/contracts.mjs";
 import type { PrimaryVoiceCatalog, PrimaryVoiceClient } from "./client";
 import { usePrimaryVoice } from "./usePrimaryVoice";
-import { LiveVoiceTranscript } from "./LiveVoiceTranscript";
+import type { LiveTranscriptItem } from "./live-transcript";
 
 export function PrimaryAgentVoice({
   client,
@@ -23,7 +23,7 @@ export function PrimaryAgentVoice({
   visible = true,
   mode = "voice",
   controlsTarget,
-  transcriptTarget,
+  onTranscript,
   embedded = false,
 }: {
   client: PrimaryVoiceClient;
@@ -32,7 +32,7 @@ export function PrimaryAgentVoice({
   mode?: "voice" | "compact" | "hidden";
   /** Only visual controls move. The hook and audio element remain at App root. */
   controlsTarget?: HTMLElement | null;
-  transcriptTarget?: HTMLElement | null;
+  onTranscript?: (items: LiveTranscriptItem[]) => void;
   embedded?: boolean;
 }) {
   const session = agent?.runtime.session;
@@ -53,6 +53,9 @@ export function PrimaryAgentVoice({
   const [catalogError, setCatalogError] = useState("");
   const [retry, setRetry] = useState(0);
   const voice = usePrimaryVoice(client, binding);
+  useEffect(() => {
+    onTranscript?.(voice.transcript);
+  }, [onTranscript, voice.transcript]);
   useEffect(
     () => client.subscribeCatalog?.(() => setRetry((value) => value + 1)),
     [client],
@@ -200,15 +203,6 @@ export function PrimaryAgentVoice({
   return (
     <>
       <audio ref={voice.audioRef} autoPlay playsInline hidden />
-      {transcriptTarget &&
-        voice.transcript.length > 0 &&
-        createPortal(
-          <LiveVoiceTranscript
-            items={voice.transcript}
-            agentName={agent?.profile.name ?? "Assistant"}
-          />,
-          transcriptTarget,
-        )}
       {controlsTarget === undefined
         ? controls
         : controlsTarget

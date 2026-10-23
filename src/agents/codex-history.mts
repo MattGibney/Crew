@@ -18,6 +18,7 @@ export function projectCodexItem(
   value: unknown,
   turnId: string | null,
   lookupSender?: CodexSenderLookup,
+  turnStartedAt?: unknown,
 ): RuntimeHistoryItem | null {
   if (
     !object(value) ||
@@ -28,7 +29,18 @@ export function projectCodexItem(
   const type = value.type;
   if (type === "reasoning" || type === "hookPrompt") return null;
   const metadata: JsonObject = { nativeType: type };
-  const base = { runtimeRef: value.id, turnId, metadata };
+  const itemTime = nativeTimestamp(value.createdAt);
+  const turnTime = nativeTimestamp(turnStartedAt);
+  const base = {
+    runtimeRef: value.id,
+    turnId,
+    metadata,
+    ...(itemTime
+      ? { timestamp: itemTime, timestampSource: "native_item" as const }
+      : turnTime
+        ? { timestamp: turnTime, timestampSource: "native_turn" as const }
+        : {}),
+  };
   if (type === "userMessage") {
     const clientId = typeof value.clientId === "string" ? value.clientId : null;
     if (clientId) metadata.clientId = clientId;
@@ -162,4 +174,17 @@ export class CodexEventStream<T> implements AsyncIterable<T> {
       this.end();
     }
   }
+}
+
+/** Native protocol numeric times are Unix seconds; never use read/reload time. */
+function nativeTimestamp(value: unknown): string | undefined {
+  const milliseconds =
+    typeof value === "number"
+      ? value * 1000
+      : typeof value === "string"
+        ? Date.parse(value)
+        : NaN;
+  return Number.isFinite(milliseconds) && Math.abs(milliseconds) <= 8.64e15
+    ? new Date(milliseconds).toISOString()
+    : undefined;
 }
