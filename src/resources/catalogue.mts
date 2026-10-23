@@ -152,15 +152,14 @@ export class ProjectResourceCatalogue {
         ? this.rows.map((old) => (old.id === previous.id ? row : old))
         : [...this.rows, row];
       const temporary = join(this.directory, `references-${randomUUID()}.tmp`);
-      await writeFile(
-        temporary,
-        JSON.stringify({
-          schema: 1,
-          projectId: this.projectId,
-          references: rows,
-        }),
-        { mode: 0o600, flag: "wx" },
-      );
+      const serialized = JSON.stringify({
+        schema: 1,
+        projectId: this.projectId,
+        references: rows,
+      });
+      if (Buffer.byteLength(serialized, "utf8") > 4 * 1024 * 1024)
+        throw Error("Project reference catalogue is too large.");
+      await writeFile(temporary, serialized, { mode: 0o600, flag: "wx" });
       await rename(temporary, join(this.directory, "references.json"));
       this.rows = rows;
       for (const listener of this.listeners) {

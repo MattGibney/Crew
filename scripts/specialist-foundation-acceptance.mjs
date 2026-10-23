@@ -256,6 +256,47 @@ try {
   );
   assert.equal(catalogue.list()[0].id, marketing.id);
   pass("Business resource catalogue persists without a repository requirement");
+  await catalogue.close();
+  const budgetRoot = join(root, "budget-resources");
+  catalogue = await ProjectResourceCatalogue.open(budgetRoot, "project");
+  const seeded = [];
+  for (let index = 0; ; index++) {
+    const row = {
+      ...marketing,
+      id: "budget-" + index,
+      description: "x".repeat(20000),
+    };
+    const next = [...seeded, row];
+    if (
+      Buffer.byteLength(
+        JSON.stringify({ schema: 1, projectId: "project", references: next }),
+      ) >
+      4 * 1024 * 1024
+    )
+      break;
+    seeded.push(row);
+  }
+  await catalogue.close();
+  await writeFile(
+    join(budgetRoot, "references.json"),
+    JSON.stringify({ schema: 1, projectId: "project", references: seeded }),
+  );
+  catalogue = await ProjectResourceCatalogue.open(budgetRoot, "project");
+  await assert.rejects(
+    catalogue.save({
+      expectedRevision: null,
+      name: "Too large",
+      category: "other",
+      description: "x".repeat(20000),
+      url: "https://example.com",
+    }),
+    /too large/,
+  );
+  await catalogue.close();
+  catalogue = await ProjectResourceCatalogue.open(budgetRoot, "project");
+  assert.equal(catalogue.list().length, seeded.length);
+  pass("Oversized resource save is rejected before damaging reopenable state");
+
   await writeFile(
     join(root, "proof.json"),
     JSON.stringify(
