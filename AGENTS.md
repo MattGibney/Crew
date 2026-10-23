@@ -676,3 +676,4 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Settings tables match the Agents table composition: rounded-lg border, muted header, px-4 py-3 cells, medium primary labels, muted supporting values and ghost icon row menus. Using the same Table primitive alone is not enough for visual consistency.
 
 - Connection creation and editing open in a centred official shadcn Dialog, not an expanded table row or side sheet. Keep the table mounted behind the dialog, scroll long forms internally and retain explicit Cancel/Save actions and busy-state protection.
+- Service names in connection tables include their brand logo through the reusable ServiceLogo component. Bundle authentic assets locally, retain visible names and use a generic fallback for unknown providers.

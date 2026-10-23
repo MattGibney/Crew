@@ -125,6 +125,7 @@
     "renderer/src/components/ui/checkbox.tsx",
     "renderer/src/components/ui/collapsible.tsx",
     "renderer/src/components/ui/context-menu.tsx",
+    "renderer/src/components/ui/dialog.tsx",
     "renderer/src/components/ui/dropdown-menu.tsx",
     "renderer/src/components/ui/input.tsx",
     "renderer/src/components/ui/label.tsx",

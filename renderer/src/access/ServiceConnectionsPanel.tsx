@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Fragment } from "react";
 import { MoreVertical, Pencil, Trash2 } from "lucide-react";
+import { ServiceLogo } from "@/components/service-logo";
 import {
   Table,
   TableCaption,
@@ -168,9 +169,12 @@ function ServiceConnectionsContent(props: ServiceConnectionsPanelProps) {
               <Fragment key={connection.id}>
                 <TableRow>
                   <TableCell className="px-4 py-3 capitalize text-muted-foreground">
-                    {connection.service.toLowerCase() === "github"
-                      ? "GitHub"
-                      : connection.service}
+                    <span className="flex items-center gap-2.5">
+                      <ServiceLogo service={connection.service} />
+                      {connection.service.toLowerCase() === "github"
+                        ? "GitHub"
+                        : connection.service}
+                    </span>
                   </TableCell>
                   <TableCell className="px-4 py-3 font-medium">
                     {connection.name}
