@@ -15,3 +15,16 @@ Implementation: `src/desktop/project-recovery.mts`, desktop owner IPC, and the u
 ## Native Quit follow-up
 
 A packaged first-use check found that final shutdown notifications tried to refresh an already destroyed menu-bar tray. That raised `Tray is destroyed`, and the ordinary native Quit handler displayed an error dialog while the app was shutting down. The desktop now drops the tray reference before destruction and ignores any destroyed tray during refresh. The final native quit flag is set only after resource cleanup succeeds. A native `app.quit()`/process-exit check is required; an automation driver's close method or a forced test cleanup is not evidence of normal Quit.
+
+## Retained agent session after project recovery (#119)
+
+Opening the project can recover its writer leases while a manager still has an
+unknown previous session. **Sessions → Recover session** confirms that the exact
+recorded native process exited and that voice, local execution and broker work
+settled. It then records the old session stopped, retaining sign-in, native chat,
+notes and resources. Recovery does not signal processes or start model work.
+
+Explicit owner Start/Stop/Restart first tries the normal lifecycle operation. If
+an unknown/error retained session has lost its peer, the same checked recovery is
+used before retrying Start/Restart, or confirming Stop. Live/unverified process
+proof and unsettled work remain visible failures; no state reset is offered.

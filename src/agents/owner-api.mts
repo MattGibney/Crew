@@ -205,10 +205,45 @@ export function createOwnerApi(
         }
         case "lifecycle": {
           const agentId = text(args.agentId);
-          if (args.action === "start") return foundation.start(agentId);
-          if (args.action === "stop") return foundation.stop(agentId);
-          if (args.action === "restart") return foundation.restart(agentId);
-          throw new Error("Unknown session action.");
+          const retained = foundation.store
+            .snapshot()
+            .agents.find((agent) => agent.id === agentId);
+          const needsRecovery = Boolean(
+            retained?.runtime.threadId &&
+            retained.runtime.session.sessionId &&
+            ["unknown", "error"].includes(
+              retained.runtime.session.observedState,
+            ),
+          );
+          const run = () =>
+            args.action === "start"
+              ? foundation.start(agentId)
+              : args.action === "stop"
+                ? foundation.stop(agentId)
+                : args.action === "restart"
+                  ? foundation.restart(agentId)
+                  : null;
+          const attempted = run();
+          if (!attempted) throw new Error("Unknown session action.");
+          const result = await attempted;
+          if (result.state !== "acknowledged" && needsRecovery) {
+            // An existing peer gets its normal lifecycle action first. A
+            // restarted host may have no peer: recover only with exact exit proof.
+            const recovered = await foundation.recoverSession(
+              principal,
+              agentId,
+            );
+            if (recovered.state !== "acknowledged")
+              return args.action === "stop"
+                ? recovered
+                : {
+                    ...recovered,
+                    retainedThreadId: retained!.runtime.threadId,
+                  };
+            if (args.action === "stop") return recovered;
+            return run();
+          }
+          return result;
         }
         case "sendMessage":
           return foundation.send(principal, {

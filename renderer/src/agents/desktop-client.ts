@@ -54,6 +54,7 @@ export function createDesktopClient(bridge: DesktopBridge, projectId: string) {
     createAgent: (input) => command("createAgent", { input }),
     saveProfile: (agentId, input) => command("saveProfile", { agentId, input }),
     lifecycle: (agentId, action) => command("lifecycle", { agentId, action }),
+    recoverSession: (agentId) => command("recoverSession", { agentId }),
     sendMessage: (input) => command("sendMessage", { input }),
     reconcileMessage: (messageId) => command("reconcileMessage", { messageId }),
     retryMessage: (messageId) => command("retryMessage", { messageId }),
