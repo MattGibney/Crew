@@ -440,6 +440,18 @@ export function createAccessOwnerApi(
               expected(input.expectedRevision),
             );
           }
+          case "removePreset": {
+            object(input, ["presetId", "expectedRevision"]);
+            const revision = expected(input.expectedRevision);
+            if (revision === null)
+              throw new Error("Template revision required.");
+            await authorization.removePreset(
+              actor,
+              id(input.presetId),
+              revision,
+            );
+            return null;
+          }
           case "setDefaultPreset": {
             object(input, ["presetId", "expectedRevision"]);
             const revision = expected(input.expectedRevision);
@@ -462,7 +474,9 @@ export function createAccessOwnerApi(
               actor,
               id(input.agentId),
               ids(input.permissionGroupIds),
-              input.serviceConnectionIds === undefined ? undefined : ids(input.serviceConnectionIds),
+              input.serviceConnectionIds === undefined
+                ? undefined
+                : ids(input.serviceConnectionIds),
               expected(input.expectedRevision),
             );
           case "saveConnection":

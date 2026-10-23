@@ -2831,7 +2831,7 @@ function SettingsView({
           </nav>
         </aside>
         <div className="min-w-0 space-y-8">
-          {panel?.id !== "agents" && (
+          {panel?.id !== "agents" && panel?.id !== "agent-templates" && (
             <div className="sticky -top-10 z-20 -mx-4 -mt-10 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/70 supports-backdrop-filter:backdrop-blur-md">
               <h2 className="text-xl font-semibold tracking-tight">
                 {panel?.label || "Project settings"}

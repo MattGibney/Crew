@@ -339,6 +339,18 @@ export function createPreviewBridge(initial: "empty" | "full" = "full") {
       assignment.revision++;
       return assignment;
     }
+    if (command === "access.removePreset") {
+      const preset = view.presets.find((item) => item.id === args.presetId);
+      if (!preset || preset.revision !== args.expectedRevision)
+        throw new Error("Template changed.");
+      view.presets = view.presets.filter((item) => item.id !== args.presetId);
+      if (view.creationDefaults.presetId === args.presetId)
+        view.creationDefaults = {
+          revision: view.creationDefaults.revision + 1,
+          presetId: null,
+        };
+      return null;
+    }
     if (command === "access.setDefaultPreset") {
       view.creationDefaults = {
         revision: view.creationDefaults.revision + 1,

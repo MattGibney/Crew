@@ -216,6 +216,9 @@ export function OwnerAccessSettings({
             groups={snapshot.groups}
             connections={snapshot.connections}
             onSave={(change) => command("savePreset", change)}
+            onRemove={(presetId, expectedRevision) =>
+              command("removePreset", { presetId, expectedRevision })
+            }
             onSetDefault={(presetId, expectedRevision) =>
               command("setDefaultPreset", { presetId, expectedRevision })
             }

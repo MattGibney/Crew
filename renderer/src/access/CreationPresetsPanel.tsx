@@ -1,4 +1,15 @@
-import { MoreVertical, Pencil } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import { MoreVertical, Pencil, Trash2 } from "lucide-react";
 import {
   Table,
   TableCaption,
@@ -23,7 +34,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { useId, useState } from "react";
+import { useId, useState, useRef } from "react";
 import type {
   Agent,
   AgentCreationPreset,
@@ -67,6 +78,7 @@ export interface CreationPresetsPanelProps extends OwnerPanelProps {
     expectedRevision: number | null;
     draft: PresetDraft;
   }): Promise<void>;
+  onRemove(presetId: string, expectedRevision: number): Promise<void>;
   onSetDefault(
     presetId: string | null,
     expectedRevision: number,
@@ -76,6 +88,12 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
   const [editing, setEditing] = useState<AgentCreationPreset | "new" | null>(
     null,
   );
+  const [defaultDraft, setDefaultDraft] = useState<{
+    presetId: string | null;
+    revision: number;
+  } | null>(null);
+  const [removing, setRemoving] = useState<AgentCreationPreset | null>(null);
+  const cancelRemove = useRef<HTMLButtonElement>(null);
   const action = useAccessAction(props.onNotify);
   const id = useId();
   if (!props.isOwner) return <OwnerRequired />;
@@ -85,14 +103,37 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
       title="Available templates"
       description="Approve a profile, groups and service identities that a manager may apply when creating a new agent. Managers cannot edit these approvals or grant themselves access."
       action={
-        <Button
-          disabled={
-            editing !== null || (!props.agents.length && !props.runtimeDefaults)
-          }
-          onClick={() => setEditing("new")}
-        >
-          Create template
-        </Button>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Template settings"
+                />
+              }
+            >
+              <MoreVertical className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => setDefaultDraft({ ...props.creationDefaults })}
+              >
+                Change default
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            disabled={
+              editing !== null ||
+              (!props.agents.length && !props.runtimeDefaults)
+            }
+            onClick={() => setEditing("new")}
+          >
+            Create template
+          </Button>
+        </div>
       }
     >
       {!props.agents.length && (
@@ -102,49 +143,136 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
             : "Configure project model access before creating the first template."}
         </p>
       )}
-      <div className="max-w-sm space-y-2">
-        <Label htmlFor={`${id}-default`}>Default for new agents</Label>
-        <Select
-          value={props.creationDefaults.presetId ?? ""}
-          disabled={action.busy}
-          onValueChange={(selectedValue) =>
-            void action.run(
-              () =>
-                props.onSetDefault(
-                  (selectedValue ?? "") || null,
-                  props.creationDefaults.revision,
-                ),
-              "Default template saved.",
-              "Could not change the default. Refresh and try again.",
-            )
-          }
-          items={[
-            { value: "", label: "No automatic default" },
-            ...props.presets.map((preset) => ({
-              value: preset.id,
-              label: `${preset.name}${preset.enabled ? "" : " (disabled)"}`,
-            })),
-          ]}
+      {defaultDraft && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !action.busy) setDefaultDraft(null);
+          }}
         >
-          <SelectTrigger id={`${id}-default`} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="">No automatic default</SelectItem>
-            {props.presets.map((preset) => (
-              <SelectItem
-                key={preset.id}
-                value={preset.id}
-                disabled={!preset.enabled}
-              >
-                {preset.name}
-                {preset.enabled ? "" : " (disabled)"}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <ErrorMessage>{action.error}</ErrorMessage>
-      </div>
+          <DialogContent showCloseButton={!action.busy}>
+            <DialogHeader>
+              <DialogTitle>Change default template</DialogTitle>
+              <DialogDescription>
+                Choose the starting template used by default when creating an
+                agent.
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              className="space-y-5"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (
+                  await action.run(
+                    () =>
+                      props.onSetDefault(
+                        defaultDraft.presetId,
+                        defaultDraft.revision,
+                      ),
+                    "Default template saved.",
+                    "Could not change the default. Reopen this dialog to use the current settings.",
+                  )
+                )
+                  setDefaultDraft(null);
+              }}
+            >
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-default`}>Default for new agents</Label>
+                <Select
+                  value={defaultDraft.presetId ?? ""}
+                  disabled={action.busy}
+                  onValueChange={(value) =>
+                    setDefaultDraft({
+                      ...defaultDraft,
+                      presetId: value || null,
+                    })
+                  }
+                  items={[
+                    { value: "", label: "No automatic default" },
+                    ...props.presets.map((preset) => ({
+                      value: preset.id,
+                      label: preset.name,
+                    })),
+                  ]}
+                >
+                  <SelectTrigger id={`${id}-default`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No automatic default</SelectItem>
+                    {props.presets.map((preset) => (
+                      <SelectItem
+                        key={preset.id}
+                        value={preset.id}
+                        disabled={!preset.enabled}
+                      >
+                        {preset.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <ErrorMessage>{action.error}</ErrorMessage>
+              <DialogFooter>
+                <FormActions
+                  busy={action.busy}
+                  label="Save changes"
+                  onCancel={() => setDefaultDraft(null)}
+                />
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
+      <AlertDialog
+        open={!!removing}
+        onOpenChange={(open) => {
+          if (!open && !action.busy) setRemoving(null);
+        }}
+      >
+        <AlertDialogContent size="sm" initialFocus={cancelRemove}>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the template. Existing agents are kept.
+              {removing?.id === props.creationDefaults.presetId
+                ? " The default will be cleared."
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ErrorMessage>{action.error}</ErrorMessage>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              ref={cancelRemove}
+              disabled={action.busy}
+              onClick={() => setRemoving(null)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={action.busy}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (
+                  removing &&
+                  (await action.run(
+                    () => props.onRemove(removing.id, removing.revision),
+                    "Agent template removed.",
+                    "Could not remove the template. Refresh and try again.",
+                  ))
+                )
+                  setRemoving(null);
+              }}
+            >
+              Remove template
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {editing && (
         <PresetEditor
           key={editing === "new" ? "new" : editing.id}
@@ -222,6 +350,13 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
                       >
                         <Pencil className="size-4" />
                         Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setRemoving(preset)}
+                      >
+                        <Trash2 className="size-4" />
+                        Remove
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

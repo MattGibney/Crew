@@ -1183,6 +1183,29 @@ export class ProjectAuthorizationService
       return preset;
     });
   }
+  async removePreset(
+    actor: Actor,
+    presetId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    await this.store.transaction((state) => {
+      owner(state, actor);
+      const preset = state.presets.find((row) => row.id === presetId);
+      if (!preset) throw new Error("Template unavailable.");
+      revision(preset, expectedRevision);
+      state.presets = state.presets.filter((row) => row.id !== presetId);
+      if (state.creationDefaults.presetId === presetId) {
+        state.creationDefaults = {
+          revision: revision(
+            state.creationDefaults,
+            state.creationDefaults.revision,
+          ),
+          presetId: null,
+        };
+      }
+      audit(state, actor, "preset.removed", presetId);
+    });
+  }
   async setDefaultPreset(
     actor: Actor,
     presetId: string | null,
