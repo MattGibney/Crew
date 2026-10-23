@@ -519,7 +519,7 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Unified browser first pass (#56, resumed)
 
 - The owner explicitly resumed #56 on the unified-agent feature branch, superseding the earlier preservation-only pause for this bounded delivery. Keep PR99 intact; fresh implementation PRs target `codex/unified-agent-platform`. Root integrates main; this track may commit/push/PR but does not install, release or main-merge.
-- Browser control requires the canonical `browser.control` group permission (no automatic/default grant) and an exact owner-selected agent/session binding. Discovery never starts work or grants authority. Control stays on the isolated preview/CDP facade, never the privileged host or a raw app-wide debugging endpoint.
+- Browser control requires the canonical `browser.control` group permission (no automatic/default grant) and stable agent ownership with an exact current caller session. Discovery never starts work or grants authority. Control stays on the isolated preview/CDP facade, never the privileged host or a raw app-wide debugging endpoint.
 - Annotations are explicit owner messages to their captured selected recipient through the existing message path. Preserve page/time/element and screenshot provenance; never silently rebind feedback or claim a historic screenshot is the current page. Refresh the unified contracts rather than carrying forward manager/worker plumbing. Native sign-in/profile acceptance is coordinated by root; never launch concurrent peers against its signed-in home or activate physical audio input.
 ## Native usage and retained voice delivery (#52, #107)
 
@@ -537,9 +537,15 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Read-only inspection of recorded background process receipts must remain available during failed-project Quit/recovery. Stop targets exact retained identity with fresh checks; requested termination, confirmed exit, application readiness and complete cleanup are distinct evidence.
 - Owner clarification: this first pass does not require hostile-worker isolation or a new VM platform. An explicitly acknowledged host-Docker template may grant broad trusted daemon authority beyond workspace filesystem restrictions. Keep it optional/off by default, label that authority honestly, use an explicit socket and clean private Docker configuration, and preserve existing services/volumes. Do not read/copy personal Docker credentials or present this capability as filesystem confinement.
 
-- #56 native tool discovery may be cached at session startup: expose the pinned upstream browser schemas to the exact current starting/started session with a current project-scoped browser.control group grant, before owner page binding. This read-only catalogue check never admits execution. Calls still require a started session, exact owner binding and fresh ordinary execution authorization; tool-list notifications alone do not prove native-model discovery.
+- #56 native tool discovery may be cached at session startup: expose the pinned upstream browser schemas to the exact current starting/started session with a current project-scoped browser.control group grant, before owner page binding. This read-only catalogue check never admits execution. Calls still require a started session, stable agent ownership and fresh ordinary execution authorization; tool-list notifications alone do not prove native-model discovery.
 
 ## Retained native-session recovery (#119)
 
 - Project writer-lease recovery and agent session recovery are separate. Explicit owner Start/Stop/Restart must be able to settle a lost in-memory peer using the existing exact native-exit and outstanding-work checks. Give an existing live peer its normal lifecycle action first; never use a generic disconnected error as proof of exit.
 - Expose owner session recovery in Sessions for unknown/error states. Preserve native thread identity, sign-in, notes and history; recovery neither signals a live process nor launches a turn. Keep unavailable/live process proof and unsettled operations explicit.
+
+## Agent-owned browsers (#121)
+
+- Each agent owns a browser workspace with multiple tabs, independent of the workspace displayed by the owner. Agent tools target only that caller’s tabs; UI selection never grants or transfers authority.
+- Tabs share a private persistent browser session within one project/agent identity; never inherit personal browser cookies or another agent’s session. Apply per-WebContents request policy when registering shared-session networking hooks.
+- Keep tab identity in annotation provenance, preserve tabs across native agent Restart, and distinguish persistent cookies/storage from the current in-memory tab registry, which does not survive desktop exit. Hiding the browser hides native views without closing tabs.
