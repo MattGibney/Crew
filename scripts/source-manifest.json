@@ -89,6 +89,7 @@
     "renderer/src/agents/AgentEditorForm.tsx",
     "renderer/src/agents/AgentEnvironmentTemplate.tsx",
     "renderer/src/agents/AgentPicture.tsx",
+    "renderer/src/agents/AgentPromptFields.tsx",
     "renderer/src/agents/AgentSchedulesPanel.tsx",
     "renderer/src/agents/AgentSettings.tsx",
     "renderer/src/agents/AgentsApp.tsx",

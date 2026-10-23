@@ -687,3 +687,5 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Agent templates use the same full-width shadcn table and vertical-ellipsis Edit menu as agents, connections and permission groups. Show availability, group/connection counts and the default template. Create/Edit uses a full-page sectioned editor matching agents, with a sticky 70% background/medium-blur header and ghost Cancel plus primary Save/Create. Default selection stays in a dialog; omit the separator below the template table.
 
 - Agent templates has one heading. The header ellipsis offers Change default in a dialog with explicit save/cancel. Row menus include destructive Remove confirmation; removal preserves existing agents and atomically clears a removed default, using owner authorization and revision checks.
+
+- The agent editor is the visual reference for template editors. Reuse AgentPromptFields for Personality and Instructions so tooltip wording, textareas, writing guidance and disclosure styles stay aligned. Template save guidance must describe future agents, not restarting an existing chat.

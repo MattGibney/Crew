@@ -1,3 +1,7 @@
+import {
+  PersonalityField,
+  AgentInstructionsSection,
+} from "../agents/AgentPromptFields";
 import { Separator } from "@/components/ui/separator";
 import {
   AlertDialog,
@@ -54,7 +58,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import {
   AccessSection,
   Choice,
@@ -494,10 +497,14 @@ function PresetEditor({
             </div>
             <div className="space-y-5">
               <div className="space-y-2">
-                <Label htmlFor={`${id}-name`}>Template name</Label>
+                <Label htmlFor={`${id}-name`}>
+                  Template name{" "}
+                  <span className="text-muted-foreground">(required)</span>
+                </Label>
                 <Input
                   id={`${id}-name`}
                   required
+                  aria-invalid={!draft.name.trim()}
                   value={draft.name}
                   onChange={(event) =>
                     setDraft({ ...draft, name: event.target.value })
@@ -572,10 +579,15 @@ function PresetEditor({
             </div>
             <div className="space-y-5">
               <div className="space-y-2">
-                <Label htmlFor={`${id}-agent-name`}>Default agent name</Label>
+                <Label htmlFor={`${id}-agent-name`}>
+                  Default agent name{" "}
+                  <span className="text-muted-foreground">(required)</span>
+                </Label>
                 <Input
                   id={`${id}-agent-name`}
                   required
+                  maxLength={200}
+                  aria-invalid={!draft.profile.name.trim()}
                   value={draft.profile.name}
                   onChange={(event) =>
                     setDraft({
@@ -585,55 +597,32 @@ function PresetEditor({
                   }
                 />
               </div>
-              <div>
-                <Label htmlFor={`${id}-personality`}>Personality</Label>
-                <Textarea
-                  id={`${id}-personality`}
-                  value={draft.profile.personality}
-                  onChange={(event) =>
-                    setDraft({
-                      ...draft,
-                      profile: {
-                        ...draft.profile,
-                        personality: event.target.value,
-                      },
-                    })
-                  }
-                />
-              </div>
-            </div>
-          </section>
-          <Separator />
-          <section className="space-y-4">
-            <div className="space-y-2">
-              <h2 className="text-base font-semibold tracking-tight">
-                Instructions
-              </h2>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Define responsibilities, standards and workflow. Personality is
-                added separately.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label className="sr-only" htmlFor={`${id}-instructions`}>
-                Instructions
-              </Label>
-              <Textarea
-                id={`${id}-instructions`}
-                rows={6}
-                value={draft.profile.systemPrompt}
-                onChange={(event) =>
+              <PersonalityField
+                id={id}
+                value={draft.profile.personality}
+                locked={action.busy}
+                onChange={(personality) =>
                   setDraft({
                     ...draft,
-                    profile: {
-                      ...draft.profile,
-                      systemPrompt: event.target.value,
-                    },
+                    profile: { ...draft.profile, personality },
                   })
                 }
               />
             </div>
           </section>
+          <Separator />
+          <AgentInstructionsSection
+            id={id}
+            value={draft.profile.systemPrompt}
+            locked={action.busy}
+            template
+            onChange={(systemPrompt) =>
+              setDraft({
+                ...draft,
+                profile: { ...draft.profile, systemPrompt },
+              })
+            }
+          />
           <Separator />
           <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
             <div className="space-y-2">
