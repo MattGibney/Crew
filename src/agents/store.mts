@@ -1,11 +1,5 @@
 import { constants } from "node:fs";
-import {
-  mkdir,
-  open,
-  lstat,
-  unlink,
-  type FileHandle,
-} from "node:fs/promises";
+import { mkdir, open, lstat, unlink, type FileHandle } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join } from "node:path";
 import { Ajv } from "ajv";
@@ -28,6 +22,8 @@ export interface FoundationState {
   projectId: string;
   ownerUserId: string;
   agents: Agent[];
+  /** Identity-only references preserve immutable history after permanent removal. */
+  deletedAgents?: { id: string; deletedAt: string }[];
   projectSettings: ProjectAgentSettings;
   provisioning: {
     agentId: string;
@@ -187,6 +183,7 @@ const agent = object({
   createdAt: timestamp,
   updatedAt: timestamp,
   archivedAt: nullable(timestamp),
+  lastUsedAt: nullable(timestamp),
   profile: object(
     {
       revision,
@@ -265,7 +262,7 @@ const agent = object({
     }),
     1000,
   ),
-});
+}, ["lastUsedAt"]);
 const job = object({
   id,
   projectId: id,
@@ -379,6 +376,7 @@ const validate = new Ajv({
     projectId: id,
     ownerUserId: id,
     agents: array(agent),
+    deletedAgents: array(object({ id, deletedAt: timestamp })),
     jobs: array(job),
     messages: array(message),
     intentFingerprints: {
@@ -469,7 +467,7 @@ const validate = new Ajv({
     reservation: nullable(
       object({ id, projectId: id, reason, acquiredAt: timestamp }),
     ),
-  }),
+  }, ["deletedAgents"]),
   $defs: {
     json: {
       anyOf: [
@@ -561,6 +559,12 @@ function validateState(
   )
     throw new Error("Invalid or mismatched foundation state.");
   const agents = new Map(value.agents.map((entry) => [entry.id, entry]));
+  const deleted = new Set((value.deletedAgents ?? []).map((row) => row.id));
+  if (
+    deleted.size !== (value.deletedAgents ?? []).length ||
+    [...deleted].some((id) => agents.has(id))
+  )
+    throw new Error("Invalid deleted agent identity.");
   const jobs = new Set(value.jobs.map((entry) => entry.id));
   const help = new Map(value.helpRequests.map((entry) => [entry.id, entry]));
   const messages = new Set([
@@ -573,6 +577,12 @@ function validateState(
   };
   const checkAgent = (agentId: string | null): void =>
     assert(agentId === null || agents.has(agentId));
+  const checkHistoricalAgent = (agentId: string | null): void =>
+    assert(agentId === null || agents.has(agentId) || deleted.has(agentId));
+  const checkHistoricalActor = (actorValue: Agent["reportsTo"]): void =>
+    actorValue.type === "user"
+      ? assert(actorValue.userId === ownerUserId)
+      : checkHistoricalAgent(actorValue.agentId);
   const checkActor = (actorValue: Agent["reportsTo"]): void =>
     actorValue.type === "user"
       ? assert(actorValue.userId === ownerUserId)
@@ -599,7 +609,7 @@ function validateState(
   checkAgent(value.projectSettings.contactAgentId ?? null);
   for (const entry of value.provisioning) {
     checkAgent(entry.agentId);
-    checkActor(entry.creator);
+    checkHistoricalActor(entry.creator);
   }
   assert(
     new Set(value.provisioning.map((entry) => entry.agentId)).size ===
@@ -636,34 +646,35 @@ function validateState(
   }
   for (const entry of value.jobs) {
     assert(entry.projectId === projectId);
-    checkActor(entry.assignment.assignedBy);
+    checkHistoricalActor(entry.assignment.assignedBy);
     checkAgent(entry.assignment.assignedToAgentId);
-    checkAgent(entry.progress.reportedByAgentId);
+    checkHistoricalAgent(entry.progress.reportedByAgentId);
     for (const change of entry.assignmentHistory) {
-      checkActor(change.changedBy);
-      checkAgent(change.previousAgentId);
-      checkAgent(change.assignedAgentId);
+      checkHistoricalActor(change.changedBy);
+      checkHistoricalAgent(change.previousAgentId);
+      checkHistoricalAgent(change.assignedAgentId);
     }
     if (entry.work.type === "local") {
       for (const update of entry.work.updates)
-        checkAgent(update.recordedByAgentId);
-      if (entry.work.outcome) checkAgent(entry.work.outcome.recordedByAgentId);
+        checkHistoricalAgent(update.recordedByAgentId);
+      if (entry.work.outcome)
+        checkHistoricalAgent(entry.work.outcome.recordedByAgentId);
     }
   }
   for (const entry of value.messages) {
     assert(entry.projectId === projectId);
-    if (entry.sender.type !== "system") checkActor(entry.sender);
-    checkAgent(entry.recipientAgentId);
+    if (entry.sender.type !== "system") checkHistoricalActor(entry.sender);
+    checkHistoricalAgent(entry.recipientAgentId);
     checkJob(entry.jobId);
     checkMessage(entry.replyToMessageId);
   }
   for (const entry of value.receipts) {
-    if (entry.sender.type !== "system") checkActor(entry.sender);
-    checkAgent(entry.recipientAgentId);
+    if (entry.sender.type !== "system") checkHistoricalActor(entry.sender);
+    checkHistoricalAgent(entry.recipientAgentId);
     checkJob(entry.jobId);
   }
   for (const entry of value.voiceTurns) {
-    checkAgent(entry.agentId);
+    checkHistoricalAgent(entry.agentId);
     assert(entry.ownerUserId === ownerUserId);
   }
   assert(
@@ -680,8 +691,8 @@ function validateState(
   );
   for (const entry of value.helpRequests) {
     assert(entry.projectId === projectId);
-    checkAgent(entry.requesterAgentId);
-    checkActor(entry.target);
+    checkHistoricalAgent(entry.requesterAgentId);
+    checkHistoricalActor(entry.target);
     checkJob(entry.jobId);
     checkMessage(entry.messageId);
     checkMessage(entry.responseMessageId);

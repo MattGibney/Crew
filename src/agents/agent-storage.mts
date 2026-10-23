@@ -6,12 +6,14 @@ import {
   realpath,
   readdir,
   rename,
+  rm,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { FoundationState } from "./store.mjs";
+import { agentRecord, readAgentRecord } from "./agent-record.mjs";
 
 type Agent = FoundationState["agents"][number];
 interface AgentReference {
@@ -29,6 +31,8 @@ interface PendingTransaction {
   transactionId: string;
   previousIndexSha256: string | null;
   nextState: FoundationState;
+  coreSchemaVersion?: 1;
+  deletedReferences?: AgentReference[];
 }
 interface EncodedState {
   index: FoundationIndex;
@@ -253,11 +257,11 @@ export class AgentFileStorage {
       throw new Error("Invalid, mismatched or oversized foundation state.");
   }
 
-  private encode(state: FoundationState): EncodedState {
+  private encode(state: FoundationState, versioned = true): EncodedState {
     this.validate(state);
     const cores = new Map<string, Buffer>();
     const references = state.agents.map((agent): AgentReference => {
-      const bytes = serialize(agent);
+      const bytes = serialize(versioned ? agentRecord(agent) : agent);
       cores.set(agent.id, bytes);
       return {
         id: agent.id,
@@ -324,7 +328,9 @@ export class AgentFileStorage {
         throw new Error(
           "Foundation agent core is missing or its hash does not match.",
         );
-      const agent: unknown = JSON.parse(bytes.toString("utf8"));
+      const agent: unknown = readAgentRecord(
+        JSON.parse(bytes.toString("utf8")),
+      );
       if (
         !record(agent) ||
         agent.id !== ref.id ||
@@ -341,7 +347,19 @@ export class AgentFileStorage {
   private pending(value: unknown): PendingTransaction {
     if (
       !record(value) ||
-      Object.keys(value).length !== 4 ||
+      Object.keys(value).some(
+        (key) =>
+          ![
+            "schema",
+            "transactionId",
+            "previousIndexSha256",
+            "nextState",
+            "coreSchemaVersion",
+            "deletedReferences",
+          ].includes(key),
+      ) ||
+      (value.coreSchemaVersion !== undefined &&
+        value.coreSchemaVersion !== 1) ||
       value.schema !== 1 ||
       typeof value.transactionId !== "string" ||
       !/^[a-zA-Z0-9-]{1,128}$/.test(value.transactionId) ||
@@ -353,6 +371,21 @@ export class AgentFileStorage {
     )
       throw new Error("Invalid foundation pending transaction.");
     this.validate(value.nextState);
+    if (value.deletedReferences !== undefined) {
+      const refs = this.index({
+        schema: 2,
+        ...this.identity,
+        agents: value.deletedReferences,
+      }).agents;
+      const live = new Set(value.nextState.agents.map((agent) => agent.id));
+      const deleted = new Set(
+        value.nextState.deletedAgents?.map((agent) => agent.id),
+      );
+      if (refs.some((ref) => live.has(ref.id) || !deleted.has(ref.id)))
+        throw new Error(
+          "Agent deletion requires a retained deletion identity.",
+        );
+    }
     return value as unknown as PendingTransaction;
   }
 
@@ -369,7 +402,10 @@ export class AgentFileStorage {
 
   private async recover(pendingBytes: Buffer): Promise<void> {
     const pending = this.pending(JSON.parse(pendingBytes.toString("utf8")));
-    const next = this.encode(pending.nextState);
+    const next = this.encode(
+      pending.nextState,
+      pending.coreSchemaVersion === 1,
+    );
     const currentBytes = await this.read(
       join(this.directory, "foundation.json"),
     );
@@ -387,6 +423,15 @@ export class AgentFileStorage {
       const current: unknown = JSON.parse(currentBytes.toString("utf8"));
       if (record(current) && current.schema === 1) this.validate(current);
       else previous = this.index(current).agents;
+    }
+    if (currentHash !== desiredHash) {
+      for (const deleted of pending.deletedReferences ?? []) {
+        const original = previous.find((ref) => ref.id === deleted.id);
+        if (!original || JSON.stringify(original) !== JSON.stringify(deleted))
+          throw new Error(
+            "Deleted agent reference does not match the previous index.",
+          );
+      }
     }
     if (currentHash === desiredHash) {
       // The index was committed only after every core was durable. A missing or
@@ -437,7 +482,31 @@ export class AgentFileStorage {
         next.bytes,
       );
     }
+    for (const ref of pending.deletedReferences ?? [])
+      await this.deleteAgentDirectory(ref);
     await this.removePending(pendingBytes);
+  }
+
+  /** Only a durable owner-requested deletion transaction reaches this method.
+   * rm unlinks symlinks inside assets instead of traversing their targets. A
+   * partially removed directory is valid only while replaying this journal. */
+  private async deleteAgentDirectory(ref: AgentReference): Promise<void> {
+    await this.writer();
+    await this.root();
+    const agents = join(this.directory, "agents");
+    await this.privateDirectory(agents);
+    const path = join(this.directory, ref.directory);
+    try {
+      await this.privateDirectory(path);
+    } catch (error) {
+      if (absent(error)) return;
+      throw error;
+    }
+    const core = await this.read(join(path, ref.file));
+    if (core !== null && digest(core) !== ref.sha256)
+      throw new Error("Deleted agent core changed before removal.");
+    await rm(path, { recursive: true, force: true });
+    await this.syncDirectory(agents);
   }
 
   async load(): Promise<FoundationState | null> {
@@ -494,6 +563,9 @@ export class AgentFileStorage {
     const state = await this.stateFromIndex(index);
     this.knownIndexHash = digest(bytes);
     this.knownReferences = index.agents;
+    // Upgrade only after validating every core and the entire assembled state.
+    // The normal journal makes version-zero to version-one conversion resumable.
+    if (!this.encode(state).bytes.equals(bytes)) await this.persist(state);
     return state;
   }
 
@@ -516,12 +588,29 @@ export class AgentFileStorage {
     if ((current === null ? null : digest(current)) !== this.knownIndexHash)
       throw new Error("Foundation index changed outside its writer.");
     const old = new Map(this.knownReferences.map((ref) => [ref.id, ref]));
+    const nextIds = new Set(next.index.agents.map((ref) => ref.id));
+    const removed = this.knownReferences.filter((ref) => !nextIds.has(ref.id));
+    const deletedIds = new Set(state.deletedAgents?.map((entry) => entry.id));
     for (const ref of this.knownReferences) {
       const bytes = await this.readCore(ref);
       if (bytes === null || digest(bytes) !== ref.sha256)
         throw new Error(
           "Foundation agent core is missing or changed outside its writer.",
         );
+      if (removed.some((entry) => entry.id === ref.id)) {
+        const agent = readAgentRecord(
+          JSON.parse(bytes.toString("utf8")),
+        ) as Agent;
+        if (
+          !deletedIds.has(ref.id) ||
+          !agent.archivedAt ||
+          agent.runtime.session.observedState !== "stopped" ||
+          agent.runtime.session.activeTurnId !== null
+        )
+          throw new Error(
+            "Permanent deletion requires an archived, stopped agent and an explicit deletion record.",
+          );
+      }
     }
     for (const ref of next.index.agents) {
       if (old.has(ref.id)) continue;
@@ -537,6 +626,8 @@ export class AgentFileStorage {
       transactionId: randomUUID(),
       previousIndexSha256: this.knownIndexHash ?? null,
       nextState: state,
+      coreSchemaVersion: 1,
+      ...(removed.length ? { deletedReferences: removed } : {}),
     };
     // Compact envelope keeps journal overhead bounded by a few hundred bytes
     // relative to the already-enforced logical-state serialization budget.

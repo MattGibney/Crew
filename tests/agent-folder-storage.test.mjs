@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 import { FoundationStore } from "../src/agents/store.mts";
 import { FoundationRecords } from "../src/agents/records.mts";
 import { AgentFileStorage } from "../src/agents/agent-storage.mts";
+import { agentRecord } from "../src/agents/agent-record.mts";
 
 const owner = { type: "owner", userId: "owner" };
 const ownerActor = { type: "user", userId: "owner" };
@@ -102,7 +103,7 @@ function nextIndex(previous, state) {
         previous.agents.find((ref) => ref.id === agent.id)?.directory ??
         `agents/${agent.id}`,
       file: "agent.json",
-      sha256: sha256(bytes(agent)),
+      sha256: sha256(bytes(agentRecord(agent))),
     })),
   };
 }
@@ -112,6 +113,7 @@ async function pending(f, previousBytes, nextState) {
     transactionId: "controlled-recovery-transaction",
     previousIndexSha256: previousBytes === null ? null : sha256(previousBytes),
     nextState,
+    coreSchemaVersion: 1,
   };
   await writeFile(
     join(f.directory, "foundation.pending.json"),
@@ -127,7 +129,7 @@ async function stageCore(f, ref, agent) {
       if (error.code !== "EEXIST") throw error;
     },
   );
-  await writeFile(f.core(ref), bytes(agent), { mode: 0o600 });
+  await writeFile(f.core(ref), bytes(agentRecord(agent)), { mode: 0o600 });
 }
 
 test("agents have independent peer folders; index holds only pointers and reparent/archive retain paths and assets", async (t) => {
@@ -232,15 +234,21 @@ test("IDs cannot choose paths or alias another folder on case-insensitive volume
   const template = await f.create("Template");
   const source = f.store.snapshot().agents[0];
   await f.store.update((state) => {
-    state.agents = [
-      "simple-worker",
-      "../escaped",
-      "Marketing",
-      "marketing",
-      "sha256-reserved",
-    ].map((id) => ({ ...structuredClone(source), id }));
+    state.agents.push(
+      ...[
+        "simple-worker",
+        "../escaped",
+        "Marketing",
+        "marketing",
+        "sha256-reserved",
+      ].map((id) => ({ ...structuredClone(source), id })),
+    );
   });
-  const index = await f.index();
+  const loaded = await f.index();
+  const index = {
+    ...loaded,
+    agents: loaded.agents.filter((ref) => ref.id !== template.id),
+  };
   assert.equal(index.agents[0].directory, "agents/simple-worker");
   assert.equal(index.agents[3].directory, "agents/marketing");
   for (const ref of index.agents.filter((ref) =>
@@ -252,10 +260,10 @@ test("IDs cannot choose paths or alias another folder on case-insensitive volume
     5,
   );
   await f.reopen();
-  assert.equal(f.store.snapshot().agents.length, 5);
+  assert.equal(f.store.snapshot().agents.length, 6);
   assert.ok(
     await lstat(join(f.directory, "agents", template.id)),
-    "unreferenced historical folder is retained",
+    "original agent folder is retained",
   );
 });
 
@@ -509,4 +517,104 @@ test("genuinely empty agent directory permits initialization and prepared initia
   await pending(f, null, next);
   await f.reopen();
   assert.deepEqual(f.store.snapshot(), next);
+});
+
+test("unversioned agent cores upgrade in place; unsupported versions fail without rewriting", async (t) => {
+  const f = await fixture(t);
+  const agent = await f.create("Versioned identity");
+  let index = await f.index();
+  const ref = index.agents[0];
+  assert.equal(
+    JSON.parse(await readFile(f.core(ref), "utf8")).schemaVersion,
+    1,
+  );
+  await f.close();
+  const raw = bytes(agent);
+  await writeFile(f.core(ref), raw, { mode: 0o600 });
+  ref.sha256 = sha256(raw);
+  await writeFile(join(f.directory, "foundation.json"), bytes(index), {
+    mode: 0o600,
+  });
+  await f.reopen();
+  assert.deepEqual(f.store.snapshot().agents[0], agent);
+  assert.equal(
+    JSON.parse(await readFile(f.core(ref), "utf8")).schemaVersion,
+    1,
+  );
+  index = await f.index();
+  await f.close();
+  const future = bytes({ schemaVersion: 999, ...agent });
+  await writeFile(f.core(ref), future, { mode: 0o600 });
+  index.agents[0].sha256 = sha256(future);
+  await writeFile(join(f.directory, "foundation.json"), bytes(index), {
+    mode: 0o600,
+  });
+  await assert.rejects(f.reopen());
+  assert.deepEqual(await readFile(f.core(ref)), future);
+});
+
+test("permanent deletion removes only the archived agent folder and retains unrelated assets", async (t) => {
+  const f = await fixture(t);
+  const retired = await f.create("Retired");
+  const survivor = await f.create("Survivor");
+  const index = await f.index();
+  const retiredRef = index.agents.find((ref) => ref.id === retired.id);
+  const survivorRef = index.agents.find((ref) => ref.id === survivor.id);
+  const retainedAsset = join(
+    dirname(f.core(survivorRef)),
+    "assets",
+    "keep.txt",
+  );
+  await writeFile(retainedAsset, "Retain unrelated data", { mode: 0o600 });
+  const records = new FoundationRecords(
+    f.store,
+    { checkCrew: async () => true },
+    { validate: async () => true },
+  );
+  await records.archive(owner, retired.id);
+  await records.permanentlyDelete(owner, retired.id);
+  await assert.rejects(lstat(dirname(f.core(retiredRef))), { code: "ENOENT" });
+  assert.equal(await readFile(retainedAsset, "utf8"), "Retain unrelated data");
+  await f.reopen();
+  assert.equal(f.store.snapshot().agents[0].id, survivor.id);
+  assert.equal(f.store.snapshot().deletedAgents[0].id, retired.id);
+});
+
+test("a committed deletion journal finishes partial folder removal on reopening", async (t) => {
+  const f = await fixture(t);
+  const retired = await f.create("Archived deletion");
+  const records = new FoundationRecords(
+    f.store,
+    { checkCrew: async () => true },
+    { validate: async () => true },
+  );
+  await records.archive(owner, retired.id);
+  const previous = await f.index();
+  const previousBytes = await readFile(join(f.directory, "foundation.json"));
+  const next = f.store.snapshot();
+  next.agents = [];
+  next.deletedAgents = [
+    { id: retired.id, deletedAt: new Date().toISOString() },
+  ];
+  const desired = nextIndex(previous, next);
+  await f.close();
+  const journal = await pending(f, previousBytes, next);
+  journal.deletedReferences = previous.agents;
+  await writeFile(
+    join(f.directory, "foundation.pending.json"),
+    JSON.stringify(journal),
+    { mode: 0o600 },
+  );
+  await writeFile(join(f.directory, "foundation.json"), bytes(desired), {
+    mode: 0o600,
+  });
+  await unlink(f.core(previous.agents[0]));
+  await f.reopen();
+  assert.deepEqual(f.store.snapshot(), next);
+  await assert.rejects(lstat(dirname(f.core(previous.agents[0]))), {
+    code: "ENOENT",
+  });
+  await assert.rejects(lstat(join(f.directory, "foundation.pending.json")), {
+    code: "ENOENT",
+  });
 });

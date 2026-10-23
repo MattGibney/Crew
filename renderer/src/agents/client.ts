@@ -127,6 +127,8 @@ export interface AgentsClient {
     instruction: string | null,
   ): Promise<Job>;
   archiveAgent(agentId: Id): Promise<unknown>;
+  restoreAgent?(agentId: Id): Promise<unknown>;
+  deleteAgent?(agentId: Id): Promise<unknown>;
   prepare(
     reason: ExecutionReservation["reason"],
   ): Promise<PreparationReadiness[]>;
