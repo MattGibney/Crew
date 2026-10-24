@@ -716,3 +716,4 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 ## Personal objectives in the chat sidebar (#137)
 
 - The agent chat sidebar shows its personal internal to-do list, grouped into Not started, In progress and Recently completed. Include only local objectives assigned to that exact agent. External GitHub/Linear tickets and delegated worker work belong elsewhere; never merge them into personal objectives or infer progress from a live session. Keep the Workers view separately available.
+- Conversation sidebar width is a global UI preference shared across agents and projects and restored on reload/restart. Clamp only the displayed width when a window shrinks; do not overwrite the saved preference. Double-clicking the divider resets the saved width.

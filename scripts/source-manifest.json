@@ -113,6 +113,7 @@
     "renderer/src/agents/project-presentation.tsx",
     "renderer/src/agents/useConversationHistory.ts",
     "renderer/src/agents/useEditorEnvironment.ts",
+    "renderer/src/agents/useSidebarWidth.ts",
     "renderer/src/agents/useVoiceArtifacts.ts",
     "renderer/src/agents/voice/PrimaryAgentVoice.tsx",
     "renderer/src/agents/voice/client.ts",

@@ -1,3 +1,4 @@
+import { useSidebarWidth } from "./useSidebarWidth";
 import { AgentObjectives } from "./AgentObjectives";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -208,7 +209,7 @@ export function AgentsApp({
   );
   const [secondaryVoiceTarget, setSecondaryVoiceTarget] =
     useState<HTMLElement | null>(null);
-  const [workerWidth, setWorkerWidth] = useState<number | null>(null);
+  const [workerWidth, setWorkerWidth] = useSidebarWidth();
   const [workspaceWidth, setWorkspaceWidth] = useState(1000);
   const workspace = useRef<HTMLElement | null>(null);
   const resizing = useRef(false);
@@ -772,7 +773,7 @@ export function AgentsApp({
                       ? 280
                       : event.key === "End"
                         ? 720
-                        : (workerWidth || 560) + offset,
+                        : Math.min(workerWidth ?? 560, maximumWorkerWidth) + offset,
                   );
                 }
               }}
