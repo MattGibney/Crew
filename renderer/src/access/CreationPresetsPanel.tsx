@@ -1,4 +1,45 @@
-import { useId, useState } from "react";
+import {
+  PersonalityField,
+  AgentInstructionsSection,
+} from "../agents/AgentPromptFields";
+import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import { MoreVertical, Pencil, Trash2 } from "lucide-react";
+import {
+  Table,
+  TableCaption,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { useId, useState, useRef } from "react";
 import type {
   Agent,
   AgentCreationPreset,
@@ -8,8 +49,15 @@ import type {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AccessSection,
   Choice,
@@ -34,6 +82,7 @@ export interface CreationPresetsPanelProps extends OwnerPanelProps {
     expectedRevision: number | null;
     draft: PresetDraft;
   }): Promise<void>;
+  onRemove(presetId: string, expectedRevision: number): Promise<void>;
   onSetDefault(
     presetId: string | null,
     expectedRevision: number,
@@ -43,106 +92,285 @@ export function CreationPresetsPanel(props: CreationPresetsPanelProps) {
   const [editing, setEditing] = useState<AgentCreationPreset | "new" | null>(
     null,
   );
+  const [defaultDraft, setDefaultDraft] = useState<{
+    presetId: string | null;
+    revision: number;
+  } | null>(null);
+  const [removing, setRemoving] = useState<AgentCreationPreset | null>(null);
+  const cancelRemove = useRef<HTMLButtonElement>(null);
   const action = useAccessAction(props.onNotify);
   const id = useId();
   if (!props.isOwner) return <OwnerRequired />;
+  if (editing)
+    return (
+      <PresetEditor
+        key={editing === "new" ? "new" : editing.id}
+        {...props}
+        preset={editing === "new" ? null : editing}
+        onClose={() => setEditing(null)}
+      />
+    );
   return (
     <AccessSection
-      title="New agent presets"
+      fullWidth
+      separator={false}
+      title="Available templates"
       description="Approve a profile, groups and service identities that a manager may apply when creating a new agent. Managers cannot edit these approvals or grant themselves access."
       action={
-        <Button
-          variant="outline"
-          disabled={
-            editing !== null || (!props.agents.length && !props.runtimeDefaults)
-          }
-          onClick={() => setEditing("new")}
-        >
-          Create preset
-        </Button>
+        <div className="flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label="Template settings"
+                />
+              }
+            >
+              <MoreVertical className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                onClick={() => setDefaultDraft({ ...props.creationDefaults })}
+              >
+                Change default
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button
+            disabled={
+              editing !== null ||
+              (!props.agents.length && !props.runtimeDefaults)
+            }
+            onClick={() => setEditing("new")}
+          >
+            Create template
+          </Button>
+        </div>
       }
     >
       {!props.agents.length && (
         <p className="text-sm text-muted-foreground">
           {props.runtimeDefaults
-            ? "Create a preset to choose the first agent's profile and access. It will use the configured project runtime."
-            : "Configure project model access before creating the first preset."}
+            ? "Create a template to choose the first agent's profile and access. It will use the configured project runtime."
+            : "Configure project model access before creating the first template."}
         </p>
       )}
-      <div className="space-y-2">
-        <Label htmlFor={`${id}-default`}>Default for new agents</Label>
-        <NativeSelect
-          id={`${id}-default`}
-          value={props.creationDefaults.presetId ?? ""}
-          disabled={action.busy}
-          onChange={(event) =>
-            void action.run(
-              () =>
-                props.onSetDefault(
-                  event.target.value || null,
-                  props.creationDefaults.revision,
-                ),
-              "Creation default saved.",
-              "Could not change the default. Refresh and try again.",
-            )
-          }
+      {defaultDraft && (
+        <Dialog
+          open
+          onOpenChange={(open) => {
+            if (!open && !action.busy) setDefaultDraft(null);
+          }}
         >
-          <option value="">No automatic default</option>
-          {props.presets.map((preset) => (
-            <option
-              key={preset.id}
-              value={preset.id}
-              disabled={!preset.enabled}
+          <DialogContent showCloseButton={!action.busy}>
+            <DialogHeader>
+              <DialogTitle>Change default template</DialogTitle>
+              <DialogDescription>
+                Choose the starting template used by default when creating an
+                agent.
+              </DialogDescription>
+            </DialogHeader>
+            <form
+              className="space-y-5"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (
+                  await action.run(
+                    () =>
+                      props.onSetDefault(
+                        defaultDraft.presetId,
+                        defaultDraft.revision,
+                      ),
+                    "Default template saved.",
+                    "Could not change the default. Reopen this dialog to use the current settings.",
+                  )
+                )
+                  setDefaultDraft(null);
+              }}
             >
-              {preset.name}
-              {preset.enabled ? "" : " (disabled)"}
-            </option>
-          ))}
-        </NativeSelect>
-        <ErrorMessage>{action.error}</ErrorMessage>
-      </div>
-      {editing === "new" && (
-        <PresetEditor
-          {...props}
-          preset={null}
-          onClose={() => setEditing(null)}
-        />
-      )}
-      <div className="divide-y border-y">
-        {!props.presets.length && (
-          <p className="py-4 text-sm text-muted-foreground">
-            No approved presets yet.
-          </p>
-        )}
-        {props.presets.map((preset) => (
-          <div key={preset.id} className="py-4">
-            {editing !== "new" && editing?.id === preset.id ? (
-              <PresetEditor
-                {...props}
-                preset={editing}
-                onClose={() => setEditing(null)}
-              />
-            ) : (
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="font-medium">{preset.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {preset.enabled ? "Available" : "Disabled"} ·{" "}
-                    {preset.permissionGroupIds.length} groups ·{" "}
-                    {preset.serviceConnectionIds.length} connections
-                  </p>
-                </div>
-                <Button
-                  variant="link"
-                  disabled={editing !== null}
-                  onClick={() => setEditing(preset)}
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-default`}>Default for new agents</Label>
+                <Select
+                  value={defaultDraft.presetId ?? ""}
+                  disabled={action.busy}
+                  onValueChange={(value) =>
+                    setDefaultDraft({
+                      ...defaultDraft,
+                      presetId: value || null,
+                    })
+                  }
+                  items={[
+                    { value: "", label: "No automatic default" },
+                    ...props.presets.map((preset) => ({
+                      value: preset.id,
+                      label: preset.name,
+                    })),
+                  ]}
                 >
-                  Update
-                </Button>
+                  <SelectTrigger id={`${id}-default`} className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">No automatic default</SelectItem>
+                    {props.presets.map((preset) => (
+                      <SelectItem
+                        key={preset.id}
+                        value={preset.id}
+                        disabled={!preset.enabled}
+                      >
+                        {preset.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
+              <ErrorMessage>{action.error}</ErrorMessage>
+              <DialogFooter>
+                <FormActions
+                  busy={action.busy}
+                  label="Save changes"
+                  onCancel={() => setDefaultDraft(null)}
+                />
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      )}
+      <AlertDialog
+        open={!!removing}
+        onOpenChange={(open) => {
+          if (!open && !action.busy) setRemoving(null);
+        }}
+      >
+        <AlertDialogContent size="sm" initialFocus={cancelRemove}>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Remove {removing?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the template. Existing agents are kept.
+              {removing?.id === props.creationDefaults.presetId
+                ? " The default will be cleared."
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ErrorMessage>{action.error}</ErrorMessage>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              ref={cancelRemove}
+              disabled={action.busy}
+              onClick={() => setRemoving(null)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={action.busy}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (
+                  removing &&
+                  (await action.run(
+                    () => props.onRemove(removing.id, removing.revision),
+                    "Agent template removed.",
+                    "Could not remove the template. Refresh and try again.",
+                  ))
+                )
+                  setRemoving(null);
+              }}
+            >
+              Remove template
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <div className="overflow-x-auto rounded-lg border">
+        <Table className="w-full text-left text-sm">
+          <TableCaption className="sr-only">
+            Agent templates and their starting configuration
+          </TableCaption>
+          <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground">
+            <TableRow>
+              <TableHead className="px-4 py-3 font-medium">Template</TableHead>
+              <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+              <TableHead className="px-4 py-3 font-medium">Groups</TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                Connections
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="divide-y">
+            {!props.presets.length && (
+              <TableRow>
+                <TableCell
+                  colSpan={5}
+                  className="px-4 py-8 text-muted-foreground"
+                >
+                  No agent templates yet.
+                </TableCell>
+              </TableRow>
             )}
-          </div>
-        ))}
+            {props.presets.map((preset) => (
+              <TableRow key={preset.id}>
+                <TableCell className="px-4 py-3 font-medium">
+                  <span className="flex items-center gap-2">
+                    {preset.name}
+                    {props.creationDefaults.presetId === preset.id && (
+                      <Badge variant="secondary">Default</Badge>
+                    )}
+                  </span>
+                </TableCell>
+                <TableCell className="px-4 py-3 text-muted-foreground">
+                  {preset.enabled ? "Available" : "Disabled"}
+                </TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">
+                  {preset.permissionGroupIds.length}
+                </TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">
+                  {preset.serviceConnectionIds.length}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Actions for ${preset.name}`}
+                          disabled={editing !== null}
+                        />
+                      }
+                    >
+                      <MoreVertical className="size-4" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        aria-label={`Edit ${preset.name}`}
+                        onClick={() => setEditing(preset)}
+                      >
+                        <Pencil className="size-4" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setRemoving(preset)}
+                      >
+                        <Trash2 className="size-4" />
+                        Remove
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </AccessSection>
   );
@@ -204,7 +432,7 @@ function PresetEditor({
     }));
   return (
     <form
-      className="space-y-4"
+      className="min-w-0 space-y-8"
       onSubmit={async (event) => {
         event.preventDefault();
         const { name, pictureRef, personality, systemPrompt } = draft.profile;
@@ -219,144 +447,210 @@ function PresetEditor({
                   profile: { name, pictureRef, personality, systemPrompt },
                 },
               }),
-            "Creation preset saved.",
-            "Could not save the preset. Refresh its current revision and references.",
+            "Agent template saved.",
+            "Could not save the template. Refresh its current revision and references.",
           )
         )
           onClose();
       }}
     >
-      {preset &&
-        props.presets.find((row) => row.id === preset.id)?.revision !==
-          preset.revision && (
-          <p role="alert" className="text-sm text-destructive">
-            The saved preset changed. Your draft is retained. Cancel and reopen
-            Update before saving.
+      <div className="sticky -top-10 z-20 -mx-4 -mt-10 flex flex-wrap items-start justify-between gap-3 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/70 supports-backdrop-filter:backdrop-blur-md">
+        <div className="min-w-0 flex-1 space-y-2">
+          <h1 className="text-xl font-semibold tracking-tight">
+            {preset ? "Edit template" : "Create template"}
+          </h1>
+          <p className="text-sm leading-6 text-muted-foreground">
+            {preset
+              ? `Configure ${preset.name} for future agents.`
+              : "Set the starting profile and access for new agents."}
           </p>
-        )}
-      <fieldset disabled={action.busy} className="space-y-4">
-        <legend className="font-medium">
-          {preset ? `Update ${preset.name}` : "Create preset"}
-        </legend>
-        <div>
-          <Label htmlFor={`${id}-name`}>Preset name</Label>
-          <Input
-            id={`${id}-name`}
-            required
-            value={draft.name}
-            onChange={(event) =>
-              setDraft({ ...draft, name: event.target.value })
-            }
-          />
         </div>
-        {!preset && first && (
-          <div>
-            <Label htmlFor={`${id}-template`}>
-              Start from an existing agent
-            </Label>
-            <NativeSelect
-              id={`${id}-template`}
-              defaultValue={first.id}
-              onChange={(event) => {
-                const agent = props.agents.find(
-                  (row) => row.id === event.target.value,
-                );
-                if (agent)
-                  setDraft((current) => ({
-                    ...current,
-                    profile: {
-                      name: agent.profile.name,
-                      pictureRef: agent.profile.pictureRef,
-                      personality: agent.profile.personality,
-                      systemPrompt: agent.profile.systemPrompt,
-                    },
-                    skills: structuredClone(agent.skills),
-                    modelAccessId: agent.runtime.modelAccessId,
-                    configRef: agent.runtime.configRef,
-                  }));
-              }}
-            >
-              {props.agents.map((agent) => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.profile.name}
-                </option>
-              ))}
-            </NativeSelect>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Copies the profile and supported runtime. Skills and services
-              derive from groups. Choose access separately below.
+        <FormActions
+          label={preset ? "Save changes" : "Create template"}
+          busy={action.busy}
+          disabled={!draft.name.trim() || !draft.profile.name.trim()}
+          onCancel={onClose}
+        />
+      </div>
+      <div className="space-y-10 pb-8">
+        {preset &&
+          props.presets.find((row) => row.id === preset.id)?.revision !==
+            preset.revision && (
+            <p role="alert" className="text-sm text-destructive">
+              The saved template changed. Your draft is retained. Cancel and
+              reopen Edit before saving.
             </p>
-          </div>
-        )}
-        <div>
-          <Label htmlFor={`${id}-agent-name`}>Default agent name</Label>
-          <Input
-            id={`${id}-agent-name`}
-            required
-            value={draft.profile.name}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                profile: { ...draft.profile, name: event.target.value },
-              })
-            }
-          />
-        </div>
-        <div>
-          <Label htmlFor={`${id}-personality`}>Personality</Label>
-          <Textarea
-            id={`${id}-personality`}
-            value={draft.profile.personality}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                profile: { ...draft.profile, personality: event.target.value },
-              })
-            }
-          />
-        </div>
-        <div>
-          <Label htmlFor={`${id}-instructions`}>Instructions</Label>
-          <Textarea
-            id={`${id}-instructions`}
-            rows={6}
+          )}
+        <fieldset disabled={action.busy} className="min-w-0 space-y-10">
+          <legend className="sr-only">
+            {preset ? `Update ${preset.name}` : "Create template"}
+          </legend>
+          <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">
+                Template
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Name this reusable configuration and choose whether it can be
+                used to create agents.
+              </p>
+            </div>
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-name`}>
+                  Template name{" "}
+                  <span className="text-muted-foreground">(required)</span>
+                </Label>
+                <Input
+                  id={`${id}-name`}
+                  required
+                  aria-invalid={!draft.name.trim()}
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft({ ...draft, name: event.target.value })
+                  }
+                />
+              </div>
+              {!preset && first && (
+                <div>
+                  <Label htmlFor={`${id}-template`}>
+                    Start from an existing agent
+                  </Label>
+                  <Select
+                    defaultValue={first.id}
+                    onValueChange={(selectedValue) => {
+                      const agent = props.agents.find(
+                        (row) => row.id === (selectedValue ?? ""),
+                      );
+                      if (agent)
+                        setDraft((current) => ({
+                          ...current,
+                          profile: {
+                            name: agent.profile.name,
+                            pictureRef: agent.profile.pictureRef,
+                            personality: agent.profile.personality,
+                            systemPrompt: agent.profile.systemPrompt,
+                          },
+                          skills: structuredClone(agent.skills),
+                          modelAccessId: agent.runtime.modelAccessId,
+                          configRef: agent.runtime.configRef,
+                        }));
+                    }}
+                    items={props.agents.map((agent) => ({
+                      value: agent.id,
+                      label: agent.profile.name,
+                    }))}
+                  >
+                    <SelectTrigger id={`${id}-template`} className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {props.agents.map((agent) => (
+                        <SelectItem key={agent.id} value={agent.id}>
+                          {agent.profile.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Copies the profile and supported runtime. Skills and
+                    services derive from groups. Choose access separately below.
+                  </p>
+                </div>
+              )}
+              <Choice
+                checked={draft.enabled}
+                onChange={(enabled) => setDraft({ ...draft, enabled })}
+              >
+                Available for new agents
+              </Choice>
+            </div>
+          </section>
+          <Separator />
+          <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">
+                Identity
+              </h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Set the default name and personality for agents created from
+                this template.
+              </p>
+            </div>
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-agent-name`}>
+                  Default agent name{" "}
+                  <span className="text-muted-foreground">(required)</span>
+                </Label>
+                <Input
+                  id={`${id}-agent-name`}
+                  required
+                  maxLength={200}
+                  aria-invalid={!draft.profile.name.trim()}
+                  value={draft.profile.name}
+                  onChange={(event) =>
+                    setDraft({
+                      ...draft,
+                      profile: { ...draft.profile, name: event.target.value },
+                    })
+                  }
+                />
+              </div>
+              <PersonalityField
+                id={id}
+                value={draft.profile.personality}
+                locked={action.busy}
+                onChange={(personality) =>
+                  setDraft({
+                    ...draft,
+                    profile: { ...draft.profile, personality },
+                  })
+                }
+              />
+            </div>
+          </section>
+          <Separator />
+          <AgentInstructionsSection
+            id={id}
             value={draft.profile.systemPrompt}
-            onChange={(event) =>
+            locked={action.busy}
+            template
+            onChange={(systemPrompt) =>
               setDraft({
                 ...draft,
-                profile: { ...draft.profile, systemPrompt: event.target.value },
+                profile: { ...draft.profile, systemPrompt },
               })
             }
           />
-        </div>
-        <Choice
-          checked={draft.enabled}
-          onChange={(enabled) => setDraft({ ...draft, enabled })}
-        >
-          Available for new agents
-        </Choice>
-        <div>
-          <p className="font-medium text-sm">Permission groups</p>
-          {props.groups.map((group) => (
-            <Choice
-              key={group.id}
-              checked={draft.permissionGroupIds.includes(group.id)}
-              onChange={(checked) =>
-                toggle("permissionGroupIds", group.id, checked)
-              }
-              description={group.description}
-            >
-              {group.name}
-            </Choice>
-          ))}
-        </div>
-      </fieldset>
-      <ErrorMessage>{action.error}</ErrorMessage>
-      <FormActions
-        busy={action.busy}
-        disabled={!draft.name.trim() || !draft.profile.name.trim()}
-        onCancel={onClose}
-      />
+          <Separator />
+          <section className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+            <div className="space-y-2">
+              <h2 className="text-base font-semibold tracking-tight">Access</h2>
+              <p className="text-sm leading-6 text-muted-foreground">
+                Choose one or more groups. New agents inherit their permissions,
+                skills, connections and resources.
+              </p>
+            </div>
+            <div className="space-y-3">
+              <p className="sr-only">Permission groups</p>
+              {props.groups.map((group) => (
+                <Choice
+                  key={group.id}
+                  checked={draft.permissionGroupIds.includes(group.id)}
+                  onChange={(checked) =>
+                    toggle("permissionGroupIds", group.id, checked)
+                  }
+                  description={group.description}
+                >
+                  {group.name}
+                </Choice>
+              ))}
+            </div>
+          </section>
+        </fieldset>
+        <ErrorMessage>{action.error}</ErrorMessage>
+      </div>
     </form>
   );
 }

@@ -1,4 +1,49 @@
-import { useId, useState } from "react";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import {
+  ChevronDown as DisclosureChevronDown,
+  MoreVertical,
+  Pencil,
+  Trash2,
+} from "lucide-react";
+import {
+  Table,
+  TableCaption,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { useId, useState, useRef } from "react";
 import type {
   Agent,
   CrewPermission,
@@ -28,6 +73,16 @@ import {
   useAccessAction,
 } from "./shared";
 
+/** Presentation only: saved grants continue to use the exact capability IDs. */
+function permissionLabel(name: string): string {
+  const words = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_.-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : "Unnamed permission";
+}
+
 export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   groups: readonly PermissionGroup[];
   skills?: readonly Skill[];
@@ -37,6 +92,7 @@ export interface PermissionGroupsPanelProps extends OwnerPanelProps {
   agents: readonly Agent[];
   workspaces?: readonly WorkspacePermissionChoice[];
   onSave: (change: GroupSave) => Promise<void>;
+  onRemove(groupId: string, expectedRevision: number): Promise<void>;
 }
 
 export function PermissionGroupsPanel(props: PermissionGroupsPanelProps) {
@@ -49,80 +105,176 @@ export function PermissionGroupsPanel(props: PermissionGroupsPanelProps) {
 
 function PermissionGroupsContent(props: PermissionGroupsPanelProps) {
   const [editing, setEditing] = useState<PermissionGroup | "new" | null>(null);
+  const [removing, setRemoving] = useState<PermissionGroup | null>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  const action = useAccessAction(props.onNotify);
   return (
     <AccessSection
+      fullWidth
       title="Permission groups"
       description="Assign groups to agents to enable their capabilities. Multiple groups add permissions together. Groups also select the skills and service identities available to their members."
       action={
-        <Button
-          disabled={editing !== null}
-          variant="outline"
-          onClick={() => setEditing("new")}
-        >
+        <Button disabled={editing !== null} onClick={() => setEditing("new")}>
           Create group
         </Button>
       }
     >
-      {editing === "new" && (
-        <GroupEditor {...props} group={null} onClose={() => setEditing(null)} />
+      <AlertDialog
+        open={!!removing}
+        onOpenChange={(open) => {
+          if (!open && !action.busy) setRemoving(null);
+        }}
+      >
+        <AlertDialogContent size="sm" initialFocus={cancel}>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <Trash2 />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete {removing?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the group from all agents and templates, removing the
+              access it grants. Agents, service accounts and other groups are
+              kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ErrorMessage>{action.error}</ErrorMessage>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              ref={cancel}
+              disabled={action.busy}
+              onClick={() => setRemoving(null)}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={action.busy}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (
+                  removing &&
+                  (await action.run(
+                    () => props.onRemove(removing.id, removing.revision),
+                    "Permission group deleted.",
+                    "Could not delete this group. Refresh and try again.",
+                  ))
+                )
+                  setRemoving(null);
+              }}
+            >
+              Delete group
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {editing && (
+        <GroupEditor
+          key={editing === "new" ? "new" : editing.id}
+          {...props}
+          group={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+        />
       )}
-      <div className="divide-y border-y">
-        {props.groups.length === 0 && (
-          <p className="py-5 text-sm text-muted-foreground">
-            No permission groups yet.
-          </p>
-        )}
-        {props.groups.map((group) => (
-          <div key={group.id} className="py-5">
-            {editing !== "new" && editing?.id === group.id ? (
-              <GroupEditor
-                {...props}
-                group={editing}
-                onClose={() => setEditing(null)}
-              />
-            ) : (
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0 space-y-1">
-                  <h3 className="break-words text-sm font-medium">
-                    {group.name}
-                  </h3>
-                  <p className="break-words text-sm text-muted-foreground">
+      <div className="overflow-x-auto rounded-lg border">
+        <Table className="w-full text-left text-sm">
+          <TableCaption className="sr-only">
+            Permission groups and their access
+          </TableCaption>
+          <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground">
+            <TableRow>
+              <TableHead className="px-4 py-3 font-medium">Group</TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                Crew permissions
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                Service capabilities
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                Workspaces
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="divide-y">
+            {!props.groups.length && (
+              <TableRow>
+                <TableCell
+                  colSpan={5}
+                  className="px-4 py-8 text-muted-foreground"
+                >
+                  No permission groups yet.
+                </TableCell>
+              </TableRow>
+            )}
+            {props.groups.map((group) => (
+              <TableRow key={group.id}>
+                <TableCell className="px-4 py-3 whitespace-normal">
+                  <p className="font-medium">{group.name}</p>
+                  <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
                     {group.description || "No description"}
                   </p>
-                  <p className="text-xs text-muted-foreground">
-                    {group.grants.crew.length} Crew permissions ·{" "}
-                    {group.grants.services.reduce(
-                      (count, service) => count + service.capabilities.length,
-                      0,
-                    )}{" "}
-                    service capabilities ·{" "}
-                    {groupWorkspaceChoices(props.workspaces ?? []).filter(
-                      (workspace) =>
-                        workspace.policyIds.some((id) =>
-                          group.grants.environmentPolicyIds.includes(id),
+                </TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">
+                  {group.grants.crew.length}
+                </TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">
+                  {group.grants.services.reduce(
+                    (count, service) => count + service.capabilities.length,
+                    0,
+                  )}
+                </TableCell>
+                <TableCell className="px-4 py-3 tabular-nums text-muted-foreground">
+                  {groupWorkspaceChoices(props.workspaces ?? []).filter(
+                    (workspace) =>
+                      workspace.policyIds.some((id) =>
+                        group.grants.environmentPolicyIds.includes(id),
+                      ),
+                  ).length +
+                    group.grants.environmentPolicyIds.filter(
+                      (id) =>
+                        !(props.workspaces ?? []).some(
+                          (workspace) => workspace.policy.id === id,
                         ),
-                    ).length +
-                      group.grants.environmentPolicyIds.filter(
-                        (id) =>
-                          !(props.workspaces ?? []).some(
-                            (workspace) => workspace.policy.id === id,
-                          ),
-                      ).length}{" "}
-                    workspaces
-                  </p>
-                </div>
-                <Button
-                  variant="link"
-                  disabled={editing !== null}
-                  aria-label={`Update ${group.name}`}
-                  onClick={() => setEditing(group)}
-                >
-                  Update
-                </Button>
-              </div>
-            )}
-          </div>
-        ))}
+                    ).length}
+                </TableCell>
+                <TableCell className="px-4 py-3 text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Actions for ${group.name}`}
+                          disabled={editing !== null}
+                        />
+                      }
+                    >
+                      <MoreVertical className="size-4" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        aria-label={`Edit ${group.name}`}
+                        onClick={() => setEditing(group)}
+                      >
+                        <Pencil className="size-4" />
+                        Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onClick={() => setRemoving(group)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </div>
     </AccessSection>
   );
@@ -225,294 +377,342 @@ function GroupEditor({
       },
     }));
   return (
-    <form
-      className="space-y-5"
-      onSubmit={async (event) => {
-        event.preventDefault();
-        if (!draft.name.trim()) return;
-        const saved = await action.run(
-          () =>
-            props.onSave({
-              id: group?.id ?? null,
-              expectedRevision: group?.revision ?? null,
-              draft: {
-                ...draft,
-                name: draft.name.trim(),
-                description: draft.description.trim(),
-              },
-            }),
-          "Permission group saved.",
-          "Could not save this group. Refresh its current permissions and try again.",
-        );
-        if (saved) onClose();
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !action.busy) onClose();
       }}
     >
-      {group &&
-        props.groups.find((row) => row.id === group.id)?.revision !==
-          group.revision && (
-          <p role="alert" className="text-sm text-destructive">
-            This group changed while you were editing. Your draft is retained.
-            Cancel and reopen Update to use the current revision.
-          </p>
-        )}
-      <fieldset disabled={action.busy} className="space-y-5">
-        <legend className="mb-4 text-sm font-semibold">
-          {group ? `Update ${group.name}` : "Create permission group"}
-        </legend>
-        <div className="space-y-2">
-          <Label htmlFor={`${id}-name`}>Name</Label>
-          <Input
-            id={`${id}-name`}
-            required
-            maxLength={120}
-            value={draft.name}
-            onChange={(event) =>
-              setDraft({ ...draft, name: event.target.value })
-            }
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor={`${id}-description`}>Description</Label>
-          <Textarea
-            id={`${id}-description`}
-            maxLength={2000}
-            value={draft.description}
-            onChange={(event) =>
-              setDraft({ ...draft, description: event.target.value })
-            }
-          />
-        </div>
-        <fieldset className="space-y-3 border-t pt-4">
-          <legend className="text-sm font-medium">Project skills</legend>
-          <p className="text-xs text-muted-foreground">
-            Members inherit these skills. Explicit Restart refreshes native
-            skill discovery; saving never starts work.
-          </p>
-          {(props.skills ?? []).map((skill) => (
-            <Choice
-              key={skill.id}
-              checked={(draft.grants.skillIds ?? []).includes(skill.id)}
-              onChange={(checked) =>
-                setDraft((current) => ({
-                  ...current,
-                  grants: {
-                    ...current.grants,
-                    skillIds: checked
-                      ? [
-                          ...new Set([
-                            ...(current.grants.skillIds ?? []),
-                            skill.id,
-                          ]),
-                        ]
-                      : (current.grants.skillIds ?? []).filter(
-                          (id) => id !== skill.id,
-                        ),
+      <DialogContent
+        className="flex max-h-[85dvh] flex-col sm:max-w-2xl"
+        showCloseButton={!action.busy}
+      >
+        <DialogHeader>
+          <DialogTitle>{group ? "Edit group" : "Create group"}</DialogTitle>
+          <DialogDescription>
+            {group
+              ? `Manage access for ${group.name}.`
+              : "Choose the permissions and resources members of this group inherit."}
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          className="flex min-h-0 flex-col gap-5"
+          onSubmit={async (event) => {
+            event.preventDefault();
+            if (!draft.name.trim()) return;
+            const saved = await action.run(
+              () =>
+                props.onSave({
+                  id: group?.id ?? null,
+                  expectedRevision: group?.revision ?? null,
+                  draft: {
+                    ...draft,
+                    name: draft.name.trim(),
+                    description: draft.description.trim(),
                   },
-                }))
-              }
-              description={skill.description}
-            >
-              {skill.name}
-            </Choice>
-          ))}
-          {(draft.grants.skillIds ?? [])
-            .filter(
-              (id) => !(props.skills ?? []).some((skill) => skill.id === id),
-            )
-            .map((id) => (
-              <Choice
-                key={id}
-                checked
-                onChange={() =>
-                  setDraft((current) => ({
-                    ...current,
-                    grants: {
-                      ...current.grants,
-                      skillIds: (current.grants.skillIds ?? []).filter(
-                        (value) => value !== id,
-                      ),
-                    },
-                  }))
-                }
-                description="Unavailable project skill; retained until explicitly removed."
-              >
-                {id}
-              </Choice>
-            ))}
-        </fieldset>
-        <fieldset className="space-y-3">
-          <legend className="mb-2 text-sm font-medium">
-            Service capabilities
-          </legend>
-          {props.capabilities.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No discovered capabilities are available. Connect a service and
-              refresh its catalogue first.
-            </p>
-          )}
-          {props.connections.map((connection) => {
-            const capabilities = props.capabilities.filter(
-              (item) => item.connectionId === connection.id,
+                }),
+              "Permission group saved.",
+              "Could not save this group. Refresh its current permissions and try again.",
             );
-            if (!capabilities.length) return null;
-            return (
-              <div key={connection.id} className="border-t pt-3">
-                <h4 className="text-sm font-medium">
-                  {connection.name} · {connection.identity.displayName}
-                </h4>
-                {capabilities.map((capability) => (
+            if (saved) onClose();
+          }}
+        >
+          <div className="min-h-0 space-y-5 overflow-y-auto px-1">
+            {group &&
+              props.groups.find((row) => row.id === group.id)?.revision !==
+                group.revision && (
+                <p role="alert" className="text-sm text-destructive">
+                  This group changed while you were editing. Your draft is
+                  retained. Cancel and reopen Edit to use the current revision.
+                </p>
+              )}
+            <fieldset disabled={action.busy} className="space-y-5">
+              <legend className="sr-only">
+                {group ? `Update ${group.name}` : "Create permission group"}
+              </legend>
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-name`}>Name</Label>
+                <Input
+                  id={`${id}-name`}
+                  required
+                  maxLength={120}
+                  value={draft.name}
+                  onChange={(event) =>
+                    setDraft({ ...draft, name: event.target.value })
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor={`${id}-description`}>Description</Label>
+                <Textarea
+                  id={`${id}-description`}
+                  maxLength={2000}
+                  value={draft.description}
+                  onChange={(event) =>
+                    setDraft({ ...draft, description: event.target.value })
+                  }
+                />
+              </div>
+              <fieldset className="space-y-3 border-t pt-4">
+                <legend className="text-sm font-medium">Project skills</legend>
+                <p className="text-xs text-muted-foreground">
+                  Members inherit these skills. Explicit Restart refreshes
+                  native skill discovery; saving never starts work.
+                </p>
+                {(props.skills ?? []).map((skill) => (
                   <Choice
-                    key={capability.id}
-                    checked={draft.grants.services.some(
-                      (item) =>
-                        item.connectionId === connection.id &&
-                        item.capabilities.includes(capability.id),
-                    )}
+                    key={skill.id}
+                    checked={(draft.grants.skillIds ?? []).includes(skill.id)}
                     onChange={(checked) =>
-                      setCapability(connection.id, capability.id, checked)
+                      setDraft((current) => ({
+                        ...current,
+                        grants: {
+                          ...current.grants,
+                          skillIds: checked
+                            ? [
+                                ...new Set([
+                                  ...(current.grants.skillIds ?? []),
+                                  skill.id,
+                                ]),
+                              ]
+                            : (current.grants.skillIds ?? []).filter(
+                                (id) => id !== skill.id,
+                              ),
+                        },
+                      }))
                     }
-                    description={
-                      <>
-                        {capability.description}
-                        <span className="block font-mono">{capability.id}</span>
-                      </>
-                    }
+                    description={skill.description}
                   >
-                    {capability.upstreamName}
+                    {skill.name}
                   </Choice>
                 ))}
-              </div>
-            );
-          })}
-          {unknownServices.map(({ connectionId, capability }) => (
-            <div
-              key={`${connectionId}:${capability}`}
-              className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
-            >
-              <span className="break-all">
-                {capability} · unavailable in the current catalogue; retained
-              </span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setCapability(connectionId, capability, false)}
-              >
-                Remove
-              </Button>
-            </div>
-          ))}
-          <p className="text-xs leading-5 text-muted-foreground">
-            A group capability permits all schema-valid arguments for that
-            operation. Use an access request for a narrower, individually
-            approved scope.
-          </p>
-        </fieldset>
-        <details className="border-t pt-4">
-          <summary className="cursor-pointer text-sm font-medium">
-            Crew permissions
-          </summary>
-          <div className="mt-3 space-y-3">
-            {props.crewCapabilities.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                The Crew permission catalogue is unavailable. Existing
-                permissions are retained.
-              </p>
-            )}
-            {props.crewCapabilities.map((choice) => {
-              const permission = draft.grants.crew.find(
-                (item) => item.action === choice.action,
-              );
-              return (
-                <div key={choice.action}>
-                  <Choice
-                    checked={!!permission}
-                    onChange={(checked) =>
-                      setCrew(
-                        choice.action,
-                        checked ? { action: choice.action } : null,
-                      )
-                    }
-                    description={choice.description}
+                {(draft.grants.skillIds ?? [])
+                  .filter(
+                    (id) =>
+                      !(props.skills ?? []).some((skill) => skill.id === id),
+                  )
+                  .map((id) => (
+                    <Choice
+                      key={id}
+                      checked
+                      onChange={() =>
+                        setDraft((current) => ({
+                          ...current,
+                          grants: {
+                            ...current.grants,
+                            skillIds: (current.grants.skillIds ?? []).filter(
+                              (value) => value !== id,
+                            ),
+                          },
+                        }))
+                      }
+                      description="Unavailable project skill; retained until explicitly removed."
+                    >
+                      {id}
+                    </Choice>
+                  ))}
+              </fieldset>
+              <fieldset className="space-y-3">
+                <legend className="mb-2 text-sm font-medium">
+                  Service capabilities
+                </legend>
+                {props.capabilities.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    No discovered capabilities are available. Connect a service
+                    and refresh its catalogue first.
+                  </p>
+                )}
+                {props.connections.map((connection) => {
+                  const capabilities = props.capabilities.filter(
+                    (item) => item.connectionId === connection.id,
+                  );
+                  if (!capabilities.length) return null;
+                  return (
+                    <div key={connection.id} className="border-t pt-3">
+                      <h4 className="text-sm font-medium">
+                        {connection.name} · {connection.identity.displayName}
+                      </h4>
+                      {capabilities.map((capability) => (
+                        <Choice
+                          key={capability.id}
+                          checked={draft.grants.services.some(
+                            (item) =>
+                              item.connectionId === connection.id &&
+                              item.capabilities.includes(capability.id),
+                          )}
+                          onChange={(checked) =>
+                            setCapability(connection.id, capability.id, checked)
+                          }
+                          description={
+                            permissionLabel(
+                              capability.description,
+                            ).toLowerCase() ===
+                            permissionLabel(
+                              capability.upstreamName,
+                            ).toLowerCase()
+                              ? undefined
+                              : capability.description
+                          }
+                        >
+                          {permissionLabel(capability.upstreamName)}
+                        </Choice>
+                      ))}
+                    </div>
+                  );
+                })}
+                {unknownServices.map(({ connectionId, capability }) => (
+                  <div
+                    key={`${connectionId}:${capability}`}
+                    className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
                   >
-                    {choice.label}
-                  </Choice>
-                </div>
-              );
-            })}
-            {draft.grants.crew
-              .filter(
-                (permission) =>
-                  !props.crewCapabilities.some(
-                    (choice) => choice.action === permission.action,
-                  ),
-              )
-              .map((permission) => (
-                <p
-                  key={permission.action}
-                  className="break-words text-xs text-muted-foreground"
-                >
-                  {permission.action} · existing permission retained
+                    <span className="break-all">
+                      Unavailable permission ·{" "}
+                      {props.connections.find(
+                        (connection) => connection.id === connectionId,
+                      )?.name ?? "Unavailable connection"}
+                      . Existing access retained until removed.
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        setCapability(connectionId, capability, false)
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+                <p className="text-xs leading-5 text-muted-foreground">
+                  A group capability permits all schema-valid arguments for that
+                  operation. Use an access request for a narrower, individually
+                  approved scope.
                 </p>
-              ))}
-          </div>
-        </details>
-        <fieldset className="space-y-3 border-t pt-4">
-          <legend className="text-sm font-medium">Workspaces</legend>
-          <p className="text-sm text-muted-foreground">
-            Choose the approved folders agents in this group can use. Configure
-            folders in Workspace settings.
-          </p>
-          {workspaces.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              No approved workspaces are available.
-            </p>
-          )}
-          {workspaces.map((workspace) => (
-            <Choice
-              key={workspace.policy.id}
-              checked={workspace.policyIds.some((id) =>
-                draft.grants.environmentPolicyIds.includes(id),
-              )}
-              onChange={(checked) => setWorkspace(workspace.policyIds, checked)}
-              description={workspace.description}
-            >
-              {workspace.label}
-            </Choice>
-          ))}
-          {draft.grants.environmentPolicyIds
-            .filter(
-              (id) =>
-                !workspaces.some((workspace) =>
-                  workspace.policyIds.includes(id),
-                ),
-            )
-            .map((id) => (
-              <div
-                key={id}
-                className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
-              >
-                <span className="break-all">
-                  {id} · workspace unavailable; existing permission retained
-                </span>
-                <Button
+              </fieldset>
+              <Collapsible className="border-t pt-4">
+                <CollapsibleTrigger
                   type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setWorkspace([id], false)}
+                  className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
                 >
-                  Remove
-                </Button>
-              </div>
-            ))}
-        </fieldset>
-      </fieldset>
-      <ErrorMessage>{action.error}</ErrorMessage>
-      <FormActions
-        busy={action.busy}
-        disabled={!draft.name.trim()}
-        onCancel={onClose}
-      />
-    </form>
+                  <DisclosureChevronDown
+                    className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                    aria-hidden="true"
+                  />
+                  Crew permissions
+                </CollapsibleTrigger>
+                <CollapsibleContent keepMounted>
+                  <div className="mt-3 space-y-3">
+                    {props.crewCapabilities.length === 0 && (
+                      <p className="text-sm text-muted-foreground">
+                        The Crew permission catalogue is unavailable. Existing
+                        permissions are retained.
+                      </p>
+                    )}
+                    {props.crewCapabilities.map((choice) => {
+                      const permission = draft.grants.crew.find(
+                        (item) => item.action === choice.action,
+                      );
+                      return (
+                        <div key={choice.action}>
+                          <Choice
+                            checked={!!permission}
+                            onChange={(checked) =>
+                              setCrew(
+                                choice.action,
+                                checked ? { action: choice.action } : null,
+                              )
+                            }
+                            description={choice.description}
+                          >
+                            {choice.label}
+                          </Choice>
+                        </div>
+                      );
+                    })}
+                    {draft.grants.crew
+                      .filter(
+                        (permission) =>
+                          !props.crewCapabilities.some(
+                            (choice) => choice.action === permission.action,
+                          ),
+                      )
+                      .map((permission) => (
+                        <p
+                          key={permission.action}
+                          className="break-words text-xs text-muted-foreground"
+                        >
+                          {permission.action} · existing permission retained
+                        </p>
+                      ))}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+              <fieldset className="space-y-3 border-t pt-4">
+                <legend className="text-sm font-medium">Workspaces</legend>
+                <p className="text-sm text-muted-foreground">
+                  Choose the approved folders agents in this group can use.
+                  Configure folders in Workspace settings.
+                </p>
+                {workspaces.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    No approved workspaces are available.
+                  </p>
+                )}
+                {workspaces.map((workspace) => (
+                  <Choice
+                    key={workspace.policy.id}
+                    checked={workspace.policyIds.some((id) =>
+                      draft.grants.environmentPolicyIds.includes(id),
+                    )}
+                    onChange={(checked) =>
+                      setWorkspace(workspace.policyIds, checked)
+                    }
+                    description={workspace.description}
+                  >
+                    {workspace.label}
+                  </Choice>
+                ))}
+                {draft.grants.environmentPolicyIds
+                  .filter(
+                    (id) =>
+                      !workspaces.some((workspace) =>
+                        workspace.policyIds.includes(id),
+                      ),
+                  )
+                  .map((id) => (
+                    <div
+                      key={id}
+                      className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+                    >
+                      <span className="break-all">
+                        {id} · workspace unavailable; existing permission
+                        retained
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setWorkspace([id], false)}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+              </fieldset>
+            </fieldset>
+            <ErrorMessage>{action.error}</ErrorMessage>
+          </div>
+          <DialogFooter>
+            <FormActions
+              label={group ? "Save changes" : "Create group"}
+              busy={action.busy}
+              disabled={!draft.name.trim()}
+              onCancel={onClose}
+            />
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

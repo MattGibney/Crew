@@ -1,3 +1,7 @@
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { useEffect, useRef, useState } from "react";
 import type {
   ManagerSchedule,
@@ -98,7 +102,7 @@ export function ManagerSchedules({
     }
   };
   return (
-    <div className="space-y-6">
+    <div className="space-y-8 pb-8">
       <p className="text-sm leading-6 text-muted-foreground">
         Schedules run only while the {subject} is running and available. Calls,
         active work and restart preparation defer them. Missed times do not
@@ -114,21 +118,24 @@ export function ManagerSchedules({
       {entries.map((schedule) => (
         <section
           key={schedule.id}
-          className="border-t py-5"
+          className="space-y-6"
           aria-label={schedule.name}
         >
+          <Separator />
           <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="font-medium">{schedule.name}</h3>
+              <h3 className="text-base font-semibold">{schedule.name}</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {schedule.enabled ? "Enabled" : "Disabled"} ·{" "}
+                <Badge variant="secondary" className="mr-2">
+                  {schedule.enabled ? "Enabled" : "Disabled"}
+                </Badge>{" "}
                 {schedule.timing.kind === "interval"
                   ? `Every ${schedule.timing.minutes} minutes`
                   : `Daily at ${schedule.timing.time} (${schedule.timing.timeZone})`}
               </p>
             </div>
             <Button
-              variant="outline"
+              variant="ghost"
               onClick={() =>
                 setEditing(editing === schedule.id ? null : schedule.id)
               }
@@ -136,7 +143,7 @@ export function ManagerSchedules({
               {editing === schedule.id ? "Close" : "Edit"}
             </Button>
           </div>
-          <div className="mt-3 text-xs leading-6 text-muted-foreground">
+          <div className="grid gap-x-6 gap-y-1 text-xs leading-6 text-muted-foreground sm:grid-cols-2">
             <p>
               Last submitted: {stamp(schedule.run?.lastAt)} · Next check:{" "}
               {schedule.enabled ? stamp(schedule.run?.nextAt) : "Disabled"}
@@ -149,14 +156,13 @@ export function ManagerSchedules({
             )}
           </div>
           {editing === schedule.id && (
-            <div className="mt-5 space-y-4">
+            <div className="grid gap-6 md:ml-auto md:w-[calc(71.43%-1rem)]">
               <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
+                <Switch
                   id={`enabled-${schedule.id}`}
                   checked={schedule.enabled}
-                  onChange={(event) =>
-                    update(schedule.id, { enabled: event.target.checked })
+                  onCheckedChange={(checked) =>
+                    update(schedule.id, { enabled: checked })
                   }
                 />
                 <Label htmlFor={`enabled-${schedule.id}`}>Enabled</Label>
@@ -195,39 +201,37 @@ export function ManagerSchedules({
               </div>
               <fieldset className="space-y-3">
                 <legend className="mb-2 text-sm font-medium">When</legend>
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      name={`timing-${schedule.id}`}
-                      checked={schedule.timing.kind === "interval"}
-                      onChange={() =>
-                        update(schedule.id, {
-                          timing: { kind: "interval", minutes: 10 },
-                        })
-                      }
-                    />
+                <RadioGroup
+                  className="flex gap-4"
+                  name={`timing-${schedule.id}`}
+                  value={schedule.timing.kind}
+                  aria-label="Schedule timing"
+                  onValueChange={(kind) => {
+                    if (kind === "interval") {
+                      update(schedule.id, {
+                        timing: { kind: "interval", minutes: 10 },
+                      });
+                    } else if (kind === "daily") {
+                      update(schedule.id, {
+                        timing: {
+                          kind: "daily",
+                          time: "09:00",
+                          timeZone:
+                            Intl.DateTimeFormat().resolvedOptions().timeZone,
+                        },
+                      });
+                    }
+                  }}
+                >
+                  <Label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value="interval" />
                     Interval
-                  </label>
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="radio"
-                      name={`timing-${schedule.id}`}
-                      checked={schedule.timing.kind === "daily"}
-                      onChange={() =>
-                        update(schedule.id, {
-                          timing: {
-                            kind: "daily",
-                            time: "09:00",
-                            timeZone:
-                              Intl.DateTimeFormat().resolvedOptions().timeZone,
-                          },
-                        })
-                      }
-                    />
+                  </Label>
+                  <Label className="flex items-center gap-2 text-sm">
+                    <RadioGroupItem value="daily" />
                     Daily
-                  </label>
-                </div>
+                  </Label>
+                </RadioGroup>
                 {schedule.timing.kind === "interval" ? (
                   <div className="space-y-2">
                     <Label htmlFor={`minutes-${schedule.id}`}>
@@ -295,7 +299,8 @@ export function ManagerSchedules({
                 )}
               </fieldset>
               <Button
-                variant="outline"
+                variant="destructive"
+                className="justify-self-start"
                 disabled={saving}
                 onClick={() => {
                   setRevision(revision ?? saved?.revision ?? null);

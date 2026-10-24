@@ -40,9 +40,8 @@ export interface WorkspaceExecutionPolicy {
     inode: number;
     hostAccessAcknowledged: true;
   };
-  /** TCP outbound plus DNS when approved. Nonempty localhostPorts currently fail
-   * closed: this macOS backend cannot enforce loopback-only server binding.
-   * inboundPorts explicitly approves incoming TCP on those ports on ALL interfaces. */
+  /** Outbound internet access remains opt-in. Workspace TCP/UDP server ports
+   * and loopback connections are unrestricted; port arrays are legacy metadata. */
   network?: {
     outbound: boolean;
     localhostPorts: number[];
@@ -110,21 +109,6 @@ async function prepareExecution(
       ))
   )
     throw new Error("Invalid approved workspace network capability.");
-  if (
-    policy.network?.inboundPorts !== undefined &&
-    (!Array.isArray(policy.network.inboundPorts) ||
-      policy.network.inboundPorts.length > 16 ||
-      policy.network.inboundPorts.some(
-        (port) => !Number.isSafeInteger(port) || port < 1024 || port > 65535,
-      ))
-  )
-    throw new Error(
-      "Incoming TCP requires at most 16 explicitly approved high ports.",
-    );
-  if (policy.network?.localhostPorts.length)
-    throw new Error(
-      "Localhost servers are unavailable: this macOS executor cannot enforce loopback-only access. Use a supported isolated server transport.",
-    );
   const roots = [
     policy.workspaceDirectory,
     policy.privateDirectory,

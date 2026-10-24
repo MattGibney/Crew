@@ -1,3 +1,11 @@
+import { useSidebarWidth } from "./useSidebarWidth";
+import { AgentObjectives } from "./AgentObjectives";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { TriangleAlert, ChevronDown, MoreVertical } from "lucide-react";
+import { Table, TableCaption, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
+import { Toaster } from "@/components/ui/sonner";
+import { SettingsToast } from "../manager/settings/SettingsToast";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
@@ -36,8 +44,24 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { OnlineStatus } from "@/components/online-status";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Message } from "../manager/Message";
 import { ArchivedAgentsSettings } from "./ArchivedAgentsSettings";
+import { ManagerOverview } from "./ManagerOverview";
 import { AgentPicture, useAgentPicture } from "./AgentPicture";
 import { useConversationHistory } from "./useConversationHistory";
 import { useVoiceArtifacts } from "./useVoiceArtifacts";
@@ -98,6 +122,8 @@ export interface AgentsAppProps {
   client: AgentsClient;
   /** #89 supplies access, connections and approval panels; foundation owns navigation. */
   settingsPanels?: AgentSettingsPanel[];
+  /** Service access decisions appear alongside questions and native approvals. */
+  renderAccessApprovals?: AgentSettingsPanel["render"];
   banner?: ReactNode;
   /** Return null once owner setup is complete. Opening setup starts no work. */
   renderSetup?: (context: {
@@ -116,7 +142,6 @@ export interface AgentsAppProps {
     onTranscript: (items: LiveTranscriptItem[]) => void;
   }) => ReactNode;
   headerActions?: ReactNode;
-  headerUpdates?: ReactNode;
   nativeWindow?: boolean;
   navigationRequest?: { id: string; view: View };
   renderPreparationActions?: (context: {
@@ -131,8 +156,10 @@ type Action = (
   success?: string,
 ) => Promise<boolean>;
 type View =
+  | "managers"
   | "browser"
   | "conversation"
+  | "objectives"
   | "agents"
   | "scratchpad"
   | "inbox"
@@ -152,18 +179,18 @@ export function AgentsApp({
   renderBrowser,
   client,
   settingsPanels = [],
+  renderAccessApprovals,
   banner,
   renderSetup,
   renderVoice,
   headerActions,
-  headerUpdates,
   nativeWindow = false,
   navigationRequest,
   renderPreparationActions,
 }: AgentsAppProps) {
   const [snapshot, setSnapshot] = useState<AgentsSnapshot | null>(null);
-  const [view, setView] = useState<View>("conversation");
-  const [settingsReturn, setSettingsReturn] = useState<View>("conversation");
+  const [view, setView] = useState<View>("managers");
+  const [settingsReturn, setSettingsReturn] = useState<View>("managers");
   const [settingsRequest, setSettingsRequest] = useState({
     id: "initial",
     page: "crew-sessions",
@@ -182,7 +209,7 @@ export function AgentsApp({
   );
   const [secondaryVoiceTarget, setSecondaryVoiceTarget] =
     useState<HTMLElement | null>(null);
-  const [workerWidth, setWorkerWidth] = useState<number | null>(null);
+  const [workerWidth, setWorkerWidth] = useSidebarWidth();
   const [workspaceWidth, setWorkspaceWidth] = useState(1000);
   const workspace = useRef<HTMLElement | null>(null);
   const resizing = useRef(false);
@@ -293,7 +320,14 @@ export function AgentsApp({
     ) ?? null;
   useEffect(() => {
     setSelectedId(null);
-    setView((current) => (current === "agents" ? "conversation" : current));
+    setView((current) =>
+      !primary &&
+      ["conversation", "objectives", "agents", "scratchpad", "browser"].includes(current)
+        ? "managers"
+        : current === "agents"
+          ? "conversation"
+          : current,
+    );
   }, [primary?.id]);
   useEffect(() => {
     if (
@@ -316,6 +350,30 @@ export function AgentsApp({
     if (view !== "settings") setSettingsReturn(view);
     if (page) setSettingsRequest({ id: crypto.randomUUID(), page });
     setView("settings");
+  };
+  const openManager = async (agent: Agent) => {
+    if (pending.has("contact")) return;
+    if (primary?.id !== agent.id) {
+      const settings = snapshot?.projectSettings;
+      if (!client.selectContact || !settings) {
+        setError(
+          "Agent selection is unavailable. Refresh the project and try again.",
+        );
+        return;
+      }
+      const selected = await act("contact", async () => {
+        await client.selectContact!(agent.id, settings.revision);
+        const next = await client.readSnapshot();
+        if (primaryAgentId(next) !== agent.id)
+          throw new Error(
+            "The selected agent could not be confirmed. Please try again.",
+          );
+        setSnapshot(next);
+      });
+      if (!selected) return;
+    }
+    setSelectedId(null);
+    setView("conversation");
   };
   const setup = snapshot
     ? renderSetup?.({
@@ -340,22 +398,9 @@ export function AgentsApp({
         {
           id: "crew-sessions",
           label: "Sessions",
-          description: "Manage the selected agent session for this project.",
+          description: "Manage sessions for your team members and worker agents.",
           icon: Radio,
-          render: () =>
-            primary ? (
-              <AgentSessionPanel
-                agent={primary}
-                skills={snapshot.skills}
-                pending={pending}
-                act={act}
-                client={client}
-              />
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Choose an agent in Agents settings.
-              </p>
-            ),
+          render: () => <AgentSessionsSettings agents={snapshot.agents} skills={snapshot.skills} pending={pending} act={act} client={client} />,
         },
         ...settingsPanels.map((panel) => ({
           ...panel,
@@ -390,31 +435,32 @@ export function AgentsApp({
           label: "Questions and approvals",
           description: "Review requests that need your decision.",
           icon: CircleHelp,
-          render: () => (
-            <OwnerInbox
-              snapshot={snapshot}
-              client={client}
-              pending={pending}
-              act={act}
-              openAgent={showWorker}
-            />
+          render: (context) => (
+            <div className="space-y-10">
+              <OwnerInbox
+                snapshot={snapshot}
+                client={client}
+                pending={pending}
+                act={act}
+                openAgent={showWorker}
+              />
+              {renderAccessApprovals && <Separator />}
+              {renderAccessApprovals?.(context)}
+            </div>
           ),
         },
         {
           id: "crew-preparation",
-          label: "Restart and Quit",
+          label: "Quit Crew",
           description:
-            "Review continuation notes and readiness before closing Crew.",
+            "Close Crew while keeping your agents and saved conversations.",
           icon: RotateCw,
-          render: () => (
-            <Preparation
-              snapshot={snapshot}
-              client={client}
-              pending={pending}
-              act={act}
-              actions={renderPreparationActions?.({ snapshot, refresh })}
-            />
-          ),
+          render: () =>
+            renderPreparationActions?.({ snapshot, refresh }) ?? (
+              <p className="text-sm text-muted-foreground">
+                Use the desktop application menu to quit Crew.
+              </p>
+            ),
         },
       ]
     : [];
@@ -423,6 +469,7 @@ export function AgentsApp({
     !setupVisible &&
     (view === "conversation" ||
       view === "agents" ||
+      view === "objectives" ||
       view === "scratchpad" ||
       view === "browser") &&
     !detailVisible;
@@ -466,7 +513,7 @@ export function AgentsApp({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {renderBrowser && (
+          {renderBrowser && view !== "managers" && primary && !setupVisible && (
             <Button
               variant={view === "browser" ? "secondary" : "ghost"}
               aria-pressed={view === "browser"}
@@ -489,7 +536,6 @@ export function AgentsApp({
             <span className="hidden sm:inline">Settings</span>
             <span className="sr-only sm:hidden">Settings</span>
           </Button>
-          {headerUpdates}
         </div>
       </header>
       {banner && (
@@ -499,42 +545,71 @@ export function AgentsApp({
       )}
       <nav
         aria-label="Workspace views"
-        className={`${normalView ? "flex" : "hidden"} shrink-0 gap-1 border-b px-3 py-2 sm:px-5`}
+        className={`${normalView ? "flex" : "hidden"} shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:px-5`}
       >
-        <Button
-          variant={view === "conversation" ? "secondary" : "ghost"}
-          aria-pressed={view === "conversation"}
-          className="h-8 text-xs"
-          onClick={() => {
-            setView("conversation");
-            setSelectedId(null);
-          }}
-        >
-          <MessageSquare />
-          Conversation
-          {attentionCount > 0 && <Badge>{attentionCount} to review</Badge>}
-        </Button>
-        <Button
-          variant={view === "agents" ? "secondary" : "ghost"}
-          aria-pressed={view === "agents"}
-          className="h-8 text-xs"
-          onClick={() => {
-            setView("agents");
-            setSelectedId(null);
-          }}
-        >
-          <Layers />
-          Workers
-        </Button>
-        <Button
-          variant={view === "scratchpad" ? "secondary" : "ghost"}
-          aria-pressed={view === "scratchpad"}
-          className="h-8 text-xs"
-          onClick={() => setView("scratchpad")}
-        >
-          <NotebookPen />
-          Scratchpad
-        </Button>
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setSelectedId(null);
+              setView("managers");
+            }}
+          >
+            <ArrowLeft aria-hidden="true" />
+            Team members
+          </Button>
+          {primary && (
+            <span className="min-w-0 truncate text-sm font-semibold">
+              {primary.profile.name}
+            </span>
+          )}
+        </div>
+        <div className="flex w-full flex-wrap gap-1 sm:w-auto">
+          <Button
+            variant={view === "conversation" ? "secondary" : "ghost"}
+            aria-pressed={view === "conversation"}
+            className="h-8 text-xs"
+            onClick={() => {
+              setView("conversation");
+              setSelectedId(null);
+            }}
+          >
+            <MessageSquare />
+            Conversation
+            {attentionCount > 0 && <Badge>{attentionCount} to review</Badge>}
+          </Button>
+          <Button
+            variant={view === "objectives" ? "secondary" : "ghost"}
+            aria-pressed={view === "objectives"}
+            className="h-8 text-xs lg:hidden"
+            onClick={() => { setView("objectives"); setSelectedId(null); }}
+          >
+            <LayoutDashboard />
+            Objectives
+          </Button>
+          <Button
+            variant={view === "agents" ? "secondary" : "ghost"}
+            aria-pressed={view === "agents"}
+            className="h-8 text-xs"
+            onClick={() => {
+              setView("agents");
+              setSelectedId(null);
+            }}
+          >
+            <Layers />
+            Workers
+          </Button>
+          <Button
+            variant={view === "scratchpad" ? "secondary" : "ghost"}
+            aria-pressed={view === "scratchpad"}
+            className="h-8 text-xs"
+            onClick={() => setView("scratchpad")}
+          >
+            <NotebookPen />
+            Scratchpad
+          </Button>
+        </div>
       </nav>
       {error && (
         <div
@@ -577,36 +652,18 @@ export function AgentsApp({
               {setup}
             </section>
           )}
-          {!setupVisible &&
-            client.selectContact &&
-            snapshot.projectSettings && (
-              <label className="flex shrink-0 items-center gap-3 border-b px-5 py-2 text-sm">
-                Talk to
-                <select
-                  className="min-w-0 rounded-md border bg-background px-2 py-1"
-                  aria-label="Talk to agent"
-                  value={primary?.id ?? ""}
-                  disabled={pending.has("contact")}
-                  onChange={(event) =>
-                    void act("contact", () =>
-                      client.selectContact!(
-                        event.target.value,
-                        snapshot.projectSettings!.revision,
-                      ),
-                    )
-                  }
-                >
-                  {!primary && <option value="">Choose an agent</option>}
-                  {snapshot.agents
-                    .filter((agent) => !agent.archivedAt)
-                    .map((agent) => (
-                      <option value={agent.id} key={agent.id}>
-                        {agent.profile.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-            )}
+          <div
+            hidden={setupVisible || view !== "managers"}
+            className="min-h-0 flex-1 overflow-y-auto"
+          >
+            <ManagerOverview
+              snapshot={snapshot}
+              client={client}
+              pending={pending.has("contact")}
+              onOpen={(agent) => void openManager(agent)}
+              onManage={() => openSettings("agents")}
+            />
+          </div>
           <main
             ref={workspace}
             id="workspace-content"
@@ -617,7 +674,7 @@ export function AgentsApp({
                     "--crew-worker-width": `${workerWidth}px`,
                   } as CSSProperties)
             }
-            className={`${!setupVisible && (view === "conversation" || (view === "agents" && !selectedId)) ? "grid" : "hidden"} min-h-0 flex-1 ${view === "conversation" ? "manager-split" : ""}`}
+            className={`${!setupVisible && (view === "conversation" || view === "objectives" || (view === "agents" && !selectedId)) ? "grid" : "hidden"} min-h-0 flex-1 ${view === "conversation" ? "manager-split" : ""}`}
           >
             <section
               aria-label="Agent workspace"
@@ -670,7 +727,7 @@ export function AgentsApp({
             </section>
             <div
               role="separator"
-              aria-label="Resize worker panel"
+              aria-label="Resize objectives panel"
               aria-orientation="vertical"
               aria-valuemin={280}
               aria-valuemax={maximumWorkerWidth}
@@ -716,31 +773,41 @@ export function AgentsApp({
                       ? 280
                       : event.key === "End"
                         ? 720
-                        : (workerWidth || 560) + offset,
+                        : Math.min(workerWidth ?? 560, maximumWorkerWidth) + offset,
                   );
                 }
               }}
             />
             <aside
-              aria-label="Project workers"
+              aria-label={view === "conversation" || view === "objectives" ? "Agent objectives sidebar" : "Project workers"}
               className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${view === "conversation" ? "hidden lg:block" : "block"}`}
             >
-              <div className="mb-4 flex justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openSettings("agents")}
-                >
-                  <Plus />
-                  Manage agents
-                </Button>
-              </div>
-              <AgentWorkerList
-                snapshot={snapshot}
-                client={client}
-                onSelect={showWorker}
-                compact={view === "conversation"}
-              />
+              {(view === "conversation" || view === "objectives") && primary ? (
+                <AgentObjectives
+                  key={primary.id}
+                  jobs={snapshot.jobs}
+                  agentId={primary.id}
+                />
+              ) : (
+                <>
+                  <div className="mb-4 flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openSettings("agents")}
+                    >
+                      <Plus />
+                      Manage agents
+                    </Button>
+                  </div>
+                  <AgentWorkerList
+                    snapshot={snapshot}
+                    client={client}
+                    onSelect={showWorker}
+                    compact={false}
+                  />
+                </>
+              )}
             </aside>
           </main>
           {renderBrowser?.({
@@ -797,7 +864,10 @@ export function AgentsApp({
           <div
             ref={setSecondaryVoiceTarget}
             hidden={
-              setupVisible || view === "conversation" || view === "settings"
+              setupVisible ||
+              view === "conversation" ||
+              view === "settings" ||
+              view === "managers"
             }
             className="shrink-0 border-t bg-background"
           />
@@ -816,9 +886,10 @@ export function AgentsApp({
           {renderVoice?.({
             primaryAgent: primary,
             snapshot,
-            visible: !setupVisible && view !== "settings",
+            visible:
+              !setupVisible && view !== "settings" && view !== "managers",
             mode:
-              setupVisible || view === "settings"
+              setupVisible || view === "settings" || view === "managers"
                 ? "hidden"
                 : view === "conversation"
                   ? inputMode === "voice"
@@ -833,23 +904,9 @@ export function AgentsApp({
           })}
         </>
       )}
+      <Toaster position="bottom-right" closeButton />
       {toast && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-xl border bg-background px-4 py-3 text-sm shadow-lg"
-        >
-          <Check className="size-4 shrink-0 text-primary" />
-          <span>{toast}</span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Dismiss confirmation"
-            onClick={() => setToast("")}
-          >
-            <X />
-          </Button>
-        </div>
+        <SettingsToast message={toast} onDismiss={() => setToast("")} />
       )}
     </div>
   );
@@ -902,11 +959,12 @@ function AgentWorkerList({
             .toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
           return (
             <article key={agent.id} className="h-full min-w-0">
-              <button
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={() => onSelect(agent.id)}
                 aria-label={`Open worker ${agent.profile.name}`}
-                className="group flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="group items-stretch justify-start whitespace-normal flex h-full w-full min-w-0 flex-col rounded-xl border bg-card p-3 text-left shadow-xs transition-colors hover:border-primary/40 hover:bg-accent/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div className="flex min-h-5 flex-wrap items-center justify-between gap-1.5">
                   <WorkerReference
@@ -953,7 +1011,7 @@ function AgentWorkerList({
                       : `Session ${agent.runtime.session.observedState}`}
                   </p>
                 )}
-              </button>
+              </Button>
             </article>
           );
         })}
@@ -962,23 +1020,238 @@ function AgentWorkerList({
   );
 }
 
-function AgentSessionPanel({
+function AgentSessionsSettings({
+  agents,
+  skills,
+  client,
+  pending,
+  act,
+}: {
+  agents: Agent[];
+  skills: Skill[];
+  client: AgentsClient;
+  pending: Set<string>;
+  act: Action;
+}) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState("");
+  const bulkLock = useRef(false);
+  const mounted = useRef(true);
+  const latest = useRef({ agents, pending, act });
+  latest.current = { agents, pending, act };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    const activeIds = new Set(
+      agents.filter((agent) => !agent.archivedAt).map((agent) => agent.id),
+    );
+    setSelectedIds((current) => {
+      const next = new Set([...current].filter((id) => activeIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [agents]);
+  const active = agents.filter((agent) => !agent.archivedAt);
+  const selected = active.filter((agent) => selectedIds.has(agent.id));
+  const eligible = (agent: Agent, action: "start" | "stop" | "restart") =>
+    !agent.archivedAt &&
+    !latest.current.pending.has(`lifecycle-${agent.id}`) &&
+    !["starting", "stopping"].includes(agent.runtime.session.observedState) &&
+    !(
+      action === "start" && agent.runtime.session.observedState === "started"
+    ) &&
+    !(action === "stop" && agent.runtime.session.observedState === "stopped");
+  const runBulk = async (action: "start" | "stop" | "restart") => {
+    if (bulkLock.current) return;
+    const targets = selected.map((agent) => ({
+      id: agent.id,
+      name: agent.profile.name,
+    }));
+    if (!targets.length) return;
+    bulkLock.current = true;
+    setRunning(true);
+    setResult(
+      `${action[0].toUpperCase() + action.slice(1)} requested for ${targets.length} agents…`,
+    );
+    let completed = 0,
+      skipped = 0;
+    const failed: string[] = [];
+    try {
+      for (const target of targets) {
+        if (!mounted.current) break;
+        const current = latest.current.agents.find(
+          (agent) => agent.id === target.id,
+        );
+        if (!current || !eligible(current, action)) {
+          skipped++;
+          continue;
+        }
+        try {
+          const success = await latest.current.act(
+            `lifecycle-${target.id}`,
+            () => client.lifecycle(target.id, action),
+          );
+          if (success) completed++;
+          else failed.push(target.name);
+        } catch {
+          failed.push(target.name);
+        }
+      }
+      if (mounted.current)
+        setResult(
+          `${action[0].toUpperCase() + action.slice(1)}: ${completed} acknowledged${skipped ? `, ${skipped} skipped` : ""}${failed.length ? `. Failed or unconfirmed: ${failed.join(", ")}.` : "."}`,
+        );
+    } finally {
+      bulkLock.current = false;
+      if (mounted.current) setRunning(false);
+    }
+  };
+  return (
+    <div className="space-y-5">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <p className="text-sm font-medium">{selected.length} selected</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={running}
+              onClick={() => setSelectedIds(new Set())}
+            >
+              Clear selection
+            </Button>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" disabled={running} />}>
+              {running ? "Applying actions…" : "Bulk action"}<ChevronDown className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-44">
+              {(["start", "stop", "restart"] as const).map((action) => (
+                <DropdownMenuItem key={action} disabled={running || !selected.some((agent) => eligible(agent, action))} onClick={() => void runBulk(action)}>
+                  {action === "start" ? <Play /> : action === "stop" ? <Square /> : <RotateCw />}
+                  {action[0].toUpperCase() + action.slice(1)} selected
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      )}
+      {result && (
+        <p role="status" className="text-sm text-muted-foreground">
+          {result}
+        </p>
+      )}
+      <div className="overflow-x-auto rounded-lg border">
+        <Table className="w-full text-left text-sm">
+          <TableCaption className="sr-only">
+            All active agents and their sessions
+          </TableCaption>
+          <TableHeader className="border-b bg-muted/30 text-xs text-muted-foreground">
+            <TableRow>
+              <TableHead className="w-10 px-4 py-3">
+                <Checkbox
+                  aria-label="Select all agents"
+                  disabled={running || !active.length}
+                  checked={!!active.length && selected.length === active.length}
+                  indeterminate={
+                    selected.length > 0 && selected.length < active.length
+                  }
+                  onCheckedChange={(checked) => {
+                    setSelectedIds(
+                      checked
+                        ? new Set(active.map((agent) => agent.id))
+                        : new Set(),
+                    );
+                    setResult("");
+                  }}
+                />
+              </TableHead>
+              <TableHead className="px-4 py-3 font-medium">Agent</TableHead>
+              <TableHead className="px-4 py-3 font-medium">Status</TableHead>
+              <TableHead className="px-4 py-3 font-medium">
+                <span className="sr-only">Session controls</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="divide-y">
+            {active.map((agent) => (
+              <AgentSessionRow
+                key={agent.id}
+                agent={agent}
+                skills={skills}
+                pending={pending}
+                act={act}
+                client={client}
+                selected={selectedIds.has(agent.id)}
+                locked={running}
+                onSelect={(checked) => {
+                  setSelectedIds((current) => {
+                    const next = new Set(current);
+                    if (checked) next.add(agent.id);
+                    else next.delete(agent.id);
+                    return next;
+                  });
+                  setResult("");
+                }}
+              />
+            ))}
+            {!active.length && (
+              <TableRow>
+                <TableCell
+                  colSpan={4}
+                  className="px-4 py-8 text-muted-foreground"
+                >
+                  No active agents. Create or restore an agent in Settings.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        Stop preserves the chat, notes and resources. Start never connects voice
+        or creates an assignment.
+      </p>
+    </div>
+  );
+}
+
+function AgentSessionPanel(props: { agent: Agent; skills: Skill[]; client: AgentsClient; pending: Set<string>; act: Action }) {
+  return <div className="overflow-x-auto rounded-lg border"><Table>
+    <TableCaption className="sr-only">Session for {props.agent.profile.name}</TableCaption>
+    <TableHeader><TableRow><TableHead>Agent</TableHead><TableHead>Status</TableHead><TableHead><span className="sr-only">Session controls</span></TableHead></TableRow></TableHeader>
+    <TableBody><AgentSessionRow {...props} /></TableBody>
+  </Table></div>;
+}
+
+function AgentSessionRow({
   agent,
   skills,
   client,
   pending,
   act,
+  selected = false,
+  onSelect,
+  locked = false,
 }: {
   agent: Agent;
   skills: Skill[];
   client: AgentsClient;
   pending: Set<string>;
   act: Action;
+  selected?: boolean;
+  onSelect?(checked: boolean): void;
+  locked?: boolean;
 }) {
   const session = agent.runtime.session;
-  const busy =
+  const busy = locked ||
     ["starting", "stopping"].includes(session.observedState) ||
     pending.has(`lifecycle-${agent.id}`);
+  const needsRecovery = ["unknown", "error"].includes(session.observedState);
   const pendingProfile =
     !session.appliedConfiguration ||
     Boolean(
@@ -988,73 +1261,42 @@ function AgentSessionPanel({
     session.appliedConfiguration.profileRevision !== agent.profile.revision ||
     !sameSkills(agent, skills);
   return (
-    <div className="space-y-3">
-      <h2 className="text-sm font-semibold">{agent.profile.name}</h2>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <Badge
-          variant={
-            session.observedState === "started" ? "secondary" : "outline"
-          }
-        >
-          {session.instructionPreparation?.state === "compacting"
-            ? "Applying instructions"
-            : session.observedState}
-        </Badge>
-        <div className="flex flex-wrap gap-2">
-          {["unknown", "error"].includes(session.observedState) &&
-            client.recoverSession && (
-              <Button
-                variant="outline"
-                disabled={busy || Boolean(agent.archivedAt)}
-                onClick={() =>
-                  void act(`lifecycle-${agent.id}`, () =>
-                    client.recoverSession!(agent.id),
-                  )
-                }
-              >
-                Recover session
-              </Button>
-            )}
-          {(["start", "stop", "restart"] as const).map((action) => (
-            <Button
-              key={action}
-              variant="outline"
-              disabled={
-                busy ||
-                Boolean(agent.archivedAt) ||
-                (action === "start" && session.observedState === "started") ||
-                (action === "stop" && session.observedState === "stopped")
-              }
-              onClick={() =>
-                void act(`lifecycle-${agent.id}`, () =>
-                  client.lifecycle(agent.id, action),
-                )
-              }
-            >
-              {action === "start" ? (
-                <Play />
-              ) : action === "stop" ? (
-                <Square />
-              ) : (
-                <RotateCw />
-              )}
-              {action[0].toUpperCase() + action.slice(1)}
-            </Button>
-          ))}
+    <TableRow data-state={selected ? "selected" : undefined}>
+      {onSelect && <TableCell className="px-4 py-3 align-top"><Checkbox aria-label={`Select ${agent.profile.name}`} checked={selected} disabled={locked} onCheckedChange={(checked) => onSelect(!!checked)} /></TableCell>}
+      <TableCell className="px-4 py-3 align-top">
+        <div className="flex items-center gap-3">
+          <AgentPicture imageRef={agent.profile.pictureRef} client={client} className="size-10 shrink-0" />
+          <div><p className="font-medium">{agent.profile.name}</p><p className="mt-1 text-xs text-muted-foreground">{agent.reportsTo.type === "user" ? "Team member" : "Worker agent"}</p></div>
         </div>
-      </div>
-      <p className="text-xs leading-5 text-muted-foreground">
-        Stop preserves the chat, notes and resources. Start never connects voice
-        or creates an assignment.
-      </p>
-      {["unknown", "error"].includes(session.observedState) && (
-        <p className="text-xs leading-5 text-muted-foreground">
-          Recovery checks that the previous native process exited and its work
-          settled. It preserves your sign-in and chat and never stops a live
-          process.
-        </p>
+      </TableCell>
+      <TableCell className="px-4 py-3 align-top whitespace-normal"><div className="max-w-md space-y-2">
+        {session.instructionPreparation?.state === "compacting" ? (
+          <Badge variant="secondary">Applying instructions</Badge>
+        ) : ["started", "stopped"].includes(session.observedState) ? (
+          <OnlineStatus
+            online={session.observedState === "started"}
+            className="text-sm"
+          />
+        ) : needsRecovery ? (
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive"><TriangleAlert className="size-3.5" aria-hidden="true" />{session.observedState === "error" ? "Session error" : "Status unknown"}</span>
+        ) : (
+          <Badge variant="outline" className="capitalize">
+            {session.observedState}
+          </Badge>
+        )}
+      {needsRecovery && (
+        <Collapsible className="space-y-2">
+          <CollapsibleTrigger render={<Button variant="ghost" size="sm" className="group h-auto gap-1 px-0 py-0 text-xs text-muted-foreground" aria-label={`Session details for ${agent.profile.name}`} />}>
+            View details <ChevronDown className="size-3 transition-transform group-data-panel-open:rotate-180" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className="space-y-2 text-xs leading-5 text-muted-foreground">
+            {session.lastError && <p role="alert" className="break-words text-foreground">{session.lastError.message}</p>}
+            <p>Recovery checks that the previous process has exited before reconnecting. Your sign-in and chat are preserved.</p>
+            {pendingProfile && <p>Saved instructions or skills will apply when you restart.</p>}
+          </CollapsibleContent>
+        </Collapsible>
       )}
-      {pendingProfile &&
+      {pendingProfile && !needsRecovery &&
         session.instructionPreparation?.state !== "compacting" && (
           <p role="status" className="text-sm text-muted-foreground">
             {agent.runtime.threadId
@@ -1074,7 +1316,7 @@ function AgentSessionPanel({
           retained; check the session error before retrying.
         </p>
       )}
-      {session.lastError && (
+      {session.lastError && !needsRecovery && (
         <p
           role="alert"
           className="rounded-lg border border-destructive/30 p-3 text-sm text-destructive"
@@ -1082,7 +1324,47 @@ function AgentSessionPanel({
           {session.lastError.message}
         </p>
       )}
-    </div>
+      </div></TableCell>
+      <TableCell className="px-4 py-3 align-top">
+        <div role="group" aria-label={`Session controls for ${agent.profile.name}`}>
+        <div className="flex items-center justify-end gap-2">
+          {["unknown", "error"].includes(session.observedState) &&
+            client.recoverSession && (
+              <Button
+                variant="outline"
+                aria-label={`Recover session for ${agent.profile.name}`}
+                disabled={busy || Boolean(agent.archivedAt)}
+                onClick={() =>
+                  void act(`lifecycle-${agent.id}`, () =>
+                    client.recoverSession!(agent.id),
+                  )
+                }
+              >
+                <RotateCw className="size-4" /> Recover session
+              </Button>
+            )}
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="ghost" size="icon" aria-label={`Session actions for ${agent.profile.name}`} disabled={busy || Boolean(agent.archivedAt)} />}>
+              <MoreVertical className="size-4" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {(["start", "stop", "restart"] as const).map((action) => (
+                <DropdownMenuItem
+                  key={action}
+                  aria-label={`${action[0].toUpperCase() + action.slice(1)} session for ${agent.profile.name}`}
+                  disabled={busy || Boolean(agent.archivedAt) || (action === "start" && session.observedState === "started") || (action === "stop" && session.observedState === "stopped")}
+                  onClick={() => void act(`lifecycle-${agent.id}`, () => client.lifecycle(agent.id, action))}
+                >
+                  {action === "start" ? <Play /> : action === "stop" ? <Square /> : <RotateCw />}
+                  {action[0].toUpperCase() + action.slice(1)}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -1139,9 +1421,11 @@ function AgentDetail({
     (job) => job.assignment.assignedToAgentId === agent.id,
   );
   return (
-    <section
+    <Tabs
+      value={tab}
+      onValueChange={(value) => setTab(value as typeof tab)}
       aria-label="Worker detail"
-      className="flex min-h-0 flex-1 flex-col"
+      className="flex min-h-0 flex-1 flex-col gap-0"
     >
       <div className="shrink-0 border-b px-5 pt-4 sm:px-8">
         <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
@@ -1162,10 +1446,10 @@ function AgentDetail({
             Session {agent.runtime.session.observedState}
           </Badge>
         </div>
-        <div
-          role="tablist"
+        <TabsList
+          variant="line"
           aria-label="Worker detail tabs"
-          className="-mb-px mt-3 flex gap-4 overflow-x-auto sm:gap-5"
+          className="-mb-px mt-3 w-full justify-start overflow-x-auto"
         >
           {(
             [
@@ -1175,23 +1459,17 @@ function AgentDetail({
               ["links", "Links", Link2],
             ] as const
           ).map(([value, label, Icon]) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={tab === value}
-              onClick={() => setTab(value)}
-              className={`flex shrink-0 items-center gap-2 border-b-2 pb-3 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${tab === value ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-            >
+            <TabsTrigger key={value} value={value} className="flex-none">
               <Icon className="size-3.5" />
               {label}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
       </div>
-      <div
-        hidden={tab !== "conversation"}
-        className="min-h-0 flex-1 flex flex-col"
+      <TabsContent
+        value="conversation"
+        keepMounted
+        className="min-h-0 flex-1 flex flex-col data-[hidden]:hidden"
       >
         <Conversation
           agent={agent}
@@ -1204,15 +1482,17 @@ function AgentDetail({
           readOnly
           onReturnToPrimary={onBack}
         />
-      </div>
-      <div
-        hidden={tab !== "notes"}
+      </TabsContent>
+      <TabsContent
+        value="notes"
+        keepMounted
         className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
       >
         <AgentScratchpad agent={agent} />
-      </div>
-      <div
-        hidden={tab !== "overview"}
+      </TabsContent>
+      <TabsContent
+        value="overview"
+        keepMounted
         className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
       >
         <div className="mx-auto max-w-4xl space-y-8">
@@ -1263,9 +1543,10 @@ function AgentDetail({
             </Button>
           )}
         </div>
-      </div>
-      <div
-        hidden={tab !== "links"}
+      </TabsContent>
+      <TabsContent
+        value="links"
+        keepMounted
         className="min-h-0 flex-1 overflow-auto px-5 py-6 sm:px-8"
       >
         <div className="mx-auto max-w-3xl space-y-4">
@@ -1295,8 +1576,8 @@ function AgentDetail({
               </p>
             )}
         </div>
-      </div>
-    </section>
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -1419,6 +1700,17 @@ function Conversation({
     }
   };
   const effectiveMode = hasVoice ? inputMode : "text";
+  const voicePanelTarget = useRef<HTMLDivElement | null>(null);
+  const compactVoiceTarget = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Only the controls portal moves; the voice runtime and audio stay mounted.
+    voiceTarget?.(
+      effectiveMode === "voice"
+        ? voicePanelTarget.current
+        : compactVoiceTarget.current,
+    );
+    return () => voiceTarget?.(null);
+  }, [effectiveMode, voiceTarget]);
   return (
     <MessageScrollerProvider
       autoScroll
@@ -1662,36 +1954,45 @@ function Conversation({
                 )}
               {(intents.length > 0 || receipts.length > 0) && (
                 <MessageScrollerItem messageId="delivery-activity">
-                  <details className="rounded-lg border px-4 py-3 text-sm">
-                    <summary className="text-xs font-medium text-muted-foreground">
+                  <Collapsible className="rounded-lg border px-4 py-3 text-sm">
+                    <CollapsibleTrigger
+                      type="button"
+                      className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring text-xs font-medium text-muted-foreground"
+                    >
+                      <ChevronRight
+                        aria-hidden="true"
+                        className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+                      />
                       Delivery activity
                       {intents.length ? ` · ${intents.length} pending` : ""}
-                    </summary>
-                    <div className="mt-3 divide-y">
-                      {intents.map((message) => (
-                        <DeliveryItem
-                          key={message.id}
-                          message={message}
-                          client={client}
-                          snapshot={snapshot}
-                          act={act}
-                          pending={pending}
-                        />
-                      ))}
-                      {receipts
-                        .slice(-10)
-                        .reverse()
-                        .map((receipt) => (
-                          <p
-                            key={receipt.messageId}
-                            className="py-2 text-xs text-muted-foreground"
-                          >
-                            Accepted · {actorLabel(receipt.sender, snapshot)} ·{" "}
-                            {formatDate(receipt.acknowledgedAt)}
-                          </p>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent keepMounted>
+                      <div className="mt-3 divide-y">
+                        {intents.map((message) => (
+                          <DeliveryItem
+                            key={message.id}
+                            message={message}
+                            client={client}
+                            snapshot={snapshot}
+                            act={act}
+                            pending={pending}
+                          />
                         ))}
-                    </div>
-                  </details>
+                        {receipts
+                          .slice(-10)
+                          .reverse()
+                          .map((receipt) => (
+                            <p
+                              key={receipt.messageId}
+                              className="py-2 text-xs text-muted-foreground"
+                            >
+                              Accepted · {actorLabel(receipt.sender, snapshot)}{" "}
+                              · {formatDate(receipt.acknowledgedAt)}
+                            </p>
+                          ))}
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 </MessageScrollerItem>
               )}
             </MessageScrollerContent>
@@ -1709,18 +2010,23 @@ function Conversation({
         {readOnly ? (
           <div className="shrink-0 border-t px-5 py-3 text-xs text-muted-foreground sm:px-8">
             Read-only worker history.{" "}
-            <button
+            <Button
+              variant="ghost"
               type="button"
-              className="underline underline-offset-4"
+              className="h-auto p-0 underline underline-offset-4"
               onClick={onReturnToPrimary}
             >
               Return to your conversation
-            </button>{" "}
+            </Button>{" "}
             to send directions.
           </div>
         ) : (
-          <div className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7">
-            <div className="mx-auto max-w-3xl">
+          <Tabs
+            value={effectiveMode}
+            onValueChange={(value) => onInputMode?.(value as "text" | "voice")}
+            className="shrink-0 space-y-3 bg-background px-5 pb-4 pt-2 sm:px-7"
+          >
+            <div className="mx-auto w-full max-w-3xl">
               <form
                 id="manager-composer"
                 tabIndex={-1}
@@ -1733,75 +2039,22 @@ function Conversation({
               >
                 {hasVoice && (
                   <div className="flex items-center justify-between gap-3 px-3 pt-2">
-                    <div
-                      role="tablist"
-                      aria-label="Input method"
-                      className="flex gap-1 rounded-lg bg-muted/60 p-0.5"
-                    >
-                      {(["text", "voice"] as const).map((mode) => (
-                        <button
-                          key={mode}
-                          id={`input-tab-${mode}`}
-                          type="button"
-                          role="tab"
-                          aria-selected={effectiveMode === mode}
-                          aria-controls={`input-panel-${mode}`}
-                          tabIndex={effectiveMode === mode ? 0 : -1}
-                          onClick={() => onInputMode?.(mode)}
-                          onKeyDown={(event) => {
-                            if (
-                              [
-                                "ArrowLeft",
-                                "ArrowRight",
-                                "Home",
-                                "End",
-                              ].includes(event.key)
-                            ) {
-                              event.preventDefault();
-                              const next =
-                                event.key === "Home"
-                                  ? "text"
-                                  : event.key === "End"
-                                    ? "voice"
-                                    : mode === "text"
-                                      ? "voice"
-                                      : "text";
-                              onInputMode?.(next);
-                              document
-                                .getElementById(`input-tab-${next}`)
-                                ?.focus();
-                            }
-                          }}
-                          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring ${effectiveMode === mode ? "bg-background text-foreground shadow-xs" : "text-muted-foreground hover:text-foreground"}`}
-                        >
-                          {mode === "text" ? (
-                            <Keyboard className="size-3.5" />
-                          ) : (
-                            <Mic className="size-3.5" />
-                          )}
-                          {mode === "text" ? "Text" : "Voice"}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="text-[11px] text-muted-foreground">
-                      Message this agent
-                    </span>
+                    <TabsList aria-label="Input method">
+                      <TabsTrigger value="text">
+                        <Keyboard className="size-3.5" />
+                        Text
+                      </TabsTrigger>
+                      <TabsTrigger value="voice">
+                        <Mic className="size-3.5" />
+                        Voice
+                      </TabsTrigger>
+                    </TabsList>
                   </div>
                 )}
-                <div
-                  ref={voiceTarget}
-                  id="input-panel-voice"
-                  role="tabpanel"
-                  aria-labelledby="input-tab-voice"
-                  className={effectiveMode === "text" ? "order-3" : ""}
-                />
-                <div
-                  id="input-panel-text"
-                  role="tabpanel"
-                  aria-labelledby={hasVoice ? "input-tab-text" : undefined}
-                  hidden={effectiveMode !== "text"}
-                  className="p-2"
-                >
+                <TabsContent value="voice" keepMounted className="px-3 pb-3 pt-2">
+                  <div ref={voicePanelTarget} />
+                </TabsContent>
+                <TabsContent value="text" keepMounted className="p-2">
                   <Textarea
                     aria-label="Message this agent"
                     placeholder="Message this agent…"
@@ -1858,10 +2111,14 @@ function Conversation({
                       )}
                     </Button>
                   </div>
-                </div>
+                </TabsContent>
+                <div
+                  ref={compactVoiceTarget}
+                  hidden={effectiveMode !== "text"}
+                />
               </form>
             </div>
-          </div>
+          </Tabs>
         )}
       </div>
     </MessageScrollerProvider>
@@ -1890,17 +2147,26 @@ function HistoryItem({
   const technical = item.kind === "tool" || item.kind === "approval";
   if (technical)
     return (
-      <details className="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
-        <summary className="text-xs font-medium text-muted-foreground">
+      <Collapsible className="rounded-lg border bg-muted/20 px-3 py-2 text-sm">
+        <CollapsibleTrigger
+          type="button"
+          className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring text-xs font-medium text-muted-foreground"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+          />
           {item.kind === "approval"
             ? "Native approval record"
             : "Tool activity"}
-        </summary>
-        <div className="mt-3">
-          <Content blocks={item.content} client={client} />
-        </div>
-        <HistoryCorrelation item={item} />
-      </details>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-3">
+            <Content blocks={item.content} client={client} />
+          </div>
+          <HistoryCorrelation item={item} />
+        </CollapsibleContent>
+      </Collapsible>
     );
   const text = item.content
     .filter((block) => block.type === "text")
@@ -1939,13 +2205,24 @@ function HistoryItem({
 }
 function HistoryCorrelation({ item }: { item: RuntimeHistoryItem }) {
   return (
-    <details className="mt-3 text-xs text-muted-foreground">
-      <summary>Reference</summary>
-      <p className="mt-1 break-all">
-        {item.runtimeRef}
-        {item.turnId ? ` · Turn ${item.turnId}` : ""}
-      </p>
-    </details>
+    <Collapsible className="mt-3 text-xs text-muted-foreground">
+      <CollapsibleTrigger
+        type="button"
+        className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+        />
+        Reference
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted>
+        <p className="mt-1 break-all">
+          {item.runtimeRef}
+          {item.turnId ? ` · Turn ${item.turnId}` : ""}
+        </p>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 function DeliveryItem({
@@ -2004,18 +2281,30 @@ function DeliveryItem({
           {message.delivery.error.message}
         </p>
       )}
-      <details className="mt-2 text-xs text-muted-foreground">
-        <summary>Retained message and attempts</summary>
-        <div className="mt-3 text-foreground">
-          <Content blocks={message.content} client={client} />
-        </div>
-        <p className="mt-3 break-all">Message {message.id}</p>
-        {message.delivery.attempts.map((attempt) => (
-          <p key={attempt.id} className="mt-1 break-all">
-            {attempt.outcome} · {attempt.id} · {formatDate(attempt.attemptedAt)}
-          </p>
-        ))}
-      </details>
+      <Collapsible className="mt-2 text-xs text-muted-foreground">
+        <CollapsibleTrigger
+          type="button"
+          className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+          />
+          Retained message and attempts
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-3 text-foreground">
+            <Content blocks={message.content} client={client} />
+          </div>
+          <p className="mt-3 break-all">Message {message.id}</p>
+          {message.delivery.attempts.map((attempt) => (
+            <p key={attempt.id} className="mt-1 break-all">
+              {attempt.outcome} · {attempt.id} ·{" "}
+              {formatDate(attempt.attemptedAt)}
+            </p>
+          ))}
+        </CollapsibleContent>
+      </Collapsible>
     </div>
   );
 }
@@ -2148,19 +2437,30 @@ function JobCard({
             <Markdown text={job.work.objective} />
           </div>
           {job.work.updates.length > 0 && (
-            <details className="mt-4 text-sm">
-              <summary>Updates ({job.work.updates.length})</summary>
-              {job.work.updates.map((update) => (
-                <div key={update.id} className="mt-3 border-l-2 pl-3">
-                  <p className="text-xs text-muted-foreground">
-                    {agentName(update.recordedByAgentId, snapshot)} ·{" "}
-                    {formatDate(update.recordedAt)}
-                  </p>
-                  <p className="mt-1 whitespace-pre-wrap">{update.text}</p>
-                  <WorkLinks links={update.links} />
-                </div>
-              ))}
-            </details>
+            <Collapsible className="mt-4 text-sm">
+              <CollapsibleTrigger
+                type="button"
+                className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+                />
+                Updates ({job.work.updates.length})
+              </CollapsibleTrigger>
+              <CollapsibleContent keepMounted>
+                {job.work.updates.map((update) => (
+                  <div key={update.id} className="mt-3 border-l-2 pl-3">
+                    <p className="text-xs text-muted-foreground">
+                      {agentName(update.recordedByAgentId, snapshot)} ·{" "}
+                      {formatDate(update.recordedAt)}
+                    </p>
+                    <p className="mt-1 whitespace-pre-wrap">{update.text}</p>
+                    <WorkLinks links={update.links} />
+                  </div>
+                ))}
+              </CollapsibleContent>
+            </Collapsible>
           )}
           {job.work.outcome && (
             <div className="mt-4 rounded-lg bg-muted/50 p-3 text-sm">
@@ -2176,62 +2476,77 @@ function JobCard({
           this assignment and its reported progress.
         </p>
       )}
-      <details className="mt-5 border-t pt-3 text-sm">
-        <summary>Assignment and history</summary>
-        <form
-          className="mt-4 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void act(
-              `assign-${job.id}`,
-              () =>
-                client.assignJob(job.id, assignee || null, instruction || null),
-              "Assignment saved.",
-            );
-          }}
+      <Collapsible className="mt-5 border-t pt-3 text-sm">
+        <CollapsibleTrigger
+          type="button"
+          className="group inline-flex items-center gap-1.5 text-left cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Field label="Assigned agent">
-            <NativeSelect
-              value={assignee}
-              onChange={(event) => setAssignee(event.target.value)}
-            >
-              <option value="">Unassigned</option>
-              {snapshot.agents
-                .filter((agent) => !agent.archivedAt)
-                .map((agent) => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.profile.name}
-                  </option>
-                ))}
-            </NativeSelect>
-          </Field>
-          <Field label="Assignment-specific direction">
-            <Textarea
-              value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
-            />
-          </Field>
-          <Button
-            type="submit"
-            variant="outline"
-            disabled={pending.has(`assign-${job.id}`)}
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 transition-transform group-aria-expanded:rotate-90"
+          />
+          Assignment and history
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <form
+            className="mt-4 space-y-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void act(
+                `assign-${job.id}`,
+                () =>
+                  client.assignJob(
+                    job.id,
+                    assignee || null,
+                    instruction || null,
+                  ),
+                "Assignment saved.",
+              );
+            }}
           >
-            Save assignment
-          </Button>
-        </form>
-        <ol className="mt-4 space-y-2 text-xs text-muted-foreground">
-          {job.assignmentHistory.map((event) => (
-            <li key={event.id}>
-              {formatDate(event.recordedAt)} ·{" "}
-              {actorLabel(event.changedBy, snapshot)} assigned{" "}
-              {event.assignedAgentId
-                ? agentName(event.assignedAgentId, snapshot)
-                : "no agent"}
-              {event.instruction ? ` · ${event.instruction}` : ""}
-            </li>
-          ))}
-        </ol>
-      </details>
+            <Field label="Assigned agent">
+              <NativeSelect
+                value={assignee}
+                onChange={(event) => setAssignee(event.target.value)}
+              >
+                <option value="">Unassigned</option>
+                {snapshot.agents
+                  .filter((agent) => !agent.archivedAt)
+                  .map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.profile.name}
+                    </option>
+                  ))}
+              </NativeSelect>
+            </Field>
+            <Field label="Assignment-specific direction">
+              <Textarea
+                value={instruction}
+                onChange={(event) => setInstruction(event.target.value)}
+              />
+            </Field>
+            <Button
+              type="submit"
+              variant="outline"
+              disabled={pending.has(`assign-${job.id}`)}
+            >
+              Save assignment
+            </Button>
+          </form>
+          <ol className="mt-4 space-y-2 text-xs text-muted-foreground">
+            {job.assignmentHistory.map((event) => (
+              <li key={event.id}>
+                {formatDate(event.recordedAt)} ·{" "}
+                {actorLabel(event.changedBy, snapshot)} assigned{" "}
+                {event.assignedAgentId
+                  ? agentName(event.assignedAgentId, snapshot)
+                  : "no agent"}
+                {event.instruction ? ` · ${event.instruction}` : ""}
+              </li>
+            ))}
+          </ol>
+        </CollapsibleContent>
+      </Collapsible>
     </article>
   );
 }
@@ -2394,12 +2709,8 @@ function OwnerInbox({
   );
   return (
     <div className="mx-auto max-w-4xl">
-      <PageHeading
-        title="Inbox"
-        description="Questions and native approvals that need your response."
-      />
       {!requests.length && !snapshot.nativeApprovals.length && (
-        <Empty icon={<Inbox />} title="Nothing waiting for you">
+        <Empty icon={<Inbox />} title="No questions or session approvals">
           <p>Agents bring questions here when they need your help.</p>
         </Empty>
       )}
@@ -2407,7 +2718,7 @@ function OwnerInbox({
         {snapshot.nativeApprovals.map((approval) => (
           <article
             key={`${approval.agentId}:${approval.approvalId}`}
-            className="rounded-xl border p-5"
+            className="border-b pb-8 last:border-b-0"
           >
             <div className="flex items-center justify-between gap-3">
               <h2 className="font-medium">
@@ -2481,8 +2792,7 @@ function OwnerInbox({
         ))}
       </div>
       <p className="mt-6 text-xs text-muted-foreground">
-        Work answers do not authorize service access. Access reviews are handled
-        separately in Settings.
+        Answering an agent’s question does not grant it permission to use a service.
       </p>
     </div>
   );
@@ -2508,7 +2818,7 @@ function HelpCard({
   )?.content;
   const job = snapshot.jobs.find((item) => item.id === request.jobId);
   return (
-    <article className="rounded-xl border p-5">
+    <article className="border-b pb-8 last:border-b-0">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-medium">
           {agentName(request.requesterAgentId, snapshot)} needs your help
@@ -2570,103 +2880,6 @@ function HelpCard({
     </article>
   );
 }
-function Preparation({
-  snapshot,
-  client,
-  pending,
-  act,
-  actions,
-}: {
-  snapshot: AgentsSnapshot;
-  client: AgentsClient;
-  pending: Set<string>;
-  act: Action;
-  actions?: ReactNode;
-}) {
-  const [reason, setReason] =
-    useState<ExecutionReservation["reason"]>("restart");
-  return (
-    <div className="mx-auto max-w-4xl">
-      <PageHeading
-        title="Prepare for a pause"
-        description="Ask agents to save continuation notes and report readiness before a restart, update or quit."
-      />
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-xl border p-5">
-        <div>
-          <label
-            className="mb-2 block text-sm font-medium"
-            htmlFor="prepare-reason"
-          >
-            Prepare for
-          </label>
-          <NativeSelect
-            id="prepare-reason"
-            value={reason}
-            onChange={(event) =>
-              setReason(event.target.value as ExecutionReservation["reason"])
-            }
-          >
-            <option value="restart">Restart</option>
-            <option value="update">App update</option>
-            <option value="quit">Quit</option>
-          </NativeSelect>
-        </div>
-        <Button
-          disabled={pending.has("prepare")}
-          onClick={() =>
-            void act(
-              "prepare",
-              () => client.prepare(reason),
-              "Preparation requested. Agents report their own readiness.",
-            )
-          }
-        >
-          {pending.has("prepare") && <LoaderCircle className="animate-spin" />}
-          Request preparation
-        </Button>
-      </div>
-      <p className="mb-5 text-sm text-muted-foreground">
-        Preparation keeps communication available. It does not stop sessions or
-        remove environments. The host must also verify execution has settled
-        before reserving an actual restart.
-      </p>
-      {actions && <div className="mb-5">{actions}</div>}
-      {snapshot.readiness.length ? (
-        <div className="divide-y rounded-xl border">
-          {snapshot.readiness.map((item) => (
-            <div
-              key={`${item.agentId}:${item.sessionId}`}
-              className="flex flex-wrap items-start justify-between gap-4 p-4"
-            >
-              <div>
-                <h2 className="font-medium">
-                  {agentName(item.agentId, snapshot)}
-                </h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {item.detail || "No readiness detail supplied."}
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {item.continuationSavedAt
-                    ? `Continuation saved ${formatDate(item.continuationSavedAt)}`
-                    : "Continuation save not yet confirmed"}
-                </p>
-              </div>
-              <span
-                className={`rounded-md px-2 py-1 text-xs capitalize ${item.state === "blocked" ? "bg-destructive/10 text-destructive" : item.state === "ready" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}
-              >
-                {item.state}
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <Empty icon={<CircleHelp />} title="No preparation requested">
-          <p>Readiness appears here after an explicit request.</p>
-        </Empty>
-      )}
-    </div>
-  );
-}
 function SettingsView({
   snapshot,
   panels,
@@ -2705,9 +2918,6 @@ function SettingsView({
           </h1>
           <nav aria-label="Settings pages" className="space-y-6">
             <div>
-              <h2 className="mb-2 px-3 text-[11px] font-medium text-muted-foreground">
-                Project settings
-              </h2>
               <div className="flex flex-wrap gap-2 md:flex-col">
                 {panels.map((item) => {
                   const Icon = item.icon ?? Settings2;
@@ -2733,19 +2943,18 @@ function SettingsView({
           </nav>
         </aside>
         <div className="min-w-0 space-y-8">
-          <div>
-            <p className="mb-2 text-xs font-medium text-primary">
-              {snapshot.projectName}
-            </p>
-            <h2 className="text-2xl font-semibold tracking-tight">
-              {panel?.label || "Project settings"}
-            </h2>
-            {panel?.description && (
-              <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                {panel.description}
-              </p>
-            )}
-          </div>
+          {!["agents", "agent-templates", "connections"].includes(panel?.id ?? "") && (
+            <div className="sticky -top-10 z-20 -mx-4 -mt-10 bg-background px-4 pb-4 pt-10 supports-backdrop-filter:bg-background/70 supports-backdrop-filter:backdrop-blur-md">
+              <h2 className="text-xl font-semibold tracking-tight">
+                {panel?.label || "Project settings"}
+              </h2>
+              {panel?.description && (
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  {panel.description}
+                </p>
+              )}
+            </div>
+          )}
           {panels.map((item) => (
             <div key={item.id} hidden={panel?.id !== item.id}>
               {item.render({

@@ -1183,6 +1183,29 @@ export class ProjectAuthorizationService
       return preset;
     });
   }
+  async removePreset(
+    actor: Actor,
+    presetId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    await this.store.transaction((state) => {
+      owner(state, actor);
+      const preset = state.presets.find((row) => row.id === presetId);
+      if (!preset) throw new Error("Template unavailable.");
+      revision(preset, expectedRevision);
+      state.presets = state.presets.filter((row) => row.id !== presetId);
+      if (state.creationDefaults.presetId === presetId) {
+        state.creationDefaults = {
+          revision: revision(
+            state.creationDefaults,
+            state.creationDefaults.revision,
+          ),
+          presetId: null,
+        };
+      }
+      audit(state, actor, "preset.removed", presetId);
+    });
+  }
   async setDefaultPreset(
     actor: Actor,
     presetId: string | null,
@@ -1451,6 +1474,44 @@ export class ProjectAuthorizationService
             lastVerifiedAt,
           }),
         );
+    });
+  }
+  async removeGroup(
+    actor: Actor,
+    groupId: string,
+    expectedRevision: number,
+  ): Promise<void> {
+    actor = structuredClone(actor);
+    await this.store.transaction((state) => {
+      owner(state, actor);
+      const group = state.groups.find((row) => row.id === groupId);
+      if (!group) throw new Error("Permission group unavailable.");
+      revision(group, expectedRevision);
+      state.groups = state.groups.filter((row) => row.id !== groupId);
+      for (const assignment of state.assignments) {
+        if (!assignment.permissionGroupIds.includes(groupId)) continue;
+        assignment.permissionGroupIds = assignment.permissionGroupIds.filter(
+          (id) => id !== groupId,
+        );
+        assignment.serviceConnectionIds = connectionIds(
+          state,
+          assignment.permissionGroupIds,
+        );
+        assignment.revision = revision(assignment, assignment.revision);
+      }
+      for (const preset of state.presets) {
+        if (!preset.permissionGroupIds.includes(groupId)) continue;
+        preset.permissionGroupIds = preset.permissionGroupIds.filter(
+          (id) => id !== groupId,
+        );
+        preset.skills = skillSelections(state, preset.permissionGroupIds);
+        preset.serviceConnectionIds = connectionIds(
+          state,
+          preset.permissionGroupIds,
+        );
+        preset.revision = revision(preset, preset.revision);
+      }
+      audit(state, actor, "group.removed", groupId);
     });
   }
   async saveGroup(

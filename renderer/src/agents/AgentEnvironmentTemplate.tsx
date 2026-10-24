@@ -504,13 +504,6 @@ function TemplateSummary({
         .
       </p>
       <p>
-        Localhost ports:{" "}
-        {template.capabilities.localhostPorts.length
-          ? template.capabilities.localhostPorts.join(", ")
-          : "none requested"}
-        .
-      </p>
-      <p>
         These are saved requirements, not evidence that tools are installed or
         an environment is ready.
       </p>

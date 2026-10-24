@@ -8,6 +8,14 @@ import { useState, useRef } from "react";
 
 import type { ManagerProps, WorkerTask } from "../../contracts/manager.js";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from "@/components/ui/table";
 
 import { api, errorText } from "../api.js";
 import { archivedWorkers } from "../worker-model.js";
@@ -62,44 +70,44 @@ export function ArchivedWorkers({ manager }: ManagerProps) {
       )}
       {tasks.length ? (
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead>
-              <tr className="border-b text-xs text-muted-foreground">
-                <th scope="col" className="py-3 pr-4 font-medium">
+          <Table className="w-full text-left text-sm">
+            <TableHeader>
+              <TableRow className="border-b text-xs text-muted-foreground">
+                <TableHead scope="col" className="py-3 pr-4 font-medium">
                   Worker
-                </th>
-                <th scope="col" className="py-3 pr-4 font-medium">
+                </TableHead>
+                <TableHead scope="col" className="py-3 pr-4 font-medium">
                   Status
-                </th>
-                <th scope="col" className="py-3 pr-4 font-medium">
+                </TableHead>
+                <TableHead scope="col" className="py-3 pr-4 font-medium">
                   Archived
-                </th>
-                <th scope="col" className="py-3 text-right font-medium">
+                </TableHead>
+                <TableHead scope="col" className="py-3 text-right font-medium">
                   Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {tasks.map((task) => {
                 const at = archiveTime(task);
                 return (
-                  <tr
+                  <TableRow
                     key={task.id}
                     data-archived-worker-id={task.id}
                     className="border-b align-top"
                   >
-                    <td className="py-4 pr-4">
+                    <TableCell className="whitespace-normal py-4 pr-4">
                       <p className="text-xs text-muted-foreground">
                         {task.ticket || task.id}
                       </p>
                       <p className="mt-1 font-medium">
                         {task.brief?.trim().split("\n")[0] || "Worker task"}
                       </p>
-                    </td>
-                    <td className="py-4 pr-4 text-muted-foreground">
+                    </TableCell>
+                    <TableCell className="py-4 pr-4 text-muted-foreground">
                       Archived
-                    </td>
-                    <td className="py-4 pr-4 text-xs text-muted-foreground">
+                    </TableCell>
+                    <TableCell className="py-4 pr-4 text-xs text-muted-foreground">
                       {at ? (
                         <time dateTime={at}>
                           {new Date(at).toLocaleString()}
@@ -107,8 +115,8 @@ export function ArchivedWorkers({ manager }: ManagerProps) {
                       ) : (
                         "Time unavailable"
                       )}
-                    </td>
-                    <td className="py-4 text-right">
+                    </TableCell>
+                    <TableCell className="whitespace-normal py-4 text-right">
                       <div className="flex justify-end gap-2">
                         <Button
                           variant="outline"
@@ -166,12 +174,12 @@ export function ArchivedWorkers({ manager }: ManagerProps) {
                           </div>
                         </div>
                       )}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 );
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
       ) : (
         <p className="py-8 text-sm text-muted-foreground">

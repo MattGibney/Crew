@@ -310,6 +310,7 @@ export class CodexAgentRuntime
     instructionApplication: "on_resume" as const,
   };
   private sessions = new Map<string, Session>();
+  private quitting = false;
   private starts = new Map<string, Promise<RuntimeStartResult>>();
   private stopped = new Map<
     string,
@@ -383,6 +384,13 @@ export class CodexAgentRuntime
   }
 
   async start(input: RuntimeStartInput): Promise<RuntimeStartResult> {
+    if (this.quitting)
+      return {
+        state: "failed",
+        error: failure("cancelled", "Crew is quitting."),
+        retainedThreadId:
+          input.thread.mode === "resume" ? input.thread.threadId : null,
+      };
     const identity = key(input.caller);
     const agentKey = JSON.stringify([
       input.caller.projectId,
@@ -606,6 +614,10 @@ export class CodexAgentRuntime
       };
       session = current;
       this.sessions.set(key(input.caller), current);
+      if (this.quitting) {
+        void current.peer.close();
+        throw new Error("Crew is quitting.");
+      }
       const pid = current.peer.child.pid;
       if (!Number.isSafeInteger(pid) || pid === undefined || pid <= 1)
         throw new CodexRpcError(
@@ -1524,6 +1536,22 @@ export class CodexAgentRuntime
       });
     }
     this.changed(session);
+  }
+
+  /** Close only owned native transports. Do not answer approvals or wait for idle. */
+  beginQuit(): void {
+    this.quitting = true;
+  }
+
+  async closeForQuit(): Promise<void> {
+    this.beginQuit();
+    await Promise.allSettled(
+      [...this.sessions.values()].map(async (session) => {
+        session.stopping = true;
+        await session.peer.close();
+        for (const stream of session.observers) stream.end();
+      }),
+    );
   }
 
   async stop(

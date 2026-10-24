@@ -1,0 +1,7 @@
+/* The app uses its canonical theme; only account for the developer control strip. */
+.preview-product > .agents-app {
+  height: 100%;
+}
+.preview-product {
+  overflow: hidden;
+}

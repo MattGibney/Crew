@@ -34,69 +34,79 @@ export function ManagerLifecycle({ manager }: ManagerProps) {
     error: "Needs attention",
   };
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Badge variant={state === "running" ? "secondary" : "outline"}>
-            {transitioning && (
-              <LoaderCircle
-                className="size-3 animate-spin motion-reduce:animate-none"
-                aria-hidden="true"
-              />
-            )}
-            {names[state] || state}
-          </Badge>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            id="start-manager"
-            variant="outline"
-            disabled={
-              transitioning || state === "running" || !manager.eventReady
-            }
-            onClick={() => void act("start")}
-          >
-            <Play aria-hidden="true" />
-            Start manager
-          </Button>
-          <Button
-            id="stop-manager"
-            variant="outline"
-            disabled={
-              transitioning || state === "stopped" || !manager.eventReady
-            }
-            onClick={() => void act("stop")}
-          >
-            <Square aria-hidden="true" />
-            Stop manager
-          </Button>
-          <Button
-            id="restart-manager"
-            disabled={transitioning || !manager.eventReady}
-            onClick={() => void act("restart")}
-          >
-            <RotateCcw aria-hidden="true" />
-            Restart manager
-          </Button>
-        </div>
-      </div>
-      <p className="text-xs leading-5 text-muted-foreground">
-        Stop ends manager work and voice. Your saved conversation, project tasks
-        and independent workers are preserved. Start never connects voice or
-        starts a task.
-      </p>
-      {transitioning && (
-        <p role="status" className="text-xs text-muted-foreground">
-          {state === "stopping" || state === "restarting"
-            ? "Releasing voice and waiting for manager work to stop…"
-            : "Waiting for the controller to confirm the manager state…"}
+    <div className="grid gap-6 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)] md:gap-8">
+      <div className="space-y-2">
+        <h3 className="text-base font-semibold tracking-tight">
+          Session controls
+        </h3>
+        <p className="text-sm leading-6 text-muted-foreground">
+          Start, stop or restart the manager’s session.
         </p>
-      )}
-      {(failure || error) && (
-        <Alert variant="destructive" role="alert">
-          <AlertDescription>{failure || error}</AlertDescription>
-        </Alert>
-      )}
+      </div>
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Badge variant={state === "running" ? "secondary" : "outline"}>
+              {transitioning && (
+                <LoaderCircle
+                  className="size-3 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              )}
+              {names[state] || state}
+            </Badge>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              id="start-manager"
+              variant="outline"
+              disabled={
+                transitioning || state === "running" || !manager.eventReady
+              }
+              onClick={() => void act("start")}
+            >
+              <Play aria-hidden="true" />
+              Start manager
+            </Button>
+            <Button
+              id="stop-manager"
+              variant="outline"
+              disabled={
+                transitioning || state === "stopped" || !manager.eventReady
+              }
+              onClick={() => void act("stop")}
+            >
+              <Square aria-hidden="true" />
+              Stop manager
+            </Button>
+            <Button
+              id="restart-manager"
+              disabled={transitioning || !manager.eventReady}
+              onClick={() => void act("restart")}
+            >
+              <RotateCcw aria-hidden="true" />
+              Restart manager
+            </Button>
+          </div>
+        </div>
+        <p className="text-sm leading-6 text-muted-foreground">
+          Stop ends manager work and voice. Your saved conversation, project
+          tasks and independent workers are preserved. Start never connects
+          voice or starts a task.
+        </p>
+        {transitioning && (
+          <p role="status" className="text-xs text-muted-foreground">
+            {state === "stopping" || state === "restarting"
+              ? "Releasing voice and waiting for manager work to stop…"
+              : "Waiting for the controller to confirm the manager state…"}
+          </p>
+        )}
+        {(failure || error) && (
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>{failure || error}</AlertDescription>
+          </Alert>
+        )}
+      </div>
     </div>
   );
 }

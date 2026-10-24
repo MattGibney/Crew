@@ -1,5 +1,5 @@
 import type { ProfileIdentity } from "./profile.js";
-import { useState } from "react";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import crewMark from "../../../build/crew-mark.png";
 import { managerPicture } from "./profile.js";
 
@@ -11,14 +11,12 @@ export function ManagerAvatar({
   className?: string;
 }) {
   const picture = managerPicture(profile);
-  const [failed, setFailed] = useState<string | null>(null);
-  const source = picture && failed !== picture ? picture : crewMark;
   return (
-    <img
-      src={source}
-      alt=""
-      className={`shrink-0 object-cover ${source === crewMark ? "" : "rounded-full"} ${className}`}
-      onError={() => setFailed(source)}
-    />
+    <Avatar className={`rounded-[25%] after:rounded-[25%] ${className}`}>
+      {picture && <AvatarImage src={picture} alt="" className="rounded-[25%]" />}
+      <AvatarFallback className="overflow-hidden rounded-[25%]">
+        <img src={crewMark} alt="" className="size-full object-cover" />
+      </AvatarFallback>
+    </Avatar>
   );
 }

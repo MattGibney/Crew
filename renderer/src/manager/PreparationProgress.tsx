@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../components/ui/collapsible.js";
 import type {
   PreparationParticipant,
   UpdatePlan,
@@ -162,61 +167,65 @@ export function PreparationProgress({ plan }: { plan: UpdatePlan }) {
                     separate explicit action.
                   </p>
                 )}
-                <details className="text-[11px]">
-                  <summary className="cursor-pointer">
+                <Collapsible className="text-[11px]">
+                  <CollapsibleTrigger className="text-left cursor-pointer">
                     Request details
                     {participant.taskId ? ` · ${participant.taskId}` : ""}
-                  </summary>
-                  <dl className="mt-2 space-y-1 break-all">
-                    <div>
-                      <dt className="inline">Request: </dt>
-                      <dd className="inline">{participant.requestId}</dd>
-                    </div>
-                    {participant.runId && (
+                  </CollapsibleTrigger>
+                  <CollapsibleContent keepMounted>
+                    <dl className="mt-2 space-y-1 break-all">
                       <div>
-                        <dt className="inline">Run: </dt>
-                        <dd className="inline">{participant.runId}</dd>
+                        <dt className="inline">Request: </dt>
+                        <dd className="inline">{participant.requestId}</dd>
                       </div>
-                    )}
-                    {participant.threadId && (
+                      {participant.runId && (
+                        <div>
+                          <dt className="inline">Run: </dt>
+                          <dd className="inline">{participant.runId}</dd>
+                        </div>
+                      )}
+                      {participant.threadId && (
+                        <div>
+                          <dt className="inline">Conversation: </dt>
+                          <dd className="inline">{participant.threadId}</dd>
+                        </div>
+                      )}
                       <div>
-                        <dt className="inline">Conversation: </dt>
-                        <dd className="inline">{participant.threadId}</dd>
+                        <dt className="inline">Delivery: </dt>
+                        <dd className="inline">{participant.delivery.state}</dd>
                       </div>
-                    )}
-                    <div>
-                      <dt className="inline">Delivery: </dt>
-                      <dd className="inline">{participant.delivery.state}</dd>
-                    </div>
-                    {participant.message && (
-                      <div>
-                        <dt>Preparation request</dt>
-                        <dd className="whitespace-pre-wrap break-words">
-                          {participant.message}
-                        </dd>
-                      </div>
-                    )}
-                    {participant.response?.continuation && (
-                      <div>
-                        <dt>Continuation context</dt>
-                        <dd className="whitespace-pre-wrap break-words">
-                          {participant.response.continuation}
-                        </dd>
-                      </div>
-                    )}
-                    {participant.response && (
-                      <div>
-                        <dt className="inline">Response: </dt>
-                        <dd className="inline">
-                          {participant.response.responseId} ·{" "}
-                          <time dateTime={participant.response.at}>
-                            {new Date(participant.response.at).toLocaleString()}
-                          </time>
-                        </dd>
-                      </div>
-                    )}
-                  </dl>
-                </details>
+                      {participant.message && (
+                        <div>
+                          <dt>Preparation request</dt>
+                          <dd className="whitespace-pre-wrap break-words">
+                            {participant.message}
+                          </dd>
+                        </div>
+                      )}
+                      {participant.response?.continuation && (
+                        <div>
+                          <dt>Continuation context</dt>
+                          <dd className="whitespace-pre-wrap break-words">
+                            {participant.response.continuation}
+                          </dd>
+                        </div>
+                      )}
+                      {participant.response && (
+                        <div>
+                          <dt className="inline">Response: </dt>
+                          <dd className="inline">
+                            {participant.response.responseId} ·{" "}
+                            <time dateTime={participant.response.at}>
+                              {new Date(
+                                participant.response.at,
+                              ).toLocaleString()}
+                            </time>
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                  </CollapsibleContent>
+                </Collapsible>
               </li>
             );
           })}

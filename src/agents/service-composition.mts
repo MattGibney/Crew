@@ -1037,6 +1037,34 @@ export async function startUnifiedApplication(
         cancelSignIn: () => nativeAccess!.cancelSignIn(),
       },
       setupDefaults: unifiedRuntimeDefaults,
+      beginQuit() {
+        foundation!.beginQuit();
+        runtime.beginQuit();
+      },
+      async closeForQuit(): Promise<void> {
+        foundation!.beginQuit();
+        for (const stop of cleanupSubscriptions) stop();
+        // Record uncertainty before closing transports. A lost acknowledgement
+        // must not be written as stopped, or erase retained active-turn evidence.
+        await store.update((state) => {
+          for (const agent of state.agents) {
+            if (agent.runtime.session.observedState === "stopped") continue;
+            agent.runtime.session.desiredState = "stopped";
+            agent.runtime.session.observedState = "unknown";
+          }
+        });
+        await Promise.allSettled([
+          runtime.closeForQuit(),
+          voice!.dispose(),
+          mcp!.close(),
+        ]);
+        // Keep journals, native history, credentials and environment receipts.
+        // Environment commands are not killed by closing the desktop app.
+        await Promise.allSettled([
+          voiceArtifacts!.dispose(),
+          foundation!.dispose(),
+        ]);
+      },
       async close(reservationId?: string): Promise<void> {
         if (closing) throw new Error("Crew close is already in progress.");
         const state = store.snapshot();

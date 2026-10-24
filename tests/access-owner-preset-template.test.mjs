@@ -155,3 +155,37 @@ test("owner preset saves accept only a resolved exact environment pin and retain
   });
   assert.deepEqual((await reopened.listPresets())[0].environmentTemplate, pin);
 });
+
+test("template removal checks owner and revision, clears defaults and persists", async () => {
+  const root = await mkdtemp(join(tmpdir(), "crew-remove-template-"));
+  let store = await AccessStore.create(join(root, "access"), "project", "owner");
+  const owner = { type: "user", userId: "owner" };
+  const identities = { getAgent: async () => null, getJob: async () => null };
+  const makeService = () => new ProjectAuthorizationService(store, identities, { hasOperation: async () => false });
+  try {
+    const service = makeService();
+    const preset = await service.savePreset(owner, {
+      id: "template", projectId: "project", revision: 1, name: "Worker", enabled: true,
+      profile: { name: "Worker", pictureRef: null, personality: "", systemPrompt: "" },
+      skills: [], modelAccessId: "subscription", configRef: "runtime", permissionGroupIds: [], serviceConnectionIds: [],
+    }, null);
+    const initial = await store.transaction((state) => state.creationDefaults.revision);
+    const defaults = await service.setDefaultPreset(owner, preset.id, initial);
+    await assert.rejects(service.removePreset({ type: "user", userId: "other" }, preset.id, preset.revision));
+    await assert.rejects(service.removePreset(owner, preset.id, preset.revision + 1));
+    assert.equal((await service.defaultPreset()).id, preset.id);
+    await service.removePreset(owner, preset.id, preset.revision);
+    const state = await store.transaction((state) => ({ presets: state.presets, defaults: state.creationDefaults, audit: state.audit }));
+    assert.equal(state.presets.length, 0);
+    assert.equal(state.defaults.presetId, null);
+    assert.equal(state.defaults.revision, defaults.revision + 1);
+    assert.equal(state.audit.at(-1).action, "preset.removed");
+    await store.close();
+    store = await AccessStore.open(join(root, "access"), "project", "owner");
+    assert.equal(await makeService().defaultPreset(), null);
+    assert.equal(await store.transaction((state) => state.presets.length), 0);
+  } finally {
+    await store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

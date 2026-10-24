@@ -123,7 +123,7 @@ export function PrimaryAgentVoice({
           )}
           {status}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {voice.playbackBlocked && (
             <Button
               variant="outline"
@@ -183,13 +183,14 @@ export function PrimaryAgentVoice({
       {mode === "voice" && catalogError && (
         <p className="mt-2 text-sm text-muted-foreground">
           {catalogError}{" "}
-          <button
+          <Button
+            variant="ghost"
             type="button"
-            className="underline"
+            className="h-auto p-0 underline"
             onClick={() => setRetry((value) => value + 1)}
           >
             Retry
-          </button>
+          </Button>
         </p>
       )}
       {mode === "voice" && catalog && !supported && (

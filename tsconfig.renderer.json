@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
@@ -10,9 +14,19 @@
     "noEmit": true,
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,
-    "paths": { "@/*": ["./renderer/src/*"] },
-    "types": ["vite/client", "react", "react-dom"]
+    "paths": {
+      "@/*": [
+        "./renderer/src/*"
+      ]
+    },
+    "types": [
+      "vite/client",
+      "react",
+      "react-dom"
+    ]
   },
-  "include": ["renderer/src/**/*.ts", "renderer/src/**/*.tsx"],
-  "exclude": ["renderer/src/preview"]
+  "include": [
+    "renderer/src/**/*.ts",
+    "renderer/src/**/*.tsx"
+  ]
 }

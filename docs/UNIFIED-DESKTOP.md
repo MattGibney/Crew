@@ -37,9 +37,9 @@ Fresh authentication and signed-in creation in a brand-new zero-agent project we
 
 ## Native lifecycle
 
-Closing the window releases voice/media and keeps the menu-bar host and independent work alive. Explicit Quit prepares all projects and observes the same readiness request while conversation remains available. Final reservations are acquired for every project before any project is closed. If closing begins but cannot be confirmed, retain reservations and offer Retry Quit under those exact reservations. A retry skips cleanup stages already confirmed complete; it does not release reservations or resume queues before disposal. Releasing a partially disposed composition is not a safe Return to work.
+Closing the window releases voice/media and keeps the menu-bar host and independent work alive. Explicit Quit checks active turns across open projects. With no active turns it quits immediately; otherwise a warning names the agents and offers Cancel or Quit anyway. No preparation, readiness reporting, approval resolution or environment teardown is required. New work is sealed only once quitting proceeds. Owned transport cleanup is bounded; unconfirmed sessions remain unknown in durable records for recovery, with chat history and sign-in preserved.
 
-Updates adapt the existing signed-update coordinator. A shared installation lease covers startup and installation, and other native instances are checked. Explicit installation requires fresh all-project reservations. Unsigned candidates cannot establish a stable update feed or install automatically. This track does not install or replace the user's existing Crew app.
+Install and restart follows the same active-turn warning rule. It remains an explicit action after downloading a verified signed release. Ordinary Quit never installs. The native installer retains its release verification and installation ownership checks. No live installation was performed during this UI change.
 
 The renderer retains submitted and newly typed drafts across async acknowledgements. Settings editors remain mounted across navigation and agent selection, and revision conflicts preserve the user's draft. A successful access save remains acknowledged if its following refresh fails; Retry refresh repeats only the read and preserves pending drafts. A rebuilt pinned renderer requires a controller restart before native validation; a successful build does not update an already open editor.
 
@@ -70,3 +70,9 @@ Current limits and follow-up:
 - The packaged candidate was launched directly, never installed or used to replace the user's Crew app. No signed updater installation, merge or release occurred.
 
 Private screenshots, exact native identities, fixture state and terminal evidence remain outside Git. Historical/intermediate snapshots are preserved separately from final terminal snapshots. See [access isolation](ACCESS-ISOLATION.md), [unified composition](AGENT-UNIFIED-COMPOSITION.md), and [project skills](PROJECT-SKILLS.md) for their implementation boundaries.
+
+## Personal objectives in conversations (#137)
+
+The conversation sidebar shows the selected agent’s own internal objectives: Not started, In progress (including blocked and ready for review), and the latest five completed items. These are the existing persisted local work records assigned to that agent; GitHub/Linear tickets, other agents’ work and cancelled items are excluded. Session online status never changes objective progress. Expanding an item shows its brief, reported progress and recorded outcome. Smaller screens offer an Objectives view in the workspace navigation. Workers remain available in the separate Workers view.
+
+The conversation sidebar width is saved as a global presentation preference at the persistent desktop renderer origin. Agent/project switches and reloads reuse it; smaller windows clamp its displayed size without replacing the saved width. Pointer and keyboard resizing both save, and double-clicking the divider restores the default.

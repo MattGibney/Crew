@@ -360,6 +360,13 @@ export function createAccessOwnerApi(
       const run = tail.then(async () => {
         await authorization.snapshot(actor); // Verify the store owner on every command.
         switch (name) {
+          case "removeGroup": {
+            object(input, ["groupId", "expectedRevision"]);
+            const revision = expected(input.expectedRevision);
+            if (revision === null) throw new Error("Group revision required.");
+            await authorization.removeGroup(actor, id(input.groupId), revision);
+            return null;
+          }
           case "saveGroup": {
             object(input, ["id", "expectedRevision", "draft"]);
             const draft = object(input.draft, [
@@ -440,6 +447,18 @@ export function createAccessOwnerApi(
               expected(input.expectedRevision),
             );
           }
+          case "removePreset": {
+            object(input, ["presetId", "expectedRevision"]);
+            const revision = expected(input.expectedRevision);
+            if (revision === null)
+              throw new Error("Template revision required.");
+            await authorization.removePreset(
+              actor,
+              id(input.presetId),
+              revision,
+            );
+            return null;
+          }
           case "setDefaultPreset": {
             object(input, ["presetId", "expectedRevision"]);
             const revision = expected(input.expectedRevision);
@@ -462,7 +481,9 @@ export function createAccessOwnerApi(
               actor,
               id(input.agentId),
               ids(input.permissionGroupIds),
-              input.serviceConnectionIds === undefined ? undefined : ids(input.serviceConnectionIds),
+              input.serviceConnectionIds === undefined
+                ? undefined
+                : ids(input.serviceConnectionIds),
               expected(input.expectedRevision),
             );
           case "saveConnection":

@@ -1,3 +1,12 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { AccessSection } from "../access/shared";
+import { Separator } from "@/components/ui/separator";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,22 +97,6 @@ const lines = (value: string) =>
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
-function ports(value: string): number[] {
-  if (!value.trim()) return [];
-  const items = value.split(",").map((port) => port.trim());
-  if (
-    items.length > 16 ||
-    items.some(
-      (port) =>
-        !/^\d+$/.test(port) || Number(port) < 1024 || Number(port) > 65535,
-    ) ||
-    new Set(items.map(Number)).size !== items.length
-  )
-    throw new Error(
-      "Use up to 16 distinct comma-separated ports from 1024 to 65535.",
-    );
-  return items.map(Number);
-}
 function definition(value: EditorDraft): EnvironmentTemplateDraft {
   if (!value.name.trim()) throw new Error("Enter a template name.");
   const advanced = JSON.parse(value.advanced);
@@ -159,8 +152,8 @@ function definition(value: EditorDraft): EnvironmentTemplateDraft {
     capabilities: {
       network: value.network,
       packageDownloads: value.packageDownloads,
-      localhostPorts: ports(value.localhostPorts),
-      inboundPorts: ports(value.inboundPorts),
+      localhostPorts: [],
+      inboundPorts: [],
     },
     ...(value.docker
       ? {
@@ -404,14 +397,13 @@ export function EnvironmentTemplateEditor({
     if (!draft) return null;
     return (
       <label className="flex items-start gap-2 text-sm">
-        <input
-          type="checkbox"
-          className="mt-1 accent-primary"
+        <Checkbox
+          className="mt-1"
           checked={draft[key]}
-          onChange={(event) =>
+          onCheckedChange={(checked) =>
             setDraft({
               ...draft,
-              [key]: event.target.checked,
+              [key]: checked,
               ...(key === "docker" ? { dockerAcknowledged: false } : {}),
             })
           }
@@ -421,16 +413,10 @@ export function EnvironmentTemplateEditor({
     );
   }
   return (
-    <section className="space-y-5 border-t py-6">
-      <div>
-        <h2 className="font-semibold tracking-tight">Environment templates</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
-          Define tools and explicit access for agent environments. Saving does
-          not install tools, run preparation commands or start an agent. Agents
-          receive durable update notices and choose when to reconcile; existing
-          prepared execution keeps its saved revision.
-        </p>
-      </div>
+    <AccessSection
+      title="Environment templates"
+      description="Define the tools, setup and network access available to agents. Agents prepare their own environments and receive a notice when their template changes."
+    >
       {templates === null ? (
         <p className="text-sm text-muted-foreground">
           Templates are not loaded.
@@ -481,9 +467,10 @@ export function EnvironmentTemplateEditor({
       )}
       {draft && (
         <fieldset disabled={busy} className="min-w-0 space-y-5">
-          <legend className="mb-4 text-sm font-medium">
+          <legend className="mb-4 text-base font-semibold">
             {draft.id ? "Update template" : "New template"}
           </legend>
+          <Separator />
           {field("Name", "name")}
           {field("Description", "description", true)}
           <div className="grid gap-4 sm:grid-cols-2">
@@ -525,18 +512,8 @@ export function EnvironmentTemplateEditor({
             {toggle("Allow outbound network access", "network")}
             {toggle("Allow package downloads", "packageDownloads")}
           </div>
-          <p className="text-xs leading-5 text-muted-foreground">
-            Loopback-only server access is unavailable on this executor. Use
-            explicit inbound ports below only when access on all interfaces is
-            acceptable.
-          </p>
-          {field(
-            "Inbound ports on all interfaces",
-            "inboundPorts",
-            false,
-            "Optional incoming TCP access on every network interface, separate from outbound access. Leave empty for none.",
-          )}
-          <div className="space-y-3 border-y py-4">
+          <Separator />
+          <div className="space-y-3">
             {toggle("Enable host Docker access", "docker")}
             {draft.docker && (
               <>
@@ -557,19 +534,28 @@ export function EnvironmentTemplateEditor({
               </>
             )}
           </div>
-          <details>
-            <summary className="cursor-pointer text-sm font-medium">
+          <Collapsible>
+            <CollapsibleTrigger
+              type="button"
+              className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
+            >
+              <DisclosureChevronDown
+                className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                aria-hidden="true"
+              />
               Advanced nonsecret configuration
-            </summary>
-            <div className="mt-3 space-y-2">
-              {field(
-                "Environment and preparation (JSON)",
-                "advanced",
-                true,
-                'Use environment for nonsecret string values. Preparation has instructions and suggested commands as argument arrays, for example [["npm", "ci"]]. Agents explicitly run those commands after preparation. Never enter credentials.',
-              )}
-            </div>
-          </details>
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <div className="mt-3 space-y-2">
+                {field(
+                  "Environment and preparation (JSON)",
+                  "advanced",
+                  true,
+                  'Use environment for nonsecret string values. Preparation has instructions and suggested commands as argument arrays, for example [["npm", "ci"]]. Agents explicitly run those commands after preparation. Never enter credentials.',
+                )}
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
           {stale && (
             <p role="alert" className="text-sm text-destructive">
               The saved template changed elsewhere. Your draft is retained.
@@ -613,7 +599,7 @@ export function EnvironmentTemplateEditor({
         Refresh templates
       </Button>
       {inspection && (
-        <div className="space-y-3 rounded-lg border p-4" role="status">
+        <div className="space-y-3 border-t pt-6" role="status">
           <h3 className="text-sm font-medium">
             Tool inspection:{" "}
             {templates?.find((row) => row.id === inspection.templateId)?.name ??
@@ -656,6 +642,6 @@ export function EnvironmentTemplateEditor({
           onDismiss={() => setToast(null)}
         />
       )}
-    </section>
+    </AccessSection>
   );
 }

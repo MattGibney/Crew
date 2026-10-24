@@ -87,6 +87,8 @@ export interface AgentSetupRequests {
     agentId?: string;
   };
   "setup.save": { expectedRevision: number | null; draft: AgentSetupDraft };
+  /** Discard only the current unapplied editor draft; never changes an agent. */
+  "setup.discard": { expectedRevision: number };
   "setup.review": { expectedRevision: number };
   "setup.complete": { expectedRevision: number };
 }

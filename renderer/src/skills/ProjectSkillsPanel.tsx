@@ -1,3 +1,13 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Separator } from "@/components/ui/separator";
+import { Label } from "@/components/ui/label";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -231,11 +241,13 @@ export function ProjectSkillsPanel({
     <section
       hidden={!visible}
       aria-label="Project skills"
-      className="min-w-0 space-y-6 py-6"
+      className="min-w-0 space-y-10 pb-8"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold">Project skills</h2>
+          <h2 className="text-lg font-semibold tracking-tight">
+            Project skills
+          </h2>
           <p className="mt-1 max-w-prose text-sm leading-6 text-muted-foreground">
             Reusable instructions for this project's agents. Skills do not grant
             permissions or connect accounts.
@@ -253,7 +265,7 @@ export function ProjectSkillsPanel({
             <RefreshCw className={loading ? "animate-spin" : ""} />
             <span className="sr-only sm:not-sr-only">Refresh</span>
           </Button>
-          <Button variant="outline" onClick={newSkill}>
+          <Button onClick={newSkill}>
             <Plus />
             New skill
           </Button>
@@ -268,40 +280,37 @@ export function ProjectSkillsPanel({
         <SettingsToast message={notice} onDismiss={() => setNotice("")} />
       )}
       <div className="min-w-0 space-y-6">
-        <div
-          aria-label="Saved project skills"
-          className="min-w-0 divide-y border-y"
-        >
+        <div aria-label="Saved project skills" className="min-w-0">
           {!skills.length && (
             <p className="py-3 text-sm text-muted-foreground">
               {loading ? "Loading skills…" : "No saved skills yet."}
             </p>
           )}
           {skills.map((skill) => (
-            <div
-              key={skill.id}
-              className="flex min-w-0 items-start justify-between gap-4 py-5"
-            >
-              <div className="min-w-0 break-words">
-                <p className="text-sm font-medium">{skill.name}</p>
-                <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {skill.description}
-                </p>
-                {drafts[skill.id] && dirty(drafts[skill.id]) && (
-                  <span className="block text-xs text-muted-foreground">
-                    Unsaved draft
-                  </span>
-                )}
+            <div key={skill.id}>
+              <Separator />
+              <div className="flex min-w-0 items-start justify-between gap-4 py-5">
+                <div className="min-w-0 break-words">
+                  <p className="text-sm font-medium">{skill.name}</p>
+                  <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                    {skill.description}
+                  </p>
+                  {drafts[skill.id] && dirty(drafts[skill.id]) && (
+                    <span className="block text-xs text-muted-foreground">
+                      Unsaved draft
+                    </span>
+                  )}
+                </div>
+                <Button
+                  type="button"
+                  variant="link"
+                  className="h-auto shrink-0 p-0 text-sm font-semibold"
+                  aria-label={`Update ${skill.name}`}
+                  onClick={() => void openSkill(skill.id)}
+                >
+                  Edit
+                </Button>
               </div>
-              <Button
-                type="button"
-                variant="link"
-                className="h-auto shrink-0 p-0 text-sm font-semibold"
-                aria-label={`Update ${skill.name}`}
-                onClick={() => void openSkill(skill.id)}
-              >
-                Update
-              </Button>
             </div>
           ))}
           {drafts.new && (
@@ -316,7 +325,7 @@ export function ProjectSkillsPanel({
         </div>
         {selected && draft ? (
           <form
-            className="min-w-0 space-y-5"
+            className="min-w-0 space-y-6"
             onSubmit={(event) => {
               event.preventDefault();
               void save();
@@ -345,22 +354,21 @@ export function ProjectSkillsPanel({
               )}
             </div>
             {draft.stale && (
-              <div
-                role="alert"
-                className="rounded-lg border bg-muted/40 p-3 text-sm"
-              >
-                The saved skill changed while this editor was open. Your draft
-                is preserved. Copy any changes you want to keep, then discard
-                the draft and reload before saving.
-              </div>
+              <Alert>
+                <AlertDescription>
+                  The saved skill changed while this editor was open. Your draft
+                  is preserved. Copy any changes you want to keep, then discard
+                  the draft and reload before saving.
+                </AlertDescription>
+              </Alert>
             )}
             <div className="space-y-2">
-              <label
+              <Label
                 htmlFor="project-skill-markdown"
                 className="text-sm font-medium"
               >
                 SKILL.md
-              </label>
+              </Label>
               <Textarea
                 id="project-skill-markdown"
                 value={draft.markdown}
@@ -372,32 +380,42 @@ export function ProjectSkillsPanel({
                 }
               />
             </div>
-            <details className="text-sm text-muted-foreground">
-              <summary className="cursor-pointer font-medium text-foreground">
+            <Collapsible className="text-sm text-muted-foreground">
+              <CollapsibleTrigger
+                type="button"
+                className="group flex w-full items-center gap-2 text-left cursor-pointer font-medium text-foreground"
+              >
+                <DisclosureChevronDown
+                  className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                  aria-hidden="true"
+                />
                 Writing a skill
-              </summary>
-              <div className="mt-3 space-y-2 leading-6">
-                <p>
-                  Keep the YAML name and description between the opening ---
-                  lines. Use a short lowercase name with hyphens, and describe
-                  when the skill should be used. Put reusable instructions below
-                  the metadata.
-                </p>
-                <p>
-                  Save here or ask a permitted agent to create or edit the same
-                  project skill. Select it in an agent's profile, then Start or
-                  Restart that agent. Saving does not replace instructions
-                  already loaded by an active session.
-                </p>
-                <p>
-                  Files remain in Crew's project storage, outside personal Codex
-                  folders and source repositories. Limit: 128 KiB instructions,
-                  64 text resources of up to 256 KiB each, and 2 MiB total.
-                  Binary resource upload is not supported.
-                </p>
-              </div>
-            </details>
-            <div className="space-y-3 border-t pt-5">
+              </CollapsibleTrigger>
+              <CollapsibleContent keepMounted>
+                <div className="mt-3 space-y-2 leading-6">
+                  <p>
+                    Keep the YAML name and description between the opening ---
+                    lines. Use a short lowercase name with hyphens, and describe
+                    when the skill should be used. Put reusable instructions
+                    below the metadata.
+                  </p>
+                  <p>
+                    Save here or ask a permitted agent to create or edit the
+                    same project skill. Select it in an agent's profile, then
+                    Start or Restart that agent. Saving does not replace
+                    instructions already loaded by an active session.
+                  </p>
+                  <p>
+                    Files remain in Crew's project storage, outside personal
+                    Codex folders and source repositories. Limit: 128 KiB
+                    instructions, 64 text resources of up to 256 KiB each, and 2
+                    MiB total. Binary resource upload is not supported.
+                  </p>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+            <Separator />
+            <div className="space-y-5">
               <div className="flex items-center justify-between gap-3">
                 <h4 className="text-sm font-medium">Supporting resources</h4>
                 <Button
@@ -424,7 +442,8 @@ export function ProjectSkillsPanel({
                 </Button>
               </div>
               {draft.resources.map((resource, index) => (
-                <div key={index} className="space-y-3 border-t py-4">
+                <div key={index} className="space-y-3 py-4">
+                  <Separator />
                   <div className="flex min-w-0 items-center gap-2">
                     <Input
                       aria-label={`Resource ${index + 1} path`}
@@ -483,15 +502,14 @@ export function ProjectSkillsPanel({
                   />
                   {resource.path.startsWith("scripts/") && (
                     <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
+                      <Checkbox
                         checked={resource.executable === true}
-                        onChange={(event) =>
+                        onCheckedChange={(checked) =>
                           edit((value) => ({
                             ...value,
                             resources: value.resources.map((item, position) =>
                               position === index
-                                ? { ...item, executable: event.target.checked }
+                                ? { ...item, executable: checked }
                                 : item,
                             ),
                           }))
@@ -510,7 +528,8 @@ export function ProjectSkillsPanel({
                 </p>
               )}
             </div>
-            <div className="flex items-center justify-end gap-3 border-t pt-4">
+            <Separator />
+            <div className="flex items-center justify-end gap-3">
               <span className="text-xs text-muted-foreground">
                 {dirty(draft) ? "Unsaved changes" : "Saved"}
               </span>

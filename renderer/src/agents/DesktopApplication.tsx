@@ -1,3 +1,16 @@
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
+import { TriangleAlert } from "lucide-react";
+
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownToLine,
@@ -8,10 +21,11 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { AgentsApp } from "./AgentsApp";
-import { ProjectBrowser } from "./ProjectBrowser";
+import { ProjectBrowser, type ProjectBrowserProps } from "./ProjectBrowser";
 import {
   createDesktopClient,
   type DesktopBridge,
@@ -24,12 +38,12 @@ import crewMark from "../../../build/crew-mark.png";
 import { ProjectSwitcher } from "../manager/ProjectSwitcher";
 import type { WorkspaceSnapshot } from "../contracts/setup";
 import type { UnifiedUpdateSnapshot } from "../../../src/desktop/unified-updates.mjs";
-import type { PreparationReadiness } from "../../../src/agents/contracts.mjs";
 import { WebLink } from "../manager/WebLink";
 
 export interface ProjectPresentation {
   settingsPanels?: AgentSettingsPanel[];
   renderSetup?: AgentsAppProps["renderSetup"];
+  renderAccessApprovals?: AgentsAppProps["renderAccessApprovals"];
   renderVoice?: AgentsAppProps["renderVoice"];
 }
 
@@ -38,8 +52,10 @@ export interface ProjectPresentation {
 export function DesktopApplication({
   bridge,
   presentation,
+  renderBrowserPage,
 }: {
   bridge: DesktopBridge;
+  renderBrowserPage?: ProjectBrowserProps["renderPage"];
   presentation?: (
     projectId: string,
     command: <T>(name: string, args: unknown) => Promise<T>,
@@ -151,75 +167,18 @@ export function DesktopApplication({
   const header = (
     <ProjectSwitcher bridge={projectSwitcher} fallbackName={selected?.name} />
   );
-  const headerUpdates = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      aria-label="Crew updates"
-      onClick={() =>
-        setNavigation({ id: crypto.randomUUID(), view: "updates" })
-      }
-    >
-      <ArrowDownToLine aria-hidden="true" />
-      <span className="hidden sm:inline">Updates</span>
-      {snapshot?.updates &&
-        ["available", "downloading", "downloaded"].includes(
-          snapshot.updates.phase,
-        ) && (
-          <span
-            className="size-1.5 rounded-full bg-primary"
-            aria-label="Update available"
-          />
-        )}
-    </Button>
-  );
   const preparation = (
-    <div className="mt-5 space-y-3 border-t pt-5">
-      <h3 className="text-base font-semibold">Quit Crew across all projects</h3>
-      <p className="text-sm text-muted-foreground">
-        Closing the window keeps agents running. Quit prepares every open
-        project and checks for work before stopping Crew.
+    <div className="space-y-5">
+      <p className="text-sm leading-6 text-muted-foreground">
+        Quit Crew and disconnect its agent sessions. Your agents, sign-in and
+        chat history are saved.
       </p>
-      {snapshot?.quit.detail && (
-        <p
-          role={snapshot.quit.recoveryRequired ? "alert" : "status"}
-          className={`text-sm ${snapshot.quit.recoveryRequired ? "text-destructive" : ""}`}
-        >
-          {snapshot.quit.detail}
-        </p>
-      )}
-      <ProjectReadiness projects={snapshot?.quit.projects ?? []} />
-      <div className="flex flex-wrap gap-2">
-        <Button
-          type="button"
-          disabled={pending || snapshot?.quit.recoveryRequired}
-          onClick={() => void act("prepareQuit")}
-        >
-          Prepare all projects
-        </Button>
-        <Button
-          variant="outline"
-          type="button"
-          disabled={pending || snapshot?.quit.recoveryRequired}
-          onClick={() => void act("cancelQuit")}
-        >
-          Return to work
-        </Button>
-        <Button
-          variant="outline"
-          type="button"
-          disabled={
-            pending ||
-            (!snapshot?.quit.recoveryRequired &&
-              snapshot?.quit.state !== "ready") ||
-            snapshot.updates?.holding
-          }
-          onClick={() => void act("quit")}
-        >
-          {snapshot?.quit.recoveryRequired ? "Retry Quit" : "Quit Crew"}
-        </Button>
-      </div>
+      <Button
+        disabled={pending || snapshot?.quit.state === "quitting"}
+        onClick={() => void act("quit")}
+      >
+        {snapshot?.quit.state === "quitting" ? "Quitting…" : "Quit Crew"}
+      </Button>
     </div>
   );
   if (!snapshot)
@@ -246,6 +205,49 @@ export function DesktopApplication({
     );
   return (
     <>
+      <AlertDialog
+        open={snapshot.quit.state === "confirmation"}
+        onOpenChange={(open) => {
+          if (!open && !pending) void act("cancelQuit");
+        }}
+      >
+        <AlertDialogContent size="sm">
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <TriangleAlert />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Agents are working</AlertDialogTitle>
+            <AlertDialogDescription>
+              {snapshot.quit.activeTurns
+                .map((agent) => agent.agentName)
+                .join(", ")}{" "}
+              {snapshot.quit.activeTurns.length === 1
+                ? "has an active turn."
+                : "have active turns."}{" "}
+              Quitting may interrupt their work. Your saved chat history will
+              be kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={pending}
+              onClick={() => void act("cancelQuit")}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={pending}
+              onClick={(event) => {
+                event.preventDefault();
+                void act("confirmQuit");
+              }}
+            >
+              Quit anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {error && (
         <div
           role="alert"
@@ -289,10 +291,11 @@ export function DesktopApplication({
         <AgentsApp
           key={projectId}
           client={transport.client}
-          renderBrowser={(context) => <ProjectBrowser {...context} />}
+          renderBrowser={(context) => (
+            <ProjectBrowser {...context} renderPage={renderBrowserPage} />
+          )}
           nativeWindow={bridge.integratedTitlebar}
           headerActions={header}
-          headerUpdates={headerUpdates}
           navigationRequest={navigation}
           settingsPanels={[
             ...(panels?.settingsPanels ?? []),
@@ -301,7 +304,7 @@ export function DesktopApplication({
               label: "Updates",
               icon: ArrowDownToLine,
               description:
-                "Signed Crew releases and update readiness across every project on this Mac.",
+                "Check for updates and install them when you’re ready.",
               render: ({ visible }) => (
                 <DesktopUpdates
                   status={snapshot.updates}
@@ -311,6 +314,7 @@ export function DesktopApplication({
               ),
             },
           ]}
+          renderAccessApprovals={panels?.renderAccessApprovals}
           renderSetup={panels?.renderSetup}
           renderVoice={panels?.renderVoice}
           renderPreparationActions={() => preparation}
@@ -357,48 +361,34 @@ function DesktopUpdates({
     if (visible) void request("status");
   }, [visible, request]);
   const phase = status?.phase ?? "unavailable";
-  const preparing = status?.preparation;
   const working =
     Boolean(pending) ||
     ["checking", "downloading", "installing"].includes(phase);
   const downloaded = phase === "downloaded";
-  const canPrepare =
-    status?.supported &&
-    downloaded &&
-    !working &&
-    !status.holding &&
-    !status.recoveryRequired &&
-    preparing?.state !== "preparing";
   const canInstall =
     status?.supported &&
     downloaded &&
     !working &&
     !status.installBlocked &&
-    !status.holding &&
-    !status.recoveryRequired &&
-    preparing?.state === "ready";
-  const canCancel =
-    preparing &&
-    preparing.state !== "idle" &&
-    !working &&
-    !status?.recoveryRequired &&
-    !["reserving", "closing"].includes(preparing.state);
+    !status.holding;
   const messages: Record<string, string> = {
     idle: "Check for a newer Crew release.",
     checking: "Checking GitHub Releases…",
     current: "Crew is up to date.",
     available: `Crew ${status?.availableVersion} is available.`,
     downloading: `Downloading${status?.downloadPercent == null ? "…" : ` ${Math.round(status.downloadPercent)}%…`}`,
-    downloaded: `Crew ${status?.availableVersion} is downloaded. Prepare every project before installing.`,
+    downloaded: `Crew ${status?.availableVersion} is downloaded and ready to install.`,
     installing: "Restarting Crew to install the update…",
     error: "The update could not be verified or retrieved.",
     unavailable: "Update status is unavailable. Refresh to retry.",
   };
   return (
-    <div className="space-y-6">
-      <section className="space-y-4" aria-label="Crew update status">
+    <div className="space-y-10 pb-8">
+      <section className="space-y-5" aria-label="Crew update status">
         <div className="flex flex-wrap items-center gap-3">
-          <h3 className="text-base font-semibold">Crew updates</h3>
+          <h3 className="text-base font-semibold tracking-tight">
+            Crew updates
+          </h3>
           {status?.currentVersion && (
             <Badge variant="secondary">{status.currentVersion}</Badge>
           )}
@@ -412,11 +402,11 @@ function DesktopUpdates({
           </p>
         )}
         {phase === "downloading" && status?.downloadPercent != null && (
-          <progress
+          <Progress
             aria-label="Update download"
             value={status.downloadPercent}
             max={100}
-            className="h-2 w-full accent-primary"
+            className="w-full [&_[data-slot=progress-track]]:h-2"
           />
         )}
         <div className="flex flex-wrap gap-2">
@@ -445,6 +435,17 @@ function DesktopUpdates({
               Download update
             </Button>
           )}
+          {downloaded && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canInstall}
+              onClick={() => void request("install")}
+            >
+              <Check />
+              Install and restart
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -456,81 +457,58 @@ function DesktopUpdates({
           </Button>
         </div>
       </section>
-      {(downloaded || (preparing && preparing.state !== "idle")) && (
-        <section
-          className="space-y-4 border-t pt-6"
-          aria-label="Update preparation"
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <h3 className="text-base font-semibold">Prepare every project</h3>
-            {preparing && (
-              <Badge variant="outline" className="capitalize">
-                {preparing.state}
-              </Badge>
-            )}
-          </div>
-          <p className="text-sm leading-6 text-muted-foreground">
-            Agents save continuation notes and report readiness. Installation
-            checks current execution and reserves every project again before
-            stopping any session.
+      <AlertDialog
+        open={status?.confirmation?.state === "confirmation"}
+        onOpenChange={(open) => {
+          if (!open && !pending) void request("cancel");
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <TriangleAlert />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Agents are working</AlertDialogTitle>
+            <AlertDialogDescription>
+              {status?.confirmation?.activeTurns
+                .map((agent) => agent.agentName)
+                .join(", ")}{" "}
+              have active turns. Installing this update will restart Crew and
+              may interrupt their work. Your saved chat history will be kept.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={working}
+              onClick={() => void request("cancel")}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={working}
+              onClick={(event) => {
+                event.preventDefault();
+                void request("confirmInstall");
+              }}
+            >
+              Install and restart anyway
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {status?.notices.map((notice, index) => (
+        <p key={index} role="status" className="text-sm text-muted-foreground">
+          {notice}
+        </p>
+      ))}
+      {downloaded &&
+        status?.installBlocked &&
+        status.reasons.map((reason, index) => (
+          <p key={index} className="text-sm text-muted-foreground">
+            {reason}
           </p>
-          {preparing?.detail && (
-            <p
-              role={status?.recoveryRequired ? "alert" : "status"}
-              className={`text-sm leading-6 ${status?.recoveryRequired ? "text-destructive" : ""}`}
-            >
-              {preparing.detail}
-            </p>
-          )}
-          {status?.installBlocked && status.reasons.length > 0 && (
-            <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-              {status.reasons.map((reason, index) => (
-                <li key={index}>{reason}</li>
-              ))}
-            </ul>
-          )}
-          <ProjectReadiness projects={preparing?.projects ?? []} />
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!canPrepare}
-              onClick={() => void request("prepare")}
-            >
-              {pending === "prepare" && (
-                <LoaderCircle className="animate-spin" />
-              )}
-              Prepare all projects
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              disabled={!canInstall}
-              onClick={() => void request("install")}
-            >
-              <Check />
-              Install and restart
-            </Button>
-            {preparing?.state !== "idle" && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={!canCancel}
-                onClick={() => void request("cancel")}
-              >
-                Cancel preparation
-              </Button>
-            )}
-          </div>
-          {status?.notices.map((notice, index) => (
-            <p key={index} className="text-xs leading-5 text-muted-foreground">
-              {notice}
-            </p>
-          ))}
-        </section>
-      )}
+        ))}
       <div className="space-y-3 border-t pt-5 text-xs leading-5 text-muted-foreground">
         <p>
           Downloading does not restart Crew. Install and restart is a separate
@@ -545,96 +523,6 @@ function DesktopUpdates({
           View releases on GitHub
         </WebLink>
       </div>
-    </div>
-  );
-}
-
-function ProjectReadiness({
-  projects,
-}: {
-  projects: {
-    projectId: string;
-    name: string;
-    readiness: PreparationReadiness[];
-    error: string | null;
-    closeState?: string;
-  }[];
-}) {
-  if (!projects.length) return null;
-  return (
-    <div className="space-y-3" aria-label="Project readiness">
-      {projects.map((project) => (
-        <section
-          key={project.projectId}
-          className="space-y-3 rounded-xl border p-4"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-sm font-semibold">{project.name}</h4>
-            {project.closeState && project.closeState !== "open" && (
-              <Badge variant="outline">
-                {project.closeState === "closed"
-                  ? "Shutdown confirmed"
-                  : project.closeState === "closing"
-                    ? "Closing"
-                    : "Shutdown unconfirmed"}
-              </Badge>
-            )}
-          </div>
-          {project.error && (
-            <p role="alert" className="text-sm text-destructive">
-              {project.error}
-            </p>
-          )}
-          {!project.error && !project.readiness.length && (
-            <p className="text-xs text-muted-foreground">
-              No agent readiness records reported.
-            </p>
-          )}
-          <ul className="divide-y">
-            {project.readiness.map((agent) => (
-              <li
-                key={`${agent.agentId}:${agent.sessionId}`}
-                className="space-y-2 py-3 first:pt-0 last:pb-0"
-              >
-                <div className="flex min-w-0 items-start justify-between gap-3">
-                  <span className="min-w-0 break-all text-xs">
-                    Agent {agent.agentId}
-                  </span>
-                  <Badge variant="outline" className="shrink-0 capitalize">
-                    {agent.state}
-                  </Badge>
-                </div>
-                {agent.detail && (
-                  <p className="text-sm leading-5 text-muted-foreground">
-                    {agent.detail}
-                  </p>
-                )}
-                <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">
-                    Preparation details
-                  </summary>
-                  <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-                    <dt>Session</dt>
-                    <dd className="break-all">{agent.sessionId}</dd>
-                    <dt>Continuation saved</dt>
-                    <dd className="break-all">
-                      {agent.continuationSavedAt ?? "Not reported"}
-                    </dd>
-                    {"preparationId" in agent && (
-                      <>
-                        <dt>Request</dt>
-                        <dd className="break-all">
-                          {String(agent.preparationId)}
-                        </dd>
-                      </>
-                    )}
-                  </dl>
-                </details>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ))}
     </div>
   );
 }

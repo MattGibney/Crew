@@ -336,7 +336,7 @@ test(
 );
 
 test(
-  "network is explicit, Unix sockets stay denied, and unsupported localhost requests fail closed",
+  "network is explicit, Unix sockets stay denied, and legacy port lists do not restrict servers",
   mac,
   async (t) => {
     const f = await fixture(t);
@@ -363,27 +363,15 @@ test(
       outbound,
     );
     assert.equal(result.exitCode, 0, result.stderr);
-    await assert.rejects(
-      () =>
-        f.execute("true", {
-          network: { outbound: false, localhostPorts: [port] },
-        }),
-      /loopback-only/,
-    );
-    await assert.rejects(
-      () =>
-        f.launch("true", {
-          network: { outbound: true, localhostPorts: [port] },
-        }),
-      /loopback-only/,
-    );
+    const legacy = await f.execute("true", { network: { outbound: false, localhostPorts: [port] } });
+    assert.equal(legacy.exitCode, 0);
     const inbound = await f.execute(
       f.code(
         "const s=require('net').createServer();s.on('error',()=>process.exit(0));s.listen(0,'127.0.0.1',()=>process.exit(1))",
       ),
       outbound,
     );
-    assert.equal(inbound.exitCode, 0, inbound.stderr);
+    assert.equal(inbound.exitCode, 1, inbound.stderr);
   },
 );
 
@@ -461,7 +449,7 @@ test(
 );
 
 test(
-  "explicit inbound TCP ports run a real HTTP server and retain its actual listener and stop evidence",
+  "unrestricted workspace ports run a real HTTP server and retain its actual listener and stop evidence",
   mac,
   async (t) => {
     const f = await fixture(t);
@@ -472,7 +460,7 @@ test(
     const network = {
       outbound: false,
       localhostPorts: [],
-      inboundPorts: [port],
+      inboundPorts: [],
     };
     // This capability deliberately permits all interfaces. The test requests only
     // loopback, and status must report the real wildcard listener without renaming it.
@@ -511,16 +499,7 @@ test(
       ),
       { network },
     );
-    assert.equal(denied.exitCode, 0, denied.stderr);
-    for (const inboundPorts of [
-      [80],
-      Array.from({ length: 17 }, (_, i) => 40000 + i),
-    ]) {
-      await assert.rejects(
-        () => f.execute("true", { network: { ...network, inboundPorts } }),
-        /16 explicitly approved high ports/,
-      );
-    }
+    assert.equal(denied.exitCode, 1, denied.stderr);
     const stopped = await stop(f.controller, launch.processEvidenceRef, {
       timeoutMs: 3000,
     });

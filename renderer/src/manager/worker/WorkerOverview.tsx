@@ -1,3 +1,8 @@
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "../../components/ui/collapsible.js";
 import { WorkerReference } from "./WorkerReference.js";
 import {
   workLinkLabel,
@@ -311,16 +316,18 @@ export function WorkerOverview({
           <div>
             <dt className="font-medium">Original worker instructions</dt>
             <dd>
-              <details className="mt-2">
-                <summary className="cursor-pointer text-muted-foreground">
+              <Collapsible className="mt-2">
+                <CollapsibleTrigger className="text-left cursor-pointer text-muted-foreground">
                   Retained snapshot ·{" "}
                   {task.workerPromptSnapshot.version?.slice(0, 10) ||
                     "Version unavailable"}
-                </summary>
-                <pre className="mt-3 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 text-xs">
-                  {task.workerPromptSnapshot.text}
-                </pre>
-              </details>
+                </CollapsibleTrigger>
+                <CollapsibleContent keepMounted>
+                  <pre className="mt-3 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-4 text-xs">
+                    {task.workerPromptSnapshot.text}
+                  </pre>
+                </CollapsibleContent>
+              </Collapsible>
             </dd>
           </div>
         )}

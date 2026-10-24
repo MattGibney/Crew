@@ -1,3 +1,9 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import { useId, useState } from "react";
 import type {
   AccessRequest,
@@ -9,7 +15,15 @@ import type {
 } from "../../../src/agents/contracts.mjs";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import type { AccessDecision, OwnerPanelProps } from "./types";
 import {
@@ -47,7 +61,7 @@ export function AccessRequestsPanel(props: AccessRequestsPanelProps) {
           No pending access requests.
         </p>
       )}
-      <div className="divide-y border-y">
+      <div className="divide-y">
         {pending.map((request) => (
           <RequestReview key={request.id} {...props} request={request} />
         ))}
@@ -161,41 +175,61 @@ function RequestReview({
           </dd>
         </div>
       </dl>
-      <details className="space-y-3">
-        <summary className="cursor-pointer text-sm font-medium">
+      <Collapsible className="space-y-3">
+        <CollapsibleTrigger
+          type="button"
+          className="group flex w-full items-center gap-2 text-left cursor-pointer text-sm font-medium"
+        >
+          <DisclosureChevronDown
+            className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+            aria-hidden="true"
+          />
           Requested future scope
-        </summary>
-        <div className="mt-3 rounded-lg border p-3">
-          <p className="mb-2 break-all text-xs text-muted-foreground">
-            Connection:{" "}
-            {props.connections.find(
-              (item) => item.id === request.requestedScope.connectionId,
-            )?.name ?? request.requestedScope.connectionId}
-          </p>
-          <ScopeSummary scope={request.requestedScope} />
-        </div>
-      </details>
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Request identity</summary>
-        <dl className="mt-2 space-y-1 break-all">
-          <div>
-            <dt className="inline font-medium">Agent: </dt>
-            <dd className="inline">{request.caller.agentId}</dd>
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <div className="mt-3 border-t pt-4">
+            <p className="mb-2 break-all text-xs text-muted-foreground">
+              Connection:{" "}
+              {props.connections.find(
+                (item) => item.id === request.requestedScope.connectionId,
+              )?.name ?? request.requestedScope.connectionId}
+            </p>
+            <ScopeSummary scope={request.requestedScope} />
           </div>
-          <div>
-            <dt className="inline font-medium">Session: </dt>
-            <dd className="inline">{request.caller.sessionId}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">Invocation: </dt>
-            <dd className="inline">{request.operation.invocationId}</dd>
-          </div>
-          <div>
-            <dt className="inline font-medium">Request: </dt>
-            <dd className="inline">{request.id}</dd>
-          </div>
-        </dl>
-      </details>
+        </CollapsibleContent>
+      </Collapsible>
+      <Collapsible className="text-xs text-muted-foreground">
+        <CollapsibleTrigger
+          type="button"
+          className="group flex w-full items-center gap-2 text-left cursor-pointer"
+        >
+          <DisclosureChevronDown
+            className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+            aria-hidden="true"
+          />
+          Request identity
+        </CollapsibleTrigger>
+        <CollapsibleContent keepMounted>
+          <dl className="mt-2 space-y-1 break-all">
+            <div>
+              <dt className="inline font-medium">Agent: </dt>
+              <dd className="inline">{request.caller.agentId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">Session: </dt>
+              <dd className="inline">{request.caller.sessionId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">Invocation: </dt>
+              <dd className="inline">{request.operation.invocationId}</dd>
+            </div>
+            <div>
+              <dt className="inline font-medium">Request: </dt>
+              <dd className="inline">{request.id}</dd>
+            </div>
+          </dl>
+        </CollapsibleContent>
+      </Collapsible>
       <form
         className="space-y-4"
         onSubmit={async (event) => {
@@ -218,12 +252,10 @@ function RequestReview({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor={`${id}-duration`}>Duration</Label>
-              <NativeSelect
-                id={`${id}-duration`}
-                className="w-full"
+              <Select
                 value={durationType}
-                onChange={(event) => {
-                  const value = event.target.value;
+                onValueChange={(selectedValue) => {
+                  const value = selectedValue ?? "";
                   const next =
                     value === "session" || value === "persistent"
                       ? value
@@ -231,36 +263,72 @@ function RequestReview({
                   setDurationType(next);
                   if (next === "once") setScopeChoice("exact");
                 }}
+                items={[
+                  { value: "once", label: "Once, for this invocation" },
+                  { value: "session", label: "Until this session stops" },
+                  { value: "persistent", label: "Until revoked" },
+                ]}
               >
-                <option value="once">Once, for this invocation</option>
-                <option value="session">Until this session stops</option>
-                <option value="persistent">Until revoked</option>
-              </NativeSelect>
+                <SelectTrigger id={`${id}-duration`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="once">
+                    Once, for this invocation
+                  </SelectItem>
+                  <SelectItem value="session">
+                    Until this session stops
+                  </SelectItem>
+                  <SelectItem value="persistent">Until revoked</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-2">
               <Label htmlFor={`${id}-scope`}>Final scope</Label>
-              <NativeSelect
-                id={`${id}-scope`}
-                className="w-full"
+              <Select
                 value={finalScope.type === "capability" ? "requested" : "exact"}
-                onChange={(event) =>
+                onValueChange={(selectedValue) =>
                   setScopeChoice(
-                    event.target.value === "requested" ? "requested" : "exact",
+                    (selectedValue ?? "") === "requested"
+                      ? "requested"
+                      : "exact",
                   )
                 }
+                items={[
+                  {
+                    value: "exact",
+                    label: "This exact operation and arguments",
+                  },
+                  ...(requestedAvailable
+                    ? [
+                        {
+                          value: "requested",
+                          label: "Requested capabilities and restrictions",
+                        },
+                      ]
+                    : []),
+                ]}
               >
-                <option value="exact">
-                  This exact operation and arguments
-                </option>
-                {requestedAvailable && (
-                  <option value="requested" disabled={durationType === "once"}>
-                    Requested capabilities and restrictions
-                  </option>
-                )}
-              </NativeSelect>
+                <SelectTrigger id={`${id}-scope`} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="exact">
+                    This exact operation and arguments
+                  </SelectItem>
+                  {requestedAvailable && (
+                    <SelectItem
+                      value="requested"
+                      disabled={durationType === "once"}
+                    >
+                      Requested capabilities and restrictions
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
             </div>
           </div>
-          <div className="rounded-lg border p-3">
+          <div className="border-t pt-4">
             <ScopeSummary scope={finalScope} exactArgumentsShown />
             <p className="mt-3 text-xs leading-5 text-muted-foreground">
               {durationType === "once"

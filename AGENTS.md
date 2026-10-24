@@ -616,3 +616,104 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Preserve a private exact legacy snapshot before migration. Test on disposable state only; changing source does not authorize migrating the owner's live profile or replacing the running app. Profile image references and external environment/chat paths are preserved; do not duplicate shared assets or move native history into an agent folder merely to make the layout uniform.
 - New agent identities are immutable UUIDs; rename/reporting changes never replace them. Independently version persisted agent records and upgrade known older formats before use; reject unknown versions without rewriting. Agent folders hold no gateway credentials or authentication tokens, although owner-authored notes/assets remain private data.
 - Archive is the default removal action for every agent and hides it from normal views. Settings has a dedicated Archived agents table with ID/name/last used/Restore/Permanently delete. Restoration is owner-only and idle; permanent deletion needs explicit confirmation and an archived stopped agent. Retain immutable shared work attribution through ID-only deletion markers, never delete shared accounts/resources by implication, and leave export/import to a later task.
+
+## Browser UI preview (#135)
+
+- `npm run ui:preview` runs the current unified React app on loopback with hot reload and separate empty/populated fictional projects. Use this for annotation and UI iteration; production entries never import the preview bridge or fixtures.
+- Keep preview interactions in browser memory and resettable. No owner-profile reads, live API proxy, credentials, model turns, native commands or physical media. Browser permission/CSP restrictions supplement the synthetic bridge; never weaken the installed app's IPC boundary to enable a design preview.
+- Use current components, shared semantic theme and representative fixtures rather than building a second copy of the product UI. Preview acceptance is presentation evidence, not provider/runtime or native microphone acceptance.
+
+## Team member overview navigation (#137)
+
+- The project opens on a responsive Team members card grid of active owner-facing agents (`reportsTo.type === "user"`). This is a presentation of reporting links, not a separate manager class or an inference from agent-creation permissions. Child workers stay in their selected manager's workspace; archived agents stay in Settings.
+- Cards select the same persistent agent through the existing revision-checked owner operation, then open its chat/workers/notes/browser. Keep a Team members return action and visible selected identity instead of the Talk to selector. Preserve drafts and voice-switch rejection; navigation must never launch work, start a session or activate capture.
+
+- Team member cards use the agent’s saved profile picture, with initials only when no picture is available. Populated UI preview agents should include sample profile pictures through the normal image-reference path.
+
+- Settings > Agents uses a tabbed switch to separate active Team members (reporting to the user) from Worker agents (reporting to another agent), and shows who each reports to. These remain the same agent model; group permissions do not determine this presentation.
+
+- Do not show a Current contact selector in Settings. Selecting a Team member card opens that agent’s workspace; Settings configures agents rather than choosing the current chat.
+
+- Keep the Agents settings list header compact: one Agents heading with Create agent alongside it, then the type tabs. Avoid a repeated project label, secondary Your agents heading or duplicated introductory copy. Retain guidance inside the creation/editing flow.
+
+- Agent Settings tables keep per-agent Edit and Archive actions in a labelled vertical ellipsis menu, rather than separate row buttons. Archive uses the destructive menu-item variant. Preserve keyboard menu navigation and the existing action behavior.
+
+- Archive from an agent row opens a destructive alert dialog naming the agent, with Cancel focused by default and explicit Archive confirmation. Explain retained history and restoration. Format observed session labels with initial capitals in Settings.
+
+- When the user links a specific shadcn example, inspect and use its actual component composition and styling. The destructive archive dialog follows the linked Base UI small example: centered media/title/description and two equal footer actions, not a custom wide left-aligned approximation.
+
+## Official shadcn/ui components
+
+- Prefer actual shadcn/ui components throughout Crew. Install the official component from the appropriate registry using the shadcn CLI and use its generated components directly. Do not approximate examples with custom markup, manually recreate registry components, or treat using the same underlying Base UI primitive as equivalent.
+- Check the project’s configured shadcn base/style before installing. Preserve the canonical theme and branding, and compose the installed components using their supported variants and props. If the user links an example, follow its actual component composition.
+
+- The component audit in docs/UI-COMPONENTS.md records installed shadcn Base UI/Nova components and composition boundaries. Keep generated registry files intact; application behavior belongs in consumers. Preserve mounted voice resources and drafts when adopting Tabs, and use one Sonner Toaster per app root.
+
+- Settings navigation has one Settings heading; do not repeat it with a Project settings subheading above the same navigation list.
+
+- Agent Settings tables present observed started sessions as Online and other session states as Offline, with a green or grey dot inside a pale circular halo to the left of the label. Keep the underlying session state available in the tooltip; availability is separate from agent-reported work progress.
+
+- Reuse the shared OnlineStatus component for Online/Offline indicators. It owns labels, dot colours and halo sizing; consumers determine availability and pass any runtime detail as a tooltip.
+
+## Single-page agent editing (#137)
+
+- Create and Edit use the same sectioned agent editor, not a wizard. Keep Save/Create and Cancel visible at the top; no step navigation, Continue buttons or autosaved wizard-progress UI. Use official installed shadcn components.
+- Identity, instructions, existing group memberships, staged environment template and supported runtime information belong here. Permissions, skills, connections and folder access derive from groups and are displayed read-only; sign-in, group creation and connection creation stay in dedicated Settings.
+- Cancel must discard only unapplied editor intent without changing an agent or template. Do not embed an independently saving environment selector inside a form promising global Save/Cancel. Keep revision checks, recoverable applying-state errors and truthful partial-success notices.
+
+- Sticky agent-editor actions need a mostly opaque theme background with backdrop blur, including the top scroll inset and side padding, so form content cannot remain sharply visible above or behind the title and Save/Cancel controls.
+
+- Agent editor sections are unboxed, separated by official shadcn Separator horizontal rules. Do not wrap Identity, Instructions, Access, Environment or Runtime sections in cards or bordered panels.
+- Agent access summaries use readable action names grouped by purpose, with installed shadcn tooltips explaining each capability. Keep summaries derived from group membership; presentation must not imply broader permissions or bypass resource limits and approvals.
+- Keep group-derived project resources in Access. The environment template selector shows its own tools, version requirements and setup capabilities, updating with the draft selection; never present these as verified installed tooling.
+- Agent workspace server ports are unrestricted. Do not add template port allow-lists or port selectors. Keep outbound internet permission, browser permissions, runtime gateway isolation and filesystem boundaries separate. Retained localhostPorts/inboundPorts arrays are compatibility metadata, not workspace authorization.
+- Explain agent Personality as tone and communication style, automatically combined with the system prompt. System prompt guidance should focus on responsibilities, technical requirements and workflows. Explain Save versus Restart separately, including retained chat history and Codex context summarization/allowance when applying changed instructions.
+
+- Profile pictures throughout Crew use rounded squares, including image, fallback and border layers. Compose the official Avatar with proportional corner radii; do not use circular profile crops or change unrelated circular status indicators.
+
+- All settings pages follow the agent editor visual language: a single compact page heading, aligned actions, 70% sticky background with medium backdrop blur, generous section spacing and unboxed content separated by horizontal rules. Use two-column section introductions for forms and full-width layouts for tables and long editors. Service connections use the official shadcn Table and row action menus.
+
+- Settings tables match the Agents table composition: rounded-lg border, muted header, px-4 py-3 cells, medium primary labels, muted supporting values and ghost icon row menus. Using the same Table primitive alone is not enough for visual consistency.
+
+- Connection creation and editing open in a centred official shadcn Dialog, not an expanded table row or side sheet. Keep the table mounted behind the dialog, scroll long forms internally and retain explicit Cancel/Save actions and busy-state protection.
+- Service names in connection tables include their brand logo through the reusable ServiceLogo component. Bundle authentic assets locally, retain visible names and use a generic fallback for unknown providers.
+
+- Keep Connections and Groups & permissions as separate Settings pages. Connections owns service accounts and authentication; Groups & permissions owns group grants. Agent templates has its own Settings page for approved starting profiles, environment choices and group memberships. Questions and approvals owns operational access requests and approval grants alongside agent questions and native approvals. Agent editor links should name and open the specific destination.
+
+- Permission groups use the same full-width shadcn table treatment as agents and connections, with group descriptions, access counts and a vertical-ellipsis Edit menu. Create/Edit opens a centred Dialog with internally scrolling content and explicit actions.
+
+- Group permission choices show readable operation names, not raw upstream snake_case names or internal connection/capability IDs. Keep IDs unchanged in stored grants and callbacks; avoid repeating descriptions that only restate the label.
+
+- Agent templates use the same full-width shadcn table and vertical-ellipsis Edit menu as agents, connections and permission groups. Show availability, group/connection counts and the default template. Create/Edit uses a full-page sectioned editor matching agents, with a sticky 70% background/medium-blur header and ghost Cancel plus primary Save/Create. Default selection stays in a dialog; omit the separator below the template table.
+
+- Agent templates has one heading. The header ellipsis offers Change default in a dialog with explicit save/cancel. Row menus include destructive Remove confirmation; removal preserves existing agents and atomically clears a removed default, using owner authorization and revision checks.
+
+- The agent editor is the visual reference for template editors. Reuse AgentPromptFields for Personality and Instructions so tooltip wording, textareas, writing guidance and disclosure styles stay aligned. Template save guidance must describe future agents, not restarting an existing chat.
+
+- Sessions lists all non-archived project agents, including team members and workers, rather than only the current contact. Keep each status, pending configuration notice, recovery path and lifecycle action scoped to the stable agent ID; opening Sessions starts no work.
+
+- Session error rows stay compact: show a clear status, a recovery action and an overflow menu for other lifecycle actions. Put diagnostic/recovery explanations in an explicit details disclosure; preserve all error text and configuration notices without stacking long paragraphs or a bordered error box in the default row.
+
+- Sessions bulk selection uses stable agent IDs and includes only non-archived agents. Bulk Start/Stop/Restart reuse the per-agent lifecycle transport and lock, skip inapplicable or busy sessions, prevent overlapping batches, and report acknowledged/skipped/failed results. Selecting agents starts no work; never report command acknowledgement as verified native liveness.
+
+- Session rows place Start/Stop/Restart in a vertical-ellipsis shadcn DropdownMenu. Preserve state-dependent disabled actions and per-agent labels; bulk actions stay visible above the table and error rows retain the prominent Recover session action.
+
+- Sessions bulk actions use one labelled Bulk action dropdown with Start/Stop/Restart selected items, rather than three exposed buttons. Keep selection count and Clear selection visible.
+
+- Connections uses one compact title/description with its add action aligned alongside, not a generic page heading followed by a duplicate service-connections heading.
+
+- Connection rows omit a redundant leading service name from the displayed connection label while preserving saved names and identities. Reuse OnlineStatus for dot/halo styling with connection-specific labels; only verified connected state gets the green indicator.
+
+- Permission group row menus include destructive Delete with a named confirmation. Owner-only revision-checked deletion atomically removes memberships from agents/templates and refreshes derived access and revisions; preserve agents, connections, other groups and historical audit/approval records.
+
+## Owner Quit and explicit update installation (#137)
+
+- Owner Quit and Install and restart use the same rule: proceed immediately when no agent has an active turn; otherwise warn and let the owner cancel or continue. Active turns are the only work-related warning. Do not require preparation notes, readiness reports, idle sessions, resolved approvals or environment teardown.
+- Updates remain explicit. Preserve signed-release verification and installer ownership checks. Ordinary Quit never installs. Cleanup is bounded and only closes owned transports; preserve saved conversations, sign-in and uncertain execution journals rather than claim unconfirmed shutdown or kill unrelated processes.
+- Updates belongs in Settings; omit the duplicate global header shortcut.
+- Keep voice controls inside the conversation composer on the same horizontal gutters as its input-method tabs, with bottom padding; allow connected-call actions to wrap on narrow widths.
+
+## Personal objectives in the chat sidebar (#137)
+
+- The agent chat sidebar shows its personal internal to-do list, grouped into Not started, In progress and Recently completed. Include only local objectives assigned to that exact agent. External GitHub/Linear tickets and delegated worker work belong elsewhere; never merge them into personal objectives or infer progress from a live session. Keep the Workers view separately available.
+- Conversation sidebar width is a global UI preference shared across agents and projects and restored on reload/restart. Clamp only the displayed width when a window shrinks; do not overwrite the saved preference. Double-clicking the divider resets the saved width.

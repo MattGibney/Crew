@@ -1,15 +1,23 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   BookOpen,
+  LayoutTemplate,
   CalendarClock,
   FolderOpen,
   LogIn,
+  Plug,
   ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NativeSelect } from "@/components/ui/native-select";
 import type { AccessOwnerView } from "../../../src/access/owner-contracts.mjs";
 import type {
   EnvironmentPolicy,
@@ -38,9 +46,10 @@ import type {
   SubscriptionUsageState,
 } from "../../../src/application/subscription-usage-contracts.mjs";
 import type { PrimaryVoiceClient, PrimaryVoiceEvent } from "./voice/client";
+import type { AgentSettingsPanel } from "./AgentsApp";
 import type { ProjectPresentation } from "./DesktopApplication";
 import type { AgentsSnapshot } from "./client";
-import { AgentSetupWizard } from "./AgentSetupWizard";
+import { AgentSettings } from "./AgentSettings";
 
 type Command = <T>(name: string, args: unknown) => Promise<T>;
 type Subscribe = (listener: (event: unknown) => void) => () => void;
@@ -158,14 +167,14 @@ export function createProjectPresentation(
         description:
           "Create and configure your team’s roles, personalities and voices.",
         render: ({ snapshot, refresh, visible, openSettings }) => (
-          <AgentSetupWizard
+          <AgentSettings
             snapshot={snapshot}
             refresh={refresh}
             command={command}
             subscribe={onOwnerChange}
             visible={visible}
-            renderSignIn={signIn}
-            onOpenConnections={() => openSettings("access")}
+            onOpenConnections={() => openSettings("connections")}
+            onOpenGroups={() => openSettings("access")}
           />
         ),
       },
@@ -187,14 +196,42 @@ export function createProjectPresentation(
           </div>
         ),
       },
-      {
-        id: "access",
-        label: "Connections & access",
-        icon: ShieldCheck,
-        description:
-          "Manage service connections, permissions and approved agent defaults.",
-        render: ({ snapshot, refresh, visible }) => (
+      ...(
+        [
+          {
+            id: "agent-templates",
+            label: "Agent templates",
+            icon: LayoutTemplate,
+            section: "templates",
+            description:
+              "Define starting profiles, environments and group memberships for new agents.",
+          },
+          {
+            id: "connections",
+            label: "Connections",
+            icon: Plug,
+            section: "connections",
+            description:
+              "Connect and manage service accounts shared by your agents.",
+          },
+          {
+            id: "access",
+            label: "Groups & permissions",
+            icon: ShieldCheck,
+            section: "groups",
+            description:
+              "Manage groups and the ongoing access their members inherit.",
+          },
+        ] as const
+      ).map(({ section, ...panel }) => ({
+        ...panel,
+        render: ({
+          snapshot,
+          refresh,
+          visible,
+        }: Parameters<AgentSettingsPanel["render"]>[0]) => (
           <AccessSettings
+            section={section}
             projectId={projectId}
             command={command}
             subscribe={onOwnerChange}
@@ -203,7 +240,7 @@ export function createProjectPresentation(
             visible={visible}
           />
         ),
-      },
+      })),
       {
         id: "workspace",
         label: "Workspace",
@@ -244,19 +281,30 @@ export function createProjectPresentation(
         ),
       },
     ],
+    renderAccessApprovals: ({ snapshot, refresh, visible }) => (
+      <AccessSettings
+        section="approvals"
+        projectId={projectId}
+        command={command}
+        subscribe={onOwnerChange}
+        snapshot={snapshot}
+        refreshProject={refresh}
+        visible={visible}
+      />
+    ),
     renderSetup: (context) => {
       if (context.snapshot.agents.some((agent) => !agent.archivedAt))
         return null;
       return (
-        <AgentSetupWizard
+        <AgentSettings
           snapshot={context.snapshot}
           refresh={context.refresh}
           command={command}
           subscribe={onOwnerChange}
           visible={context.visible}
           firstUse
-          renderSignIn={signIn}
-          onOpenConnections={() => context.openSettings("access")}
+          onOpenConnections={() => context.openSettings("connections")}
+          onOpenGroups={() => context.openSettings("access")}
         />
       );
     },
@@ -315,6 +363,7 @@ function validVoiceEvent(
 }
 
 function AccessSettings({
+  section,
   projectId,
   command,
   subscribe,
@@ -322,6 +371,7 @@ function AccessSettings({
   refreshProject,
   visible,
 }: {
+  section: "connections" | "groups" | "templates" | "approvals";
   projectId: string;
   command: Command;
   subscribe: Subscribe;
@@ -416,6 +466,7 @@ function AccessSettings({
       )}
       {access ? (
         <OwnerAccessSettings
+          section={section}
           snapshot={access}
           workspaces={workspaces.map((workspace) => ({
             policy: workspace.policy,
@@ -565,7 +616,7 @@ function WorkspaceSettings({
         setToast({
           id: crypto.randomUUID(),
           message:
-            "Workspace approved. Assign its policy to an agent's permission group in Connections & access.",
+            "Workspace approved. Assign its policy to an agent's permission group in Groups & permissions.",
         });
       }
       await Promise.all([reload(), refreshProject()]);
@@ -580,17 +631,19 @@ function WorkspaceSettings({
     }
   }
   return (
-    <section className="space-y-5 py-6">
+    <section className="space-y-8">
       <div>
-        <h2 className="font-semibold tracking-tight">Project workspace</h2>
-        <p className="mt-1 text-xs leading-5 text-muted-foreground">
+        <h2 className="text-base font-semibold tracking-tight">
+          Project folder access
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
           Approve the registered project folder, then assign its policy to a
-          permission group in Connections & access.
+          permission group in Groups & permissions.
         </p>
       </div>
       {saved ? (
         <>
-          <div className="grid items-start gap-3 border-y py-6 sm:grid-cols-[136px_minmax(0,1fr)_auto] sm:gap-6">
+          <div className="grid items-start gap-6 border-b pb-8 md:grid-cols-[minmax(0,0.8fr)_minmax(0,2fr)_auto] md:gap-8">
             <h3 className="text-sm font-medium">Project folder</h3>
             <p className="break-all text-sm text-muted-foreground">
               {saved.folder}
@@ -626,21 +679,32 @@ function WorkspaceSettings({
                   <p className="mt-1 text-xs text-muted-foreground">
                     {workspaceConfigurationDescription(row)}
                   </p>
-                  <details className="mt-2 text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">Policy details</summary>
-                    {policyIds.map((id) => (
-                      <p key={id} className="mt-2 break-all">
-                        {id}
-                      </p>
-                    ))}
-                    {policyIds.length > 1 && (
-                      <p className="mt-2">
-                        Equivalent legacy approvals retained for existing
-                        assignments and environments. Update edits the first
-                        listed policy.
-                      </p>
-                    )}
-                  </details>
+                  <Collapsible className="mt-2 text-xs text-muted-foreground">
+                    <CollapsibleTrigger
+                      type="button"
+                      className="group flex w-full items-center gap-2 text-left cursor-pointer"
+                    >
+                      <DisclosureChevronDown
+                        className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                        aria-hidden="true"
+                      />
+                      Policy details
+                    </CollapsibleTrigger>
+                    <CollapsibleContent keepMounted>
+                      {policyIds.map((id) => (
+                        <p key={id} className="mt-2 break-all">
+                          {id}
+                        </p>
+                      ))}
+                      {policyIds.length > 1 && (
+                        <p className="mt-2">
+                          Equivalent legacy approvals retained for existing
+                          assignments and environments. Update edits the first
+                          listed policy.
+                        </p>
+                      )}
+                    </CollapsibleContent>
+                  </Collapsible>
                 </div>
                 {!draft && simple(row) && (
                   <Button
@@ -664,13 +728,11 @@ function WorkspaceSettings({
           {draft && (
             <div className="space-y-4">
               <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="accent-primary"
+                <Checkbox
                   disabled={busy || stale}
                   checked={draft.writable}
-                  onChange={(event) =>
-                    setDraft({ ...draft, writable: event.target.checked })
+                  onCheckedChange={(checked) =>
+                    setDraft({ ...draft, writable: checked })
                   }
                 />
                 Allow writes in the project folder
@@ -684,9 +746,13 @@ function WorkspaceSettings({
               {stale && (
                 <p role="alert" className="text-sm text-destructive">
                   The saved policy changed elsewhere.{" "}
-                  <button className="underline" onClick={() => setDraft(null)}>
+                  <Button
+                    variant="ghost"
+                    className="h-auto p-0 underline"
+                    onClick={() => setDraft(null)}
+                  >
                     Reload the saved policy
-                  </button>{" "}
+                  </Button>{" "}
                   before editing.
                 </p>
               )}
@@ -906,11 +972,13 @@ function SubscriptionSettings({
     }
   }
   return (
-    <section className="space-y-5 py-6">
+    <section className="space-y-6 pb-8">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h2 className="font-semibold tracking-tight">ChatGPT subscription</h2>
-          <p className="mt-1 max-w-2xl text-xs leading-5 text-muted-foreground">
+          <h2 className="text-base font-semibold tracking-tight">
+            ChatGPT subscription
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
             Sign in with your existing ChatGPT account to use its subscription
             in Crew. Crew keeps its project profile and configuration separate
             from your personal Codex setup. Service connections and agent
@@ -918,15 +986,15 @@ function SubscriptionSettings({
           </p>
         </div>
         <Button
-          variant="link"
-          className="h-auto p-0 text-sm font-semibold"
+          variant="outline"
+          size="sm"
           disabled={busy}
           onClick={() => void reload()}
         >
           Refresh status
         </Button>
       </div>
-      <div className="border-y py-5">
+      <div className="space-y-3">
         <p className="text-sm">
           {status?.state === "signed_in"
             ? `Signed in${status.plan ? ` · ${status.plan}` : ""}`
@@ -962,7 +1030,7 @@ function SubscriptionSettings({
               Open sign-in page
             </Button>
             <Button
-              variant="outline"
+              variant="ghost"
               disabled={busy}
               onClick={() => void run("cancelSignIn")}
             >
@@ -982,7 +1050,7 @@ function SubscriptionSettings({
               : "Waiting for a confirmed sign-in result."}
           </p>
           <Button
-            variant="outline"
+            variant="ghost"
             disabled={busy}
             onClick={() => void run("cancelSignIn")}
           >

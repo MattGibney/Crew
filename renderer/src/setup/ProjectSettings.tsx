@@ -1,3 +1,9 @@
+import { ChevronDown as DisclosureChevronDown } from "lucide-react";
+import {
+  Collapsible,
+  CollapsibleTrigger,
+  CollapsibleContent,
+} from "@/components/ui/collapsible";
 import { useState } from "react";
 import {
   trackingPreferences,
@@ -133,7 +139,7 @@ function TrackingSettings({ setup }: SetupProps) {
           <Label key={provider}>
             <SetupCheckbox
               checked={tracking.providers.includes(provider)}
-              onChange={(event) => toggle(provider, event.target.checked)}
+              onCheckedChange={(checked) => toggle(provider, checked)}
             />
             {provider === "linear" ? "Linear" : "GitHub"}
           </Label>
@@ -373,88 +379,97 @@ function AdvancedSettings({ setup }: SetupProps) {
   ];
   const value = (path: string) => readDraftPath(draft, path);
   return (
-    <details className="rounded-lg border border-border">
-      <summary className="cursor-pointer px-4 py-3 font-medium">
+    <Collapsible className="rounded-lg border border-border">
+      <CollapsibleTrigger
+        type="button"
+        className="group flex w-full items-center gap-2 text-left cursor-pointer px-4 py-3 font-medium"
+      >
+        <DisclosureChevronDown
+          className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+          aria-hidden="true"
+        />
         Advanced settings
-      </summary>
-      <div className="space-y-5 border-t border-border p-4">
-        <Hint>
-          Optional technical settings. Normal setup fills these for you. Changes
-          are validated before saving.
-        </Hint>
-        {fields.slice(0, 2).map(([id, label, path]) => (
-          <Field
-            key={id}
-            id={id}
-            label={label}
-            value={value(path)}
-            onChange={(next) => edit(path, next)}
-            multiline={id === "context"}
-          />
-        ))}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="mode">Project type</Label>
-            <Select
-              id="mode"
-              value={draft.project.mode}
-              onChange={(event) => edit("project.mode", event.target.value)}
-            >
-              <option value="repository">Code project</option>
-              <option value="fixture">Disposable test fixture</option>
-            </Select>
+      </CollapsibleTrigger>
+      <CollapsibleContent keepMounted>
+        <div className="space-y-5 border-t border-border p-4">
+          <Hint>
+            Optional technical settings. Normal setup fills these for you.
+            Changes are validated before saving.
+          </Hint>
+          {fields.slice(0, 2).map(([id, label, path]) => (
+            <Field
+              key={id}
+              id={id}
+              label={label}
+              value={value(path)}
+              onChange={(next) => edit(path, next)}
+              multiline={id === "context"}
+            />
+          ))}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="mode">Project type</Label>
+              <Select
+                id="mode"
+                value={draft.project.mode}
+                onChange={(event) => edit("project.mode", event.target.value)}
+              >
+                <option value="repository">Code project</option>
+                <option value="fixture">Disposable test fixture</option>
+              </Select>
+            </div>
+            <Field
+              id="port"
+              label="Local port"
+              value={draft.runtime.port}
+              onChange={(next) => edit("runtime.port", next)}
+              type="number"
+              min="1024"
+              max="65535"
+            />
           </div>
           <Field
-            id="port"
-            label="Local port"
-            value={draft.runtime.port}
-            onChange={(next) => edit("runtime.port", next)}
+            id="max-workers"
+            label="Workers running at once"
+            value={draft.project.worker.maxConcurrent ?? 2}
+            onChange={(next) => edit("project.worker.maxConcurrent", next)}
             type="number"
-            min="1024"
-            max="65535"
+            min="1"
+            max="8"
+            hint="Additional agreed tasks wait in a queue. Default: two."
           />
+          {fields.slice(2).map(([id, label, path]) => (
+            <Field
+              key={id}
+              id={id}
+              label={label}
+              value={value(path)}
+              onChange={(next) => edit(path, next)}
+            />
+          ))}
+          <Actions>
+            <SetupButton
+              id="open-config"
+              onClick={() =>
+                setup.run("Open configuration", () => setup.api.openConfig())
+              }
+            >
+              Open settings file
+            </SetupButton>
+            <SetupButton
+              id="open-prompts"
+              onClick={() =>
+                setup.run("Open configuration folder", () =>
+                  setup.api.openPrompts(),
+                )
+              }
+            >
+              Open settings folder
+            </SetupButton>
+          </Actions>
         </div>
-        <Field
-          id="max-workers"
-          label="Workers running at once"
-          value={draft.project.worker.maxConcurrent ?? 2}
-          onChange={(next) => edit("project.worker.maxConcurrent", next)}
-          type="number"
-          min="1"
-          max="8"
-          hint="Additional agreed tasks wait in a queue. Default: two."
-        />
-        {fields.slice(2).map(([id, label, path]) => (
-          <Field
-            key={id}
-            id={id}
-            label={label}
-            value={value(path)}
-            onChange={(next) => edit(path, next)}
-          />
-        ))}
-        <Actions>
-          <SetupButton
-            id="open-config"
-            onClick={() =>
-              setup.run("Open configuration", () => setup.api.openConfig())
-            }
-          >
-            Open settings file
-          </SetupButton>
-          <SetupButton
-            id="open-prompts"
-            onClick={() =>
-              setup.run("Open configuration folder", () =>
-                setup.api.openPrompts(),
-              )
-            }
-          >
-            Open settings folder
-          </SetupButton>
-        </Actions>
-      </div>
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -598,43 +613,52 @@ export default function ProjectSettings({ setup }: SetupProps) {
               <TrackingSettings setup={setup} />
             </div>
           )}
-          <details
+          <Collapsible
             id="understanding"
             className="rounded-lg border border-border"
           >
-            <summary className="cursor-pointer px-4 py-3 font-medium">
+            <CollapsibleTrigger
+              type="button"
+              className="group flex w-full items-center gap-2 text-left cursor-pointer px-4 py-3 font-medium"
+            >
+              <DisclosureChevronDown
+                className="size-4 shrink-0 transition-transform group-aria-expanded:rotate-180"
+                aria-hidden="true"
+              />
               What Crew learned about this project
-            </summary>
-            <div className="space-y-3 border-t border-border p-4">
-              <p
-                id="understanding-text"
-                className="whitespace-pre-wrap text-sm leading-relaxed"
-              >
-                {snapshot?.config?.project?.context || ""}
-              </p>
-              <div
-                id="proposal-evidence"
-                className="space-y-2 text-sm text-muted-foreground"
-              >
-                {info && (
-                  <>
-                    <p>
-                      Based on {info.sources?.length || 0} selected files
-                      {info.truncated ? " from part of this repository" : ""}.
-                    </p>
-                    {(info.findings || []).map((finding, index) => (
-                      <p key={index}>
-                        {finding.statement} (
-                        {finding.sources?.join(", ") ||
-                          "Not established by the selected files"}
-                        )
+            </CollapsibleTrigger>
+            <CollapsibleContent keepMounted>
+              <div className="space-y-3 border-t border-border p-4">
+                <p
+                  id="understanding-text"
+                  className="whitespace-pre-wrap text-sm leading-relaxed"
+                >
+                  {snapshot?.config?.project?.context || ""}
+                </p>
+                <div
+                  id="proposal-evidence"
+                  className="space-y-2 text-sm text-muted-foreground"
+                >
+                  {info && (
+                    <>
+                      <p>
+                        Based on {info.sources?.length || 0} selected files
+                        {info.truncated ? " from part of this repository" : ""}.
                       </p>
-                    ))}
-                  </>
-                )}
+                      {(info.findings || []).map((finding, index) => (
+                        <p key={index}>
+                          {finding.statement} (
+                          {finding.sources?.join(", ") ||
+                            "Not established by the selected files"}
+                          )
+                        </p>
+                      ))}
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
-          </details>
+            </CollapsibleContent>
+          </Collapsible>
           <AdvancedSettings setup={setup} />
           <Actions>
             <SetupButton

@@ -33,7 +33,7 @@ export function ApprovalGrantsPanel(props: ApprovalGrantsPanelProps) {
       title="Approval grants"
       description="Revoking a grant prevents future admission through that grant. Other valid group permissions and grants remain effective; calls already admitted may finish."
     >
-      <div className="divide-y border-y">
+      <div className="divide-y">
         {!props.grants.length && (
           <p className="py-5 text-sm text-muted-foreground">
             No approval grants have been issued.
@@ -138,7 +138,7 @@ function GrantRow({
       </div>
       {revoking && canRevoke && (
         <form
-          className="space-y-3 rounded-lg border p-3"
+          className="space-y-3 border-t pt-4"
           onSubmit={async (event) => {
             event.preventDefault();
             if (!reason.trim()) return;
