@@ -1,3 +1,4 @@
+import { AgentObjectives } from "./AgentObjectives";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { TriangleAlert, ChevronDown, MoreVertical } from "lucide-react";
@@ -157,6 +158,7 @@ type View =
   | "managers"
   | "browser"
   | "conversation"
+  | "objectives"
   | "agents"
   | "scratchpad"
   | "inbox"
@@ -319,7 +321,7 @@ export function AgentsApp({
     setSelectedId(null);
     setView((current) =>
       !primary &&
-      ["conversation", "agents", "scratchpad", "browser"].includes(current)
+      ["conversation", "objectives", "agents", "scratchpad", "browser"].includes(current)
         ? "managers"
         : current === "agents"
           ? "conversation"
@@ -466,6 +468,7 @@ export function AgentsApp({
     !setupVisible &&
     (view === "conversation" ||
       view === "agents" ||
+      view === "objectives" ||
       view === "scratchpad" ||
       view === "browser") &&
     !detailVisible;
@@ -561,7 +564,7 @@ export function AgentsApp({
             </span>
           )}
         </div>
-        <div className="flex w-full gap-1 sm:w-auto">
+        <div className="flex w-full flex-wrap gap-1 sm:w-auto">
           <Button
             variant={view === "conversation" ? "secondary" : "ghost"}
             aria-pressed={view === "conversation"}
@@ -574,6 +577,15 @@ export function AgentsApp({
             <MessageSquare />
             Conversation
             {attentionCount > 0 && <Badge>{attentionCount} to review</Badge>}
+          </Button>
+          <Button
+            variant={view === "objectives" ? "secondary" : "ghost"}
+            aria-pressed={view === "objectives"}
+            className="h-8 text-xs lg:hidden"
+            onClick={() => { setView("objectives"); setSelectedId(null); }}
+          >
+            <LayoutDashboard />
+            Objectives
           </Button>
           <Button
             variant={view === "agents" ? "secondary" : "ghost"}
@@ -661,7 +673,7 @@ export function AgentsApp({
                     "--crew-worker-width": `${workerWidth}px`,
                   } as CSSProperties)
             }
-            className={`${!setupVisible && (view === "conversation" || (view === "agents" && !selectedId)) ? "grid" : "hidden"} min-h-0 flex-1 ${view === "conversation" ? "manager-split" : ""}`}
+            className={`${!setupVisible && (view === "conversation" || view === "objectives" || (view === "agents" && !selectedId)) ? "grid" : "hidden"} min-h-0 flex-1 ${view === "conversation" ? "manager-split" : ""}`}
           >
             <section
               aria-label="Agent workspace"
@@ -714,7 +726,7 @@ export function AgentsApp({
             </section>
             <div
               role="separator"
-              aria-label="Resize worker panel"
+              aria-label="Resize objectives panel"
               aria-orientation="vertical"
               aria-valuemin={280}
               aria-valuemax={maximumWorkerWidth}
@@ -766,25 +778,35 @@ export function AgentsApp({
               }}
             />
             <aside
-              aria-label="Project workers"
+              aria-label={view === "conversation" || view === "objectives" ? "Agent objectives sidebar" : "Project workers"}
               className={`min-h-0 min-w-0 overflow-y-auto bg-muted/25 p-5 ${view === "conversation" ? "hidden lg:block" : "block"}`}
             >
-              <div className="mb-4 flex justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openSettings("agents")}
-                >
-                  <Plus />
-                  Manage agents
-                </Button>
-              </div>
-              <AgentWorkerList
-                snapshot={snapshot}
-                client={client}
-                onSelect={showWorker}
-                compact={view === "conversation"}
-              />
+              {(view === "conversation" || view === "objectives") && primary ? (
+                <AgentObjectives
+                  key={primary.id}
+                  jobs={snapshot.jobs}
+                  agentId={primary.id}
+                />
+              ) : (
+                <>
+                  <div className="mb-4 flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openSettings("agents")}
+                    >
+                      <Plus />
+                      Manage agents
+                    </Button>
+                  </div>
+                  <AgentWorkerList
+                    snapshot={snapshot}
+                    client={client}
+                    onSelect={showWorker}
+                    compact={false}
+                  />
+                </>
+              )}
             </aside>
           </main>
           {renderBrowser?.({

@@ -377,6 +377,7 @@ export function createPreviewProject(kind: "empty" | "full"): PreviewProject {
       0,
     ],
   ];
+  jobDefinitions.push(["Prepare the delivery plan", "in_progress", "Reviewing priorities", 40, 0]);
   const jobs: Job[] = populated
     ? jobDefinitions.map(
         ([title, status, label, percent, agentIndex], index) => ({

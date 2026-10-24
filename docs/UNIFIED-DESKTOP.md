@@ -70,3 +70,7 @@ Current limits and follow-up:
 - The packaged candidate was launched directly, never installed or used to replace the user's Crew app. No signed updater installation, merge or release occurred.
 
 Private screenshots, exact native identities, fixture state and terminal evidence remain outside Git. Historical/intermediate snapshots are preserved separately from final terminal snapshots. See [access isolation](ACCESS-ISOLATION.md), [unified composition](AGENT-UNIFIED-COMPOSITION.md), and [project skills](PROJECT-SKILLS.md) for their implementation boundaries.
+
+## Personal objectives in conversations (#137)
+
+The conversation sidebar shows the selected agent’s own internal objectives: Not started, In progress (including blocked and ready for review), and the latest five completed items. These are the existing persisted local work records assigned to that agent; GitHub/Linear tickets, other agents’ work and cancelled items are excluded. Session online status never changes objective progress. Expanding an item shows its brief, reported progress and recorded outcome. Smaller screens offer an Objectives view in the workspace navigation. Workers remain available in the separate Workers view.

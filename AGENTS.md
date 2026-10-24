@@ -712,3 +712,7 @@ Workflow state is arbitrary project-defined visual data, explicitly set by agent
 - Updates remain explicit. Preserve signed-release verification and installer ownership checks. Ordinary Quit never installs. Cleanup is bounded and only closes owned transports; preserve saved conversations, sign-in and uncertain execution journals rather than claim unconfirmed shutdown or kill unrelated processes.
 - Updates belongs in Settings; omit the duplicate global header shortcut.
 - Keep voice controls inside the conversation composer on the same horizontal gutters as its input-method tabs, with bottom padding; allow connected-call actions to wrap on narrow widths.
+
+## Personal objectives in the chat sidebar (#137)
+
+- The agent chat sidebar shows its personal internal to-do list, grouped into Not started, In progress and Recently completed. Include only local objectives assigned to that exact agent. External GitHub/Linear tickets and delegated worker work belong elsewhere; never merge them into personal objectives or infer progress from a live session. Keep the Workers view separately available.
