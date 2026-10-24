@@ -2049,9 +2049,6 @@ function Conversation({
                         Voice
                       </TabsTrigger>
                     </TabsList>
-                    <span className="text-[11px] text-muted-foreground">
-                      Message this agent
-                    </span>
                   </div>
                 )}
                 <TabsContent value="voice" keepMounted className="px-3 pb-3 pt-2">
